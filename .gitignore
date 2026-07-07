@@ -1,0 +1,26 @@
+# Build output
+/build/
+/cmake-build-*/
+*.o
+*.obj
+*.a
+*.dylib
+*.so
+
+# ccache / tooling caches
+.cache/
+.ccache/
+
+# Vendored baseline source (built locally, not committed)
+/third_party/QuantLib/
+/third_party/eigen/
+
+# Golden data is committed; local scratch is not
+/tests/golden/scratch/
+/bench/results-local/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+compile_commands.json

@@ -1,0 +1,29 @@
+{
+  "_comment": "Committed performance baselines. 'quantlib_ns' = stock QuantLib timing (the bar to beat); 'ours_ns' = our engine's last verified timing; 'min_speedup' = the factor the perf gate requires vs QuantLib. Populated in Phase 1+ once real benchmarks exist.",
+  "environment": {
+    "note": "record CPU, compiler, and build flags when baselines are captured",
+    "cpu": null,
+    "compiler": null,
+    "flags": null
+  },
+  "metrics": {
+    "curve_build": {
+      "description": "Global LM calibration of the reference swap curve",
+      "quantlib_ns": null,
+      "ours_ns": null,
+      "min_speedup": 3.0
+    },
+    "risk_full_jacobian": {
+      "description": "Full bucketed delta ladder (AAD vs QuantLib bump-and-reprice)",
+      "quantlib_ns": null,
+      "ours_ns": null,
+      "min_speedup": 20.0
+    },
+    "portfolio_analytics": {
+      "description": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)",
+      "quantlib_ns": null,
+      "ours_ns": null,
+      "min_speedup": 10.0
+    }
+  }
+}
