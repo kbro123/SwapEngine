@@ -1,29 +1,45 @@
 {
-  "_comment": "Committed performance baselines. 'quantlib_ns' = stock QuantLib timing (the bar to beat); 'ours_ns' = our engine's last verified timing; 'min_speedup' = the factor the perf gate requires vs QuantLib. Populated in Phase 1+ once real benchmarks exist.",
-  "environment": {
-    "note": "record CPU, compiler, and build flags when baselines are captured",
-    "cpu": null,
-    "compiler": null,
-    "flags": null
+  "_comment": [
+    "Committed performance baselines, KEYED BY MACHINE+TOOLCHAIN FINGERPRINT.",
+    "A baseline captured on one CPU/compiler says nothing about another: a 2017 Kaby Lake",
+    "(AVX2, 4 doubles/reg) and an Apple M4 or an AVX-512 Xeon (8 doubles/reg) are not",
+    "comparable. tools/fingerprint.sh computes the key; the perf gate REFUSES to compare",
+    "across keys and instead tells you to re-baseline. See CLAUDE.md sections 3 and 4.",
+    "",
+    "'thresholds' are policy and machine-independent: the factor by which we must beat",
+    "QuantLib. 'machines.<key>.metrics' hold the measured timings for that fingerprint,",
+    "where QuantLib was compiled with the SAME compiler and flags as our engine."
+  ],
+
+  "thresholds": {
+    "curve_build":        { "min_speedup_vs_quantlib": 3.0,  "max_self_regression": 1.05 },
+    "risk_full_jacobian": { "min_speedup_vs_quantlib": 20.0, "max_self_regression": 1.05 },
+    "portfolio_analytics":{ "min_speedup_vs_quantlib": 10.0, "max_self_regression": 1.05 }
   },
-  "metrics": {
-    "curve_build": {
-      "description": "Global LM calibration of the reference swap curve",
-      "quantlib_ns": null,
-      "ours_ns": null,
-      "min_speedup": 3.0
-    },
-    "risk_full_jacobian": {
-      "description": "Full bucketed delta ladder (AAD vs QuantLib bump-and-reprice)",
-      "quantlib_ns": null,
-      "ours_ns": null,
-      "min_speedup": 20.0
-    },
-    "portfolio_analytics": {
-      "description": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)",
-      "quantlib_ns": null,
-      "ours_ns": null,
-      "min_speedup": 10.0
+
+  "metric_descriptions": {
+    "curve_build":         "Global LM calibration of the reference swap curve",
+    "risk_full_jacobian":  "Full bucketed delta ladder (our AAD vs QuantLib bump-and-reprice)",
+    "portfolio_analytics": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)"
+  },
+
+  "machines": {
+    "_schema_example": {
+      "_note": "Populated by the perf gate at first capture; this stub documents the shape.",
+      "fingerprint": {
+        "arch": "x86_64",
+        "cpu": "Intel(R) Core(TM) i7-7820HQ CPU @ 2.90GHz",
+        "isa": "AVX2",
+        "doubles_per_register": 4,
+        "compiler": "Apple clang version 15.0.0",
+        "arch_flag": "-march=native"
+      },
+      "captured_utc": "1970-01-01T00:00:00Z",
+      "metrics": {
+        "curve_build":         { "quantlib_ns": null, "ours_ns": null },
+        "risk_full_jacobian":  { "quantlib_ns": null, "ours_ns": null },
+        "portfolio_analytics": { "quantlib_ns": null, "ours_ns": null }
+      }
     }
   }
 }

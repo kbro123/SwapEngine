@@ -27,8 +27,15 @@ BENCH_VER=1.8.4
 BOOST_VER=1.84.0
 QL_VER=1.34
 
-# Optimization flags — MUST match what CMakeLists.txt uses for the engine.
-OPT_FLAGS="-O3 -march=native -DNDEBUG"
+# Optimization flags — MUST match what CMakeLists.txt/cmake/DetectISA.cmake give the engine,
+# or the perf comparison against QuantLib is invalid (CLAUDE.md §3).
+# Arch flag is host-detected: x86_64 -> -march=native, arm64 -> -mcpu=native.
+case "$(uname -m)" in
+  arm64|aarch64) ARCH_FLAG="-mcpu=native" ;;
+  x86_64)        ARCH_FLAG="-march=native" ;;
+  *)             ARCH_FLAG="" ;;
+esac
+OPT_FLAGS="-O3 ${ARCH_FLAG} -DNDEBUG"
 
 BOOST_USCORE="${BOOST_VER//./_}"
 

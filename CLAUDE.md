@@ -68,18 +68,24 @@ Every checkpoint must pass **both** gates. `./tools/verify.sh` runs them and pri
   as our engine** (`-O3 -march=native`). Never benchmark our tuned build against a generically-
   compiled QuantLib package/bottle — that measures compiler flags, not our algorithm, and inflates
   the speedup. `third_party/` builds QuantLib with our flags for exactly this reason.
-- Baselines in `baselines/baselines.json` are **compiler- and machine-dependent**. If the compiler,
-  compiler version, or `-march` target changes, **all baselines must be recaptured** and the
-  `environment` block in that file updated. Never compare across toolchains.
+- Baselines in `baselines/baselines.json` are **keyed by a machine+toolchain fingerprint**
+  (`./tools/fingerprint.sh` → CPU, ISA, compiler, arch flag). The perf gate **must refuse to compare
+  measurements across different fingerprint keys** and instead demand a re-baseline. A Kaby Lake
+  AVX2 number and an M-series NEON or AVX-512 Xeon number are not comparable, and silently
+  comparing them would manufacture a fake speedup. Changing compiler *or* CPU changes the key.
+- `thresholds` in that file are policy (how much we must beat QuantLib by) and are
+  machine-independent; only the measured timings are per-fingerprint.
 - Benchmarks run on a quiesced machine; report medians, and prefer `benchmark::DoNotOptimize` /
   `ClobberMemory` to stop the optimizer eliding the work under test.
 
 ## 4. Build environment (this machine) & commands
 
 ### Hard constraints of the dev machine — do not re-litigate these
-- **MacBook Pro 15" 2017 (`MacBookPro14,3`), Kaby Lake, 4 physical cores / 8 threads, 16 GB.**
-- **SIMD: AVX2 + FMA. There is no AVX-512.** Design batched analytics around **4 doubles per
-  register**, not 8. `-march=native` targets AVX2 here.
+- **MacBook Pro 15" 2017 (`MacBookPro14,3`), i7-7820HQ Kaby Lake, 4 physical cores / 8 threads, 16 GB.**
+- **SIMD *on this host*: AVX2 + FMA, no AVX-512 → 4 doubles/register.** This is a *fact about this
+  machine*, **not a design constant**. The ISA is detected automatically at configure time by
+  `cmake/DetectISA.cmake` (AVX-512 / AVX2 / AVX / NEON / SSE2), so the project builds optimally on
+  any host. See the no-hard-coded-width rule in §5.
 - **macOS 13.7.8 (Ventura) is the final supported OS for this Mac.** No macOS upgrade is possible.
 - **Homebrew is "Tier 3" on macOS 13 → it ships NO prebuilt bottles.** `brew install` compiles
   everything from source and drags in `go`/`rust`/`llvm` build deps. **Do not use Homebrew for
@@ -117,6 +123,14 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 
 - **C++20.** The engine is **header-only and templated on the scalar type** (`double` for pricing,
   `AutoDiffScalar<…>` for AAD). Never hard-code `double` in engine math — use the template scalar.
+- **Never hard-code a SIMD width.** No literal `4`, no `_mm256_*` intrinsics in engine code.
+  Use `swaps::simd::packet_size<Scalar>` and `swaps::simd::padded_count<Scalar>(n)` from
+  `include/swaps/simd.hpp`. The same source must compile optimally to **2 lanes (SSE2/NEON),
+  4 (AVX/AVX2), or 8 (AVX-512)** with no edit. `simd.hpp` `static_assert`s that CMake's detected
+  width agrees with Eigen's `packet_traits<double>::size`, so a misconfigured build fails loudly
+  rather than silently running at the wrong width.
+- Pad the swap dimension of portfolio matrices to `padded_count<Scalar>(P)` so batched loops need
+  no scalar remainder path.
 - Hot paths: **no heap allocation in inner loops**, no `virtual` dispatch, no UB. Prefer Eigen fixed/
   dynamic matrices with contiguous storage. Keep data layout SoA-friendly for vectorization.
 - Vectorize with Eigen expressions; **avoid per-swap `for` loops** in analytics — that is the point.
@@ -141,6 +155,9 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 ## 7. Directory layout
 
 ```
+cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
+cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
+include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
 include/swaps/curve/         interpolation (meeting-date flat + smooth spline), discounting
 include/swaps/ad/            AAD scalar typedefs / dual helpers
 include/swaps/calibration/   LM solver wrapper, residuals, implicit-function-theorem risk

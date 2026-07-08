@@ -13,9 +13,15 @@ endif()
 
 # Aggressive, reproducible optimization for the engine + benchmarks.
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
-option(SWAPS_NATIVE_ARCH "Build with -march=native (required for fair SIMD benchmarks)" ON)
-if(SWAPS_NATIVE_ARCH)
-  add_compile_options($<$<CONFIG:Release>:-march=native>)
+
+# ---- Automatic ISA/SIMD detection (portable across hosts) -------------------
+# Detects AVX2 / AVX-512 / NEON / SSE2 on whatever machine this is built on and
+# derives the doubles-per-register width. Nothing in the engine hard-codes a width.
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(DetectISA)
+
+if(SWAPS_ARCH_FLAGS)
+  add_compile_options($<$<CONFIG:Release>:${SWAPS_ARCH_FLAGS}>)
 endif()
 
 # ccache if available.
@@ -28,6 +34,18 @@ endif()
 add_library(swaps INTERFACE)
 target_include_directories(swaps INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(swaps INTERFACE cxx_std_20)
+
+# Generated header recording what DetectISA found (swaps/simd_config.hpp).
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/simd_config.hpp.in
+  ${CMAKE_BINARY_DIR}/generated/swaps/simd_config.hpp
+  @ONLY)
+target_include_directories(swaps INTERFACE ${CMAKE_BINARY_DIR}/generated)
+
+# Eigen opt-ins implied by the detected ISA (e.g. EIGEN_ENABLE_AVX512).
+if(SWAPS_EIGEN_DEFINES)
+  target_compile_definitions(swaps INTERFACE ${SWAPS_EIGEN_DEFINES})
+endif()
 
 # ---- Vendored dependencies (third_party/, populated by tools/bootstrap_deps.sh) ----
 # Homebrew is NOT used: macOS 13 / Intel is Homebrew Tier 3 (no bottles). See CLAUDE.md §4.
