@@ -18,17 +18,23 @@ shipped engine.
 
 ## Build
 
+Dependencies are vendored into `third_party/` (this machine is Homebrew "Tier 3" — no bottles).
+
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-./tools/verify.sh          # runs correctness + performance gates
+./tools/bootstrap_deps.sh   # one-time: fetch + build deps (resumable). ~30-50 min.
+./tools/verify.sh           # runs correctness + performance gates
 ```
 
 See [CLAUDE.md](CLAUDE.md) for the full architecture, rules, and the two-gate verification policy.
 
 ## Status
 
-Phase 0 (scaffolding). See the roadmap in [CLAUDE.md](CLAUDE.md#8-phased-roadmap).
+**Phase 0 complete.** Toolchain (Apple clang 14.0.3, C++20), vendored deps, QuantLib 1.34 built
+static with matched `-O3 -march=native` flags, automatic ISA detection (AVX2+FMA → 4 doubles/reg
+on the dev machine), correctness gate green. The performance checker is still a stub (Phase 6).
+
+Next: **Phase 1** — golden reference curve from QuantLib + correctness harness.
+See the roadmap in [CLAUDE.md](CLAUDE.md#8-phased-roadmap).
 
 ## License
 

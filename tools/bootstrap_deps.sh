@@ -39,6 +39,12 @@ OPT_FLAGS="-O3 ${ARCH_FLAG} -DNDEBUG"
 
 BOOST_USCORE="${BOOST_VER//./_}"
 
+# Build parallelism. DO NOT let ninja use its default (logical cores + 2 = 10 here).
+# On this 4-core/16GB Ventura machine that many concurrent clang processes exhausted
+# memory and triggered an APFS kernel panic (OSMetaClassBase::_RESERVEDOSMetaClassBase6,
+# panicking task = clang) plus non-deterministic clang segfaults. Cap at physical cores.
+JOBS="${SWAPS_BUILD_JOBS:-$( (sysctl -n hw.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4) )}"
+
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -48,7 +54,8 @@ fetch() {
   local url="$1" out="${DL}/$2"
   if [ -s "${out}" ]; then log "cached: $2"; return 0; fi
   log "fetching $2"
-  curl -fL --retry 8 --retry-delay 3 --retry-connrefused -C - -o "${out}.part" "${url}" \
+  # -sS: quiet progress bars (they render as thousands of lines in a log) but keep errors.
+  curl -fL -sS --retry 8 --retry-delay 3 --retry-connrefused -C - -o "${out}.part" "${url}" \
     || die "download failed: ${url}  (re-run this script; it resumes)"
   mv "${out}.part" "${out}"
 }
@@ -108,7 +115,7 @@ if [ ! -f "${TP}/gtest/install/lib/libgtest.a" ]; then
     -DCMAKE_MAKE_PROGRAM="${NINJA}" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_FLAGS="${OPT_FLAGS}" \
     -DCMAKE_INSTALL_PREFIX="${TP}/gtest/install" -DBUILD_GMOCK=OFF
-  "${CMAKE}" --build "${TP}/gtest/build" --target install
+  "${CMAKE}" --build "${TP}/gtest/build" --target install -j "${JOBS}"
 fi
 log "googletest: third_party/gtest/install"
 
@@ -122,27 +129,46 @@ if [ ! -f "${TP}/benchmark/install/lib/libbenchmark.a" ]; then
     -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_FLAGS="${OPT_FLAGS}" \
     -DCMAKE_INSTALL_PREFIX="${TP}/benchmark/install" \
     -DBENCHMARK_ENABLE_TESTING=OFF -DBENCHMARK_ENABLE_GTEST_TESTS=OFF
-  "${CMAKE}" --build "${TP}/benchmark/build" --target install
+  "${CMAKE}" --build "${TP}/benchmark/build" --target install -j "${JOBS}"
 fi
 log "google-benchmark: third_party/benchmark/install"
 
 # ---- 7. QuantLib — the oracle + speed baseline -------------------------------
 # Built with OUR compiler and OUR flags. This is a correctness requirement of the
 # perf gate, not an optimization. See CLAUDE.md §3.
-if [ ! -f "${TP}/quantlib/install/lib/libQuantLib.a" ]; then
+# Built STATIC on purpose: a shared QuantLib pays cross-DSO call overhead and blocks
+# inlining, which would handicap the baseline and flatter our speedup. Give the
+# baseline its best shot (CLAUDE.md §3).
+QL_STATIC_LIB="${TP}/quantlib/install/lib/libQuantLib.a"
+if [ ! -f "${QL_STATIC_LIB}" ]; then
   fetch "https://github.com/lballabio/QuantLib/releases/download/v${QL_VER}/QuantLib-${QL_VER}.tar.gz" "quantlib.tar.gz"
-  rm -rf "${TP}/quantlib/src"; mkdir -p "${TP}/quantlib/src"
-  tar xzf "${DL}/quantlib.tar.gz" -C "${TP}/quantlib/src" --strip-components=1
-  log "building QuantLib ${QL_VER} with: ${OPT_FLAGS}  (this takes ~20-40 min on 4 cores)"
+  # Do NOT re-extract if the source is already there: re-extraction resets every mtime,
+  # which makes ninja rebuild all 937 objects and silently defeats the resume below.
+  if [ ! -f "${TP}/quantlib/src/CMakeLists.txt" ]; then
+    rm -rf "${TP}/quantlib/src"; mkdir -p "${TP}/quantlib/src"
+    tar xzf "${DL}/quantlib.tar.gz" -C "${TP}/quantlib/src" --strip-components=1
+  fi
+  log "building QuantLib ${QL_VER} with: ${OPT_FLAGS} -j${JOBS}  (~20-40 min on 4 cores)"
+  # Resume-friendly: only discard the build tree if it was configured differently
+  # (e.g. an older shared-library config). A partial QuantLib build is ~30 min of
+  # work and this machine drops its network / crashes; never throw that away blindly.
+  QL_CACHE="${TP}/quantlib/build/CMakeCache.txt"
+  if [ -f "${QL_CACHE}" ] && ! grep -q "^BUILD_SHARED_LIBS.*=OFF" "${QL_CACHE}"; then
+    warn "quantlib build tree has a stale (shared) config — reconfiguring from scratch"
+    rm -rf "${TP}/quantlib/build"
+  elif [ -f "${QL_CACHE}" ]; then
+    log "resuming existing quantlib build ($(find "${TP}/quantlib/build" -name '*.o' | wc -l | tr -d ' ') objects already compiled)"
+  fi
   "${CMAKE}" -S "${TP}/quantlib/src" -B "${TP}/quantlib/build" -G Ninja \
     -DCMAKE_MAKE_PROGRAM="${NINJA}" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_FLAGS="${OPT_FLAGS}" \
     -DCMAKE_INSTALL_PREFIX="${TP}/quantlib/install" \
+    -DBUILD_SHARED_LIBS=OFF \
     -DBOOST_ROOT="${TP}/boost" -DBoost_INCLUDE_DIR="${TP}/boost" \
     -DQL_BUILD_EXAMPLES=OFF -DQL_BUILD_TEST_SUITE=OFF -DQL_BUILD_BENCHMARK=OFF
-  "${CMAKE}" --build "${TP}/quantlib/build" --target install
+  "${CMAKE}" --build "${TP}/quantlib/build" --target install -j "${JOBS}"
 fi
-log "quantlib: third_party/quantlib/install (built with ${OPT_FLAGS})"
+log "quantlib: third_party/quantlib/install (static, built with ${OPT_FLAGS})"
 
 # ---- Summary -----------------------------------------------------------------
 cat <<EOF

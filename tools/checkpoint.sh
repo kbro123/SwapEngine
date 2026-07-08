@@ -14,9 +14,22 @@ MSG="${1:-}"
 if [ -z "${MSG}" ]; then echo "usage: checkpoint.sh \"commit message\"" >&2; exit 2; fi
 
 echo ">> running gates before checkpoint"
-if ! ./tools/verify.sh; then
+VERIFY_OUT="$(mktemp)"
+if ! ./tools/verify.sh | tee "${VERIFY_OUT}"; then
   echo "!! gates failed — refusing to checkpoint. Fix correctness/perf first." >&2
   exit 1
+fi
+
+# Report the ACTUAL gate status in the trailer. Never claim "perf passing" when the
+# perf gate merely skipped — a commit trailer that overstates verification is worse
+# than none, because later work trusts it.
+gate() { grep -E "^  $1 gate:" "${VERIFY_OUT}" | awk '{print $NF}'; }
+C_STATUS="$(gate correctness)"; P_STATUS="$(gate performance)"
+rm -f "${VERIFY_OUT}"
+TRAILER="Verified: correctness=${C_STATUS:-UNKNOWN} perf=${P_STATUS:-UNKNOWN}"
+
+if [ "${P_STATUS}" != "PASS" ]; then
+  echo ">> NOTE: perf gate is '${P_STATUS}' — this checkpoint is not perf-verified."
 fi
 
 # Next checkpoint number.
@@ -27,7 +40,7 @@ tag="checkpoint-${next}"
 git add -A
 git commit -m "${MSG}
 
-Verified: correctness+perf gates passing
+${TRAILER}
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>" || echo "(nothing to commit)"
 git tag -a "${tag}" -m "${MSG}"

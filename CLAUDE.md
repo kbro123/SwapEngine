@@ -87,6 +87,13 @@ Every checkpoint must pass **both** gates. `./tools/verify.sh` runs them and pri
   `cmake/DetectISA.cmake` (AVX-512 / AVX2 / AVX / NEON / SSE2), so the project builds optimally on
   any host. See the no-hard-coded-width rule in §5.
 - **macOS 13.7.8 (Ventura) is the final supported OS for this Mac.** No macOS upgrade is possible.
+- **Cap build parallelism at 4 (physical cores). Never use ninja's default (`logical+2` = 10).**
+  Ten concurrent clang processes on this 4-core/16 GB box exhausted memory and tripped an
+  **APFS kernel panic** (`OSMetaClassBase::_RESERVEDOSMetaClassBase6`, panicking task `clang`),
+  plus non-deterministic clang segfaults that look like compiler ICEs but are not — the same
+  file compiles fine when run alone. `bootstrap_deps.sh` caps via `SWAPS_BUILD_JOBS`.
+- **Never run benchmarks while anything else is compiling.** Perf numbers taken under load are
+  garbage (we measured a load average of ~17 during a build).
 - **Homebrew is "Tier 3" on macOS 13 → it ships NO prebuilt bottles.** `brew install` compiles
   everything from source and drags in `go`/`rust`/`llvm` build deps. **Do not use Homebrew for
   project dependencies.** Vendor them into `third_party/` instead.
@@ -144,7 +151,9 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 - **Commit message convention:** `type(scope): summary`, where type ∈
   `feat|perf|fix|test|bench|refactor|build|docs|chore`. For `perf` commits, include the measured
   before/after speedup in the body.
-- Commit trailer (both gates green): `Verified: correctness+perf gates passing`.
+- Commit trailer states the **actual** gate result, e.g. `Verified: correctness=PASS perf=SKIP`.
+  `checkpoint.sh` derives it from the real `verify.sh` output — never hand-write a trailer
+  claiming a gate passed when it skipped or was not run.
 - End commit messages with:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
 - **Major checkpoints** get an annotated tag `checkpoint-NN` and are **pushed to the web backup**
@@ -173,7 +182,10 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
 
 ## 8. Phased roadmap (update the checkbox as phases land)
 
-- [ ] **Phase 0** — Toolchain, repo, CLAUDE.md, CMake skeleton, QuantLib baseline builds.
+- [x] **Phase 0** — Toolchain, repo, CLAUDE.md, CMake skeleton, QuantLib baseline builds.
+      *(Apple clang 14.0.3 / C++20; vendored cmake+ninja+Eigen+Boost+GTest+Benchmark;
+      QuantLib 1.34 built static with `-O3 -march=native`; ISA auto-detect → AVX2+FMA,
+      4 doubles/reg; correctness gate green. Perf checker still a stub → Phase 6.)*
 - [ ] **Phase 1** — Correctness harness + golden reference curve from QuantLib.
 - [ ] **Phase 2** — Core engine: two-region interpolation + discounting + global LM with numerical Jacobian.
 - [ ] **Phase 3** — AAD Jacobian (forward-mode vector-dual); verify vs bump; verify speed.
