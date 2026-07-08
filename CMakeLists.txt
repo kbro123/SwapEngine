@@ -29,32 +29,45 @@ add_library(swaps INTERFACE)
 target_include_directories(swaps INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(swaps INTERFACE cxx_std_20)
 
-# Eigen (linear algebra + LevenbergMarquardt + AutoDiffScalar).
-find_package(Eigen3 3.4 QUIET)
-if(Eigen3_FOUND)
-  target_link_libraries(swaps INTERFACE Eigen3::Eigen)
-  message(STATUS "Eigen3: found")
+# ---- Vendored dependencies (third_party/, populated by tools/bootstrap_deps.sh) ----
+# Homebrew is NOT used: macOS 13 / Intel is Homebrew Tier 3 (no bottles). See CLAUDE.md §4.
+set(SWAPS_THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
+# Eigen (linear algebra + LevenbergMarquardt + AutoDiffScalar) — header-only.
+if(EXISTS ${SWAPS_THIRD_PARTY}/eigen/Eigen)
+  target_include_directories(swaps INTERFACE ${SWAPS_THIRD_PARTY}/eigen)
+  message(STATUS "Eigen: vendored (${SWAPS_THIRD_PARTY}/eigen)")
 else()
-  message(WARNING "Eigen3 not found — install it (brew install eigen). Engine targets will not build yet.")
+  find_package(Eigen3 3.4 QUIET)
+  if(Eigen3_FOUND)
+    target_link_libraries(swaps INTERFACE Eigen3::Eigen)
+    message(STATUS "Eigen: system")
+  else()
+    message(WARNING "Eigen not found — run ./tools/bootstrap_deps.sh")
+  endif()
 endif()
 
-# ---- Dev/baseline dependencies (optional until installed) ------------------
+# ---- Dev/baseline dependencies ---------------------------------------------
+list(PREPEND CMAKE_PREFIX_PATH
+  ${SWAPS_THIRD_PARTY}/gtest/install
+  ${SWAPS_THIRD_PARTY}/benchmark/install)
+
 find_package(GTest QUIET)
 find_package(benchmark QUIET)
 
-# QuantLib (oracle + baseline). No standard CMake config on all installs; probe both ways.
-find_package(QuantLib QUIET)
-if(NOT QuantLib_FOUND)
-  find_library(QUANTLIB_LIB QuantLib)
-  find_path(QUANTLIB_INCLUDE ql/quantlib.hpp)
-  if(QUANTLIB_LIB AND QUANTLIB_INCLUDE)
-    set(QuantLib_FOUND TRUE)
-    message(STATUS "QuantLib: found (${QUANTLIB_LIB})")
-  else()
-    message(WARNING "QuantLib not found — baseline/oracle targets disabled until it is built/installed.")
-  endif()
+# QuantLib: correctness oracle + speed baseline. Built from source with OUR flags
+# (perf-gate integrity, CLAUDE.md §3) — never a generically-compiled package.
+set(QL_ROOT ${SWAPS_THIRD_PARTY}/quantlib/install)
+find_library(QUANTLIB_LIB NAMES QuantLib HINTS ${QL_ROOT}/lib NO_DEFAULT_PATH)
+find_path(QUANTLIB_INCLUDE ql/quantlib.hpp HINTS ${QL_ROOT}/include NO_DEFAULT_PATH)
+if(QUANTLIB_LIB AND QUANTLIB_INCLUDE)
+  set(QuantLib_FOUND TRUE)
+  add_library(quantlib_oracle INTERFACE)
+  target_include_directories(quantlib_oracle INTERFACE ${QUANTLIB_INCLUDE} ${SWAPS_THIRD_PARTY}/boost)
+  target_link_libraries(quantlib_oracle INTERFACE ${QUANTLIB_LIB})
+  message(STATUS "QuantLib oracle: ${QUANTLIB_LIB}")
 else()
-  message(STATUS "QuantLib: found (package config)")
+  message(WARNING "QuantLib not found — run ./tools/bootstrap_deps.sh (oracle/baseline targets disabled)")
 endif()
 
 # ---- Test & benchmark trees (guarded so a fresh clone still configures) -----

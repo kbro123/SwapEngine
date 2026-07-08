@@ -11,9 +11,9 @@
 .cache/
 .ccache/
 
-# Vendored baseline source (built locally, not committed)
-/third_party/QuantLib/
-/third_party/eigen/
+# Vendored dependencies + toolchain (fetched/built locally, never committed)
+/third_party/*
+!/third_party/.gitkeep
 
 # Golden data is committed; local scratch is not
 /tests/golden/scratch/

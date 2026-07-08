@@ -63,10 +63,40 @@ Every checkpoint must pass **both** gates. `./tools/verify.sh` runs them and pri
 - AAD Jacobian vs bump-and-reprice: `rel <= 1e-6` (bump noise dominates; tighten if we refine the bump).
 - Update tolerances only with a documented reason in the commit message.
 
-## 4. Build / test / bench commands
+### Perf-gate integrity (how we keep the benchmark honest)
+- **QuantLib must be compiled from source with the SAME compiler and the SAME optimization flags
+  as our engine** (`-O3 -march=native`). Never benchmark our tuned build against a generically-
+  compiled QuantLib package/bottle — that measures compiler flags, not our algorithm, and inflates
+  the speedup. `third_party/` builds QuantLib with our flags for exactly this reason.
+- Baselines in `baselines/baselines.json` are **compiler- and machine-dependent**. If the compiler,
+  compiler version, or `-march` target changes, **all baselines must be recaptured** and the
+  `environment` block in that file updated. Never compare across toolchains.
+- Benchmarks run on a quiesced machine; report medians, and prefer `benchmark::DoNotOptimize` /
+  `ClobberMemory` to stop the optimizer eliding the work under test.
+
+## 4. Build environment (this machine) & commands
+
+### Hard constraints of the dev machine — do not re-litigate these
+- **MacBook Pro 15" 2017 (`MacBookPro14,3`), Kaby Lake, 4 physical cores / 8 threads, 16 GB.**
+- **SIMD: AVX2 + FMA. There is no AVX-512.** Design batched analytics around **4 doubles per
+  register**, not 8. `-march=native` targets AVX2 here.
+- **macOS 13.7.8 (Ventura) is the final supported OS for this Mac.** No macOS upgrade is possible.
+- **Homebrew is "Tier 3" on macOS 13 → it ships NO prebuilt bottles.** `brew install` compiles
+  everything from source and drags in `go`/`rust`/`llvm` build deps. **Do not use Homebrew for
+  project dependencies.** Vendor them into `third_party/` instead.
+- Toolchain is **Apple clang 15** via Command Line Tools for Xcode 15.4 (Apple clang 12, which
+  shipped with this machine, cannot compile C++20 — it rejects `-std=c++20`).
+  Ensure `xcode-select -p` → `/Library/Developer/CommandLineTools`, **not** the stale `Xcode.app` (12.4).
+
+### Dependencies (all vendored under `third_party/`, gitignored)
+Eigen (header-only), GoogleTest, Google Benchmark, Boost headers, and QuantLib
+(built from source with our flags — see the perf-gate integrity rule in §3).
 
 ```bash
-# Configure + build (Ninja + ccache)
+# One-time: fetch + build vendored deps (resumable; the network here is unreliable)
+./tools/bootstrap_deps.sh
+
+# Configure + build
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
@@ -81,7 +111,7 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 ```
 
 - Optimized builds only for benchmarking: `-DCMAKE_BUILD_TYPE=Release` (`-O3 -march=native`).
-- Prefer the Homebrew LLVM toolchain over Apple clang (better auto-vectorization, C++20).
+- Any network fetch must be **resumable and retried** (`curl -C - --retry`); connections drop here.
 
 ## 5. Coding standards
 
@@ -119,8 +149,9 @@ src/                         non-header impl / example drivers
 tests/                       GoogleTest correctness gate  (tests/golden/ = committed reference data)
 bench/                       Google Benchmark performance gate
 baselines/baselines.json     committed baseline timings (ours vs QuantLib)
-tools/                       verify.sh, checkpoint.sh, gen_golden, etc.
-third_party/                 QuantLib + Eigen source (gitignored; built locally)
+tools/                       bootstrap_deps.sh, verify.sh, checkpoint.sh, gen_golden, etc.
+third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers, QuantLib
+                             (gitignored; fetched + built locally by tools/bootstrap_deps.sh)
 ```
 
 ## 8. Phased roadmap (update the checkbox as phases land)
