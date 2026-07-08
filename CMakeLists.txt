@@ -88,6 +88,13 @@ else()
   message(WARNING "QuantLib not found — run ./tools/bootstrap_deps.sh (oracle/baseline targets disabled)")
 endif()
 
+# ---- Golden-data generator (oracle only; never part of the shipped engine) ---
+if(QuantLib_FOUND)
+  add_executable(gen_golden tools/gen_golden.cpp)
+  target_link_libraries(gen_golden PRIVATE swaps quantlib_oracle)
+  target_include_directories(gen_golden PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+endif()
+
 # ---- Test & benchmark trees (guarded so a fresh clone still configures) -----
 option(SWAPS_BUILD_TESTS "Build correctness gate" ON)
 option(SWAPS_BUILD_BENCH "Build performance gate" ON)

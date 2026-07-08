@@ -1,16 +1,20 @@
 # Correctness gate — GoogleTest.
 # Tests compare the engine against the QuantLib oracle within tests/tolerances.hpp.
-# Phase 0 ships only a smoke test that proves the engine + Eigen + GTest wiring builds.
 
 find_package(GTest REQUIRED)
 include(GoogleTest)
 
 add_executable(swaps_tests
   smoke_test.cpp
+  curve_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
-
-# Later phases add QuantLib-backed oracle tests; link QuantLib only where needed:
-#   target_link_libraries(swaps_oracle_tests PRIVATE swaps GTest::gtest_main ${QUANTLIB_LIB})
+target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# Golden data lives in the source tree and is committed.
+target_compile_definitions(swaps_tests PRIVATE
+  SWAPS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
 
 gtest_discover_tests(swaps_tests)
+
+# Later phases add QuantLib-backed oracle tests; link QuantLib only where needed:
+#   target_link_libraries(swaps_oracle_tests PRIVATE swaps GTest::gtest_main quantlib_oracle)

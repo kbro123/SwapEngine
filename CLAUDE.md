@@ -27,15 +27,42 @@ shipped engine — it is used only as (a) the correctness **oracle** and (b) the
 - **Spread curves:** if a curve is defined as a spread to a base curve, the free variables are
   **forward spreads** `s_k` and `forward(t) = forward_base(t) + spread(t)`; the base curve is held
   fixed (jointly-calibrated base is a later extension).
+### Knot dates
+`knots = union(CB meeting dates, par-swap maturity dates)`.
+
 - **Interpolation is two-region:**
-  - **Front end (up to the last central-bank meeting date):** instantaneous forward is
-    **piecewise-flat**, breakpoints at **CB meeting dates**. Forwards jump only at meetings.
-    Knot (meeting) dates are **decoupled** from instrument maturities — this is why calibration is a
-    global least-squares solve, not 1:1 bootstrapping.
+  - **Front end (up to the last CB meeting date):** instantaneous forward is **piecewise-flat
+    between meeting dates**. Forwards jump only at meetings. **No calibration instrument matures
+    on a meeting date** — the front-end knots are meeting dates, full stop.
   - **Back end (beyond the last meeting date):** **smooth forwards** with **C¹ and C² continuity**
-    across the long knots (cubic-spline-class interpolation on the forwards).
+    across the long knots. Here the **knots *are* the par-swap maturity dates**.
   - **At the join** (last meeting date): enforce **level continuity** of the forward into the spline;
     do **not** impose C¹/C² across the join (the front end is intentionally discontinuous).
+
+### Calibration instruments, and why the solve is over-determined
+- **Front end:** **1M and 3M futures**, deliberately **over-provided** across the meeting-date
+  region — there are more futures than meeting knots.
+- **Back end:** **par swaps**, whose maturities define the back-end knots.
+- Swaps span the front region too, so front and back knots are coupled: one **global** solve.
+
+**Therefore the system is OVER-DETERMINED.** `min ‖r(x)‖²` has a **non-zero residual at the
+optimum**. This is a modelling choice, not a defect.
+
+> **Testing rule: never assert that instruments reprice exactly.** Residuals are non-zero by
+> construction. A test asserting `residual ≈ 0` is wrong and would only pass on a rigged
+> (square) market. Assert **first-order optimality** (`‖Jᵀr‖∞ ≈ 0`) instead.
+
+> **Residuals must all be in RATE units.** Futures quote as a *price* (`100·(1 − R)`), swaps as a
+> *rate*. Mixing them in `r(x)` silently weights each futures contract **100×** a swap, because a
+> 1bp rate error is `1e-4` in rate but `1e-2` in price. Convert futures to rate space
+> (`R = (100 − price)/100`) before forming the residual, or apply explicit weights. Observed
+> directly: at the reference forwards the futures residuals were ~2e-1 (price) while the swap
+> residuals were ~1e-3 (rate) — the same order of error in rate terms.
+
+> **QuantLib's `GlobalBootstrap` cannot be the calibration oracle here.** It ends with
+> `QL_REQUIRE(finalTargetError <= accuracy)` where `finalTargetError` is the *RMS residual*; on an
+> over-determined fit that throws. Loosening `accuracy` also loosens LM convergence, because
+> `optEps = accuracy`. See the oracle strategy in §3.
 - A cubic spline's coefficients are a **linear** map of the knot forwards, so the whole interpolator
   stays cleanly differentiable — preserve that property; do not introduce non-differentiable kinks in
   the back end.
@@ -45,9 +72,28 @@ shipped engine — it is used only as (a) the correctness **oracle** and (b) the
 Every checkpoint must pass **both** gates. `./tools/verify.sh` runs them and prints a pass/fail table.
 
 ### Correctness gate (GoogleTest, `tests/`)
-- Our discount factors and par rates match QuantLib within tolerance.
-- Our AAD Jacobian matches a QuantLib bump-and-reprice Jacobian within tolerance.
-- Batched portfolio analytics match per-swap QuantLib pricing within tolerance.
+
+Because the calibration is over-determined (§2), correctness splits into two layers with very
+different tolerances. **Do not conflate them.**
+
+**(a) Pricing / interpolation — deterministic, no optimizer involved. `rel <= 1e-10`.**
+Given a *fixed, hand-specified* set of knot forwards, our `DF(t)`, `forward(t)`, futures implied
+rates and par swap rates must match QuantLib. Two oracles:
+  - *Front-only config* → QuantLib `InterpolatedForwardCurve<BackwardFlat>` on the meeting dates.
+  - *Composite curve* → wrap our engine in a `YieldTermStructure` adapter overriding
+    `discountImpl(Time)`, and let QuantLib's own pricing engines price the instruments off our
+    discount factors. Any disagreement is then *our pricing bug*, not an interpolation mismatch.
+    This is the workhorse oracle: it needs no QuantLib equivalent of our two-region interpolator.
+
+**(b) Calibration — solver-dependent. Do NOT demand 1e-10.**
+  - Assert **first-order optimality**: `‖Jᵀr‖∞` below a stationarity tolerance.
+  - Assert the achieved `‖r‖²` is no worse than a committed golden objective value.
+  - Optionally cross-check the minimizer against an independent optimizer (Eigen LM + numerical
+    Jacobian) — *not* against QuantLib's `GlobalBootstrap`, which throws on over-determined fits.
+
+**(c) AAD Jacobian** matches bump-and-reprice within `rel <= 1e-6` (bump noise dominates).
+**(d) Batched portfolio analytics** match per-swap QuantLib pricing within `rel <= 1e-10`.
+
 - **Rule: never regress correctness. A failing correctness test blocks the checkpoint. No exceptions.**
 
 ### Performance gate (Google Benchmark, `bench/`)
@@ -186,8 +232,14 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       *(Apple clang 14.0.3 / C++20; vendored cmake+ninja+Eigen+Boost+GTest+Benchmark;
       QuantLib 1.34 built static with `-O3 -march=native`; ISA auto-detect → AVX2+FMA,
       4 doubles/reg; correctness gate green. Perf checker still a stub → Phase 6.)*
-- [ ] **Phase 1** — Correctness harness + golden reference curve from QuantLib.
-- [ ] **Phase 2** — Core engine: two-region interpolation + discounting + global LM with numerical Jacobian.
+- [x] **Phase 1** — Correctness harness + golden reference from QuantLib.
+      *(Reference market: 6 FOMC knots + 11 swap-maturity knots, 25 instruments, over-determined.
+      `TwoRegionForwardCurve<Scalar>` implemented and validated against QuantLib's BackwardFlat
+      and natural-cubic interpolators to ~1e-16, with a negative control proving the harness has
+      teeth. `ql_adapter.hpp` exposes our curve to QuantLib as a `YieldTermStructure`, so
+      QuantLib prices instruments off our discount factors.)*
+- [ ] **Phase 2** — Core engine: residual vector (in RATE units) + global LM with numerical Jacobian.
+      *Curve + discounting already landed in Phase 1.*
 - [ ] **Phase 3** — AAD Jacobian (forward-mode vector-dual); verify vs bump; verify speed.
 - [ ] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
 - [ ] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
