@@ -25,6 +25,11 @@ if(TARGET quantlib_oracle)
   add_executable(risk_bench risk_bench.cpp)
   target_link_libraries(risk_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(risk_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
+  # The portfolio-analytics baseline: batched reprice vs QuantLib per-swap NPV loop.
+  add_executable(portfolio_bench portfolio_bench.cpp)
+  target_link_libraries(portfolio_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(portfolio_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 endif()
 
 # Convenience target: run the perf gate.

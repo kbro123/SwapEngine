@@ -283,8 +283,8 @@ include/swaps/curve/         two-region interpolation + discounting; ql_term_str
 include/swaps/pricing/       templated, QuantLib-free pricing kernel (plain-data cashflow schedules)
 include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
 include/swaps/ad/            AAD scalar typedefs / dual helpers
-include/swaps/calibration/   residual vector (problem.hpp) + LM solver (lm.hpp); IFT risk later
-include/swaps/portfolio/     vectorized swap analytics
+include/swaps/calibration/   residual vector (problem.hpp), LM solver (lm.hpp), IFT risk (risk.hpp)
+include/swaps/portfolio/     portfolio NPV kernel (portfolio.hpp) + vectorized reprice (compiled.hpp)
 src/                         non-header impl / example drivers
 tests/                       GoogleTest correctness gate  (tests/golden/ = committed reference data)
 bench/                       Google Benchmark performance gate
@@ -323,12 +323,13 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       ill-conditioned (cond≈636): one knot direction is weakly identified — a smoothness/Tikhonov
       regulariser is the eventual fix. AAD's VectorXd allocation is the next speed target.)*
 - [ ] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
-- [~] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
-      *Analytic bucketed delta DONE (`swaps/calibration/risk.hpp`): AAD `d(NPV)/dx` + implicit-function
-      theorem `dx/dq = (JᵀJ)⁻¹Jᵀ` gives the full ladder from one calibration. Matches
-      bump-and-recalibrate to ~2e-8; **39× faster than QuantLib bump-and-reprice** (0.70 ms vs 27.6 ms
-      over 23 quotes, fingerprint `52e94be82bc4`; QuantLib got the fast IterativeBootstrap + one-sided
-      bumps, so conservative).*
-      *STILL TODO: the batched/vectorized many-swap analytics on the cached weight matrix `W` (§2) —
-      reprice a large book as `exp(-Wx)` + batched combinations for the real-time / many-curves path.*
+- [x] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
+      *Analytic bucketed delta (`swaps/calibration/risk.hpp`): AAD `d(NPV)/dx` + IFT
+      `dx/dq = (JᵀJ)⁻¹Jᵀ` → full ladder from one calibration. Matches bump-and-recalibrate to ~2e-8;
+      **39× vs QuantLib bump-and-reprice**.*
+      *Vectorized book reprice (`swaps/portfolio/compiled.hpp`): `W` (cashflow-time × knot integral
+      weights) built once via one AAD pass; reprice = `DF = exp(-Wx)` + gathered elementwise coupon
+      math + sparse per-swap reductions, no scalar loop. Matches the scalar kernel to ~1e-15;
+      **~126× vs QuantLib's per-swap `NPV()` loop** on a 1000-swap book (0.19 ms vs 23.9 ms,
+      fingerprint `52e94be82bc4`). All three perf baselines now populated.*
 - [ ] **Phase 6** — Perf-gate hardening, SIMD/layout tuning, checkpoint/backup automation.
