@@ -1,14 +1,14 @@
 #pragma once
 // Exposes our TwoRegionForwardCurve to QuantLib as a YieldTermStructure.
 //
-// This is the key to the oracle strategy (CLAUDE.md §3a): QuantLib has no equivalent of our
-// composite interpolator, so instead of asking it to reproduce the curve we let it PRICE off
-// the curve. QuantLib supplies the instrument machinery it is authoritative for — SOFR
-// arithmetic-average vs compounded accrual, IMM schedules, business-day and day-count
-// conventions — while every discount factor comes from us. Any disagreement between this and
-// our own instrument pricing is therefore OUR pricing bug, not an interpolation mismatch.
+// This is a CORE ENGINE COMPONENT, not just a test tool (CLAUDE.md §1): our calibrated curve is a
+// QuantLib::YieldTermStructure, so it plugs straight into QuantLib pricing engines. QuantLib
+// supplies the instrument machinery it is authoritative for — SOFR arithmetic-average vs
+// compounded accrual, IMM schedules, business-day and day-count conventions — while every discount
+// factor comes from our two-region interpolator.
 //
-// Oracle only. Never linked into the shipped engine.
+// It is also how we validate: QuantLib pricing off this curve is the oracle for our own templated
+// pricing kernel, and any disagreement is our pricing bug, not an interpolation mismatch.
 
 #include <ql/termstructures/yieldtermstructure.hpp>
 #include <ql/time/daycounters/actual365fixed.hpp>

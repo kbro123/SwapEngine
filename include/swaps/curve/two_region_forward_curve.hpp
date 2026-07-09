@@ -62,16 +62,20 @@ class TwoRegionForwardCurve {
   double max_time() const { return s_.back(); }
 
   /// x = (f_1..f_Nf, g_1..g_Nb). Recomputes spline coefficients and cumulative integrals.
+  /// Index-based access so `x` may be a std::vector, an Eigen vector, or an AutoDiffScalar vector.
   template <class Vec>
   void set_forwards(const Vec& x) {
     if (static_cast<int>(x.size()) != n_knots())
       throw std::invalid_argument("set_forwards: wrong size");
+    const int nf = n_front();
 
-    f_.assign(x.begin(), x.begin() + n_front());
+    f_.resize(nf);
+    for (int i = 0; i < nf; ++i) f_[i] = x[i];
+
     ys_.clear();
     ys_.reserve(s_.size() + 1);
     ys_.push_back(f_.back());  // <- the join constraint
-    ys_.insert(ys_.end(), x.begin() + n_front(), x.end());
+    for (int i = nf; i < n_knots(); ++i) ys_.push_back(x[i]);
 
     build_front_integral();
     build_spline();

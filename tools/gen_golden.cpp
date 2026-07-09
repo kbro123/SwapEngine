@@ -36,8 +36,8 @@
 #include <string>
 #include <vector>
 
-#include "ql_adapter.hpp"
 #include "reference_market.hpp"
+#include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/curve/two_region_forward_curve.hpp"
 
 using namespace QuantLib;

@@ -4,21 +4,41 @@ Guidance for Claude Code when working in this repository. Read this first, every
 
 ## 1. What this project is
 
-SwapsEngine is a high-performance interest-rate **swap-curve calibration engine** and
-**vectorized swap-analytics library**. It is designed to be *provably faster and more accurate*
-than stock QuantLib on the specific workflow it targets. QuantLib is **not** a dependency of the
-shipped engine — it is used only as (a) the correctness **oracle** and (b) the speed **baseline** to beat.
+SwapsEngine is a high-performance **extension of QuantLib** that replaces its two slowest workflows
+— swap-curve calibration and bulk swap analytics — with a globally-calibrated, AAD-differentiated,
+vectorized implementation, while **reusing** QuantLib for everything else.
+
+**QuantLib IS a linked dependency of the shipped engine.** We reuse its base functionality wholesale
+— calendars, day counters, `Schedule`, instrument definitions (`OvernightIndexedSwap`, SOFR futures,
+rate helpers), quotes, conventions. We do **not** reimplement calendars or schedule generation. Our
+value-add is narrow and deep: the calibration solve and the bulk-pricing math.
+
+QuantLib is **also** still the correctness **oracle** and the speed **baseline** — its native
+`IterativeBootstrap`/`GlobalBootstrap` and its per-swap `NPV()` loop are exactly what we must beat,
+compiled with the same compiler and flags (§3 perf-gate integrity).
+
+### The division of labour (the core architectural rule)
+- **Reused from QuantLib (setup, done once, not differentiable):** calendars, day counts, schedules,
+  instrument/cashflow definitions. Extract dates and accrual factors from QuantLib objects here.
+- **Ours (hot path, templated on `Scalar`, differentiable, vectorized):** the curve interpolation,
+  the discount/forward math, the residual vector, and the batched portfolio kernels. QuantLib is not
+  templated, so AAD cannot flow through `OvernightIndexedSwap::NPV()`; the differentiable kernel must
+  be our own code consuming QuantLib-extracted schedules.
 
 ### North-star capabilities
-1. **Global curve calibration.** All knot forwards solved **jointly** with Levenberg–Marquardt,
-   not sequential 1-D bootstrapping.
-2. **Analytic Jacobian via AAD.** The LM Jacobian `J[i][k] = d residual_i / d knot_k` is computed
-   by **forward-mode "vector-dual" automatic differentiation** (Eigen `AutoDiffScalar` carrying a
-   length-M derivative vector), in one differentiated evaluation — not by bump-and-reprice.
-3. **Analytic bucketed risk.** Via the implicit-function theorem, `dx/dquote = -(dr/dx)^{-1} (dr/dquote)`,
+1. **Our calibrated curve is a `QuantLib::YieldTermStructure`.** `TwoRegionForwardCurve<Scalar>` is the
+   templated math core; the `YieldTermStructure` wrapper exposes it to QuantLib pricing engines for
+   validation and reuse.
+2. **Global curve calibration.** All knot forwards solved **jointly** with Levenberg–Marquardt over
+   residuals built from QuantLib rate helpers — not QuantLib's sequential 1-D bootstrapping.
+3. **Analytic Jacobian via AAD.** The LM Jacobian `J[i][k] = d residual_i / d knot_k` is computed by
+   **forward-mode "vector-dual" automatic differentiation** (Eigen `AutoDiffScalar`), in one
+   differentiated evaluation — not by bump-and-reprice.
+4. **Analytic bucketed risk.** Via the implicit-function theorem, `dx/dquote = -(dr/dx)^{-1} (dr/dquote)`,
    reusing the calibration Jacobian, so delta ladders are analytic (no bumping).
-4. **Vectorized portfolio analytics.** A portfolio of P swaps is priced as batched Eigen matrix–vector
-   algebra (par rate, NPV, PV01/DV01, bucketed delta, convexity) — **no per-swap loop**.
+5. **Vectorized portfolio analytics.** Cashflow structure is extracted from QuantLib swaps once, then a
+   portfolio of P swaps is priced as batched Eigen matrix–vector algebra (par rate, NPV, PV01/DV01,
+   bucketed delta, convexity) — **no per-swap QuantLib pricing loop**.
 
 ## 2. Curve model (the math the code must implement)
 
@@ -183,8 +203,12 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 
 ## 5. Coding standards
 
-- **C++20.** The engine is **header-only and templated on the scalar type** (`double` for pricing,
-  `AutoDiffScalar<…>` for AAD). Never hard-code `double` in engine math — use the template scalar.
+- **C++20. Links QuantLib.** The engine reuses QuantLib types for calendars/schedules/instruments.
+  The *hot, differentiable kernels* (curve, pricing, residuals, batched analytics) are **header-only
+  and templated on the scalar type** (`double` for pricing, `AutoDiffScalar<…>` for AAD) — never
+  hard-code `double` there. Extract dates/accruals from QuantLib **once** at setup; keep QuantLib
+  objects and virtual dispatch **out of the hot loop** (that per-coupon loop is exactly the baseline
+  we are beating).
 - **Never hard-code a SIMD width.** No literal `4`, no `_mm256_*` intrinsics in engine code.
   Use `swaps::simd::packet_size<Scalar>` and `swaps::simd::padded_count<Scalar>(n)` from
   `include/swaps/simd.hpp`. The same source must compile optimally to **2 lanes (SSE2/NEON),
@@ -222,9 +246,11 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
 include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
-include/swaps/curve/         interpolation (meeting-date flat + smooth spline), discounting
+include/swaps/curve/         two-region interpolation + discounting; ql_term_structure.hpp wrapper
+include/swaps/pricing/       templated, QuantLib-free pricing kernel (plain-data cashflow schedules)
+include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
 include/swaps/ad/            AAD scalar typedefs / dual helpers
-include/swaps/calibration/   LM solver wrapper, residuals, implicit-function-theorem risk
+include/swaps/calibration/   residual vector (problem.hpp) + LM solver (lm.hpp); IFT risk later
 include/swaps/portfolio/     vectorized swap analytics
 src/                         non-header impl / example drivers
 tests/                       GoogleTest correctness gate  (tests/golden/ = committed reference data)
@@ -249,9 +275,13 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       interpolators to ~1e-16, with a 1bp negative control. Hull–White futures convexity matches
       `HullWhite::convexityBias` exactly. `ql_adapter.hpp` exposes our curve to QuantLib as a
       `YieldTermStructure`, so QuantLib prices instruments off our discount factors.)*
-- [ ] **Phase 2** — Core engine: residual vector (in RATE units) + global LM with numerical Jacobian.
-      *Curve + discounting already landed in Phase 1.*
+- [x] **Phase 2** — Core engine: templated pricing kernel + residual vector (RATE units) + global LM.
+      *(Kernel prices OIS swaps, 1M averaged & 3M compounded SOFR futures from QuantLib-extracted
+      schedules, matching QuantLib to ~1e-16 incl. the current-month contract's realized fixings.
+      Global LM (numerical Jacobian) recovers a generating curve to 3e-14 and reaches
+      ‖Jᵀr‖∞≈1e-8 on the over-determined market. `include/swaps/{pricing,ql,calibration}/`.)*
 - [ ] **Phase 3** — AAD Jacobian (forward-mode vector-dual); verify vs bump; verify speed.
+      *The residual/kernel code is already Scalar-templated; Phase 3 swaps `double`→`AutoDiffScalar`.*
 - [ ] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
 - [ ] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
 - [ ] **Phase 6** — Perf-gate hardening, SIMD/layout tuning, checkpoint/backup automation.
