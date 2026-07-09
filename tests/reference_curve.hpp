@@ -144,4 +144,61 @@ inline Curve reference_curve(const Market& mk) {
   return c;
 }
 
+// ---- Square setup: 6x1M + 8x3M futures + 9 swaps = 23 instruments, 23 knots at the instrument
+// pillar dates, zero convexity. Shared by the curve-build and risk benchmarks/tests so this exact
+// problem lives in ONE place. `build_square_ql` fills `quotes` with the SimpleQuotes so a caller can
+// bump them and force a QuantLib re-bootstrap.
+inline swaps::calibration::CalibrationProblem build_square_problem(const Market& mk) {
+  using namespace QuantLib;
+  swaps::calibration::CalibrationProblem p;
+  auto t = [&](const Date& d) { return mk.dc.yearFraction(mk.today, d); };
+  std::vector<double> front, back;
+  for (int i = 0; i < 6; ++i) {
+    const auto& q = rm::futures_1m[i];
+    const Date s = sofr_start(Month(q.ref_month), q.ref_year, Monthly),
+               e = sofr_end(Month(q.ref_month), q.ref_year, Monthly);
+    p.avg_futs.push_back(
+        {swaps::qlx::extract_averaged_future(mk.sofr, s, e, mk.today, mk.dc), 0.0, 1.0 - q.price / 100.0});
+    front.push_back(t(e));
+  }
+  for (int i = 0; i < 8; ++i) {
+    const auto& q = rm::futures_3m[i];
+    const Date s = sofr_start(Month(q.ref_month), q.ref_year, Quarterly),
+               e = sofr_end(Month(q.ref_month), q.ref_year, Quarterly);
+    p.comp_futs.push_back(
+        {swaps::qlx::extract_compounded_future(s, e, mk.today, mk.dc), 0.0, 1.0 - q.price / 100.0});
+    back.push_back(t(e));
+  }
+  for (std::size_t i = 0; i < rm::swaps.size(); ++i) {
+    p.swaps.push_back({swaps::qlx::extract_ois_swap(*mk.swaps[i], mk.today, mk.dc), rm::swaps[i].par_rate});
+    back.push_back(t(mk.swaps[i]->maturityDate()));
+  }
+  std::sort(front.begin(), front.end());
+  std::sort(back.begin(), back.end());
+  p.meeting_times = front;
+  p.back_times = back;
+  return p;
+}
+
+inline std::vector<QuantLib::ext::shared_ptr<QuantLib::RateHelper>> build_square_ql(
+    const Market& mk, std::vector<QuantLib::ext::shared_ptr<QuantLib::SimpleQuote>>& quotes) {
+  using namespace QuantLib;
+  std::vector<ext::shared_ptr<RateHelper>> helpers;
+  auto fut = [&](const rm::FutureQuote& q, Frequency f) {
+    auto sq = ext::make_shared<SimpleQuote>(q.price);
+    quotes.push_back(sq);
+    helpers.push_back(
+        ext::make_shared<SofrFutureRateHelper>(Handle<Quote>(sq), Month(q.ref_month), q.ref_year, f));
+  };
+  for (int i = 0; i < 6; ++i) fut(rm::futures_1m[i], Monthly);
+  for (int i = 0; i < 8; ++i) fut(rm::futures_3m[i], Quarterly);
+  for (const auto& s : rm::swaps) {
+    auto sq = ext::make_shared<SimpleQuote>(s.par_rate);
+    quotes.push_back(sq);
+    helpers.push_back(
+        ext::make_shared<OISRateHelper>(2, Period(s.tenor_years, Years), Handle<Quote>(sq), mk.sofr));
+  }
+  return helpers;
+}
+
 }  // namespace swaps::refbuild

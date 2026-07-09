@@ -323,8 +323,12 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       ill-conditioned (cond≈636): one knot direction is weakly identified — a smoothness/Tikhonov
       regulariser is the eventual fix. AAD's VectorXd allocation is the next speed target.)*
 - [ ] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
-- [ ] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta. Built on the cached
-      weight matrix `W` (§2): extend/wrap QuantLib instruments to hold `W` once, then reprice a
-      portfolio as `exp(-Wx)` + batched combinations; Greeks via `∂DF/∂x = -DF·w`. This is the
-      real-time-repricing / same-structure-many-curves path.
+- [~] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
+      *Analytic bucketed delta DONE (`swaps/calibration/risk.hpp`): AAD `d(NPV)/dx` + implicit-function
+      theorem `dx/dq = (JᵀJ)⁻¹Jᵀ` gives the full ladder from one calibration. Matches
+      bump-and-recalibrate to ~2e-8; **39× faster than QuantLib bump-and-reprice** (0.70 ms vs 27.6 ms
+      over 23 quotes, fingerprint `52e94be82bc4`; QuantLib got the fast IterativeBootstrap + one-sided
+      bumps, so conservative).*
+      *STILL TODO: the batched/vectorized many-swap analytics on the cached weight matrix `W` (§2) —
+      reprice a large book as `exp(-Wx)` + batched combinations for the real-time / many-curves path.*
 - [ ] **Phase 6** — Perf-gate hardening, SIMD/layout tuning, checkpoint/backup automation.

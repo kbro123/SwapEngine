@@ -68,6 +68,14 @@ Scalar ois_par_rate(const OisSwap& s, const Curve& c) {
   return ois_float_pv<Scalar>(s, c) / ois_annuity<Scalar>(s, c);
 }
 
+// Net swap NPV per unit notional, receiver-of-float / payer-of-fixed:
+//   NPV = float_pv - fixed_rate * annuity.
+// fixed_rate is a contract constant (not a curve variable), so it is a raw double.
+template <class Scalar, class Curve>
+Scalar ois_swap_npv(const OisSwap& s, double fixed_rate, const Curve& c) {
+  return ois_float_pv<Scalar>(s, c) - fixed_rate * ois_annuity<Scalar>(s, c);
+}
+
 // ---- 3M compounded (IMM) SOFR future ---------------------------------------------------------
 // The reference rate is the daily-compounded SOFR over the accrual period, which telescopes to
 //   R = (DF(start)/DF(end) - 1) / accrual.

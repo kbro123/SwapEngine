@@ -20,6 +20,11 @@ if(TARGET quantlib_oracle)
   add_executable(curve_build_bench curve_build_bench.cpp)
   target_link_libraries(curve_build_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(curve_build_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
+  # The risk-ladder baseline: our AAD + IFT vs QuantLib bump-and-reprice.
+  add_executable(risk_bench risk_bench.cpp)
+  target_link_libraries(risk_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(risk_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 endif()
 
 # Convenience target: run the perf gate.
