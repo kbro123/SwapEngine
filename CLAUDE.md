@@ -299,8 +299,15 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       schedules, matching QuantLib to ~1e-16 incl. the current-month contract's realized fixings.
       Global LM (numerical Jacobian) recovers a generating curve to 3e-14 and reaches
       ‖Jᵀr‖∞≈1e-8 on the over-determined market. `include/swaps/{pricing,ql,calibration}/`.)*
-- [ ] **Phase 3** — AAD Jacobian (forward-mode vector-dual); verify vs bump; verify speed.
-      *The residual/kernel code is already Scalar-templated; Phase 3 swaps `double`→`AutoDiffScalar`.*
+- [x] **Phase 3** — AAD Jacobian (forward-mode vector-dual); verify vs bump; verify speed.
+      *(`swaps/ad/dual.hpp` seeds M knot forwards as `AutoDiffScalar<VectorXd>`; one differentiated
+      pass of the residual code yields the full M-wide Jacobian. Matches bump-and-reprice to <1e-6 on
+      significant entries; AAD-driven LM reaches ‖Jᵀr‖∞≈8e-15. Cross-checked against the linear-map
+      weights w(t) (exact to 1e-15). Speed (dev box, not quiesced): AAD Jacobian 2.7× vs bump; full
+      calibration 4.8× vs numerical (AAD LM 4 iters vs 16). Kernel accumulators are AAD-safe
+      (seeded from the first curve-dependent term; raw-double constants). Jacobian is moderately
+      ill-conditioned (cond≈636): one knot direction is weakly identified — a smoothness/Tikhonov
+      regulariser is the eventual fix. AAD's VectorXd allocation is the next speed target.)*
 - [ ] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
 - [ ] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta. Built on the cached
       weight matrix `W` (§2): extend/wrap QuantLib instruments to hold `W` once, then reprice a

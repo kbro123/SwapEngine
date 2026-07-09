@@ -54,16 +54,15 @@ struct CalibrationProblem {
     curve::TwoRegionForwardCurve<Scalar> c(meeting_times, back_times);
     c.set_forwards(x);
 
+    // Constants are added as raw double (AutoDiffScalar preserves the model term's derivatives).
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
     int i = 0;
     for (const auto& a : avg_futs)
-      r[i++] = pricing::averaged_future_rate<Scalar>(a.sched, c) + Scalar(a.convexity) -
-               Scalar(a.market_rate);
+      r[i++] = pricing::averaged_future_rate<Scalar>(a.sched, c) + (a.convexity - a.market_rate);
     for (const auto& cf : comp_futs)
-      r[i++] = pricing::compounded_future_rate<Scalar>(cf.sched, c) + Scalar(cf.convexity) -
-               Scalar(cf.market_rate);
+      r[i++] = pricing::compounded_future_rate<Scalar>(cf.sched, c) + (cf.convexity - cf.market_rate);
     for (const auto& s : swaps)
-      r[i++] = pricing::ois_par_rate<Scalar>(s.sched, c) - Scalar(s.market_rate);
+      r[i++] = pricing::ois_par_rate<Scalar>(s.sched, c) - s.market_rate;
     return r;
   }
 };

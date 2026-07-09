@@ -8,7 +8,14 @@
 //
 // All times are year fractions measured on the curve's day counter, from the curve reference date.
 // The `Curve` template parameter only needs a member `Scalar discount(double t) const`.
+//
+// AAD SAFETY (matters when Scalar = AutoDiffScalar<VectorXd>): never seed an accumulator from a bare
+// constant. `Scalar(0.0)` has an EMPTY derivative vector, and `+=` a length-M term then mismatches
+// sizes (silent UB under -DNDEBUG). So every accumulator here is initialised from the FIRST
+// curve-dependent term (which carries the derivatives), and scalar constants are added as raw
+// `double` (AutoDiffScalar has a `+ double` overload that preserves the derivatives).
 
+#include <cassert>
 #include <vector>
 
 namespace swaps::pricing {
@@ -30,23 +37,28 @@ struct OisSwap {
   std::vector<double> fixed_accrual;    // year fraction tau_i (fixed day count)
 };
 
+// PV of one floating coupon: DF(pay) * (DF(accStart)/DF(accEnd) - 1).
+template <class Scalar, class Curve>
+Scalar ois_float_coupon_pv(const OisSwap& s, std::size_t i, const Curve& c) {
+  return c.discount(s.float_pay[i]) *
+         (c.discount(s.float_acc_start[i]) / c.discount(s.float_acc_end[i]) - 1.0);
+}
+
 // PV of the floating leg for unit notional.
 template <class Scalar, class Curve>
 Scalar ois_float_pv(const OisSwap& s, const Curve& c) {
-  Scalar pv(0.0);
-  for (std::size_t i = 0; i < s.float_acc_start.size(); ++i) {
-    const Scalar growth = c.discount(s.float_acc_start[i]) / c.discount(s.float_acc_end[i]);
-    pv += c.discount(s.float_pay[i]) * (growth - Scalar(1.0));
-  }
+  assert(!s.float_acc_start.empty());
+  Scalar pv = ois_float_coupon_pv<Scalar>(s, 0, c);  // seed from first term (carries derivatives)
+  for (std::size_t i = 1; i < s.float_acc_start.size(); ++i) pv += ois_float_coupon_pv<Scalar>(s, i, c);
   return pv;
 }
 
 // Fixed-leg annuity per unit fixed rate and unit notional: sum(tau_i * DF(pay_i)).
 template <class Scalar, class Curve>
 Scalar ois_annuity(const OisSwap& s, const Curve& c) {
-  Scalar a(0.0);
-  for (std::size_t i = 0; i < s.fixed_pay.size(); ++i)
-    a += Scalar(s.fixed_accrual[i]) * c.discount(s.fixed_pay[i]);
+  assert(!s.fixed_pay.empty());
+  Scalar a = c.discount(s.fixed_pay[0]) * s.fixed_accrual[0];
+  for (std::size_t i = 1; i < s.fixed_pay.size(); ++i) a += c.discount(s.fixed_pay[i]) * s.fixed_accrual[i];
   return a;
 }
 
@@ -67,7 +79,7 @@ struct CompoundedFuture {
 
 template <class Scalar, class Curve>
 Scalar compounded_future_rate(const CompoundedFuture& f, const Curve& c) {
-  return (c.discount(f.start) / c.discount(f.end) - Scalar(1.0)) / Scalar(f.accrual);
+  return (c.discount(f.start) / c.discount(f.end) - 1.0) / f.accrual;
 }
 
 // ---- 1M arithmetic-average SOFR future -------------------------------------------------------
@@ -87,16 +99,20 @@ struct AveragedFuture {
 
 template <class Scalar, class Curve>
 Scalar averaged_future_rate(const AveragedFuture& f, const Curve& c) {
-  Scalar num(f.realized_sum);
-  for (std::size_t d = 0; d < f.sub_start.size(); ++d)
-    num += c.discount(f.sub_start[d]) / c.discount(f.sub_end[d]) - Scalar(1.0);
-  return num / Scalar(f.period_yf);
+  if (f.sub_start.empty())  // whole period already fixed (no curve dependence)
+    return Scalar(f.realized_sum / f.period_yf);
+  // Seed from the first forward day so the accumulator carries derivatives, then fold in the
+  // realized (constant) contribution as a plain double.
+  Scalar num = c.discount(f.sub_start[0]) / c.discount(f.sub_end[0]) - 1.0;
+  for (std::size_t d = 1; d < f.sub_start.size(); ++d)
+    num += c.discount(f.sub_start[d]) / c.discount(f.sub_end[d]) - 1.0;
+  return (num + f.realized_sum) / f.period_yf;
 }
 
 // Futures PRICE from the reference rate: price = 100 * (1 - (rate + convexity)).
 template <class Scalar>
 Scalar future_price(Scalar rate, double convexity) {
-  return Scalar(100.0) * (Scalar(1.0) - (rate + Scalar(convexity)));
+  return (1.0 - (rate + convexity)) * 100.0;
 }
 
 }  // namespace swaps::pricing

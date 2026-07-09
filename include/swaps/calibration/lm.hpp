@@ -12,9 +12,26 @@
 
 #include <cmath>
 
+#include "swaps/ad/dual.hpp"
 #include "swaps/calibration/problem.hpp"
 
 namespace swaps::calibration {
+
+// Analytic Jacobian J[i][k] = d residual_i / d knot_k via forward-mode AAD, in one differentiated
+// evaluation of the residual code. This is the north-star (CLAUDE.md §1) — no bump-and-reprice.
+inline Eigen::MatrixXd aad_jacobian(const CalibrationProblem& prob, const Eigen::VectorXd& x) {
+  const auto rd = prob.residuals<ad::Dual>(ad::seed(x));
+  const int n = prob.n_residuals(), m = prob.n_knots();
+  Eigen::MatrixXd J(n, m);
+  for (int i = 0; i < n; ++i) {
+    // A residual with no curve dependence would have an empty gradient; guard defensively.
+    if (rd[i].derivatives().size() == m)
+      J.row(i) = rd[i].derivatives().transpose();
+    else
+      J.row(i).setZero();
+  }
+  return J;
+}
 
 // Eigen NonLinearOptimization functor: fvec = r(x), rate units.
 struct ResidualFunctor {
@@ -35,6 +52,29 @@ struct ResidualFunctor {
   }
 };
 
+// Same residual, but with the ANALYTIC AAD Jacobian supplied via df() (no numerical differencing).
+struct ResidualFunctorAAD {
+  using Scalar = double;
+  using InputType = Eigen::VectorXd;
+  using ValueType = Eigen::VectorXd;
+  using JacobianType = Eigen::MatrixXd;
+  enum { InputsAtCompileTime = Eigen::Dynamic, ValuesAtCompileTime = Eigen::Dynamic };
+
+  const CalibrationProblem* prob;
+  explicit ResidualFunctorAAD(const CalibrationProblem& p) : prob(&p) {}
+  int inputs() const { return prob->n_knots(); }
+  int values() const { return prob->n_residuals(); }
+
+  int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec) const {
+    fvec = prob->residuals<double>(x);
+    return 0;
+  }
+  int df(const Eigen::VectorXd& x, Eigen::MatrixXd& fjac) const {
+    fjac = aad_jacobian(*prob, x);
+    return 0;
+  }
+};
+
 struct CalibrationResult {
   Eigen::VectorXd x;
   int iterations = 0;
@@ -43,24 +83,34 @@ struct CalibrationResult {
   double stationarity = 0;  // ||J^T r||_inf  -- the over-determined optimality measure
 };
 
-inline CalibrationResult calibrate(const CalibrationProblem& prob, const Eigen::VectorXd& x0) {
-  ResidualFunctor functor(prob);
-  Eigen::NumericalDiff<ResidualFunctor> num_diff(functor);
-  Eigen::LevenbergMarquardt<Eigen::NumericalDiff<ResidualFunctor>> lm(num_diff);
-  lm.parameters.xtol = 1e-14;
-  lm.parameters.ftol = 1e-14;
-  lm.parameters.maxfev = 4000;
-
+// jacobian == "aad" (analytic, default) or "numerical" (Eigen NumericalDiff).
+inline CalibrationResult calibrate(const CalibrationProblem& prob, const Eigen::VectorXd& x0,
+                                   bool use_aad = true) {
   CalibrationResult res;
   res.x = x0;
-  res.info = lm.minimize(res.x);
-  res.iterations = lm.iter;
+
+  if (use_aad) {
+    ResidualFunctorAAD functor(prob);
+    Eigen::LevenbergMarquardt<ResidualFunctorAAD> lm(functor);
+    lm.parameters.xtol = 1e-14;
+    lm.parameters.ftol = 1e-14;
+    lm.parameters.maxfev = 4000;
+    res.info = lm.minimize(res.x);
+    res.iterations = lm.iter;
+  } else {
+    ResidualFunctor functor(prob);
+    Eigen::NumericalDiff<ResidualFunctor> num_diff(functor);
+    Eigen::LevenbergMarquardt<Eigen::NumericalDiff<ResidualFunctor>> lm(num_diff);
+    lm.parameters.xtol = 1e-14;
+    lm.parameters.ftol = 1e-14;
+    lm.parameters.maxfev = 4000;
+    res.info = lm.minimize(res.x);
+    res.iterations = lm.iter;
+  }
 
   const Eigen::VectorXd r = prob.residuals<double>(res.x);
   res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
-
-  Eigen::MatrixXd J(prob.n_residuals(), prob.n_knots());
-  num_diff.df(res.x, J);
+  const Eigen::MatrixXd J = aad_jacobian(prob, res.x);
   res.stationarity = (J.transpose() * r).cwiseAbs().maxCoeff();
   return res;
 }
