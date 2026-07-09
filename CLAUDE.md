@@ -152,6 +152,20 @@ rates and par swap rates must match QuantLib. Two oracles:
 - **Rule: every commit that changes engine code must include or refresh a benchmark proving the
   speedup. If the performance gate fails, do not commit the change as an improvement.**
 
+**Curve-build is benchmarked against `GlobalBootstrap`, not `IterativeBootstrap`** — this is the
+honest same-algorithm-class comparison, and it is a settled decision, do not re-litigate it:
+- `GlobalBootstrap` is QuantLib's OWN global Levenberg–Marquardt. On the same square problem (same
+  knots, same instruments) it uses a numerical Jacobian + per-coupon object pricing; we use an AAD
+  Jacobian + templated kernel. Measured (fingerprint `52e94be82bc4`): **~6.8× faster** (2.35 ms vs
+  16.1 ms), even though our spline back end does *more* interpolation work than QuantLib's flat
+  forwards — so the win is purely the AAD + templated pricing.
+- `IterativeBootstrap` (sequential 1-D) is a **different, cheaper algorithm** and is actually *faster*
+  on the simple square case (~0.6 ms). It cannot do the over-determined global fit or supply analytic
+  risk, so it is not our target. Say so openly; never quote a curve-build win over it.
+- The **largest** win is the risk ladder: our AAD + implicit-function-theorem gives the full bucketed
+  delta from one calibration; QuantLib bumps-and-reprices (one full re-bootstrap per quote). That is
+  the `risk_full_jacobian` gate (≥20×). See `bench/curve_build_bench.cpp`.
+
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
 - Discount factors / par rates vs QuantLib: `rel <= 1e-10`.
 - AAD Jacobian vs bump-and-reprice: `rel <= 1e-6` (bump noise dominates; tighten if we refine the bump).

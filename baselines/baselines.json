@@ -8,7 +8,14 @@
     "",
     "'thresholds' are policy and machine-independent: the factor by which we must beat",
     "QuantLib. 'machines.<key>.metrics' hold the measured timings for that fingerprint,",
-    "where QuantLib was compiled with the SAME compiler and flags as our engine."
+    "where QuantLib was compiled with the SAME compiler and flags as our engine.",
+    "",
+    "curve_build is measured against QuantLib's GlobalBootstrap -- its OWN global-LM",
+    "algorithm on the SAME square problem (same knots, same instruments). It is NOT compared",
+    "against IterativeBootstrap: that is a different, cheaper sequential 1-D algorithm which",
+    "cannot do the over-determined global fit or supply analytic risk. IterativeBootstrap is",
+    "in fact faster on the simple square case; our win is over GlobalBootstrap and, far more,",
+    "on the AAD risk ladder (bump-and-reprice-free) and vectorized analytics."
   ],
 
   "thresholds": {
@@ -18,27 +25,29 @@
   },
 
   "metric_descriptions": {
-    "curve_build":         "Global LM calibration of the reference swap curve",
-    "risk_full_jacobian":  "Full bucketed delta ladder (our AAD vs QuantLib bump-and-reprice)",
+    "curve_build":         "Global-LM calibration of a square curve (23 instruments, 23 knots): ours (AAD Jacobian + templated kernel) vs QuantLib GlobalBootstrap (numerical Jacobian + object pricing)",
+    "risk_full_jacobian":  "Full bucketed delta ladder (our AAD + implicit-function-theorem vs QuantLib bump-and-reprice)",
     "portfolio_analytics": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)"
   },
 
   "machines": {
-    "_schema_example": {
-      "_note": "Populated by the perf gate at first capture; this stub documents the shape.",
+    "52e94be82bc4": {
       "fingerprint": {
         "arch": "x86_64",
+        "os": "Darwin 22.6.0",
         "cpu": "Intel(R) Core(TM) i7-7820HQ CPU @ 2.90GHz",
+        "physical_cores": 4,
         "isa": "AVX2",
         "doubles_per_register": 4,
-        "compiler": "Apple clang version 15.0.0",
+        "compiler": "Apple clang version 14.0.3 (clang-1403.0.22.14.1)",
         "arch_flag": "-march=native"
       },
-      "captured_utc": "1970-01-01T00:00:00Z",
+      "captured_utc": "2026-07-09T19:31:04Z",
+      "notes": "Median of 5 reps, benchmark_min_time=1s. Machine load ~3 during capture (stddev ~1-2%); re-capture quiesced before treating absolute ns as authoritative. Ratio is load-robust.",
       "metrics": {
-        "curve_build":         { "quantlib_ns": null, "ours_ns": null },
-        "risk_full_jacobian":  { "quantlib_ns": null, "ours_ns": null },
-        "portfolio_analytics": { "quantlib_ns": null, "ours_ns": null }
+        "curve_build":         { "quantlib_ns": 16104287, "ours_ns": 2350783, "speedup": 6.85 },
+        "risk_full_jacobian":  { "quantlib_ns": null, "ours_ns": null, "speedup": null },
+        "portfolio_analytics": { "quantlib_ns": null, "ours_ns": null, "speedup": null }
       }
     }
   }

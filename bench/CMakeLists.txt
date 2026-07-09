@@ -15,6 +15,11 @@ if(TARGET quantlib_oracle)
   add_executable(calibration_bench calibration_bench.cpp)
   target_link_libraries(calibration_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(calibration_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
+  # The committed curve-build baseline: ours vs QuantLib GlobalBootstrap (same algorithm class).
+  add_executable(curve_build_bench curve_build_bench.cpp)
+  target_link_libraries(curve_build_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(curve_build_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 endif()
 
 # Convenience target: run the perf gate.
