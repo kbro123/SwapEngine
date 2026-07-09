@@ -14,6 +14,7 @@
 
 #include <vector>
 
+#include "swaps/curve/spread_curve.hpp"
 #include "swaps/curve/two_region_forward_curve.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
@@ -47,14 +48,11 @@ struct CalibrationProblem {
     return static_cast<int>(swaps.size() + comp_futs.size() + avg_futs.size());
   }
 
-  // r(x) in rate units. Ordering: averaged futures, compounded futures, swaps (stable, so a
-  // caller can map residual index back to instrument).
-  template <class Scalar, class Vec>
-  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    curve::TwoRegionForwardCurve<Scalar> c(meeting_times, back_times);
-    c.set_forwards(x);
-
-    // Constants are added as raw double (AutoDiffScalar preserves the model term's derivatives).
+  // r in rate units for an ARBITRARY curve (anything with `Scalar discount(double)`). Ordering:
+  // averaged futures, compounded futures, swaps. Constants are added as raw double so AutoDiffScalar
+  // preserves the model term's derivatives.
+  template <class Scalar, class Curve>
+  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> price_residuals(const Curve& c) const {
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
     int i = 0;
     for (const auto& a : avg_futs)
@@ -64,6 +62,33 @@ struct CalibrationProblem {
     for (const auto& s : swaps)
       r[i++] = pricing::ois_par_rate<Scalar>(s.sched, c) - s.market_rate;
     return r;
+  }
+
+  // r(x) with x = the knot forwards of a standalone two-region curve.
+  template <class Scalar, class Vec>
+  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
+    curve::TwoRegionForwardCurve<Scalar> c(meeting_times, back_times);
+    c.set_forwards(x);
+    return price_residuals<Scalar>(c);
+  }
+};
+
+// Calibrating a spread to a FIXED base curve. Reuses the instrument set + pricing of a
+// CalibrationProblem (its meeting_times/back_times are the SPREAD knot times); the free variables
+// are the spread forwards s. Duck-types with CalibrationProblem (residuals / n_knots / n_residuals),
+// so the same LM + AAD + risk code drives it with no change.
+struct SpreadCalibrationProblem {
+  CalibrationProblem inst;                             // instruments + spread knot times
+  const curve::TwoRegionForwardCurve<double>* base;    // fixed base curve
+
+  int n_knots() const { return inst.n_knots(); }
+  int n_residuals() const { return inst.n_residuals(); }
+
+  template <class Scalar, class Vec>
+  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& s) const {
+    curve::SpreadCurve<Scalar> c(*base, inst.meeting_times, inst.back_times);
+    c.set_spreads(s);
+    return inst.price_residuals<Scalar>(c);
   }
 };
 

@@ -279,7 +279,7 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
 include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
-include/swaps/curve/         two-region interpolation + discounting; ql_term_structure.hpp wrapper
+include/swaps/curve/         two-region interpolation, spread_curve.hpp, ql_term_structure.hpp wrapper
 include/swaps/pricing/       templated, QuantLib-free pricing kernel (plain-data cashflow schedules)
 include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
 include/swaps/ad/            AAD scalar typedefs / dual helpers
@@ -322,7 +322,13 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       (seeded from the first curve-dependent term; raw-double constants). Jacobian is moderately
       ill-conditioned (cond≈636): one knot direction is weakly identified — a smoothness/Tikhonov
       regulariser is the eventual fix. AAD's VectorXd allocation is the next speed target.)*
-- [ ] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
+- [x] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
+      *(`swaps/curve/spread_curve.hpp`: `forward = base + spread`, `DF = base_DF·exp(-∫spread)`, spread
+      interpolated with the same two-region scheme so it stays linear/AAD-differentiable; base fixed.
+      `SpreadCalibrationProblem` reuses the instrument set + pricing of a `CalibrationProblem` and
+      duck-types the interface, so the LM/AAD/`calibrate`/`aad_jacobian` code — now templated on the
+      problem type — drives spread calibration unchanged. Decomposition exact to 1e-16; recovers a
+      known spread to 1.5e-13; spread AAD Jacobian matches bump to 1e-7.)*
 - [x] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
       *Analytic bucketed delta (`swaps/calibration/risk.hpp`): AAD `d(NPV)/dx` + IFT
       `dx/dq = (JᵀJ)⁻¹Jᵀ` → full ladder from one calibration. Matches bump-and-recalibrate to ~2e-8;
