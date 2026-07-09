@@ -96,6 +96,25 @@ optimum**. This is a modelling choice, not a defect.
   stays cleanly differentiable — preserve that property; do not introduce non-differentiable kinks in
   the back end.
 
+### The curve is a LINEAR MAP in log-discount space (the key to caching & analytic risk)
+`integral(t) = ∫_0^t f(u)du = w(t)·x` is **linear** in the knot forwards `x`, with weights `w(t)`
+that depend only on the knot **times** (the structure), never their values:
+- **Front (flat):** `w` entries are the overlaps of `[0,t]` with each meeting segment.
+- **Back (spline):** the natural-spline coefficients are a fixed linear map of the knot values (the
+  tridiagonal solve is `M = (matrix in knot times)·ys`), so their integral is linear in the values.
+
+Hence `DF(t) = exp(-w(t)·x)`: **the only nonlinearity in the engine is the `exp` and the way DFs
+combine into prices.** Exploit this — it is the whole optimization thesis:
+- **Cache per instrument; reprice cheap.** For a fixed curve structure, stack each cashflow's weight
+  row into a matrix `W` (cashflows × knots), built **once**. Repricing as the calibrated curve moves
+  (a real-time engine) is `L = Wx; DF = exp(-L)` then vectorized per-instrument combinations — no
+  spline re-solve, no schedule regeneration, no per-coupon loop.
+- **Swap math directly on curve parameters.** `∂DF/∂x = -DF·w(t)`, so PV and bucketed sensitivities
+  to the knot forwards are direct; chain through the calibration Jacobian (IFT) for quote deltas.
+- **Extending/re-wrapping QuantLib is allowed where it unlocks this.** QuantLib instruments recompute
+  per-coupon on every pricing call; our wrapper computes `W` once (reusing QuantLib only to build the
+  schedule) and reprices by matrix algebra. Reimplement/extend the hot parts; reuse the rest.
+
 ## 3. THE TWO GATES (non-negotiable)
 
 Every checkpoint must pass **both** gates. `./tools/verify.sh` runs them and prints a pass/fail table.
@@ -283,5 +302,8 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
 - [ ] **Phase 3** — AAD Jacobian (forward-mode vector-dual); verify vs bump; verify speed.
       *The residual/kernel code is already Scalar-templated; Phase 3 swaps `double`→`AutoDiffScalar`.*
 - [ ] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
-- [ ] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
+- [ ] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta. Built on the cached
+      weight matrix `W` (§2): extend/wrap QuantLib instruments to hold `W` once, then reprice a
+      portfolio as `exp(-Wx)` + batched combinations; Greeks via `∂DF/∂x = -DF·w`. This is the
+      real-time-repricing / same-structure-many-curves path.
 - [ ] **Phase 6** — Perf-gate hardening, SIMD/layout tuning, checkpoint/backup automation.
