@@ -3,18 +3,26 @@
 // Deliberately free of QuantLib types so both the oracle generator (tools/gen_golden.cpp)
 // and the engine's own tests consume exactly the same inputs.
 //
-// Curve structure (CLAUDE.md §2):
-//   knots = union(6 FOMC meeting dates, 11 par-swap maturity dates)  -> 17 free forwards
-//   front (<= last meeting date): forwards flat BETWEEN meeting dates; no instrument
-//                                 matures on a meeting date
-//   back  (>  last meeting date): C2-smooth forwards; knots ARE the swap maturities
+// Curve structure (CLAUDE.md §2), mirroring a real SOFR build:
+//   front knots = 6 FOMC meeting dates                 -> forwards flat BETWEEN meetings
+//   back  knots = { 3M-futures END dates > last meeting }
+//                 U { par-swap maturity dates }         -> C2 spline on forwards
 //
-// Instruments: 1M SOFR futures (arithmetic average) + 3M SOFR futures (compounded, IMM)
-//              + par OIS swaps.  The futures OVER-SPECIFY the 6 front knots on purpose,
-//              so the least-squares fit has a NON-ZERO residual at the optimum.
-//              Never assert exact repricing.
+// Instrument strip is SEQUENTIAL, not overlapping:
+//   - 12 x 1M SOFR futures (arithmetic average), starting with the CURRENT month's contract,
+//     covering the first year. The first contract's accrual begins before the evaluation date,
+//     so gen_golden seeds the elapsed SOFR fixings.
+//   - 8 x 3M SOFR futures (compounded, IMM), the first starting on/after the last 1M contract's
+//     end date (2027-07-01) so the strips do NOT overlap, continuing until a contract's end date
+//     passes the 3y swap maturity. There is a deliberate ~2.5-month gap between the strips; the
+//     spline interpolates through it.
+//   - 9 x par OIS swaps, 4y..30y (the futures cover everything shorter).
+//
+// The futures OVER-SPECIFY the knots on purpose, so the least-squares fit has a NON-ZERO residual
+// at the optimum. Never assert exact repricing. 29 instruments vs 23 knots.
 
 #include <array>
+#include <cmath>
 
 namespace swaps::refmkt {
 
@@ -27,6 +35,8 @@ inline constexpr Ymd evaluation_date{2026, 7, 8};
 
 // ---- Front end: FOMC meeting *effective* dates (the day the new policy rate applies) ----
 // The instantaneous forward is flat on (m[k-1], m[k]]; it jumps only here.
+// Note the last meeting (2027-03-18) is the day after the 3rd-Wednesday IMM date (2027-03-17),
+// which is why the Dec-2026 3M contract's end date falls just *inside* the front region.
 inline constexpr std::array<Ymd, 6> meeting_dates{{
     {2026, 7, 30},
     {2026, 9, 17},
@@ -36,72 +46,92 @@ inline constexpr std::array<Ymd, 6> meeting_dates{{
     {2027, 3, 18},
 }};
 
-// ---- Futures (front end, deliberately over-provided) ----
-// price = 100 * (1 - (forward_rate + convexity_adjustment))   [QuantLib's convention]
-// `quarterly=false` -> 1M contract, arithmetic average of daily SOFR over the calendar month.
-// `quarterly=true`  -> 3M IMM contract, compounded daily SOFR over the IMM period.
+// ---- Futures ----
+// price = 100 * (1 - (forward_rate + convexity_adjustment))   [QuantLib's convention:
+//         OvernightIndexFuture does  R = convexityAdjustment() + rate();  NPV = 100*(1-R)]
 struct FutureQuote {
   int ref_year;
-  int ref_month;      // 1..12; for quarterly this is the IMM month (Mar/Jun/Sep/Dec)
+  int ref_month;  // 1..12; for quarterly this is the IMM month (Mar/Jun/Sep/Dec)
   bool quarterly;
   double price;
 };
 
-// 1M contracts start at the first of their reference month, so we begin at Aug-2026
-// (a Jul-2026 contract would already have started before the 8-Jul evaluation date and
-// would require historical fixings).
-inline constexpr std::array<FutureQuote, 11> futures_1m{{
-    {2026, 8, false, 95.72},
-    {2026, 9, false, 95.75},
-    {2026, 10, false, 95.83},
-    {2026, 11, false, 95.90},
-    {2026, 12, false, 96.01},
-    {2027, 1, false, 96.10},
-    {2027, 2, false, 96.20},
-    {2027, 3, false, 96.28},
-    {2027, 4, false, 96.37},
-    {2027, 5, false, 96.44},
-    {2027, 6, false, 96.50},
+// 12 consecutive monthly contracts, starting with the current month (Jul-2026). The Jul contract
+// straddles the evaluation date; gen_golden seeds the elapsed fixings so QuantLib can price it.
+// Prices trace an easing policy path (rising price = falling rate).
+inline constexpr std::array<FutureQuote, 12> futures_1m{{
+    {2026, 7, false, 95.68},  {2026, 8, false, 95.75},  {2026, 9, false, 95.85},
+    {2026, 10, false, 95.95}, {2026, 11, false, 96.05}, {2026, 12, false, 96.15},
+    {2027, 1, false, 96.25},  {2027, 2, false, 96.33},  {2027, 3, false, 96.40},
+    {2027, 4, false, 96.46},  {2027, 5, false, 96.50},  {2027, 6, false, 96.53},
 }};
 
-inline constexpr std::array<FutureQuote, 3> futures_3m{{
-    {2026, 9, true, 95.78},
-    {2026, 12, true, 96.03},
-    {2027, 3, true, 96.30},
+// 8 IMM quarters, Sep-2027..Jun-2029, non-overlapping with the 1M strip (first start >= the last
+// 1M end date, 2027-07-01) and running past the 3y swap end. Every end date is a back knot.
+inline constexpr std::array<FutureQuote, 8> futures_3m{{
+    {2027, 9, true, 96.55},  {2027, 12, true, 96.58}, {2028, 3, true, 96.60},
+    {2028, 6, true, 96.62},  {2028, 9, true, 96.63},  {2028, 12, true, 96.63},
+    {2029, 3, true, 96.62},  {2029, 6, true, 96.60},
 }};
 
-// ---- Back end: par OIS swaps. Their maturities ARE the back-end knots. ----
+// ---- Back end: par OIS swaps from 4y (the 3M strip covers everything shorter) ----
 struct SwapQuote {
   int tenor_years;
   double par_rate;  // decimal, e.g. 0.0355 = 3.55%
 };
 
-inline constexpr std::array<SwapQuote, 11> swaps{{
-    {2, 0.0355},  {3, 0.0350},  {4, 0.0352},  {5, 0.0355},
-    {7, 0.0362},  {10, 0.0372}, {12, 0.0378}, {15, 0.0385},
-    {20, 0.0390}, {25, 0.0388}, {30, 0.0383},
+inline constexpr std::array<SwapQuote, 9> swaps{{
+    {4, 0.0352},  {5, 0.0355},  {7, 0.0362},  {10, 0.0372}, {12, 0.0378},
+    {15, 0.0385}, {20, 0.0390}, {25, 0.0388}, {30, 0.0383},
 }};
 
-// ---- Futures convexity (modelled, not ignored) ----
-// Ho-Lee / normal-model convexity: futures_rate - forward_rate = 0.5 * sigma^2 * t1 * t2,
-// with t1 = accrual start, t2 = accrual end (year fractions from the evaluation date).
-// A single documented sigma keeps the golden data deterministic and auditable.
-inline constexpr double convexity_sigma = 0.0075;  // 75 bp/yr normal vol
+// ---- Futures convexity: Hull-White (volatility AND mean reversion) ----
+// Ho-Lee (0.5*sigma^2*t1*t2) is the a -> 0 limit of this and grows like t^2 without bound.
+// With the strip now reaching ~3.2y the mean-reversion term matters, so we use Hull-White.
+//
+// This is the classic Eurodollar (term-rate) futures bias. Applying it to SOFR
+// averaged/compounded overnight futures is a first-order approximation, standard in practice.
+// Transcribed from QuantLib's HullWhite::convexityBias; tests/convexity_test.cpp checks the two
+// agree, so the engine itself never has to link QuantLib.
+inline constexpr double convexity_sigma = 0.0075;          // 75 bp/yr normal vol
+inline constexpr double convexity_mean_reversion = 0.03;   // 3% mean reversion
 
-constexpr double convexity_adjustment(double t1, double t2) {
-  return 0.5 * convexity_sigma * convexity_sigma * t1 * t2;
+inline double hull_white_convexity(double futures_price, double t1, double t2) {
+  const double a = convexity_mean_reversion, s = convexity_sigma;
+  const double dt = t2 - t1;
+  const double B = (1.0 - std::exp(-a * dt)) / a;
+  const double Bt = (1.0 - std::exp(-a * t1)) / a;
+  const double half_sigma_sq = 0.5 * s * s;
+  const double lambda = half_sigma_sq * (1.0 - std::exp(-2.0 * a * t1)) / a * B * B;
+  const double phi = half_sigma_sq * B * Bt * Bt;
+  const double z = lambda + phi;
+  const double future_rate = (100.0 - futures_price) / 100.0;
+  return (1.0 - std::exp(-z)) * (future_rate + 1.0 / dt);
 }
 
-// ---- Problem dimensions (sanity, used by tests) ----
-inline constexpr int n_front_knots = static_cast<int>(meeting_dates.size());   // 6
-inline constexpr int n_back_knots = static_cast<int>(swaps.size());            // 11
-inline constexpr int n_knots = n_front_knots + n_back_knots;                   // 17
+// ---- Reference knot forwards (ARBITRARY BUT FIXED; not a calibrated solution) ----
+// Changing either array invalidates every committed golden file.
+inline constexpr std::array<double, 6> reference_front_forwards{
+    0.0428, 0.0415, 0.0400, 0.0385, 0.0372, 0.0360};
+
+// 8 knots from 3M-futures end dates (t ~ 1.44 .. 3.20), then 9 from swap maturities (4y..30y).
+inline constexpr std::array<double, 17> reference_back_forwards{
+    0.0345, 0.0342, 0.0340, 0.0339, 0.0338, 0.0338, 0.0339, 0.0341,   // futures region
+    0.0345, 0.0352, 0.0362, 0.0375, 0.0382, 0.0390, 0.0396, 0.0392, 0.0385};  // swap region
+
+// ---- Problem dimensions ----
+// The number of back knots is determined by the CALENDAR (how many 3M end dates fall after the
+// last meeting date), so gen_golden asserts it at runtime rather than here.
+inline constexpr int n_front_knots = static_cast<int>(meeting_dates.size());          // 6
+inline constexpr int n_back_knots = static_cast<int>(reference_back_forwards.size()); // 17
+inline constexpr int n_knots = n_front_knots + n_back_knots;                          // 23
 inline constexpr int n_instruments =
-    static_cast<int>(futures_1m.size() + futures_3m.size() + swaps.size());    // 25
+    static_cast<int>(futures_1m.size() + futures_3m.size() + swaps.size());           // 29
 
 static_assert(n_instruments > n_knots,
               "The calibration must be OVER-determined: more instruments than knot forwards. "
               "If this ever becomes square, the 'never assert exact repricing' rule silently "
               "stops being meaningful.");
+static_assert(reference_front_forwards.size() == meeting_dates.size());
 
 }  // namespace swaps::refmkt

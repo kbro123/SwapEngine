@@ -17,9 +17,13 @@
 //   3. REGRESSION LOCK (our own output, committed so refactors cannot silently change it)
 //        golden/composite_curve.csv
 //
+// Knot construction (the calendar is authoritative, so it happens HERE, once):
+//        front = FOMC meeting dates
+//        back  = { 3M futures end dates strictly after the last meeting } U { swap maturities }
+//
 // This program does NOT calibrate. The calibration is over-determined (CLAUDE.md §2) and
-// QuantLib's GlobalBootstrap throws on a non-zero residual. The knot forwards below are
-// arbitrary but fixed; changing them invalidates every file above.
+// QuantLib's GlobalBootstrap throws on a non-zero residual. The knot forwards in
+// reference_market.hpp are arbitrary but fixed; changing them invalidates every file above.
 
 #include <ql/quantlib.hpp>
 
@@ -32,8 +36,8 @@
 #include <string>
 #include <vector>
 
-#include "reference_market.hpp"
 #include "ql_adapter.hpp"
+#include "reference_market.hpp"
 #include "swaps/curve/two_region_forward_curve.hpp"
 
 using namespace QuantLib;
@@ -46,8 +50,9 @@ constexpr int kPrec = 17;
 
 Date to_ql(const rm::Ymd& d) { return Date(d.d, static_cast<Month>(d.m), d.y); }
 
-// Mirrors QuantLib's anonymous-namespace getValidSofrStart/getValidSofrEnd so our accrual dates,
-// and hence the convexity we compute from them, match the library exactly.
+// Mirrors QuantLib's anonymous-namespace getValidSofrStart/getValidSofrEnd
+// (termstructures/yield/overnightindexfutureratehelper.cpp) so our accrual dates — and hence the
+// convexity we compute from them, and the knots we derive from them — match the library exactly.
 Date sofr_start(Month m, Year y, Frequency f) {
   return f == Monthly ? UnitedStates(UnitedStates::GovernmentBond).adjust(Date(1, m, y))
                       : Date::nthWeekday(3, Wednesday, m, y);
@@ -68,11 +73,6 @@ std::string iso(const Date& d) {
   return os.str();
 }
 
-// ARBITRARY BUT FIXED. 6 front (one flat forward per meeting segment) + 11 back knot forwards.
-const std::vector<double> kFront{0.0428, 0.0415, 0.0400, 0.0385, 0.0372, 0.0360};
-const std::vector<double> kBack{0.0350, 0.0345, 0.0350, 0.0355, 0.0365, 0.0380,
-                                0.0388, 0.0395, 0.0398, 0.0392, 0.0385};
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -86,30 +86,60 @@ int main(int argc, char** argv) {
   RelinkableHandle<YieldTermStructure> h;
   auto sofr = ext::make_shared<Sofr>(h);
 
+  // The current-month 1M contract began before the evaluation date, so QuantLib needs the
+  // elapsed SOFR fixings to price its realized portion. Seed a flat historical rate over the
+  // days leading up to (and including) today; addFixing only accepts valid fixing dates.
+  for (Date d = today - 20; d <= today; ++d)
+    if (sofr->isValidFixingDate(d)) sofr->addFixing(d, 0.0430);
+
   // ---- Pass 1: swap maturities (schedule only; independent of the curve) --------------------
   h.linkTo(ext::make_shared<FlatForward>(today, 0.03, dc, Continuous));
   std::vector<ext::shared_ptr<OvernightIndexedSwap>> oisSwaps;
-  std::vector<double> backTimes;
+  std::vector<Date> backDates;
   for (const auto& s : rm::swaps) {
     ext::shared_ptr<OvernightIndexedSwap> p =
         MakeOIS(Period(s.tenor_years, Years), sofr, 0.03).withDiscountingTermStructure(h);
     oisSwaps.push_back(p);
-    backTimes.push_back(T(p->maturityDate()));
+    backDates.push_back(p->maturityDate());
   }
 
+  // ---- Knot construction --------------------------------------------------------------------
+  const Date lastMeeting = to_ql(rm::meeting_dates.back());
   std::vector<double> meetingTimes;
   for (const auto& m : rm::meeting_dates) meetingTimes.push_back(T(to_ql(m)));
 
+  // 3M futures END dates beyond the last meeting date become the first back-end knots.
+  int nFromFutures = 0;
+  for (const auto& q : rm::futures_3m) {
+    const Date e = sofr_end(static_cast<Month>(q.ref_month), q.ref_year, Quarterly);
+    if (e > lastMeeting) {
+      backDates.push_back(e);
+      ++nFromFutures;
+    }
+  }
+  std::sort(backDates.begin(), backDates.end());
+  backDates.erase(std::unique(backDates.begin(), backDates.end()), backDates.end());
+
+  std::vector<double> backTimes;
+  for (const Date& d : backDates) backTimes.push_back(T(d));
+
+  QL_REQUIRE(static_cast<int>(backTimes.size()) == rm::n_back_knots,
+             "back-knot count " << backTimes.size() << " != reference_back_forwards ("
+                                << rm::n_back_knots << "). The calendar moved; update the header.");
+
   // ---- Our composite curve ------------------------------------------------------------------
   Curve curve(meetingTimes, backTimes);
-  std::vector<double> x = kFront;
-  x.insert(x.end(), kBack.begin(), kBack.end());
+  std::vector<double> x(rm::reference_front_forwards.begin(), rm::reference_front_forwards.end());
+  x.insert(x.end(), rm::reference_back_forwards.begin(), rm::reference_back_forwards.end());
   curve.set_forwards(x);
 
   const double Tjoin = curve.join_time(), Tmax = curve.max_time();
   std::cout << "evaluation date : " << iso(today) << "\n"
-            << "front knots     : " << curve.n_front() << " (join at t=" << Tjoin << ")\n"
-            << "back knots      : " << curve.n_back() << " (out to t=" << Tmax << ")\n"
+            << "front knots     : " << curve.n_front() << " FOMC meetings (join at t=" << Tjoin
+            << ")\n"
+            << "back knots      : " << curve.n_back() << " = " << nFromFutures
+            << " x 3M-futures end dates + " << rm::swaps.size() << " swap maturities (to t=" << Tmax
+            << ")\n"
             << "free forwards   : " << curve.n_knots() << "\n"
             << "instruments     : " << rm::n_instruments << "  (OVER-determined)\n\n";
 
@@ -117,10 +147,10 @@ int main(int argc, char** argv) {
   // Abscissae [0, m_1..m_6]; BackwardFlat puts the value on (x_{i-1}, x_i] at y_i, so y_0 (the
   // value exactly at t=0) is set to f_1.
   {
-    std::vector<Real> xs{0.0}, ys{kFront.front()};
+    std::vector<Real> xs{0.0}, ys{rm::reference_front_forwards.front()};
     for (std::size_t i = 0; i < meetingTimes.size(); ++i) {
       xs.push_back(meetingTimes[i]);
-      ys.push_back(kFront[i]);
+      ys.push_back(rm::reference_front_forwards[i]);
     }
     Interpolation flat = BackwardFlat().interpolate(xs.begin(), xs.end(), ys.begin());
     flat.enableExtrapolation();
@@ -137,10 +167,10 @@ int main(int argc, char** argv) {
   // ---- 1b. ORACLE: natural cubic interpolation over the spline abscissae ---------------------
   // Spline knots are (T, f_last) then the back knots — the join value is pinned, not free.
   {
-    std::vector<Real> xs{Tjoin}, ys{kFront.back()};
+    std::vector<Real> xs{Tjoin}, ys{rm::reference_front_forwards.back()};
     for (std::size_t i = 0; i < backTimes.size(); ++i) {
       xs.push_back(backTimes[i]);
-      ys.push_back(kBack[i]);
+      ys.push_back(rm::reference_back_forwards[i]);
     }
     const Cubic natural(CubicInterpolation::Spline, /*monotonic*/ false,
                         CubicInterpolation::SecondDerivative, 0.0,
@@ -166,17 +196,18 @@ int main(int argc, char** argv) {
   {
     std::ofstream f(out + "/instrument_quotes.csv");
     f << std::setprecision(kPrec)
-      << "# kind,label,start,end,convexity,implied_quote   (QuantLib pricing off OUR curve)\n";
+      << "# kind,label,start,end,convexity,market_quote,implied_quote   "
+         "(convexity = Hull-White; implied = QuantLib pricing off OUR curve)\n";
 
     auto emit_future = [&](const rm::FutureQuote& q) {
       const Frequency freq = q.quarterly ? Quarterly : Monthly;
       const Month mon = static_cast<Month>(q.ref_month);
       const Date s = sofr_start(mon, q.ref_year, freq), e = sofr_end(mon, q.ref_year, freq);
-      const double conv = rm::convexity_adjustment(T(s), T(e));
+      const double conv = rm::hull_white_convexity(q.price, T(s), T(e));
       OvernightIndexFuture fut(sofr, s, e, Handle<Quote>(ext::make_shared<SimpleQuote>(conv)),
                                q.quarterly ? RateAveraging::Compound : RateAveraging::Simple);
       f << (q.quarterly ? "future_3m," : "future_1m,") << q.ref_year << '-' << q.ref_month << ','
-        << iso(s) << ',' << iso(e) << ',' << conv << ',' << fut.NPV() << '\n';
+        << iso(s) << ',' << iso(e) << ',' << conv << ',' << q.price << ',' << fut.NPV() << '\n';
     };
     for (const auto& q : rm::futures_1m) emit_future(q);
     for (const auto& q : rm::futures_3m) emit_future(q);
@@ -184,7 +215,8 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < oisSwaps.size(); ++i) {
       oisSwaps[i]->deepUpdate();  // the handle was relinked after construction
       f << "par_swap," << rm::swaps[i].tenor_years << "y," << iso(oisSwaps[i]->startDate()) << ','
-        << iso(oisSwaps[i]->maturityDate()) << ",0," << oisSwaps[i]->fairRate() << '\n';
+        << iso(oisSwaps[i]->maturityDate()) << ",0," << rm::swaps[i].par_rate << ','
+        << oisSwaps[i]->fairRate() << '\n';
     }
     std::cout << "  wrote " << out << "/instrument_quotes.csv\n";
   }
@@ -195,9 +227,9 @@ int main(int argc, char** argv) {
     f << std::setprecision(kPrec);
     f << "# knot,kind,time,forward\n";
     for (int i = 0; i < curve.n_front(); ++i)
-      f << "knot,front," << meetingTimes[i] << ',' << kFront[i] << '\n';
+      f << "knot,front," << meetingTimes[i] << ',' << rm::reference_front_forwards[i] << '\n';
     for (int i = 0; i < curve.n_back(); ++i)
-      f << "knot,back," << backTimes[i] << ',' << kBack[i] << '\n';
+      f << "knot,back," << backTimes[i] << ',' << rm::reference_back_forwards[i] << '\n';
 
     f << "# grid,time,forward,integral,discount\n";
     for (int i = 0; i <= 600; ++i) {

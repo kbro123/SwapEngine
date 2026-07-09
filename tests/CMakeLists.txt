@@ -16,5 +16,11 @@ target_compile_definitions(swaps_tests PRIVATE
 
 gtest_discover_tests(swaps_tests)
 
-# Later phases add QuantLib-backed oracle tests; link QuantLib only where needed:
-#   target_link_libraries(swaps_oracle_tests PRIVATE swaps GTest::gtest_main quantlib_oracle)
+# Oracle-linked tests: these self-check the reference market against QuantLib itself. Kept in a
+# SEPARATE binary so the engine's own gate (swaps_tests) never links QuantLib.
+if(TARGET quantlib_oracle)
+  add_executable(swaps_oracle_tests convexity_test.cpp)
+  target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
+  target_include_directories(swaps_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  gtest_discover_tests(swaps_oracle_tests)
+endif()

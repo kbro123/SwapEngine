@@ -28,22 +28,31 @@ shipped engine — it is used only as (a) the correctness **oracle** and (b) the
   **forward spreads** `s_k` and `forward(t) = forward_base(t) + spread(t)`; the base curve is held
   fixed (jointly-calibrated base is a later extension).
 ### Knot dates
-`knots = union(CB meeting dates, par-swap maturity dates)`.
+`front knots = CB meeting dates`;
+`back knots = { 3M-futures END dates falling after the last meeting } ∪ { par-swap maturities }`.
 
 - **Interpolation is two-region:**
   - **Front end (up to the last CB meeting date):** instantaneous forward is **piecewise-flat
     between meeting dates**. Forwards jump only at meetings. **No calibration instrument matures
     on a meeting date** — the front-end knots are meeting dates, full stop.
-  - **Back end (beyond the last meeting date):** **smooth forwards** with **C¹ and C² continuity**
-    across the long knots. Here the **knots *are* the par-swap maturity dates**.
+  - **Back end (beyond the last meeting date):** **smooth forwards** with **C¹ and C² continuity**.
+    The back-end knots are the **3M-futures end dates** (the strip carries the curve to ~3y) and
+    then the **par-swap maturities** (4y onward).
   - **At the join** (last meeting date): enforce **level continuity** of the forward into the spline;
     do **not** impose C¹/C² across the join (the front end is intentionally discontinuous).
 
 ### Calibration instruments, and why the solve is over-determined
-- **Front end:** **1M and 3M futures**, deliberately **over-provided** across the meeting-date
-  region — there are more futures than meeting knots.
-- **Back end:** **par swaps**, whose maturities define the back-end knots.
-- Swaps span the front region too, so front and back knots are coupled: one **global** solve.
+- **1M SOFR futures** (arithmetic average) cover the first year, then **3M SOFR futures**
+  (compounded, IMM) take over — the two strips are **sequential, not overlapping** (the first 3M
+  contract starts on/after the last 1M end date). The 3M strip runs past ~3y.
+- **Par swaps from 4y** define the long back-end knots.
+- The strips and swaps span multiple knots, so front and back are coupled: one **global** solve.
+  Reference market: 6 front + 17 back = 23 knots vs 29 instruments (12×1M + 8×3M + 9 swaps).
+  The current-month 1M contract straddles the evaluation date, so its elapsed SOFR fixings are
+  seeded when generating golden data.
+- Futures convexity is **Hull–White** (`½σ² …` with mean reversion `a`), not Ho–Lee — the a→0
+  limit `½σ²t₁t₂` under-damps once the strip passes ~2y. Transcribed from
+  `HullWhite::convexityBias` and checked against it in `tests/convexity_test.cpp`.
 
 **Therefore the system is OVER-DETERMINED.** `min ‖r(x)‖²` has a **non-zero residual at the
 optimum**. This is a modelling choice, not a defect.
@@ -233,11 +242,13 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       QuantLib 1.34 built static with `-O3 -march=native`; ISA auto-detect → AVX2+FMA,
       4 doubles/reg; correctness gate green. Perf checker still a stub → Phase 6.)*
 - [x] **Phase 1** — Correctness harness + golden reference from QuantLib.
-      *(Reference market: 6 FOMC knots + 11 swap-maturity knots, 25 instruments, over-determined.
-      `TwoRegionForwardCurve<Scalar>` implemented and validated against QuantLib's BackwardFlat
-      and natural-cubic interpolators to ~1e-16, with a negative control proving the harness has
-      teeth. `ql_adapter.hpp` exposes our curve to QuantLib as a `YieldTermStructure`, so
-      QuantLib prices instruments off our discount factors.)*
+      *(Reference market: 6 FOMC front knots + 17 back knots (8 from 3M-futures end dates + 9
+      swap maturities) vs 29 instruments (12×1M then 8×3M sequential futures + 9 swaps 4y–30y),
+      over-determined.
+      `TwoRegionForwardCurve<Scalar>` validated against QuantLib's BackwardFlat and natural-cubic
+      interpolators to ~1e-16, with a 1bp negative control. Hull–White futures convexity matches
+      `HullWhite::convexityBias` exactly. `ql_adapter.hpp` exposes our curve to QuantLib as a
+      `YieldTermStructure`, so QuantLib prices instruments off our discount factors.)*
 - [ ] **Phase 2** — Core engine: residual vector (in RATE units) + global LM with numerical Jacobian.
       *Curve + discounting already landed in Phase 1.*
 - [ ] **Phase 3** — AAD Jacobian (forward-mode vector-dual); verify vs bump; verify speed.

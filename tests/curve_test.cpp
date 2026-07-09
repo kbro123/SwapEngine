@@ -25,10 +25,11 @@ namespace gd = swaps::golden;
 
 namespace {
 
-// Must match tools/gen_golden.cpp exactly.
-const std::vector<double> kFront{0.0428, 0.0415, 0.0400, 0.0385, 0.0372, 0.0360};
-const std::vector<double> kBack{0.0350, 0.0345, 0.0350, 0.0355, 0.0365, 0.0380,
-                                0.0388, 0.0395, 0.0398, 0.0392, 0.0385};
+// Single source of truth — the same forwards gen_golden used. No local copies to drift.
+const std::vector<double> kFront(rm::reference_front_forwards.begin(),
+                                 rm::reference_front_forwards.end());
+const std::vector<double> kBack(rm::reference_back_forwards.begin(),
+                                rm::reference_back_forwards.end());
 
 std::string golden(const std::string& f) { return std::string(SWAPS_GOLDEN_DIR) + "/" + f; }
 
