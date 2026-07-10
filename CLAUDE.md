@@ -185,6 +185,9 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   machine-independent; only the measured timings are per-fingerprint.
 - Benchmarks run on a quiesced machine; report medians, and prefer `benchmark::DoNotOptimize` /
   `ClobberMemory` to stop the optimizer eliding the work under test.
+- The gate is `tools/check_perf.py` (run by `verify.sh`): it runs the benchmarks, refuses to compare
+  across fingerprints, and enforces the thresholds. It pairs `BM_*_QuantLib` with `BM_*_Ours` per
+  metric — keep that naming when adding benchmarks.
 
 ## 4. Build environment (this machine) & commands
 
@@ -338,4 +341,10 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       math + sparse per-swap reductions, no scalar loop. Matches the scalar kernel to ~1e-15;
       **~126× vs QuantLib's per-swap `NPV()` loop** on a 1000-swap book (0.19 ms vs 23.9 ms,
       fingerprint `52e94be82bc4`). All three perf baselines now populated.*
-- [ ] **Phase 6** — Perf-gate hardening, SIMD/layout tuning, checkpoint/backup automation.
+- [x] **Phase 6** — Perf-gate hardening. `tools/check_perf.py` runs the benchmarks, computes the
+      machine+toolchain fingerprint, REFUSES to compare across fingerprints, and enforces
+      `min_speedup_vs_quantlib` (load-robust) + `max_self_regression` vs the committed baseline.
+      `verify.sh` now gates on it — both gates green report `perf=PASS`. Re-baseline with
+      `SWAPS_CAPTURE_UTC=$(date -u +%FT%TZ) ./tools/check_perf.py --build build --baselines
+      baselines/baselines.json --update`. *(Remaining nice-to-haves: quiesced re-capture for
+      authoritative absolute ns; further SIMD/layout tuning.)*

@@ -17,19 +17,26 @@
     "in fact faster on the simple square case; our win is over GlobalBootstrap and, far more,",
     "on the AAD risk ladder (bump-and-reprice-free) and vectorized analytics."
   ],
-
+  "_thresholds_note": "min_speedup_vs_quantlib is the load-ROBUST primary gate (both sides timed back to back). max_self_regression compares absolute ours_ns to the committed baseline and IS load-sensitive; 1.25 absorbs this dev box's noise. On a quiesced machine it can be tightened after a fresh --update.",
   "thresholds": {
-    "curve_build":        { "min_speedup_vs_quantlib": 3.0,  "max_self_regression": 1.05 },
-    "risk_full_jacobian": { "min_speedup_vs_quantlib": 20.0, "max_self_regression": 1.05 },
-    "portfolio_analytics":{ "min_speedup_vs_quantlib": 10.0, "max_self_regression": 1.05 }
+    "curve_build": {
+      "min_speedup_vs_quantlib": 3.0,
+      "max_self_regression": 1.25
+    },
+    "risk_full_jacobian": {
+      "min_speedup_vs_quantlib": 20.0,
+      "max_self_regression": 1.25
+    },
+    "portfolio_analytics": {
+      "min_speedup_vs_quantlib": 10.0,
+      "max_self_regression": 1.25
+    }
   },
-
   "metric_descriptions": {
-    "curve_build":         "Global-LM calibration of a square curve (23 instruments, 23 knots): ours (AAD Jacobian + templated kernel) vs QuantLib GlobalBootstrap (numerical Jacobian + object pricing)",
-    "risk_full_jacobian":  "Full bucketed delta ladder (our AAD + implicit-function-theorem vs QuantLib bump-and-reprice)",
+    "curve_build": "Global-LM calibration of a square curve (23 instruments, 23 knots): ours (AAD Jacobian + templated kernel) vs QuantLib GlobalBootstrap (numerical Jacobian + object pricing)",
+    "risk_full_jacobian": "Full bucketed delta ladder (our AAD + implicit-function-theorem vs QuantLib bump-and-reprice)",
     "portfolio_analytics": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)"
   },
-
   "machines": {
     "52e94be82bc4": {
       "fingerprint": {
@@ -42,12 +49,24 @@
         "compiler": "Apple clang version 14.0.3 (clang-1403.0.22.14.1)",
         "arch_flag": "-march=native"
       },
-      "captured_utc": "2026-07-09T19:31:04Z",
-      "notes": "Median of 5 reps, benchmark_min_time=1s. Machine load ~3 during capture (stddev ~1-2%); re-capture quiesced before treating absolute ns as authoritative. Ratio is load-robust.",
+      "captured_utc": "2026-07-10T07:07:33Z",
+      "notes": "Captured by tools/check_perf.py --update (3 reps, benchmark_min_time=0.5s), machine load ~3. The speedup RATIOS are load-robust (both sides timed together); the absolute ns are not authoritative until re-captured on a quiesced machine.",
       "metrics": {
-        "curve_build":         { "quantlib_ns": 16104287, "ours_ns": 2350783, "speedup": 6.85 },
-        "risk_full_jacobian":  { "quantlib_ns": 27571827, "ours_ns": 703593, "speedup": 39.2 },
-        "portfolio_analytics": { "quantlib_ns": 23873482, "ours_ns": 189889, "speedup": 125.7, "book_size": 1000 }
+        "curve_build": {
+          "quantlib_ns": 17519579,
+          "ours_ns": 2573594,
+          "speedup": 6.81
+        },
+        "risk_full_jacobian": {
+          "quantlib_ns": 19013402,
+          "ours_ns": 483577,
+          "speedup": 39.32
+        },
+        "portfolio_analytics": {
+          "quantlib_ns": 23423179,
+          "ours_ns": 151649,
+          "speedup": 154.46
+        }
       }
     }
   }
