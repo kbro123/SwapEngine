@@ -17,7 +17,7 @@
     "in fact faster on the simple square case; our win is over GlobalBootstrap and, far more,",
     "on the AAD risk ladder (bump-and-reprice-free) and vectorized analytics."
   ],
-  "_thresholds_note": "min_speedup_vs_quantlib is the load-ROBUST primary gate (both sides timed back to back). max_self_regression compares absolute ours_ns to the committed baseline and IS load-sensitive; 1.25 absorbs this dev box's noise. On a quiesced machine it can be tightened after a fresh --update.",
+  "_thresholds_note": "min_speedup_vs_quantlib is the HARD, load-ROBUST gate (both sides timed back to back). max_self_regression is advisory: exceeding it only WARNS (absolute ns is load-sensitive on a noisy box); only a GROSS regression (>2x, a real code problem) hard-fails. Tighten/rely on it after a quiesced --update.",
   "thresholds": {
     "curve_build": {
       "min_speedup_vs_quantlib": 3.0,

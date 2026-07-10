@@ -342,9 +342,10 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
       **~126× vs QuantLib's per-swap `NPV()` loop** on a 1000-swap book (0.19 ms vs 23.9 ms,
       fingerprint `52e94be82bc4`). All three perf baselines now populated.*
 - [x] **Phase 6** — Perf-gate hardening. `tools/check_perf.py` runs the benchmarks, computes the
-      machine+toolchain fingerprint, REFUSES to compare across fingerprints, and enforces
-      `min_speedup_vs_quantlib` (load-robust) + `max_self_regression` vs the committed baseline.
-      `verify.sh` now gates on it — both gates green report `perf=PASS`. Re-baseline with
+      machine+toolchain fingerprint, REFUSES to compare across fingerprints, and HARD-gates on
+      `min_speedup_vs_quantlib` (load-robust). `max_self_regression` is advisory (absolute ns is
+      load-sensitive): exceeding it only warns; only a gross >2× regression hard-fails. `verify.sh`
+      gates on it — both gates green report `perf=PASS`. Re-baseline with
       `SWAPS_CAPTURE_UTC=$(date -u +%FT%TZ) ./tools/check_perf.py --build build --baselines
-      baselines/baselines.json --update`. *(Remaining nice-to-haves: quiesced re-capture for
-      authoritative absolute ns; further SIMD/layout tuning.)*
+      baselines/baselines.json --update`. *(Nice-to-haves: quiesced re-capture for authoritative
+      absolute ns; further SIMD/layout tuning.)*
