@@ -24,3 +24,7 @@
 .idea/
 .vscode/
 compile_commands.json
+
+# Python bytecode
+__pycache__/
+*.pyc

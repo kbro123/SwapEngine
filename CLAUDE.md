@@ -96,6 +96,22 @@ optimum**. This is a modelling choice, not a defect.
   stays cleanly differentiable — preserve that property; do not introduce non-differentiable kinks in
   the back end.
 
+### Interpolation is a compile-time, multi-region policy (linear schemes keep the fast path)
+The curve is `MultiRegionCurve<Scalar, Regions...>` (`curve/multi_region_curve.hpp`): an arbitrary
+compile-time sequence of region policies (`curve/regions.hpp`), each **linear in its knot values**,
+stitched with a C⁰ (level) `Boundary` handoff by default (optional C¹ where both regions support it).
+`TwoRegionForwardCurve` = `MultiRegionCurve<Flat, NaturalCubic>` (a thin wrapper, bit-identical).
+- **Rule: the interpolation must be a LINEAR MAP of the knot values to keep the microsecond path.**
+  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, and local `Hermite`/`B-spline` when added)
+  preserve `integral(t)=w(t)·x`, hence the `W`-cache, analytic Jacobian and 168 ns warm update. A
+  `is_linear_map` trait (AND over regions) gates that fast tier.
+- **Value-dependent schemes (monotone-convex / Hyman) are allowed but drop to the AAD tier** — they
+  regime-switch on the data, so `W` is no longer constant. Support them as `is_linear_map=false`
+  policies; calibration still works via AAD, just without the linear warm update.
+- Locality is a real design axis even among linear schemes: natural cubic is C² but *global* (dense
+  `W`, non-local deltas); a local C¹ `Hermite`/`B-spline` back end gives local deltas **without**
+  leaving the fast path. Prefer it when hedging stability matters.
+
 ### The curve is a LINEAR MAP in log-discount space (the key to caching & analytic risk)
 `integral(t) = ∫_0^t f(u)du = w(t)·x` is **linear** in the knot forwards `x`, with weights `w(t)`
 that depend only on the knot **times** (the structure), never their values:
@@ -282,7 +298,10 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
 include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
-include/swaps/curve/         two-region interpolation, spread_curve.hpp, ql_term_structure.hpp wrapper
+include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/NaturalCubic policies),
+                             two_region_forward_curve.hpp wrapper, spread_curve.hpp, ql_term_structure.hpp
+include/swaps/calibration/   problem.hpp, lm.hpp, risk.hpp, warm.hpp (cached-Jacobian + linear update),
+                             streaming.hpp (envelope-gated live feed), compiled_residual.hpp
 include/swaps/pricing/       templated, QuantLib-free pricing kernel (plain-data cashflow schedules)
 include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
 include/swaps/ad/            AAD scalar typedefs / dual helpers
@@ -296,6 +315,30 @@ tools/                       bootstrap_deps.sh, verify.sh, checkpoint.sh, gen_go
 third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers, QuantLib
                              (gitignored; fetched + built locally by tools/bootstrap_deps.sh)
 ```
+
+## 7a. Stage 2 — warm re-calibration to microseconds
+
+Goal: re-calibrate after a *small* market perturbation from a solved curve in microseconds. Three
+measured levers (the order matters — measure before optimising, CLAUDE.md discipline):
+
+- **Cached-Jacobian Newton (`swaps/calibration/warm.hpp`, `WarmCalibrator`).** A warm re-cal doesn't
+  need a full LM: cache `J0` (and its factorization) at the base solution and take frozen-Jacobian
+  Gauss-Newton steps. **Automatic envelope detection** — if frozen steps stop converging, `J0` is
+  stale (perturbation outside the reuse envelope) and it auto-refreshes. Full LM 2.8 ms → **48 µs**
+  exact (matches full LM to ~1e-13).
+- **First-order live-tick update = ONE matvec.** At the base `r(x0) = -dq` exactly, so the first
+  Newton step is `x = x0 + M·dq` with `M = (JᵀJ)⁻¹Jᵀ` precomputed — which is the *same* operator as
+  the analytic risk ladder `dx/dq`. **168 ns**, error `O(|dq|²)` (~1e-6 at 1bp). This is the
+  microsecond path for real-time ticks; `recalibrate()` (48 µs, exact) is the fallback for big moves.
+- **Vectorized compiled residual (`compiled_residual.hpp` on `pricing/compiled.hpp`).** The
+  calibration instruments are just a portfolio valued off `DF = exp(-Wx)`; `CompiledResidual` shares
+  that engine. **Honest result: only ~1.3× vs the scalar kernel** — our scalar residual was already
+  fast (no virtual dispatch, telescoped, L1-resident), so the `W`-cache that gave 126× vs QuantLib's
+  slow per-swap loop gives little here. It's the DRY unification, not the speed lever.
+
+> **Measured, not assumed:** the warm-recal working set is ~9 KB (L1-resident), so cache-placement /
+> memory-hierarchy tuning buys ~0. The wins are algorithmic (cached `J0`, the one-matvec update),
+> not memory management.
 
 ## 8. Phased roadmap (update the checkbox as phases land)
 

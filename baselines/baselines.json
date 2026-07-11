@@ -30,12 +30,17 @@
     "portfolio_analytics": {
       "min_speedup_vs_quantlib": 10.0,
       "max_self_regression": 1.25
+    },
+    "warm_recalibration": {
+      "min_speedup_vs_quantlib": 5.0,
+      "max_self_regression": 1.25
     }
   },
   "metric_descriptions": {
     "curve_build": "Global-LM calibration of a square curve (23 instruments, 23 knots): ours (AAD Jacobian + templated kernel) vs QuantLib GlobalBootstrap (numerical Jacobian + object pricing)",
     "risk_full_jacobian": "Full bucketed delta ladder (our AAD + implicit-function-theorem vs QuantLib bump-and-reprice)",
-    "portfolio_analytics": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)"
+    "portfolio_analytics": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)",
+    "warm_recalibration": "Stage 2: re-calibrate after a small (in-envelope) market tick -- ours (cached-Jacobian, auto envelope detection) vs QuantLib IterativeBootstrap re-bootstrap"
   },
   "machines": {
     "52e94be82bc4": {
@@ -49,23 +54,28 @@
         "compiler": "Apple clang version 14.0.3 (clang-1403.0.22.14.1)",
         "arch_flag": "-march=native"
       },
-      "captured_utc": "2026-07-10T07:07:33Z",
+      "captured_utc": "2026-07-10T21:44:25Z",
       "notes": "Captured by tools/check_perf.py --update (3 reps, benchmark_min_time=0.5s), machine load ~3. The speedup RATIOS are load-robust (both sides timed together); the absolute ns are not authoritative until re-captured on a quiesced machine.",
       "metrics": {
         "curve_build": {
-          "quantlib_ns": 17519579,
-          "ours_ns": 2573594,
-          "speedup": 6.81
+          "quantlib_ns": 16045515,
+          "ours_ns": 2443929,
+          "speedup": 6.57
         },
         "risk_full_jacobian": {
-          "quantlib_ns": 19013402,
-          "ours_ns": 483577,
-          "speedup": 39.32
+          "quantlib_ns": 19139246,
+          "ours_ns": 482227,
+          "speedup": 39.69
         },
         "portfolio_analytics": {
-          "quantlib_ns": 23423179,
-          "ours_ns": 151649,
-          "speedup": 154.46
+          "quantlib_ns": 22347676,
+          "ours_ns": 152779,
+          "speedup": 146.27
+        },
+        "warm_recalibration": {
+          "quantlib_ns": 1108773,
+          "ours_ns": 55384,
+          "speedup": 20.02
         }
       }
     }

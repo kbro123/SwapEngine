@@ -27,6 +27,7 @@ METRICS = {
     "curve_build":         ("curve_build_bench", "BM_CurveBuild_QuantLib",   "BM_CurveBuild_Ours"),
     "risk_full_jacobian":  ("risk_bench",        "BM_Risk_QuantLib_Bump",    "BM_Risk_Ours_Analytic"),
     "portfolio_analytics": ("portfolio_bench",   "BM_Portfolio_QuantLib",    "BM_Portfolio_Ours"),
+    "warm_recalibration":  ("warm_bench",        "BM_WarmRecal_QuantLib",    "BM_WarmRecal_Ours"),
 }
 UNIT_NS = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
 
