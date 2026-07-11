@@ -7,11 +7,16 @@
 #include <cmath>
 #include <vector>
 
+#include <Eigen/Core>
+
+#include "swaps/ad/dual.hpp"
 #include "swaps/curve/multi_region_curve.hpp"
 #include "swaps/curve/regions.hpp"
 #include "swaps/curve/two_region_forward_curve.hpp"
 
+using swaps::ad::Dual;
 using swaps::curve::Flat;
+using swaps::curve::Hermite;
 using swaps::curve::Linear;
 using swaps::curve::MultiRegionCurve;
 using swaps::curve::NaturalCubic;
@@ -47,6 +52,45 @@ TEST(MultiRegion, ReproducesTwoRegionForwardCurve) {
   EXPECT_LT(wf, 1e-15);
   EXPECT_LT(wi, 1e-15);
   EXPECT_LT(wd, 1e-15);
+}
+
+TEST(MultiRegion, HermiteInterpolatesKnotsIsC1AndLocal) {
+  const std::vector<double> meeting{0.1, 0.3};
+  const std::vector<double> back{1, 2, 3, 5, 7, 10, 15, 20, 30};
+  const std::vector<double> xv{0.040, 0.038,                                                   // front
+                               0.035, 0.036, 0.037, 0.038, 0.039, 0.040, 0.041, 0.039, 0.037};  // back
+  static_assert(MultiRegionCurve<double, Flat, Hermite>::is_linear_map);
+
+  // Interpolates its back knots exactly, and is C1 (slope continuous) across them.
+  MultiRegionCurve<double, Flat, Hermite> hc{Flat<double>(meeting), Hermite<double>(back)};
+  hc.set_forwards(xv);
+  for (std::size_t i = 0; i < back.size(); ++i) EXPECT_NEAR(hc.forward(back[i]), xv[2 + i], 1e-12);
+  const double e = 1e-6;
+  for (std::size_t i = 1; i + 1 < back.size(); ++i) {  // interior back knots
+    const double left = (hc.forward(back[i]) - hc.forward(back[i] - e)) / e;
+    const double right = (hc.forward(back[i] + e) - hc.forward(back[i])) / e;
+    EXPECT_NEAR(left, right, 1e-3) << "C1 broken at back knot " << i;
+  }
+
+  // Locality: d forward(t)/dx for a mid-back time. Hermite depends on only a few nearby knots
+  // (banded); the natural cubic depends on ~all of them (global).
+  Eigen::VectorXd x = Eigen::Map<const Eigen::VectorXd>(xv.data(), static_cast<int>(xv.size()));
+  const double tmid = 6.0;
+  auto nonzeros = [&](auto& curve) {
+    curve.set_forwards(swaps::ad::seed(x));
+    const auto d = curve.forward(tmid).derivatives();
+    int nz = 0;
+    for (int k = 0; k < d.size(); ++k)
+      if (std::abs(d[k]) > 1e-9) ++nz;
+    return nz;
+  };
+  MultiRegionCurve<Dual, Flat, Hermite> hd{Flat<Dual>(meeting), Hermite<Dual>(back)};
+  MultiRegionCurve<Dual, Flat, NaturalCubic> cd{Flat<Dual>(meeting), NaturalCubic<Dual>(back)};
+  const int herm = nonzeros(hd), cub = nonzeros(cd);
+  std::cout << "  [locality] d forward(6y)/dx nonzeros: Hermite=" << herm << " NaturalCubic=" << cub
+            << " (of " << xv.size() << " knots)\n";
+  EXPECT_LE(herm, 6) << "Hermite forward should depend on only a few nearby knots";
+  EXPECT_GT(cub, herm) << "natural cubic is global, so depends on more knots";
 }
 
 TEST(MultiRegion, LinearMapTraitAndComposition) {

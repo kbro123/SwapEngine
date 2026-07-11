@@ -225,4 +225,92 @@ class NaturalCubic {
   Scalar end_slope_{0.0};
 };
 
+// Local C1 cubic (Hermite) with Bessel/parabolic tangents. Each node's tangent is a fixed linear
+// combination of its neighbours' values, so f is C1, LOCAL (a knot influences only its adjacent
+// intervals -> banded W, local deltas), and still a linear map of the knot values -> fast path
+// preserved. Contrast NaturalCubic, which is C2 but GLOBAL (dense W). C0 at the near join (pinned
+// leading value); one-sided parabolic tangents at the ends.
+template <class Scalar>
+class Hermite {
+ public:
+  explicit Hermite(std::vector<double> knots) : s_(std::move(knots)) {}
+  int n_values() const { return static_cast<int>(s_.size()); }
+  double t_end() const { return s_.back(); }
+  static constexpr bool is_linear_map = true;
+
+  template <class Vec>
+  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
+    const int N = n + 1;  // points: [in.time, s_...]
+    xs_.resize(N);
+    ys_.resize(N);
+    xs_[0] = in.time;
+    ys_[0] = in.value;
+    for (int i = 0; i < n; ++i) {
+      xs_[i + 1] = s_[i];
+      ys_[i + 1] = x[off + i];
+    }
+    const int nseg = N - 1;
+    std::vector<double> h(nseg);
+    std::vector<Scalar> sec(nseg);
+    for (int i = 0; i < nseg; ++i) {
+      h[i] = xs_[i + 1] - xs_[i];
+      sec[i] = (ys_[i + 1] - ys_[i]) / h[i];
+    }
+    // Bessel/parabolic tangents (linear in ys).
+    std::vector<Scalar> m(N);
+    for (int j = 1; j < N - 1; ++j)
+      m[j] = (h[j] * sec[j - 1] + h[j - 1] * sec[j]) / (h[j - 1] + h[j]);
+    if (nseg >= 2) {
+      m[0] = ((2.0 * h[0] + h[1]) * sec[0] - h[0] * sec[1]) / (h[0] + h[1]);
+      m[N - 1] = ((2.0 * h[nseg - 1] + h[nseg - 2]) * sec[nseg - 1] - h[nseg - 1] * sec[nseg - 2]) /
+                 (h[nseg - 1] + h[nseg - 2]);
+    } else {
+      m[0] = sec[0];
+      m[1] = sec[0];
+    }
+
+    a_.resize(nseg);
+    b_.resize(nseg);
+    c_.resize(nseg);
+    d_.resize(nseg);
+    for (int i = 0; i < nseg; ++i) {
+      const double hi = h[i];
+      a_[i] = ys_[i];
+      b_[i] = m[i];
+      c_[i] = 3.0 * sec[i] / hi - (2.0 * m[i] + m[i + 1]) / hi;
+      d_[i] = (m[i] + m[i + 1]) / (hi * hi) - 2.0 * sec[i] / (hi * hi);
+    }
+    Is_.resize(N);
+    Is_[0] = in.integral;
+    for (int i = 0; i < nseg; ++i) {
+      const double u = h[i];
+      Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
+    }
+    end_slope_ = m[N - 1];
+  }
+
+  Scalar forward(double t) const {
+    if (t >= xs_.back()) return ys_.back();
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
+  }
+  Scalar integral(double t) const {
+    if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
+  }
+  Boundary<Scalar> out() const { return {xs_.back(), ys_.back(), end_slope_, Is_.back()}; }
+
+ private:
+  int seg(double t) const {
+    auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
+    return static_cast<int>(it - xs_.begin()) - 1;
+  }
+  std::vector<double> s_, xs_;
+  std::vector<Scalar> ys_, a_, b_, c_, d_, Is_;
+  Scalar end_slope_{0.0};
+};
+
 }  // namespace swaps::curve
