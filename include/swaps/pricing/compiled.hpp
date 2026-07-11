@@ -86,24 +86,28 @@ inline Eigen::VectorXd to_vec(const std::vector<double>& v) {
 
 // Float legs of N swaps: pv_j = sum over j's coupons of DF[pay]*(DF[accS]/DF[accE]-1).
 struct CompiledFloatLegs {
-  Eigen::VectorXi pay, accS, accE;      // per coupon (all swaps flattened)
-  Eigen::SparseMatrix<double> R;        // N x n_coupons, 0/1 reduction to per-swap
+  Eigen::VectorXi pay, accS, accE, swap;  // per coupon (all swaps flattened); swap = owning swap
+  Eigen::SparseMatrix<double> R;          // N x n_coupons, 0/1 reduction to per-swap
+  int n_swaps = 0;
 
   void build(const std::vector<const OisSwap*>& swaps, TimeIndex& ti) {
-    std::vector<int> p, s, e;
+    n_swaps = static_cast<int>(swaps.size());
+    std::vector<int> p, s, e, sw;
     std::vector<Eigen::Triplet<double>> trip;
-    for (int j = 0; j < static_cast<int>(swaps.size()); ++j)
+    for (int j = 0; j < n_swaps; ++j)
       for (std::size_t i = 0; i < swaps[j]->float_pay.size(); ++i) {
         const int k = static_cast<int>(p.size());
         p.push_back(ti(swaps[j]->float_pay[i]));
         s.push_back(ti(swaps[j]->float_acc_start[i]));
         e.push_back(ti(swaps[j]->float_acc_end[i]));
+        sw.push_back(j);
         trip.emplace_back(j, k, 1.0);
       }
     pay = detail::to_vec(p);
     accS = detail::to_vec(s);
     accE = detail::to_vec(e);
-    R.resize(static_cast<int>(swaps.size()), static_cast<int>(p.size()));
+    swap = detail::to_vec(sw);
+    R.resize(n_swaps, static_cast<int>(p.size()));
     R.setFromTriplets(trip.begin(), trip.end());
   }
   Eigen::VectorXd pv(const Eigen::VectorXd& DF) const {
@@ -113,12 +117,12 @@ struct CompiledFloatLegs {
 
 // Fixed-leg annuities of N swaps: ann_j = sum over j's coupons of tau*DF[pay].
 struct CompiledFixedLegs {
-  Eigen::VectorXi pay;
+  Eigen::VectorXi pay, swap;  // per coupon; swap = owning swap
   Eigen::VectorXd tau;
   Eigen::SparseMatrix<double> R;  // N x n_coupons
 
   void build(const std::vector<const OisSwap*>& swaps, TimeIndex& ti) {
-    std::vector<int> p;
+    std::vector<int> p, sw;
     std::vector<double> t;
     std::vector<Eigen::Triplet<double>> trip;
     for (int j = 0; j < static_cast<int>(swaps.size()); ++j)
@@ -126,10 +130,12 @@ struct CompiledFixedLegs {
         const int k = static_cast<int>(p.size());
         p.push_back(ti(swaps[j]->fixed_pay[i]));
         t.push_back(swaps[j]->fixed_accrual[i]);
+        sw.push_back(j);
         trip.emplace_back(j, k, 1.0);
       }
     pay = detail::to_vec(p);
     tau = detail::to_vec(t);
+    swap = detail::to_vec(sw);
     R.resize(static_cast<int>(swaps.size()), static_cast<int>(p.size()));
     R.setFromTriplets(trip.begin(), trip.end());
   }
@@ -167,8 +173,8 @@ struct CompiledCompoundedFutures {
 
 // 1M arithmetic-average futures: rate_j = (realized_j + sum_days(DF[subS]/DF[subE]-1))*inv_period + conv.
 struct CompiledAveragedFutures {
-  Eigen::VectorXi subS, subE;      // per business day (all futures flattened)
-  Eigen::SparseMatrix<double> R;   // N x n_subperiods
+  Eigen::VectorXi subS, subE, fut;  // per business day (all futures flattened); fut = owning future
+  Eigen::SparseMatrix<double> R;    // N x n_subperiods
   Eigen::VectorXd realized, inv_period, convexity;
 
   void add(const AveragedFuture& f, double conv, TimeIndex& ti) {
@@ -185,6 +191,7 @@ struct CompiledAveragedFutures {
   void finalize() {
     subS = detail::to_vec(ss_);
     subE = detail::to_vec(se_);
+    fut = detail::to_vec(row_);
     realized = detail::to_vec(rz_);
     inv_period = detail::to_vec(ip_);
     convexity = detail::to_vec(cv_);

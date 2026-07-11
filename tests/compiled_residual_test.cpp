@@ -43,3 +43,24 @@ TEST_F(Compiled, ResidualMatchesScalarKernel) {
             << " worst |vec - scalar| = " << worst << "\n";
   EXPECT_LT(worst, 1e-12);
 }
+
+TEST_F(Compiled, AnalyticJacobianMatchesAad) {
+  const cal::CompiledResidual cr(prob);
+  double worst_abs = 0, scale = 0;
+  for (double lvl : {0.030, 0.040}) {
+    const Eigen::VectorXd x = Eigen::VectorXd::Constant(prob.n_knots(), lvl);
+    const Eigen::MatrixXd Ja = cr.jacobian(x);
+    const Eigen::MatrixXd Jaad = cal::aad_jacobian(prob, x);
+    ASSERT_EQ(Ja.rows(), prob.n_residuals());
+    ASSERT_EQ(Ja.cols(), prob.n_knots());
+    worst_abs = std::max(worst_abs, (Ja - Jaad).cwiseAbs().maxCoeff());
+    scale = std::max(scale, Jaad.cwiseAbs().maxCoeff());
+  }
+  // also at the calibrated point
+  const Eigen::VectorXd xs = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
+  worst_abs = std::max(worst_abs, (cr.jacobian(xs) - cal::aad_jacobian(prob, xs)).cwiseAbs().maxCoeff());
+
+  std::cout << "  [analytic J] worst_abs=" << worst_abs << " / scale=" << scale
+            << " = " << worst_abs / scale << "\n";
+  EXPECT_LT(worst_abs / scale, 1e-9) << "analytic Jacobian must match AAD";
+}

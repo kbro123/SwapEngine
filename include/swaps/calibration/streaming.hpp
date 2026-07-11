@@ -58,11 +58,11 @@ class StreamingCalibrator {
   }
 
  private:
-  // M = (J^T J)^{-1} J^T at x (= J^{-1} when square). One AAD Jacobian + a factor-solve.
+  // M = (J^T J)^{-1} J^T at x (= J^{-1} when square). One ANALYTIC Jacobian + a factor-solve.
   void set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     x_anchor_ = x;
     q_anchor_ = q;
-    const Eigen::MatrixXd J = aad_jacobian(*prob_, x);
+    const Eigen::MatrixXd J = cr_.jacobian(x);
     M_ = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
         Eigen::MatrixXd::Identity(prob_->n_residuals(), prob_->n_residuals()));
     ++refresh_count_;
@@ -88,7 +88,7 @@ class StreamingCalibrator {
       if (dx.cwiseAbs().maxCoeff() < opt_.step_tol) break;
       if (frozen >= opt_.max_frozen) {
         if (refreshes >= opt_.max_refresh) break;
-        const Eigen::MatrixXd J = aad_jacobian(*prob_, x);
+        const Eigen::MatrixXd J = cr_.jacobian(x);  // analytic, no AAD
         Mref = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
             Eigen::MatrixXd::Identity(prob_->n_residuals(), prob_->n_residuals()));
         M = &Mref;

@@ -44,9 +44,9 @@ class WarmCalibrator {
   };
 
   WarmCalibrator(const CalibrationProblem& prob, const Eigen::VectorXd& x_base)
-      : prob_(&prob), x0_(x_base), qr0_(aad_jacobian(prob, x_base)), cr_(prob) {
-    // First-order curve sensitivity M = (J^T J)^{-1} J^T (= J^{-1} when square) -- the SAME operator
-    // as the analytic risk ladder dx/dq. Precomputed once.
+      : prob_(&prob), x0_(x_base), cr_(prob), qr0_(cr_.jacobian(x_base)) {
+    // J0 via the ANALYTIC Jacobian (no AAD). First-order curve sensitivity M = (J^T J)^{-1} J^T
+    // (= J^{-1} when square) -- the SAME operator as the analytic risk ladder dx/dq. Precomputed once.
     M_ = qr0_.solve(Eigen::MatrixXd::Identity(prob.n_residuals(), prob.n_residuals()));
   }
 
@@ -84,7 +84,7 @@ class WarmCalibrator {
       // Envelope detection: too many frozen steps without hitting tolerance => J0 is stale.
       if (frozen >= opt.max_frozen) {
         if (res.jacobian_refreshes >= opt.max_refresh) break;  // give up (caller may fall back)
-        refreshed = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(aad_jacobian(*prob_, x));
+        refreshed = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(cr_.jacobian(x));  // analytic, no AAD
         J = &refreshed;
         ++res.jacobian_refreshes;
         frozen = 0;
@@ -105,9 +105,9 @@ class WarmCalibrator {
  private:
   const CalibrationProblem* prob_;
   Eigen::VectorXd x0_;
+  CompiledResidual cr_;                              // vectorized residual + analytic Jacobian
   Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr0_;  // factorization of J0 (base Jacobian)
   Eigen::MatrixXd M_;                                // first-order sensitivity (J^T J)^{-1} J^T
-  CompiledResidual cr_;                              // vectorized residual for the hot loop
 };
 
 }  // namespace swaps::calibration

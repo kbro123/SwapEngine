@@ -127,6 +127,11 @@ combine into prices.** Exploit this — it is the whole optimization thesis:
   spline re-solve, no schedule regeneration, no per-coupon loop.
 - **Swap math directly on curve parameters.** `∂DF/∂x = -DF·w(t)`, so PV and bucketed sensitivities
   to the knot forwards are direct; chain through the calibration Jacobian (IFT) for quote deltas.
+- **The calibration Jacobian is ANALYTIC (no AAD in the hot path).** `CompiledResidual::jacobian`
+  computes `J = ∂r/∂x = -(∂r/∂DF · diag(DF))·W`: the per-instrument `∂r/∂DF` (analytic, sparse)
+  scattered, then one `W` matmul. Matches AAD to 1e-15, ~15× faster (25 µs vs 373 µs) — this is what
+  makes the streaming Jacobian *refresh* cheap. AAD is now used in exactly one place: producing `W`
+  once (`integral_weight_matrix`), which works generically for any linear region policy.
 - **Extending/re-wrapping QuantLib is allowed where it unlocks this.** QuantLib instruments recompute
   per-coupon on every pricing call; our wrapper computes `W` once (reusing QuantLib only to build the
   schedule) and reprices by matrix algebra. Reimplement/extend the hot parts; reuse the rest.

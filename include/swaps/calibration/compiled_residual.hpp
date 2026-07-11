@@ -63,6 +63,45 @@ class CompiledResidual {
 
   Eigen::VectorXd residuals(const Eigen::VectorXd& x) const { return model_rates(x) - market_; }
 
+  // Analytic calibration Jacobian J = dr/dx, WITHOUT AAD. It factors through the DFs:
+  //   J = dr/dDF * dDF/dx = -(dr/dDF * diag(DF)) * W        (dDF/dx = -diag(DF)*W from DF=exp(-Wx))
+  // dr/dDF is the per-instrument pricing sensitivity (analytic, sparse) scattered into G (n_res x
+  // n_times); the W matmul then maps DF-space back to knot space. No VectorXd-allocating dual sweep.
+  Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
+    const Eigen::VectorXd DF = df_(x);
+    const int N = n_residuals(), T = df_.n_times();
+    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(N, T);  // dr/dDF
+
+    for (int k = 0; k < static_cast<int>(avg_.subS.size()); ++k) {
+      const int j = avg_.fut[k], sd = avg_.subS[k], se = avg_.subE[k];
+      const double ip = avg_.inv_period[j];
+      G(j, sd) += ip / DF[se];
+      G(j, se) += -ip * DF[sd] / (DF[se] * DF[se]);
+    }
+    for (int j = 0; j < comp_.size(); ++j) {
+      const int row = n_avg_ + j, s = comp_.s[j], e = comp_.e[j];
+      const double it = comp_.inv_tau[j];
+      G(row, s) += it / DF[e];
+      G(row, e) += -it * DF[s] / (DF[e] * DF[e]);
+    }
+    if (n_swap_) {
+      const Eigen::VectorXd fpv = float_.pv(DF), ann = fixed_.annuity(DF);
+      Eigen::MatrixXd dfpv = Eigen::MatrixXd::Zero(n_swap_, T), dann = Eigen::MatrixXd::Zero(n_swap_, T);
+      for (int i = 0; i < static_cast<int>(float_.pay.size()); ++i) {
+        const int sw = float_.swap[i], pay = float_.pay[i], aS = float_.accS[i], aE = float_.accE[i];
+        dfpv(sw, pay) += DF[aS] / DF[aE] - 1.0;
+        dfpv(sw, aS) += DF[pay] / DF[aE];
+        dfpv(sw, aE) += -DF[pay] * DF[aS] / (DF[aE] * DF[aE]);
+      }
+      for (int i = 0; i < static_cast<int>(fixed_.pay.size()); ++i)
+        dann(fixed_.swap[i], fixed_.pay[i]) += fixed_.tau[i];
+      for (int j = 0; j < n_swap_; ++j)
+        G.row(n_avg_ + n_comp_ + j) =
+            dfpv.row(j) / ann[j] - fpv[j] * dann.row(j) / (ann[j] * ann[j]);
+    }
+    return -((G * DF.asDiagonal()) * df_.W());
+  }
+
  private:
   int n_avg_, n_comp_, n_swap_;
   pricing::CompiledDiscounts df_;
