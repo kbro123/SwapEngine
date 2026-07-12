@@ -34,7 +34,7 @@ struct PortfolioVec : ::testing::Test {
   }
 
   double scalar_total(const Eigen::VectorXd& x) const {
-    swaps::curve::TwoRegionForwardCurve<double> c(prob.meeting_times, prob.back_times);
+    auto c = swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
     c.set_forwards(x);
     return pf.npv<double>(c);
   }
@@ -57,7 +57,7 @@ TEST_F(PortfolioVec, MatchesScalarKernelAtManyCurves) {
   for (const auto& x : curves) {
     // per-swap agreement
     const Eigen::VectorXd vec = cp.npv(x);
-    swaps::curve::TwoRegionForwardCurve<double> c(prob.meeting_times, prob.back_times);
+    auto c = swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
     c.set_forwards(x);
     for (int p = 0; p < cp.n_swaps(); ++p) {
       const double scal = pf.positions[p].notional *

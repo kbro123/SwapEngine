@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "swaps/ad/dual.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
 namespace swaps::pricing {
@@ -27,7 +27,7 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<double>& meeting
                                               const std::vector<double>& back,
                                               const std::vector<double>& times) {
   const int m = static_cast<int>(meeting.size() + back.size());
-  curve::TwoRegionForwardCurve<ad::Dual> c(meeting, back);
+  auto c = curve::make_calibration_curve<ad::Dual>(meeting, back);
   c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
   Eigen::MatrixXd W(static_cast<int>(times.size()), m);
   for (std::size_t i = 0; i < times.size(); ++i) {

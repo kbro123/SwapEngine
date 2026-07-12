@@ -14,6 +14,7 @@
 
 #include <vector>
 
+#include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/spread_curve.hpp"
 #include "swaps/curve/two_region_forward_curve.hpp"
 #include "swaps/pricing/cashflows.hpp"
@@ -67,7 +68,7 @@ struct CalibrationProblem {
   // r(x) with x = the knot forwards of a standalone two-region curve.
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    curve::TwoRegionForwardCurve<Scalar> c(meeting_times, back_times);
+    auto c = curve::make_calibration_curve<Scalar>(meeting_times, back_times);
     c.set_forwards(x);
     return price_residuals<Scalar>(c);
   }

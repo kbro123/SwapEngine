@@ -18,30 +18,12 @@
 #include <map>
 #include <vector>
 
-#include "swaps/ad/dual.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/pricing/compiled.hpp"  // shared integral_weight_matrix (uses the calibration curve)
 #include "swaps/portfolio/portfolio.hpp"
 
 namespace swaps::portfolio {
 
-// W(i,:) such that integral(times[i]) = W(i,:)·x. Built via one AAD pass: integral is linear, so its
-// gradient IS w and is independent of x. Setup only (not the hot path).
-inline Eigen::MatrixXd integral_weight_matrix(const std::vector<double>& meeting,
-                                              const std::vector<double>& back,
-                                              const std::vector<double>& times) {
-  const int m = static_cast<int>(meeting.size() + back.size());
-  curve::TwoRegionForwardCurve<ad::Dual> c(meeting, back);
-  c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));  // any x; gradient is the weight row
-  Eigen::MatrixXd W(static_cast<int>(times.size()), m);
-  for (std::size_t i = 0; i < times.size(); ++i) {
-    const ad::Dual I = c.integral(times[i]);
-    if (I.derivatives().size() == m)
-      W.row(static_cast<int>(i)) = I.derivatives().transpose();
-    else
-      W.row(static_cast<int>(i)).setZero();  // t<=0: no curve dependence
-  }
-  return W;
-}
+using pricing::integral_weight_matrix;  // W over the calibration curve -- one source, not two
 
 class CompiledPortfolio {
  public:

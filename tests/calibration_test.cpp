@@ -32,16 +32,16 @@ Eigen::VectorXd reference_x() {
   return x;
 }
 
-// A calibration problem whose market quotes are exactly the model quotes at the reference curve,
-// so the global minimum sits at the reference forwards with zero residual.
+// A calibration problem whose quotes are exactly the model quotes at the reference forwards, so the
+// global minimum sits there with zero residual. Set via the residual-bump trick (market += r(xref)),
+// which is curve-agnostic -- it uses the problem's own calibration curve, whatever the interpolation.
 cal::CalibrationProblem self_consistent_problem(const rb::Market& mk) {
   cal::CalibrationProblem p = rb::build_problem(mk);
-  rb::Curve ref = rb::reference_curve(mk);
-  for (auto& s : p.swaps) s.market_rate = swaps::pricing::ois_par_rate<double>(s.sched, ref);
-  for (auto& cf : p.comp_futs)
-    cf.market_rate = swaps::pricing::compounded_future_rate<double>(cf.sched, ref) + cf.convexity;
-  for (auto& a : p.avg_futs)
-    a.market_rate = swaps::pricing::averaged_future_rate<double>(a.sched, ref) + a.convexity;
+  const Eigen::VectorXd r0 = p.residuals<double>(reference_x());
+  int i = 0;
+  for (auto& a : p.avg_futs) a.market_rate += r0[i++];
+  for (auto& c : p.comp_futs) c.market_rate += r0[i++];
+  for (auto& s : p.swaps) s.market_rate += r0[i++];
   return p;
 }
 
