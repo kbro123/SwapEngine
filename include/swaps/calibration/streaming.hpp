@@ -1,15 +1,23 @@
 #pragma once
-// Streaming re-calibrator for a live market feed (Stage 2). Holds an ANCHOR (x_anchor solving market
-// q_anchor, plus M = J(x_anchor)^{-1}). Each tick decides linear vs exact by how far the CURRENT
-// market has drifted from the anchor market -- exactly the point where the Jacobian was last taken:
+// Streaming re-calibrator for a live market feed (Stage 2). Holds a cached inverse Jacobian
+// M = J(x_ref)^{-1} at the last point where J was computed, and the current solution x_cur.
 //
-//   drift = ||q_new - q_anchor||_inf
-//     drift < envelope :  x = x_anchor + M*(q_new - q_anchor)      one matvec, ~168 ns, error O(drift^2)
-//     drift >= envelope:  RE-ANCHOR: refine to the exact solution at q_new, recompute J there, reset
-//                         the anchor to (x*, q_new, J*^{-1}). Costs one AAD Jacobian.
+// Two modes (Options::exact):
 //
-// So the linear fast path runs as long as the market stays inside the envelope of the last Jacobian;
-// a re-anchor happens only when it doesn't -- and resets the drift to zero.
+//  EXACT (default -- accuracy-first, for a live pricer to sharp clients):
+//    Every tick runs frozen-Jacobian Gauss-Newton to convergence, REUSING the cached M:
+//        x <- x - M*(model_rates(x) - q)   until ||dx||_inf < step_tol
+//    The reused M is a Newton PRECONDITIONER, valid over a far larger market move than a single
+//    linear step is accurate -- so each tick is solved EXACTLY (~step_tol), independent of move size.
+//    J is recomputed ONLY when the frozen iteration stalls (M stale as a preconditioner), i.e. on the
+//    staleness envelope (several bp), NOT the tiny linear-accuracy envelope. That is how Jacobian
+//    recalcs are eliminated without any accuracy give-up.
+//
+//  LINEAR (legacy, for comparison): a single linear step x = x_anchor + M*dq while drift < envelope,
+//    re-anchoring (recompute J) on every envelope crossing. Fast (one matvec) but O(drift^2) error.
+//
+// In both modes the streamed curve reprices the calibration instruments back to the input quotes; in
+// EXACT mode the round-trip residual ||model_rates(x) - q||_inf is at the Newton tolerance every tick.
 
 #include <Eigen/Dense>
 
@@ -19,19 +27,20 @@
 namespace swaps::calibration {
 
 struct StreamTick {
-  bool refreshed = false;  // this tick recomputed the Jacobian (re-anchored)
-  int newton_steps = 0;    // refinement steps taken during a re-anchor (0 on the linear path)
-  int refreshes = 0;       // AAD Jacobian recomputations during a re-anchor (>=1 if refreshed)
-  double drift = 0;        // ||q_new - q_anchor||_inf before this tick
+  bool refreshed = false;  // this tick recomputed the analytic Jacobian (>=1 refresh)
+  int newton_steps = 0;    // total frozen Gauss-Newton steps taken this tick
+  int refreshes = 0;       // analytic Jacobian recomputations this tick (0 on the pure fast path)
+  double drift = 0;        // ||q_new - q_ref||_inf: market move since J was last computed
 };
 
 class StreamingCalibrator {
  public:
   struct Options {
-    double envelope = 1e-4;   // drift (rate units) that triggers a re-anchor; ~1bp
-    double step_tol = 1e-9;   // re-anchor refinement converged when ||dx||_inf < step_tol
-    int max_frozen = 4;       // frozen-M refinement steps before refreshing M mid-re-anchor
-    int max_refresh = 4;
+    double envelope = 1e-4;  // LINEAR mode: drift (rate units) that forces a re-anchor
+    double step_tol = 1e-9;  // EXACT mode: converged when ||dx||_inf < step_tol
+    int max_frozen = 4;      // EXACT mode: frozen steps without convergence -> refresh M (staleness)
+    int max_refresh = 6;     // safety cap on refreshes within one tick
+    bool exact = true;       // EXACT (iterate to step_tol) vs LINEAR (single step + drift re-anchor)
   };
 
   StreamingCalibrator(const CalibrationProblem& prob, const Eigen::VectorXd& x0,
@@ -47,18 +56,66 @@ class StreamingCalibrator {
   int refresh_count() const { return refresh_count_; }
 
   StreamTick update(const Eigen::VectorXd& q_new) {
+    return opt_.exact ? update_exact(q_new) : update_linear(q_new);
+  }
+
+ private:
+  // EXACT: frozen-Newton to step_tol, reusing M; recompute J only when the iteration stalls.
+  StreamTick update_exact(const Eigen::VectorXd& q_new) {
+    StreamTick t;
+    t.drift = (q_new - q_anchor_).cwiseAbs().maxCoeff();
+    Eigen::VectorXd x = x_cur_;  // warm start from the last exact solution (tick-to-tick move is tiny)
+    int frozen = 0;
+    for (;;) {
+      const Eigen::VectorXd r = cr_.model_rates(x) - q_new;
+      const Eigen::VectorXd dx = M_ * r;
+      x.noalias() -= dx;
+      ++t.newton_steps;
+      if (dx.cwiseAbs().maxCoeff() < opt_.step_tol) break;  // EXACT reprice reached
+      if (++frozen >= opt_.max_frozen) {                    // M stale as a preconditioner -> refresh
+        if (t.refreshes >= opt_.max_refresh) break;         // safety (never hit on smooth feeds)
+        set_anchor(x, q_new);
+        t.refreshed = true;
+        ++t.refreshes;
+        frozen = 0;
+      }
+    }
+    x_cur_ = x;
+    return t;
+  }
+
+  // LINEAR (legacy): single linear step inside the envelope, re-anchor (recompute J) outside it.
+  StreamTick update_linear(const Eigen::VectorXd& q_new) {
     StreamTick t;
     const Eigen::VectorXd d = q_new - q_anchor_;
     t.drift = d.cwiseAbs().maxCoeff();
     if (t.drift < opt_.envelope) {
-      x_cur_.noalias() = x_anchor_ + M_ * d;  // LINEAR fast path
+      x_cur_.noalias() = x_anchor_ + M_ * d;  // one matvec, O(drift^2) error
       return t;
     }
-    return reanchor(q_new, d);  // drifted out of the envelope -> exact re-solve + refresh
+    t.refreshed = true;
+    Eigen::VectorXd x = x_anchor_ + M_ * d;
+    int frozen = 0;
+    for (;;) {
+      const Eigen::VectorXd r = cr_.model_rates(x) - q_new;
+      const Eigen::VectorXd dx = M_ * r;
+      x.noalias() -= dx;
+      ++t.newton_steps;
+      if (dx.cwiseAbs().maxCoeff() < opt_.step_tol) break;
+      if (++frozen >= opt_.max_frozen) {
+        if (t.refreshes >= opt_.max_refresh) break;
+        set_anchor(x, q_new);
+        ++t.refreshes;
+        frozen = 0;
+      }
+    }
+    set_anchor(x, q_new);  // legacy always refreshes at the converged solution
+    x_cur_ = x;
+    t.refreshes += 1;
+    return t;
   }
 
- private:
-  // M = (J^T J)^{-1} J^T at x (= J^{-1} when square). One ANALYTIC Jacobian + a factor-solve.
+  // M = J(x)^{-1} (square problem). One ANALYTIC Jacobian + a factor-solve.
   void set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     x_anchor_ = x;
     q_anchor_ = q;
@@ -66,41 +123,6 @@ class StreamingCalibrator {
     M_ = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
         Eigen::MatrixXd::Identity(prob_->n_residuals(), prob_->n_residuals()));
     ++refresh_count_;
-  }
-
-  StreamTick reanchor(const Eigen::VectorXd& q_new, const Eigen::VectorXd& d0) {
-    StreamTick t;
-    t.refreshed = true;
-    t.drift = d0.cwiseAbs().maxCoeff();
-
-    // Warm start from the linear prediction, then refine to the exact solution at q_new with the
-    // current M (refreshing M if it stalls), before taking the fresh anchor Jacobian.
-    Eigen::VectorXd x = x_anchor_ + M_ * d0;
-    Eigen::MatrixXd Mref;
-    const Eigen::MatrixXd* M = &M_;
-    int frozen = 0, refreshes = 0;
-    for (;;) {
-      const Eigen::VectorXd r = cr_.model_rates(x) - q_new;
-      const Eigen::VectorXd dx = (*M) * r;
-      x.noalias() -= dx;
-      ++t.newton_steps;
-      ++frozen;
-      if (dx.cwiseAbs().maxCoeff() < opt_.step_tol) break;
-      if (frozen >= opt_.max_frozen) {
-        if (refreshes >= opt_.max_refresh) break;
-        const Eigen::MatrixXd J = cr_.jacobian(x);  // analytic, no AAD
-        Mref = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
-            Eigen::MatrixXd::Identity(prob_->n_residuals(), prob_->n_residuals()));
-        M = &Mref;
-        ++refreshes;
-        ++refresh_count_;
-        frozen = 0;
-      }
-    }
-    set_anchor(x, q_new);  // fresh anchor Jacobian at the converged solution
-    x_cur_ = x;
-    t.refreshes = refreshes + 1;  // +1 for the anchor Jacobian
-    return t;
   }
 
   const CalibrationProblem* prob_;

@@ -29,6 +29,7 @@ if(TARGET quantlib_oracle)
     portfolio_test.cpp
     spread_test.cpp
     warm_test.cpp
+    streaming_test.cpp
     compiled_residual_test.cpp
   )
   target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
