@@ -303,10 +303,12 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
 include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
-include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/NaturalCubic policies),
-                             two_region_forward_curve.hpp wrapper, spread_curve.hpp, ql_term_structure.hpp
+include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/NaturalCubic/Hermite),
+                             curve_module.hpp (runtime ModularCurve: build from CurveModule{knots,scheme}),
+                             two_region_forward_curve.hpp + calibration_curve.hpp (Flat+Hermite, shipped),
+                             spread_curve.hpp, ql_term_structure.hpp (generic CurveTermStructure<Curve>)
 include/swaps/calibration/   problem.hpp, lm.hpp, risk.hpp, warm.hpp (cached-Jacobian + linear update),
-                             streaming.hpp (envelope-gated live feed), compiled_residual.hpp
+                             streaming.hpp (exact frozen-Newton live feed), compiled_residual.hpp
 include/swaps/pricing/       templated, QuantLib-free pricing kernel (plain-data cashflow schedules)
 include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
 include/swaps/ad/            AAD scalar typedefs / dual helpers
@@ -344,6 +346,24 @@ measured levers (the order matters — measure before optimising, CLAUDE.md disc
 > **Measured, not assumed:** the warm-recal working set is ~9 KB (L1-resident), so cache-placement /
 > memory-hierarchy tuning buys ~0. The wins are algorithmic (cached `J0`, the one-matvec update),
 > not memory management.
+
+### The accuracy-first streaming path (`swaps/calibration/streaming.hpp`, `StreamingCalibrator`)
+For a **live pricer to sharp clients**, a stale price is a free option — so the default streaming mode
+is `exact`: **iterate the cached `M = J⁻¹` as a frozen-Newton *preconditioner* to convergence every
+tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not a single linear extrapolation.
+- The fixed point is `r = 0` **for any invertible `M`**, so every tick lands on the EXACT solution
+  (round-trip `‖model_rates(x) − q‖∞ ≈ 1e-12`, machine-exact) regardless of `M`'s accuracy. `M` only
+  sets the convergence *rate* `ρ = ‖I − M·J(x)‖` (measured: ~0.04 at 10 bp of drift → ~3 steps/tick).
+- **The Jacobian is recomputed only on genuine staleness** — when frozen-Newton needs more than
+  `max_frozen` steps — NOT on a drift envelope. That staleness envelope is ~30 bp of curve move (a
+  level move; `tools/jacobian_staleness.cpp` measures `ρ` vs move size) vs the linear path's 0.35 bp,
+  so ~85× fewer recomputes AND exact. The recompute reuses the cached `W` (analytic `J`, no AAD).
+- **The legacy `linear` single-step path (`x = x_anchor + M·dq`, O(dq²) error, re-anchor at 0.35 bp)
+  is a *smooth-market artifact*.** Under a realistic **~0.15 bp/tick** feed it re-anchors ~20% of
+  ticks (drift crosses 0.35 bp every few ticks); the exact path rides one Jacobian all day. The
+  "168 ns / 98% fast-path" numbers above assume an unrealistically smooth crawl — keep them for the
+  *WarmCalibrator small-perturbation* use, not the live tick feed. Gate: `tests/streaming_test.cpp`
+  (round-trip + exactness every tick). Demo: `tools/stream_sim.cpp` (trending day, both modes).
 
 ## 8. Phased roadmap (update the checkbox as phases land)
 
