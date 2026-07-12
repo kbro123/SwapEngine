@@ -34,7 +34,7 @@ fi
 
 # Next checkpoint number.
 last="$(git tag --list 'checkpoint-*' | sed 's/checkpoint-//' | sort -n | tail -1)"
-next=$(printf '%02d' $(( ${last:-0} + 1 )))
+next=$(printf '%02d' $(( 10#${last:-0} + 1 )))  # 10# forces base-10 (else 08/09 parse as octal)
 tag="checkpoint-${next}"
 
 git add -A
