@@ -26,9 +26,9 @@ compiled with the same compiler and flags (§3 perf-gate integrity).
   be our own code consuming QuantLib-extracted schedules.
 
 ### North-star capabilities
-1. **Our calibrated curve is a `QuantLib::YieldTermStructure`.** `TwoRegionForwardCurve<Scalar>` is the
-   templated math core; the `YieldTermStructure` wrapper exposes it to QuantLib pricing engines for
-   validation and reuse.
+1. **Our calibrated curve is a `QuantLib::YieldTermStructure`.** `make_calibration_curve<Scalar>`
+   (`MultiRegionCurve<Flat, Hermite>`) is the templated math core; the generic
+   `CurveTermStructure<Curve>` wrapper exposes it to QuantLib pricing engines for validation and reuse.
 2. **Global curve calibration.** All knot forwards solved **jointly** with Levenberg–Marquardt over
    residuals built from QuantLib rate helpers — not QuantLib's sequential 1-D bootstrapping.
 3. **Analytic Jacobian via AAD.** The LM Jacobian `J[i][k] = d residual_i / d knot_k` is computed by
@@ -100,11 +100,14 @@ optimum**. This is a modelling choice, not a defect.
 The curve is `MultiRegionCurve<Scalar, Regions...>` (`curve/multi_region_curve.hpp`): an arbitrary
 compile-time sequence of region policies (`curve/regions.hpp`), each **linear in its knot values**,
 stitched with a C⁰ (level) `Boundary` handoff by default (optional C¹ where both regions support it).
-`TwoRegionForwardCurve` = `MultiRegionCurve<Flat, NaturalCubic>` (a thin wrapper, bit-identical).
+The **shipped** curve is `make_calibration_curve` = `MultiRegionCurve<Flat, Hermite>` (flat meeting-date
+front, **local C¹ Hermite** back) — used everywhere: calibration, pricing, risk, streaming, the bundle.
+The old `TwoRegionForwardCurve` (Flat+NaturalCubic) wrapper was retired; `NaturalCubic`/`Linear` remain
+as available region policies. Region ctors reject duplicate/unsorted knots (a zero-length segment is a
+0/0 → silent NaN; caught at construction).
 - **Rule: the interpolation must be a LINEAR MAP of the knot values to keep the microsecond path.**
-  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, and local `Hermite`/`B-spline` when added)
-  preserve `integral(t)=w(t)·x`, hence the `W`-cache, analytic Jacobian and 168 ns warm update. A
-  `is_linear_map` trait (AND over regions) gates that fast tier.
+  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`) preserve `integral(t)=w(t)·x`, hence
+  the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over regions) gates that tier.
 - **Value-dependent schemes (monotone-convex / Hyman) are allowed but drop to the AAD tier** — they
   regime-switch on the data, so `W` is no longer constant. Support them as `is_linear_map=false`
   policies; calibration still works via AAD, just without the linear warm update.
@@ -152,7 +155,8 @@ rates and par swap rates must match QuantLib. Two oracles:
   - *Composite curve* → wrap our engine in a `YieldTermStructure` adapter overriding
     `discountImpl(Time)`, and let QuantLib's own pricing engines price the instruments off our
     discount factors. Any disagreement is then *our pricing bug*, not an interpolation mismatch.
-    This is the workhorse oracle: it needs no QuantLib equivalent of our two-region interpolator.
+    This is the workhorse oracle: it needs no QuantLib equivalent of our multi-region interpolator,
+    and it is now the ONLY interpolation oracle (the natural-cubic golden CSVs were retired).
 
 **(b) Calibration — solver-dependent. Do NOT demand 1e-10.**
   - Assert **first-order optimality**: `‖Jᵀr‖∞` below a stationarity tolerance.
@@ -303,22 +307,24 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
 include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
-include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/NaturalCubic/Hermite),
+include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/NaturalCubic/Hermite;
+                             region ctors reject duplicate/unsorted knots), calibration_curve.hpp
+                             (make_calibration_curve = MultiRegionCurve<Flat,Hermite> -- the SHIPPED curve),
                              curve_module.hpp (runtime ModularCurve: build from CurveModule{knots,scheme}),
-                             two_region_forward_curve.hpp + calibration_curve.hpp (Flat+Hermite, shipped),
                              spread_curve.hpp, ql_term_structure.hpp (generic CurveTermStructure<Curve>)
 include/swaps/calibration/   problem.hpp, lm.hpp, risk.hpp, warm.hpp (cached-Jacobian + linear update),
-                             streaming.hpp (exact frozen-Newton live feed), compiled_residual.hpp
-include/swaps/pricing/       templated, QuantLib-free pricing kernel (plain-data cashflow schedules)
+                             streaming.hpp (exact frozen-Newton live feed), compiled_residual.hpp,
+                             bundle_problem.hpp + bundle_stage.hpp (Stage 3 multi-curve bundle)
+include/swaps/pricing/       templated, QuantLib-free pricing kernel (cashflows.hpp; single- AND
+                             multi-curve OIS: ois_par_rate/basis_par_spread with forecast != discount)
 include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
 include/swaps/ad/            AAD scalar typedefs / dual helpers
-include/swaps/calibration/   residual vector (problem.hpp), LM solver (lm.hpp), IFT risk (risk.hpp)
 include/swaps/portfolio/     portfolio NPV kernel (portfolio.hpp) + vectorized reprice (compiled.hpp)
 src/                         non-header impl / example drivers
-tests/                       GoogleTest correctness gate  (tests/golden/ = committed reference data)
+tests/                       GoogleTest correctness gate (QuantLib YieldTermStructure oracle -- no golden CSVs)
 bench/                       Google Benchmark performance gate
 baselines/baselines.json     committed baseline timings (ours vs QuantLib)
-tools/                       bootstrap_deps.sh, verify.sh, checkpoint.sh, gen_golden, etc.
+tools/                       bootstrap_deps.sh, verify.sh, checkpoint.sh, stream_sim, etc.
 third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers, QuantLib
                              (gitignored; fetched + built locally by tools/bootstrap_deps.sh)
 ```
@@ -364,6 +370,30 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   "168 ns / 98% fast-path" numbers above assume an unrealistically smooth crawl — keep them for the
   *WarmCalibrator small-perturbation* use, not the live tick feed. Gate: `tests/streaming_test.cpp`
   (round-trip + exactness every tick). Demo: `tools/stream_sim.cpp` (trending day, both modes).
+
+## 7b. Stage 3 — the curve bundle (N curves calibrated together)
+
+`BundleProblem` (`calibration/bundle_problem.hpp`) calibrates **N curves simultaneously** over one
+stacked `x = [x_0; x_1; …]`. Instruments reference curves BY ROLE — a `forecast`, a `benchmark`
+(for basis quotes) and a `discount` curve — so a discount curve ≠ its forecast curve. The multi-curve
+pricing kernel (`pricing/cashflows.hpp`) is a faithful extension of the single-curve one: the OIS
+schedule already separates `float_acc_start/end` (forecast) from `float_pay` (discount), so
+`ois_par_rate(sched, fc, dc)` and `basis_par_spread(sched, fwd, bench, disc)` just thread two curves.
+`fc == dc` reduces to the single-curve form. This is exactly QuantLib's multi-curve setup and is
+validated against it to ~1e-16 (`tests/bundle_test.cpp`, a realistic SOFR + FF + PRIME + PRIME2 chain,
+all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13).
+
+- **It reuses everything.** `BundleProblem` exposes the SAME `residuals<Scalar>(x)` / `n_knots` /
+  `n_residuals` interface, so `calibrate`, `aad_jacobian`, `StreamingCalibrator` and the risk ladder
+  drive it UNCHANGED. The block-structured Jacobian falls straight out of AAD over the stacked
+  residual — a curve-0-only instrument has an identically-zero derivative w.r.t. curve-1's knots.
+- **Staged solve (`bundle_stage.hpp`).** Decompose the dependency graph (Tarjan SCC), solve each SCC
+  in dependency order: a **singleton** SCC → a LOCAL LM over just that curve's block with earlier
+  curves FROZEN as constants; a **cycle** → a joint LM over just its members. Frozen curves must carry
+  a block-SIZED zero gradient (`xb[0]*0.0`), not an empty one, or Eigen `AutoDiffScalar` adds
+  mismatched-size derivative vectors → NaN. Honest result: staging beats the joint solve on small
+  bundles but ~ties it at production size (curve-rebuild-per-eval dominates); the real win is that both
+  are **~20× faster than QuantLib IterativeBootstrap, ~64× vs GlobalBootstrap** (`bench/bundle_build_bench.cpp`).
 
 ## 8. Phased roadmap (update the checkbox as phases land)
 
@@ -417,3 +447,10 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
       `SWAPS_CAPTURE_UTC=$(date -u +%FT%TZ) ./tools/check_perf.py --build build --baselines
       baselines/baselines.json --update`. *(Nice-to-haves: quiesced re-capture for authoritative
       absolute ns; further SIMD/layout tuning.)*
+- [x] **Stage 2** — Warm/streaming re-calibration (see §7a): cached-Jacobian Newton (48 µs exact) and
+      the accuracy-first exact frozen-Newton streaming path (exact every tick, staleness-gated recompute).
+- [x] **Stage 3** — Curve bundle (see §7b): N curves calibrated simultaneously over a stacked `x`,
+      multi-curve pricing kernel (forecast ≠ discount) + basis chains, joint and staged (SCC-decomposed)
+      solves. Realistic SOFR+FF+PRIME+PRIME2 chain validated vs QuantLib to ~1e-16; ~20× vs QuantLib
+      IterativeBootstrap on a production swap grid. *(Next: real FF-averaging-futures QuantLib helpers for
+      a fully-faithful build benchmark; jointly-calibrated spread base; real-time cross-curve risk ladder.)*

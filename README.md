@@ -8,13 +8,18 @@ library**, built to be provably faster and more accurate than stock QuantLib on 
 - **Global calibration** of all knot forwards via **Levenberg–Marquardt** (not sequential bootstrapping).
 - **Analytic Jacobian via forward-mode AAD** (Eigen `AutoDiffScalar`), reused for **analytic bucketed
   risk** through the implicit-function theorem — no bump-and-reprice.
-- **Two-region forward interpolation**: piecewise-flat forwards on **central-bank meeting dates** in
-  the front end; **C²-smooth** forwards beyond the last meeting date.
+- **Multi-region forward interpolation**: piecewise-flat forwards on **central-bank meeting dates** in
+  the front end; a **local C¹ Hermite** spline beyond the last meeting date. The generic
+  `MultiRegionCurve` composes any linear-in-values region policies (Flat/Linear/NaturalCubic/Hermite).
+- **Multi-curve bundle**: N curves (e.g. SOFR + Fed-Funds + Prime …) calibrated **simultaneously** over
+  one stacked parameter vector, with forecast ≠ discount pricing and basis-swap chains.
+- **Real-time streaming re-calibration**: an exact frozen-Newton path reprices to the market every tick.
 - **Vectorized portfolio analytics**: par rates, NPV, PV01/DV01, bucketed delta as batched Eigen
   algebra — no per-swap loops.
 
-QuantLib is used only as the **correctness oracle** and **speed baseline**; it is not linked into the
-shipped engine.
+QuantLib **is a linked dependency**: the engine reuses its calendars, schedules, instruments and
+conventions wholesale, and extends only the two hot workflows (curve calibration + bulk analytics).
+QuantLib is **also** the **correctness oracle** and **speed baseline** we must beat.
 
 ## Build
 
@@ -29,11 +34,11 @@ See [CLAUDE.md](CLAUDE.md) for the full architecture, rules, and the two-gate ve
 
 ## Status
 
-**Phase 0 complete.** Toolchain (Apple clang 14.0.3, C++20), vendored deps, QuantLib 1.34 built
-static with matched `-O3 -march=native` flags, automatic ISA detection (AVX2+FMA → 4 doubles/reg
-on the dev machine), correctness gate green. The performance checker is still a stub (Phase 6).
+**Phases 0–6 + Stage 2 (streaming) + Stage 3 (multi-curve bundle) complete.** Both gates green:
+correctness against the QuantLib `YieldTermStructure` oracle, and a fingerprint-keyed performance gate.
+Representative speedups vs QuantLib (same compiler/flags): curve build ~5×, bucketed risk ~32×,
+portfolio reprice ~150×, multi-curve bundle build ~20× vs IterativeBootstrap.
 
-Next: **Phase 1** — golden reference curve from QuantLib + correctness harness.
 See the roadmap in [CLAUDE.md](CLAUDE.md#8-phased-roadmap).
 
 ## License
