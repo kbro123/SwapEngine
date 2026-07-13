@@ -30,6 +30,10 @@ inline std::vector<std::vector<int>> bundle_dependency_order(const BundleProblem
   const int N = p.n_curves();
   std::vector<std::vector<int>> adj(N);
   auto add = [&](int c, int d) { if (d != c) adj[c].push_back(d); };  // c depends on d
+  // A spread curve depends STRUCTURALLY on its base (base must be built first); if the base is also a
+  // free, mutually-referenced curve, an instrument edge closes the cycle -> they land in one SCC.
+  for (int c = 0; c < N; ++c)
+    if (p.curves[c].base >= 0) add(c, p.curves[c].base);
   for (const auto& s : p.swaps) add(s.forecast, s.discount);
   for (const auto& b : p.bases) { add(b.forecast, b.benchmark); add(b.forecast, b.discount); }
 
@@ -78,17 +82,6 @@ class BundleBlockProblem {
       if (free_[p.avg_futs[i].forecast]) avg_futs_.push_back(i);
     for (int i = 0; i < static_cast<int>(p.comp_futs.size()); ++i)
       if (free_[p.comp_futs[i].forecast]) comp_futs_.push_back(i);
-    std::vector<char> ref(p.n_curves(), 0);
-    for (int c : block_) ref[c] = 1;
-    for (int i : swaps_) { ref[p.swaps[i].forecast] = 1; ref[p.swaps[i].discount] = 1; }
-    for (int i : bases_) {
-      const auto& b = p.bases[i];
-      ref[b.forecast] = ref[b.benchmark] = ref[b.discount] = 1;
-    }
-    for (int i : avg_futs_) ref[p.avg_futs[i].forecast] = 1;
-    for (int i : comp_futs_) ref[p.comp_futs[i].forecast] = 1;
-    for (int c = 0; c < p.n_curves(); ++c)
-      if (ref[c]) referenced_.push_back(c);
   }
 
   int n_knots() const { return nk_; }
@@ -102,23 +95,12 @@ class BundleBlockProblem {
     // size as the free curves, or Eigen AutoDiffScalar adds mismatched-size derivative vectors -> NaN.
     // `xb[0] * 0.0` scales a seeded Dual to value 0 with a full-size zero gradient (and is just 0.0 for double).
     const Scalar zero_grad = xb.size() > 0 ? xb[0] * 0.0 : Scalar(0.0);
-    std::vector<std::unique_ptr<curve::CalibrationCurve<Scalar>>> C(p_->n_curves());
-    for (int c : referenced_) {
-      const auto& spec = p_->curves[c];
-      const int nk = spec.n_knots();
-      Eigen::Matrix<Scalar, Eigen::Dynamic, 1> xi(nk);
-      if (free_[c]) {
-        const int bo = block_offset(c);
-        for (int i = 0; i < nk; ++i) xi[i] = xb[bo + i];       // free: from the block parameter vector
-      } else {
-        const int go = p_->offset(c);
-        for (int i = 0; i < nk; ++i) xi[i] = zero_grad + solved_[go + i];  // frozen: constant, sized zero gradient
-      }
-      auto cc = std::make_unique<curve::CalibrationCurve<Scalar>>(
-          curve::make_calibration_curve<Scalar>(spec.meeting, spec.back));
-      cc->set_forwards(xi);
-      C[c] = std::move(cc);
-    }
+    // Build EVERY curve (build_bundle_curves needs each spread's base present): free curves from the
+    // block vector, frozen curves as constants with a block-sized zero gradient.
+    const auto C = build_bundle_curves<Scalar>(p_->curves, [&](int c, int i) -> Scalar {
+      if (free_[c]) return xb[block_offset(c) + i];
+      return zero_grad + solved_[p_->offset(c) + i];
+    });
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
     int row = 0;
     for (int i : avg_futs_) {
@@ -153,7 +135,7 @@ class BundleBlockProblem {
 
  private:
   const BundleProblem* p_;
-  std::vector<int> block_, referenced_, swaps_, bases_, avg_futs_, comp_futs_;
+  std::vector<int> block_, swaps_, bases_, avg_futs_, comp_futs_;
   Eigen::VectorXd solved_;
   std::vector<char> free_;
   int nk_ = 0;

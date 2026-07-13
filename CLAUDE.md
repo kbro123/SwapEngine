@@ -394,6 +394,19 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   mismatched-size derivative vectors → NaN. Honest result: staging beats the joint solve on small
   bundles but ~ties it at production size (curve-rebuild-per-eval dominates); the real win is that both
   are **~20× faster than QuantLib IterativeBootstrap, ~64× vs GlobalBootstrap** (`bench/bundle_build_bench.cpp`).
+- **Outright vs spread is in the curve DEFINITION, not the solver.** `CurveSpec` carries `base`:
+  `base < 0` = OUTRIGHT (free vars are its own forwards); `base >= 0` = SPREAD, i.e. the curve IS
+  `curves[base] + spread` and its free vars are the forward SPREADs. `build_bundle_curves<Scalar>`
+  wraps each as a type-erased `CurveHandle<Scalar>` (`OutrightHandle` / `SpreadHandle`, the latter
+  `forward = base + spread`, `DF = base_DF·exp(-∫spread)`), so the pricing kernel and every residual
+  are oblivious to the parameterization — the engine does the right thing off the spec alone. The
+  virtual dispatch lands ONLY in the calibration residual; the microsecond streaming path stays on `W`.
+  If the `base` is another FREE curve, base and spread calibrate JOINTLY (AAD couples the blocks through
+  the base discount); if it is a curve you never pin, it is effectively a fixed base — that choice IS
+  "jointly-calibrated vs fixed spread base". A spread curve adds a `base` dependency edge, so staging
+  builds the base first (singleton SCCs) or forces a cycle into one joint block automatically. Gate:
+  `tests/bundle_test.cpp` `BundleSpread.*` (joint & staged recover base+spread to ~1.5e-15; the handle
+  math is exact). Requirement: `base < c` (bases defined before the spreads that reference them).
 
 ## 8. Phased roadmap (update the checkbox as phases land)
 
@@ -452,5 +465,7 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
 - [x] **Stage 3** — Curve bundle (see §7b): N curves calibrated simultaneously over a stacked `x`,
       multi-curve pricing kernel (forecast ≠ discount) + basis chains, joint and staged (SCC-decomposed)
       solves. Realistic SOFR+FF+PRIME+PRIME2 chain validated vs QuantLib to ~1e-16; ~20× vs QuantLib
-      IterativeBootstrap on a production swap grid. *(Next: real FF-averaging-futures QuantLib helpers for
-      a fully-faithful build benchmark; jointly-calibrated spread base; real-time cross-curve risk ladder.)*
+      IterativeBootstrap on a production swap grid. Outright-vs-spread is inherent in the curve DEFINITION
+      (`CurveSpec.base`), so a curve quoted as `base + spread` calibrates jointly (or over a fixed base)
+      with no solver change. *(Next: real FF-averaging-futures QuantLib helpers for a fully-faithful build
+      benchmark; real-time cross-curve risk ladder.)*

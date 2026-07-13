@@ -191,3 +191,91 @@ TEST_F(BundleRealistic, MultiCurveBasisMatchesQuantLib) {
   std::cout << "  [bundle-real] FF-SOFR basis max |ours - QuantLib| = " << worst << " over " << n << " tenors\n";
   EXPECT_LT(worst, swaps::tol::curve_rel) << "multi-curve basis pricing must match QuantLib";
 }
+
+// ---- Spread-parameterized bundle curves -------------------------------------------------------
+// A curve's DEFINITION carries whether it is OUTRIGHT (own forwards) or a SPREAD over another bundle
+// curve (its free vars are forward spreads); the calibration engine does the right thing off that spec
+// alone. These are QuantLib-free machinery tests: hand-built annual OIS schedules, self-consistent
+// market from a known x, recovered by the joint + staged solvers.
+namespace {
+swaps::pricing::OisSwap make_annual_ois(double T) {
+  swaps::pricing::OisSwap s;
+  std::vector<double> t;
+  for (double u = 1.0; u < T - 1e-9; u += 1.0) t.push_back(u);
+  t.push_back(T);
+  double prev = 0.0;
+  for (double u : t) {
+    s.float_acc_start.push_back(prev);
+    s.float_acc_end.push_back(u);
+    s.float_pay.push_back(u);
+    s.fixed_pay.push_back(u);
+    s.fixed_accrual.push_back(u - prev);
+    prev = u;
+  }
+  return s;
+}
+}  // namespace
+
+TEST(BundleSpread, JointAndStagedRecoverSpreadCurve) {
+  // Curve 0 = outright base (pinned by its own OIS swaps); curve 1 = base + forward-spread (pinned by
+  // basis swaps over curve 0). The spread block is coupled to the base block through the base discount.
+  cal::BundleProblem prob;
+  const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
+  prob.curves.resize(2);
+  prob.curves[0] = {meeting, back, -1};  // outright
+  prob.curves[1] = {meeting, back, 0};   // spread over curve 0
+  const int nk = prob.curves[0].n_knots();
+  const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
+  for (double T : mats) prob.swaps.push_back({0, 0, make_annual_ois(T), 0.0});     // pin the base
+  for (double T : mats) prob.bases.push_back({1, 0, 0, make_annual_ois(T), 0.0});  // pin the spread
+
+  Eigen::VectorXd x_true(2 * nk);
+  for (int i = 0; i < nk; ++i) {
+    x_true[i] = 0.040 + 0.001 * i;         // base forwards
+    x_true[nk + i] = 0.0050 + 0.0003 * i;  // forward spreads
+  }
+  const Eigen::VectorXd r0 = prob.residuals<double>(x_true);  // make x_true the exact solution
+  int k = 0;
+  for (auto& s : prob.swaps) s.market_rate += r0[k++];
+  for (auto& b : prob.bases) b.market_rate += r0[k++];
+  ASSERT_LT(prob.residuals<double>(x_true).cwiseAbs().maxCoeff(), 1e-14);
+
+  Eigen::VectorXd x0(2 * nk);
+  x0.head(nk).setConstant(0.04);
+  x0.tail(nk).setConstant(0.005);
+  const auto joint = cal::calibrate(prob, x0);
+  const auto staged = cal::calibrate_staged(prob, x0);
+  std::cout << "  [bundle-spread] joint ||x*-xtrue||=" << (joint.x - x_true).cwiseAbs().maxCoeff()
+            << " iters=" << joint.iterations << " stat=" << joint.stationarity << "  staged ||x*-xtrue||="
+            << (staged.x - x_true).cwiseAbs().maxCoeff() << " iters=" << staged.iterations << "\n";
+  EXPECT_LT((joint.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "joint solve recovers base + spread";
+  EXPECT_LT((staged.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "staged solve recovers base then spread";
+}
+
+TEST(BundleSpread, SpreadHandleMatchesBasePlusSpread) {
+  // The spread handle must be EXACTLY forward = base + spread, DF = base_DF * exp(-int spread).
+  const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
+  std::vector<cal::BundleCurveSpec> specs{{meeting, back, -1}, {meeting, back, 0}};
+  const int nk = specs[0].n_knots();
+  Eigen::VectorXd base_f(nk), spread_f(nk);
+  for (int i = 0; i < nk; ++i) {
+    base_f[i] = 0.04 + 0.001 * i;
+    spread_f[i] = 0.005 + 0.0003 * i;
+  }
+  const auto C = cal::build_bundle_curves<double>(
+      specs, [&](int c, int i) { return c == 0 ? base_f[i] : spread_f[i]; });
+
+  auto base_curve = cv::make_calibration_curve<double>(meeting, back);
+  base_curve.set_forwards(base_f);
+  auto spread_curve = cv::make_calibration_curve<double>(meeting, back);
+  spread_curve.set_forwards(spread_f);
+  double wf = 0.0, wd = 0.0;
+  for (double t : {0.1, 0.5, 0.9, 1.5, 3.0, 7.0, 10.0}) {
+    wf = std::max(wf, std::abs(C[1]->forward(t) - (base_curve.forward(t) + spread_curve.forward(t))));
+    const double df = base_curve.discount(t) * std::exp(-spread_curve.integral(t));
+    wd = std::max(wd, std::abs(C[1]->discount(t) - df));
+  }
+  std::cout << "  [bundle-spread] SpreadHandle max fwd err=" << wf << " df err=" << wd << "\n";
+  EXPECT_LT(wf, 1e-14);
+  EXPECT_LT(wd, 1e-14);
+}
