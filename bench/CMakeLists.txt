@@ -35,6 +35,11 @@ if(TARGET quantlib_oracle)
   add_executable(warm_bench warm_bench.cpp)
   target_link_libraries(warm_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(warm_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
+  # Stage 3: curve-bundle build -- our joint LM vs QuantLib sequential multi-curve GlobalBootstrap.
+  add_executable(bundle_build_bench bundle_build_bench.cpp)
+  target_link_libraries(bundle_build_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(bundle_build_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 endif()
 
 # Convenience target: run the perf gate.

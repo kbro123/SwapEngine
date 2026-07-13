@@ -10,6 +10,7 @@
 #include <Eigen/Core>
 
 #include "swaps/ad/dual.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/multi_region_curve.hpp"
 #include "swaps/curve/regions.hpp"
 #include "swaps/curve/two_region_forward_curve.hpp"
@@ -118,4 +119,16 @@ TEST(MultiRegion, LinearMapTraitAndComposition) {
     EXPECT_LT(c.discount(t), prev);
     prev = c.discount(t);
   }
+}
+
+// Duplicate/unsorted knots must be rejected at construction (they cause a zero-length segment -> NaN).
+TEST(RegionKnots, RejectsDuplicateAndUnsortedKnots) {
+  EXPECT_THROW(Hermite<double>({1.0, 2.0, 2.0, 3.0}), std::invalid_argument);   // duplicate
+  EXPECT_THROW(Hermite<double>({1.0, 3.0, 2.0}), std::invalid_argument);        // unsorted
+  EXPECT_THROW(Flat<double>({0.5, 0.5}), std::invalid_argument);                // duplicate
+  EXPECT_THROW(Flat<double>({}), std::invalid_argument);                        // empty
+  EXPECT_NO_THROW(Hermite<double>({1.0, 2.0, 3.0}));                            // strictly increasing OK
+  // Cross-region join: first back knot must exceed the last front knot.
+  EXPECT_THROW(swaps::curve::make_calibration_curve<double>({0.5, 1.0}, {1.0, 2.0}), std::invalid_argument);
+  EXPECT_NO_THROW(swaps::curve::make_calibration_curve<double>({0.5, 1.0}, {1.5, 2.0}));
 }
