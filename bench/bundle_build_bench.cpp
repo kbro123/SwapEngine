@@ -32,9 +32,11 @@ struct BundleFixture {
   Date today = Date(15, July, 2026);
   DayCounter dc = Actual365Fixed();
   Calendar cal = UnitedStates(UnitedStates::GovernmentBond);
-  Date far = today + 11 * Years;
-  std::vector<double> pil = {0.5, 1, 2, 3, 5, 7, 10};
-  std::vector<Period> tenors;
+  Date far = today + 31 * Years;
+  // Production swap grid (exact Periods -- no double->Period rounding): 1 front + 15 back knots/curve.
+  std::vector<Period> pil = {3 * Months,  6 * Months,  9 * Months, 1 * Years,  18 * Months, 2 * Years,
+                             3 * Years,    4 * Years,   5 * Years,  7 * Years,  10 * Years,  12 * Years,
+                             15 * Years,   20 * Years,  25 * Years, 30 * Years};
 
   std::vector<ext::shared_ptr<OvernightIndex>> idx;
   std::vector<std::vector<ext::shared_ptr<SimpleQuote>>> quote;  // [curve][pillar] outright OIS par
@@ -43,7 +45,6 @@ struct BundleFixture {
 
   explicit BundleFixture(int nc) : NC(nc) {
     Settings::instance().evaluationDate() = today;
-    for (double y : pil) tenors.push_back(y < 1 ? Period(int(y * 12 + 0.5), Months) : Period(int(y + 0.5), Years));
 
     std::vector<RelinkableHandle<YieldTermStructure>> h(NC);
     idx.resize(NC);
@@ -55,7 +56,7 @@ struct BundleFixture {
 
     std::vector<double> meeting, back;
     for (std::size_t i = 0; i < pil.size(); ++i) {
-      const double tt = dc.yearFraction(today, today + tenors[i]);
+      const double tt = dc.yearFraction(today, today + pil[i]);
       (i == 0 ? meeting : back).push_back(tt);
     }
     cal::BundleProblem::CurveSpec spec{meeting, back};
@@ -85,28 +86,24 @@ struct BundleFixture {
 
     quote.assign(NC, {});
     for (int c = 0; c < NC; ++c)
-      for (double T : pil) {
-        auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(tenorOf(T), idx[c], 0.03).withDiscountingTermStructure(h[0]));
+      for (const Period& T : pil) {
+        auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(T, idx[c], 0.03).withDiscountingTermStructure(h[0]));
         o->deepUpdate();
         quote[c].push_back(ext::make_shared<SimpleQuote>(o->fairRate()));  // outright SOFR-discounted par
       }
 
     // Our bundle: curve 0 by single-curve OIS, curve c>0 by a basis over c-1 (SOFR-discounted).
     for (std::size_t i = 0; i < pil.size(); ++i) {
-      auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(tenors[i], idx[0], 0.03).withDiscountingTermStructure(h[0]));
+      auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(pil[i], idx[0], 0.03).withDiscountingTermStructure(h[0]));
       prob.swaps.push_back({0, 0, swaps::qlx::extract_ois_swap(*o, today, dc), quote[0][i]->value()});
     }
     for (int c = 1; c < NC; ++c)
       for (std::size_t i = 0; i < pil.size(); ++i) {
-        auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(tenors[i], idx[c], 0.03).withDiscountingTermStructure(h[0]));
+        auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(pil[i], idx[c], 0.03).withDiscountingTermStructure(h[0]));
         prob.bases.push_back({c, c - 1, 0, swaps::qlx::extract_ois_swap(*o, today, dc),
                               quote[c - 1][i]->value() - quote[c][i]->value()});
       }
     x0 = Eigen::VectorXd::Constant(prob.n_knots(), 0.05);
-  }
-
-  Period tenorOf(double y) const {
-    return y < 1 ? Period(int(y * 12 + 0.5), Months) : Period(int(y + 0.5), Years);
   }
 
   // QuantLib multi-curve chain: SOFR self-disc, then each curve SOFR-discounted; N sequential bootstraps.
@@ -117,7 +114,7 @@ struct BundleFixture {
     for (int c = 0; c < NC; ++c) {
       std::vector<ext::shared_ptr<RateHelper>> hs;
       for (std::size_t i = 0; i < pil.size(); ++i)
-        hs.push_back(ext::make_shared<OISRateHelper>(2, tenors[i], Handle<Quote>(quote[c][i]), idx[c],
+        hs.push_back(ext::make_shared<OISRateHelper>(2, pil[i], Handle<Quote>(quote[c][i]), idx[c],
                                                      c == 0 ? Handle<YieldTermStructure>() : hS));
       auto curve = ext::make_shared<PWC>(today, hs, dc);
       curve->enableExtrapolation();
