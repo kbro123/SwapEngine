@@ -9,6 +9,8 @@
 // (The curve-vs-QuantLib golden tests still validate the natural-cubic TwoRegionForwardCurve; this
 // type is specifically the calibration/pricing curve.)
 
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "swaps/curve/multi_region_curve.hpp"
@@ -22,6 +24,12 @@ using CalibrationCurve = MultiRegionCurve<S, Flat, Hermite>;
 template <class S>
 inline CalibrationCurve<S> make_calibration_curve(const std::vector<double>& meeting,
                                                   const std::vector<double>& back) {
+  // Per-region strictly-increasing knots are enforced in the Flat/Hermite ctors; here also enforce the
+  // CROSS-region join: the first back knot must sit strictly after the last front knot (else the first
+  // Hermite segment has zero length -> NaN).
+  if (!meeting.empty() && !back.empty() && !(back.front() > meeting.back()))
+    throw std::invalid_argument("make_calibration_curve: first back knot (" + std::to_string(back.front()) +
+                                ") must exceed last front knot (" + std::to_string(meeting.back()) + ")");
   return CalibrationCurve<S>{Flat<S>(meeting), Hermite<S>(back)};
 }
 

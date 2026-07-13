@@ -17,9 +17,25 @@
 //   static constexpr bool is_linear_map = true;
 
 #include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace swaps::curve {
+
+// Knot times for a region must be finite and STRICTLY increasing: a duplicate (or unsorted) knot gives
+// a zero-length segment -> a 0/0 in the interpolation -> silent NaN downstream. Reject at construction.
+inline void require_increasing_knots(const std::vector<double>& k, const char* who) {
+  if (k.empty()) throw std::invalid_argument(std::string(who) + ": empty knot set");
+  for (std::size_t i = 0; i < k.size(); ++i) {
+    if (!std::isfinite(k[i]))
+      throw std::invalid_argument(std::string(who) + ": non-finite knot at index " + std::to_string(i));
+    if (i && !(k[i] > k[i - 1]))
+      throw std::invalid_argument(std::string(who) + ": knots must be strictly increasing (duplicate/unsorted at index " +
+                                  std::to_string(i) + ": " + std::to_string(k[i - 1]) + ", " + std::to_string(k[i]) + ")");
+  }
+}
 
 template <class Scalar>
 struct Boundary {
@@ -35,7 +51,7 @@ struct Boundary {
 template <class Scalar>
 class Flat {
  public:
-  explicit Flat(std::vector<double> ends) : m_(std::move(ends)) {}
+  explicit Flat(std::vector<double> ends) : m_(std::move(ends)) { require_increasing_knots(m_, "Flat"); }
   int n_values() const { return static_cast<int>(m_.size()); }
   double t_end() const { return m_.back(); }
   static constexpr bool is_linear_map = true;
@@ -83,7 +99,7 @@ class Flat {
 template <class Scalar>
 class Linear {
  public:
-  explicit Linear(std::vector<double> knots) : s_(std::move(knots)) {}
+  explicit Linear(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "Linear"); }
   int n_values() const { return static_cast<int>(s_.size()); }
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;
@@ -138,7 +154,7 @@ class Linear {
 template <class Scalar>
 class NaturalCubic {
  public:
-  explicit NaturalCubic(std::vector<double> knots) : s_(std::move(knots)) {}
+  explicit NaturalCubic(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "NaturalCubic"); }
   int n_values() const { return static_cast<int>(s_.size()); }
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;
@@ -233,7 +249,7 @@ class NaturalCubic {
 template <class Scalar>
 class Hermite {
  public:
-  explicit Hermite(std::vector<double> knots) : s_(std::move(knots)) {}
+  explicit Hermite(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "Hermite"); }
   int n_values() const { return static_cast<int>(s_.size()); }
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;

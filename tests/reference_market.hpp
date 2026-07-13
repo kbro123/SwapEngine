@@ -37,13 +37,15 @@ inline constexpr Ymd evaluation_date{2026, 7, 8};
 // The instantaneous forward is flat on (m[k-1], m[k]]; it jumps only here.
 // Note the last meeting (2027-03-18) is the day after the 3rd-Wednesday IMM date (2027-03-17),
 // which is why the Dec-2026 3M contract's end date falls just *inside* the front region.
+// Actual FOMC decision dates (2nd day of each meeting) for the six meetings after the eval date,
+// from the Fed's published schedule (federalreserve.gov/monetarypolicy/fomccalendars.htm).
 inline constexpr std::array<Ymd, 6> meeting_dates{{
-    {2026, 7, 30},
-    {2026, 9, 17},
-    {2026, 11, 5},
-    {2026, 12, 17},
-    {2027, 1, 28},
-    {2027, 3, 18},
+    {2026, 7, 29},
+    {2026, 9, 16},
+    {2026, 10, 28},
+    {2026, 12, 9},
+    {2027, 1, 27},
+    {2027, 3, 17},
 }};
 
 // ---- Futures ----
