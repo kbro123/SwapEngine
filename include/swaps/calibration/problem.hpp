@@ -16,7 +16,7 @@
 
 #include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/spread_curve.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
 namespace swaps::calibration {
@@ -80,7 +80,7 @@ struct CalibrationProblem {
 // so the same LM + AAD + risk code drives it with no change.
 struct SpreadCalibrationProblem {
   CalibrationProblem inst;                             // instruments + spread knot times
-  const curve::TwoRegionForwardCurve<double>* base;    // fixed base curve
+  const curve::CalibrationCurve<double>* base;    // fixed base curve
 
   int n_knots() const { return inst.n_knots(); }
   int n_residuals() const { return inst.n_residuals(); }

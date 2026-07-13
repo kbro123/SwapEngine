@@ -4,7 +4,7 @@
 //   FF     : 12x1M FF futures (front) + FF-SOFR basis at 18m/2y/3y + swap maturities (replaces 3M futures)
 //   PRIME  : basis over FF at 3m/6m/9m/12m + 18m/2y/3y + swap maturities (basis only, no futures)
 //   PRIME2 : basis over PRIME, same tenors
-// Quotes are generated from a known set of forwards, so the joint solve must recover them. The DUAL-CURVE
+// Quotes are generated from a known set of forwards, so the joint solve must recover them. The MULTI-CURVE
 // basis pricing (the new Stage-3 kernel) is additionally oracle-checked against QuantLib's own multi-curve
 // OIS fair spread. SOFR/FF futures reuse the single-curve kernel already validated to 1e-16 (pricing_test).
 
@@ -169,7 +169,7 @@ TEST_F(BundleRealistic, JointAndStagedRecoverAllFourCurves) {
   EXPECT_LT((staged.x - x_true).cwiseAbs().maxCoeff(), 1e-6) << "staged solve recovers all four realistic curves";
 }
 
-TEST_F(BundleRealistic, DualCurveBasisMatchesQuantLib) {
+TEST_F(BundleRealistic, MultiCurveBasisMatchesQuantLib) {
   // The FF-SOFR basis (forecast FF, discount SOFR) must equal QuantLib's OIS fair rate spread:
   // s = fairRate(FF OIS, SOFR-disc) - fairRate(SOFR OIS, SOFR-disc), at x_true.
   double worst = 0.0;
@@ -189,5 +189,5 @@ TEST_F(BundleRealistic, DualCurveBasisMatchesQuantLib) {
     ++n;
   }
   std::cout << "  [bundle-real] FF-SOFR basis max |ours - QuantLib| = " << worst << " over " << n << " tenors\n";
-  EXPECT_LT(worst, swaps::tol::curve_rel) << "dual-curve basis pricing must match QuantLib";
+  EXPECT_LT(worst, swaps::tol::curve_rel) << "multi-curve basis pricing must match QuantLib";
 }

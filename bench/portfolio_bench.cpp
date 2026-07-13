@@ -17,7 +17,7 @@
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 
@@ -36,8 +36,9 @@ struct Fixture {
   cal::CalibrationProblem prob = rb::build_square_problem(mk);
   Eigen::VectorXd x = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
 
-  swaps::curve::TwoRegionForwardCurve<double> curve{prob.meeting_times, prob.back_times};
-  ext::shared_ptr<swaps::qlx::TwoRegionTermStructure> ts_a, ts_b;
+  swaps::curve::CalibrationCurve<double> curve =
+      swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
+  ext::shared_ptr<swaps::qlx::CurveTermStructure<swaps::curve::CalibrationCurve<double>>> ts_a, ts_b;
 
   swaps::portfolio::Portfolio pf;
   std::vector<ext::shared_ptr<OvernightIndexedSwap>> ql_book;
@@ -45,8 +46,8 @@ struct Fixture {
 
   Fixture() {
     curve.set_forwards(x);
-    ts_a = ext::make_shared<swaps::qlx::TwoRegionTermStructure>(mk.today, mk.dc, &curve);
-    ts_b = ext::make_shared<swaps::qlx::TwoRegionTermStructure>(mk.today, mk.dc, &curve);
+    ts_a = ext::make_shared<swaps::qlx::CurveTermStructure<swaps::curve::CalibrationCurve<double>>>(mk.today, mk.dc, &curve);
+    ts_b = ext::make_shared<swaps::qlx::CurveTermStructure<swaps::curve::CalibrationCurve<double>>>(mk.today, mk.dc, &curve);
     ts_a->enableExtrapolation();
     ts_b->enableExtrapolation();
     h.linkTo(ts_a);

@@ -11,13 +11,13 @@
 
 #include "reference_market.hpp"
 #include "swaps/calibration/problem.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "swaps/ql/extract.hpp"
 
 namespace swaps::refbuild {
 
 namespace rm = swaps::refmkt;
-using Curve = swaps::curve::TwoRegionForwardCurve<double>;
+using Curve = swaps::curve::CalibrationCurve<double>;
 
 inline QuantLib::Date to_ql(const rm::Ymd& d) {
   return QuantLib::Date(d.d, static_cast<QuantLib::Month>(d.m), d.y);
@@ -137,7 +137,7 @@ inline swaps::calibration::CalibrationProblem build_problem(const Market& mk) {
 
 // The reference (arbitrary-but-fixed) curve.
 inline Curve reference_curve(const Market& mk) {
-  Curve c(mk.meeting_times, mk.back_times);
+  Curve c = swaps::curve::make_calibration_curve<double>(mk.meeting_times, mk.back_times);
   std::vector<double> x(rm::reference_front_forwards.begin(), rm::reference_front_forwards.end());
   x.insert(x.end(), rm::reference_back_forwards.begin(), rm::reference_back_forwards.end());
   c.set_forwards(x);

@@ -34,10 +34,10 @@ struct Pricing : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
   rb::Curve curve = rb::reference_curve(mk);
-  ext::shared_ptr<swaps::qlx::TwoRegionTermStructure> ts;
+  ext::shared_ptr<swaps::qlx::CurveTermStructure<rb::Curve>> ts;
 
   void SetUp() override {
-    ts = ext::make_shared<swaps::qlx::TwoRegionTermStructure>(mk.today, mk.dc, &curve);
+    ts = ext::make_shared<swaps::qlx::CurveTermStructure<rb::Curve>>(mk.today, mk.dc, &curve);
     ts->enableExtrapolation();
     h.linkTo(ts);
     for (auto& s : mk.swaps) s->deepUpdate();

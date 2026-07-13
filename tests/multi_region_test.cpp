@@ -1,5 +1,5 @@
 // The generalized MultiRegionCurve<Flat, NaturalCubic> must reproduce the hand-written
-// TwoRegionForwardCurve to machine precision -- same interpolation, same knots, same forwards. This
+// CalibrationCurve to machine precision -- same interpolation, same knots, same forwards. This
 // is the de-risking step before anything migrates onto the multi-region engine.
 
 #include <gtest/gtest.h>
@@ -13,7 +13,7 @@
 #include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/multi_region_curve.hpp"
 #include "swaps/curve/regions.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 
 using swaps::ad::Dual;
 using swaps::curve::Flat;
@@ -21,7 +21,7 @@ using swaps::curve::Hermite;
 using swaps::curve::Linear;
 using swaps::curve::MultiRegionCurve;
 using swaps::curve::NaturalCubic;
-using swaps::curve::TwoRegionForwardCurve;
+using swaps::curve::CalibrationCurve;
 
 namespace {
 const std::vector<double> kMeeting{0.08, 0.25, 0.45, 0.70};
@@ -30,11 +30,11 @@ const std::vector<double> kX{0.043, 0.041, 0.039, 0.036,          // front (flat
                              0.035, 0.037, 0.040, 0.043, 0.041, 0.038};  // back (spline)
 }  // namespace
 
-TEST(MultiRegion, ReproducesTwoRegionForwardCurve) {
-  TwoRegionForwardCurve<double> ref(kMeeting, kBack);
+TEST(MultiRegion, ReproducesCalibrationCurve) {
+  auto ref = swaps::curve::make_calibration_curve<double>(kMeeting, kBack);
   ref.set_forwards(kX);
 
-  MultiRegionCurve<double, Flat, NaturalCubic> mr{Flat<double>(kMeeting), NaturalCubic<double>(kBack)};
+  MultiRegionCurve<double, Flat, Hermite> mr{Flat<double>(kMeeting), Hermite<double>(kBack)};
   ASSERT_EQ(mr.n_knots(), static_cast<int>(kX.size()));
   mr.set_forwards(kX);
 

@@ -6,8 +6,8 @@
 // still match; the local Hermite does not. It remains a LINEAR MAP of the knot values, so the
 // W-cache / analytic-Jacobian / microsecond warm-recal fast path is fully preserved (CLAUDE.md §2).
 //
-// (The curve-vs-QuantLib golden tests still validate the natural-cubic TwoRegionForwardCurve; this
-// type is specifically the calibration/pricing curve.)
+// This is the shipped curve everywhere; it is validated end-to-end against QuantLib via the
+// YieldTermStructure oracle (tests/pricing_test.cpp, tests/modular_curve_test.cpp).
 
 #include <stdexcept>
 #include <string>

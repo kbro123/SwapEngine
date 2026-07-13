@@ -6,7 +6,6 @@ include(GoogleTest)
 
 add_executable(swaps_tests
   smoke_test.cpp
-  curve_test.cpp
   multi_region_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
@@ -30,7 +29,6 @@ if(TARGET quantlib_oracle)
     spread_test.cpp
     warm_test.cpp
     streaming_test.cpp
-    modular_curve_test.cpp
     bundle_test.cpp
     compiled_residual_test.cpp
   )

@@ -9,7 +9,7 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 

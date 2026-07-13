@@ -9,25 +9,24 @@
 // (jointly-calibrated base is a later extension). The spread is interpolated with the SAME two-region
 // scheme (piecewise-flat front, C2 spline back), so integral_spread(t) = w(t)·s is linear in the
 // spread knots and the whole thing stays AAD-differentiable. The base contributes a constant additive
-// integral (zero derivative w.r.t. s), so this reuses TwoRegionForwardCurve unchanged.
+// integral (zero derivative w.r.t. s), so this reuses CalibrationCurve unchanged.
 //
 // Templated on Scalar: base is always `double` (fixed); the spread is `Scalar` so AAD flows through s.
 
 #include <cmath>
 
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 
 namespace swaps::curve {
 
 template <class Scalar>
 class SpreadCurve {
  public:
-  SpreadCurve(const TwoRegionForwardCurve<double>& base, std::vector<double> meeting_times,
-              std::vector<double> back_times)
-      : base_(&base), spread_(std::move(meeting_times), std::move(back_times)) {}
+  SpreadCurve(const CalibrationCurve<double>& base, const std::vector<double>& meeting_times,
+              const std::vector<double>& back_times)
+      : base_(&base), spread_(make_calibration_curve<Scalar>(meeting_times, back_times)) {}
 
   int n_knots() const { return spread_.n_knots(); }
-  double join_time() const { return spread_.join_time(); }
   double max_time() const { return spread_.max_time(); }
 
   // Spread forwards at the knots (front spreads, then back spreads). May be negative.
@@ -51,11 +50,11 @@ class SpreadCurve {
     return integral(t) / t;
   }
 
-  const TwoRegionForwardCurve<Scalar>& spread_component() const { return spread_; }
+  const CalibrationCurve<Scalar>& spread_component() const { return spread_; }
 
  private:
-  const TwoRegionForwardCurve<double>* base_;
-  TwoRegionForwardCurve<Scalar> spread_;
+  const CalibrationCurve<double>* base_;
+  CalibrationCurve<Scalar> spread_;
 };
 
 }  // namespace swaps::curve

@@ -9,7 +9,7 @@
 // is a singleton, so it is four small local solves -- like-for-like with QuantLib's sequential bootstrap
 // -- and no 28-knot global solve. A cycle forces exactly (and only) its members into a joint solve.
 //
-// Freezing a solved curve is free: the dual-curve kernel is templated per curve argument, and a frozen
+// Freezing a solved curve is free: the multi-curve kernel is templated per curve argument, and a frozen
 // curve enters as a constant (Scalar(value), zero gradient), so the block's AAD Jacobian is the small
 // per-block one automatically -- no kernel change.
 

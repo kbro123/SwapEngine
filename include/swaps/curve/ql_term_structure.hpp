@@ -1,11 +1,11 @@
 #pragma once
-// Exposes our TwoRegionForwardCurve to QuantLib as a YieldTermStructure.
+// Exposes our CalibrationCurve to QuantLib as a YieldTermStructure.
 //
 // This is a CORE ENGINE COMPONENT, not just a test tool (CLAUDE.md §1): our calibrated curve is a
 // QuantLib::YieldTermStructure, so it plugs straight into QuantLib pricing engines. QuantLib
 // supplies the instrument machinery it is authoritative for — SOFR arithmetic-average vs
 // compounded accrual, IMM schedules, business-day and day-count conventions — while every discount
-// factor comes from our two-region interpolator.
+// factor comes from our interpolator.
 //
 // It is also how we validate: QuantLib pricing off this curve is the oracle for our own templated
 // pricing kernel, and any disagreement is our pricing bug, not an interpolation mismatch.
@@ -13,12 +13,12 @@
 #include <ql/termstructures/yieldtermstructure.hpp>
 #include <ql/time/daycounters/actual365fixed.hpp>
 
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 
 namespace swaps::qlx {
 
 // Wrap ANY curve exposing `discount(double)` as a QuantLib::YieldTermStructure -- so our calibrated
-// curve, WHATEVER its region composition (natural-cubic TwoRegionForwardCurve, the Hermite
+// curve, WHATEVER its region composition (natural-cubic CalibrationCurve, the Hermite
 // make_calibration_curve, or a runtime ModularCurve), plugs straight into QuantLib pricing engines.
 // This is a CORE ENGINE COMPONENT, not just a test tool (CLAUDE.md §1): QuantLib supplies the
 // instrument machinery it is authoritative for (SOFR average vs compounded accrual, IMM schedules,
@@ -43,7 +43,5 @@ class CurveTermStructure : public QuantLib::YieldTermStructure {
   const Curve* curve_;
 };
 
-// Back-compat: the original natural-cubic wrapper is one instantiation.
-using TwoRegionTermStructure = CurveTermStructure<curve::TwoRegionForwardCurve<double>>;
 
 }  // namespace swaps::qlx

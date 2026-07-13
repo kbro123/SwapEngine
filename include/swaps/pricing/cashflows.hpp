@@ -76,7 +76,7 @@ Scalar ois_swap_npv(const OisSwap& s, double fixed_rate, const Curve& c) {
   return ois_float_pv<Scalar>(s, c) - fixed_rate * ois_annuity<Scalar>(s, c);
 }
 
-// --- Dual-curve variants (Stage 3): the float leg FORECASTS off `fc` (the DF-ratio compounding) but
+// --- Multi-curve variants (Stage 3): the float leg FORECASTS off `fc` (the DF-ratio compounding) but
 // DISCOUNTS off `dc` (the pay-date DF and the annuity). fc == dc reduces to the single-curve forms.
 // This is exactly QuantLib's multi-curve setup (index forecast curve + a separate discount curve).
 template <class Scalar, class FCurve, class DCurve>

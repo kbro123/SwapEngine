@@ -18,7 +18,7 @@
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 
 using namespace QuantLib;
 namespace rb = swaps::refbuild;

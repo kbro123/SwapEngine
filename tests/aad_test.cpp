@@ -16,7 +16,7 @@
 #include "reference_curve.hpp"
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "tolerances.hpp"
 
 using namespace QuantLib;
@@ -130,7 +130,7 @@ TEST_F(Aad, IntegralIsLinearMapAndAadRecoversTheWeights) {
   auto weight_column = [&](int k) {
     Eigen::VectorXd ek = Eigen::VectorXd::Zero(m);
     ek[k] = 1.0;
-    swaps::curve::TwoRegionForwardCurve<double> c(mk.meeting_times, mk.back_times);
+    auto c = swaps::curve::make_calibration_curve<double>(mk.meeting_times, mk.back_times);
     c.set_forwards(ek);
     Eigen::VectorXd col(test_t.size());
     for (std::size_t j = 0; j < test_t.size(); ++j) col[j] = c.integral(test_t[j]);
@@ -140,10 +140,10 @@ TEST_F(Aad, IntegralIsLinearMapAndAadRecoversTheWeights) {
   for (int k = 0; k < m; ++k) W.col(k) = weight_column(k);
 
   // AAD weights: d integral(t)/dx from the dual curve (independent of x since integral is linear).
-  swaps::curve::TwoRegionForwardCurve<swaps::ad::Dual> cd(mk.meeting_times, mk.back_times);
+  auto cd = swaps::curve::make_calibration_curve<swaps::ad::Dual>(mk.meeting_times, mk.back_times);
   cd.set_forwards(swaps::ad::seed(x));
 
-  swaps::curve::TwoRegionForwardCurve<double> c(mk.meeting_times, mk.back_times);
+  auto c = swaps::curve::make_calibration_curve<double>(mk.meeting_times, mk.back_times);
   c.set_forwards(x);
 
   double worst_w = 0, worst_recon = 0, worst_df = 0;

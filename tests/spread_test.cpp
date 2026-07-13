@@ -16,7 +16,7 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/curve/spread_curve.hpp"
-#include "swaps/curve/two_region_forward_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
 #include "tolerances.hpp"
 
 using namespace QuantLib;
@@ -44,7 +44,8 @@ struct SpreadCal : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
   cal::CalibrationProblem base_prob = rb::build_square_problem(mk);
-  swaps::curve::TwoRegionForwardCurve<double> base{base_prob.meeting_times, base_prob.back_times};
+  swaps::curve::CalibrationCurve<double> base =
+      swaps::curve::make_calibration_curve<double>(base_prob.meeting_times, base_prob.back_times);
   cal::SpreadCalibrationProblem sp;
   Eigen::VectorXd s_true;
 
@@ -70,7 +71,7 @@ struct SpreadCal : ::testing::Test {
 TEST_F(SpreadCal, DecomposesIntoBaseTimesSpread) {
   swaps::curve::SpreadCurve<double> total(base, sp.inst.meeting_times, sp.inst.back_times);
   total.set_spreads(s_true);
-  swaps::curve::TwoRegionForwardCurve<double> spread_only(sp.inst.meeting_times, sp.inst.back_times);
+  auto spread_only = swaps::curve::make_calibration_curve<double>(sp.inst.meeting_times, sp.inst.back_times);
   spread_only.set_forwards(s_true);  // the spread's own two-region curve
 
   double worst_df = 0, worst_fwd = 0;
