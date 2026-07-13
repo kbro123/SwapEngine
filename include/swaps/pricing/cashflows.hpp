@@ -76,6 +76,34 @@ Scalar ois_swap_npv(const OisSwap& s, double fixed_rate, const Curve& c) {
   return ois_float_pv<Scalar>(s, c) - fixed_rate * ois_annuity<Scalar>(s, c);
 }
 
+// --- Dual-curve variants (Stage 3): the float leg FORECASTS off `fc` (the DF-ratio compounding) but
+// DISCOUNTS off `dc` (the pay-date DF and the annuity). fc == dc reduces to the single-curve forms.
+// This is exactly QuantLib's multi-curve setup (index forecast curve + a separate discount curve).
+template <class Scalar, class FCurve, class DCurve>
+Scalar ois_float_coupon_pv(const OisSwap& s, std::size_t i, const FCurve& fc, const DCurve& dc) {
+  return dc.discount(s.float_pay[i]) *
+         (fc.discount(s.float_acc_start[i]) / fc.discount(s.float_acc_end[i]) - 1.0);
+}
+template <class Scalar, class FCurve, class DCurve>
+Scalar ois_float_pv(const OisSwap& s, const FCurve& fc, const DCurve& dc) {
+  assert(!s.float_acc_start.empty());
+  Scalar pv = ois_float_coupon_pv<Scalar>(s, 0, fc, dc);
+  for (std::size_t i = 1; i < s.float_acc_start.size(); ++i) pv += ois_float_coupon_pv<Scalar>(s, i, fc, dc);
+  return pv;
+}
+// Par rate of an OIS forecasting `fc`, discounting `dc` (= QuantLib OIS fairRate with a discount curve).
+template <class Scalar, class FCurve, class DCurve>
+Scalar ois_par_rate(const OisSwap& s, const FCurve& fc, const DCurve& dc) {
+  return ois_float_pv<Scalar>(s, fc, dc) / ois_annuity<Scalar>(s, dc);
+}
+// Par spread of a basis swap: spread leg forecasts `fwd`, benchmark leg forecasts `bench`, both
+// discount `disc`. s = (float_pv_bench - float_pv_fwd) / annuity_disc.
+template <class Scalar, class FwdCurve, class BenchCurve, class DiscCurve>
+Scalar basis_par_spread(const OisSwap& s, const FwdCurve& fwd, const BenchCurve& bench, const DiscCurve& disc) {
+  return (ois_float_pv<Scalar>(s, bench, disc) - ois_float_pv<Scalar>(s, fwd, disc)) /
+         ois_annuity<Scalar>(s, disc);
+}
+
 // ---- 3M compounded (IMM) SOFR future ---------------------------------------------------------
 // The reference rate is the daily-compounded SOFR over the accrual period, which telescopes to
 //   R = (DF(start)/DF(end) - 1) / accrual.
