@@ -384,9 +384,22 @@ validated against it to ~1e-16 (`tests/bundle_test.cpp`, a realistic SOFR + FF +
 all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13).
 
 - **It reuses everything.** `BundleProblem` exposes the SAME `residuals<Scalar>(x)` / `n_knots` /
-  `n_residuals` interface, so `calibrate`, `aad_jacobian`, `StreamingCalibrator` and the risk ladder
-  drive it UNCHANGED. The block-structured Jacobian falls straight out of AAD over the stacked
-  residual — a curve-0-only instrument has an identically-zero derivative w.r.t. curve-1's knots.
+  `n_residuals` (+ `market()`) interface, so `calibrate`, `aad_jacobian`, the risk ladder, AND the
+  warm/streaming re-calibrators drive it UNCHANGED. The block-structured Jacobian falls straight out of
+  AAD over the stacked residual — a curve-0-only instrument has an identically-zero derivative w.r.t.
+  curve-1's knots.
+- **Warm & streaming re-cal are problem-generic (`calibration/residual_engine.hpp`).** `WarmCalibrator`
+  and `StreamingCalibrator` are now templated on the problem via `residual_engine_t<Problem>`:
+  `CalibrationProblem` → the analytic `CompiledResidual` (`W`-cache) microsecond fast path;
+  `BundleProblem` (or any problem exposing `residuals<Scalar>`/`market()`) → an `AadResidualEngine`
+  (templated residual + AAD Jacobian). So the exact same frozen-Jacobian control flow re-calibrates the
+  multi-curve bundle. Measured on the 4-curve bundle at a ~1bp tick (`bench/bundle_build_bench.cpp`,
+  `tests/bundle_test.cpp`): warm exact re-cal **2.76 ms** (~7× vs a 19 ms cold LM re-solve; matches an
+  independent cold solve to ~1.5e-11), one-matvec linear update **411 ns**, streaming exact path
+  round-trips every tick to ~3e-12. The bundle's frozen envelope is *tighter* than the single curve's
+  (the AAD engine + coupled residual is more nonlinear), so a 1bp move already triggers one Jacobian
+  refresh — hence ~7× here vs the single curve's ~55×. A true `W`-cache analytic bundle residual (to
+  recover the single-curve speedup) is a later extension; the linear 411 ns path is already microsecond.
 - **Staged solve (`bundle_stage.hpp`).** Decompose the dependency graph (Tarjan SCC), solve each SCC
   in dependency order: a **singleton** SCC → a LOCAL LM over just that curve's block with earlier
   curves FROZEN as constants; a **cycle** → a joint LM over just its members. Frozen curves must carry

@@ -20,8 +20,7 @@
 
 #include <limits>
 
-#include "swaps/calibration/compiled_residual.hpp"
-#include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/residual_engine.hpp"
 
 namespace swaps::calibration {
 
@@ -33,8 +32,11 @@ struct WarmResult {
   double final_step = 0.0;     // last ||dx||_inf
 };
 
-// Specialised to CalibrationProblem: it uses the vectorized CompiledResidual (DF = exp(-Wx)) for the
-// hot inner-loop residual evaluations, and the AAD problem only for the (rare) Jacobian refresh.
+// Templated on the problem type via residual_engine_t: for CalibrationProblem the engine is the
+// vectorized CompiledResidual (DF = exp(-Wx), analytic Jacobian) -- the microsecond fast path; for a
+// BundleProblem it is the AAD engine. Either way the inner loop is frozen-J Gauss-Newton and only the
+// (rare) refresh recomputes J. Default Problem = CalibrationProblem keeps existing call sites (CTAD).
+template <class Problem = CalibrationProblem>
 class WarmCalibrator {
  public:
   struct Options {
@@ -43,11 +45,12 @@ class WarmCalibrator {
     int max_refresh = 3;     // cap on Jacobian refreshes (then give up / fall through)
   };
 
-  WarmCalibrator(const CalibrationProblem& prob, const Eigen::VectorXd& x_base)
-      : prob_(&prob), x0_(x_base), cr_(prob), qr0_(cr_.jacobian(x_base)) {
-    // J0 via the ANALYTIC Jacobian (no AAD). First-order curve sensitivity M = (J^T J)^{-1} J^T
-    // (= J^{-1} when square) -- the SAME operator as the analytic risk ladder dx/dq. Precomputed once.
-    M_ = qr0_.solve(Eigen::MatrixXd::Identity(prob.n_residuals(), prob.n_residuals()));
+  WarmCalibrator(const Problem& prob, const Eigen::VectorXd& x_base)
+      : n_res_(prob.n_residuals()), x0_(x_base), engine_(prob), qr0_(engine_.jacobian(x_base)) {
+    // J0 via the engine's Jacobian (analytic for the single curve, AAD for the bundle). First-order
+    // curve sensitivity M = (J^T J)^{-1} J^T (= J^{-1} when square) -- the SAME operator as the
+    // analytic risk ladder dx/dq. Precomputed once.
+    M_ = qr0_.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
   }
 
   int n_knots() const { return static_cast<int>(x0_.size()); }
@@ -61,8 +64,8 @@ class WarmCalibrator {
 
   WarmResult recalibrate(const Eigen::VectorXd& dq) const { return recalibrate(dq, Options{}); }
 
-  // Adaptive re-calibration with automatic envelope detection (the safe default). The residual is the
-  // vectorized CompiledResidual; only a refresh touches the AAD Jacobian.
+  // Adaptive re-calibration with automatic envelope detection (the safe default). The residual comes
+  // from the engine (analytic for the single curve, AAD for the bundle); only a refresh recomputes J.
   WarmResult recalibrate(const Eigen::VectorXd& dq, const Options& opt) const {
     WarmResult res;
     Eigen::VectorXd x = x0_;
@@ -71,7 +74,7 @@ class WarmCalibrator {
     int frozen = 0;
 
     while (true) {
-      const Eigen::VectorXd dx = J->solve(cr_.residuals(x) - dq);
+      const Eigen::VectorXd dx = J->solve(engine_.residuals(x) - dq);
       x.noalias() -= dx;
       ++res.steps;
       ++frozen;
@@ -84,7 +87,7 @@ class WarmCalibrator {
       // Envelope detection: too many frozen steps without hitting tolerance => J0 is stale.
       if (frozen >= opt.max_frozen) {
         if (res.jacobian_refreshes >= opt.max_refresh) break;  // give up (caller may fall back)
-        refreshed = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(cr_.jacobian(x));  // analytic, no AAD
+        refreshed = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(engine_.jacobian(x));
         J = &refreshed;
         ++res.jacobian_refreshes;
         frozen = 0;
@@ -98,14 +101,14 @@ class WarmCalibrator {
   // KNOWS the perturbation is inside the envelope (e.g. a live tick). Prefer recalibrate() otherwise.
   Eigen::VectorXd recalibrate_fixed(const Eigen::VectorXd& dq, int iters = 2) const {
     Eigen::VectorXd x = x0_;
-    for (int k = 0; k < iters; ++k) x.noalias() -= qr0_.solve(cr_.residuals(x) - dq);
+    for (int k = 0; k < iters; ++k) x.noalias() -= qr0_.solve(engine_.residuals(x) - dq);
     return x;
   }
 
  private:
-  const CalibrationProblem* prob_;
+  int n_res_;
   Eigen::VectorXd x0_;
-  CompiledResidual cr_;                              // vectorized residual + analytic Jacobian
+  residual_engine_t<Problem> engine_;                // vectorized residual + Jacobian for this problem
   Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr0_;  // factorization of J0 (base Jacobian)
   Eigen::MatrixXd M_;                                // first-order sensitivity (J^T J)^{-1} J^T
 };

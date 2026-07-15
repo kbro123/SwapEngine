@@ -50,7 +50,7 @@ struct Streaming : ::testing::Test {
 };
 
 TEST_F(Streaming, ExactPathRoundTripsAndMatchesExactSolve) {
-  cal::StreamingCalibrator::Options opt;  // exact=true by default
+  cal::StreamingCalibrator<>::Options opt;  // exact=true by default
   cal::StreamingCalibrator sc(prob, x0, q0, opt);
 
   double worst_rt = 0, worst_ex = 0;
@@ -72,7 +72,7 @@ TEST_F(Streaming, ExactPathRoundTripsAndMatchesExactSolve) {
 }
 
 TEST_F(Streaming, SubBpMovesReuseTheCachedJacobian) {
-  cal::StreamingCalibrator::Options opt;
+  cal::StreamingCalibrator<>::Options opt;
   cal::StreamingCalibrator sc(prob, x0, q0, opt);
   for (int t = 1; t <= 200; ++t) {
     Eigen::VectorXd q = q0;

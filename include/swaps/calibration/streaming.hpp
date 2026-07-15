@@ -21,8 +21,7 @@
 
 #include <Eigen/Dense>
 
-#include "swaps/calibration/compiled_residual.hpp"
-#include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/residual_engine.hpp"
 
 namespace swaps::calibration {
 
@@ -33,6 +32,7 @@ struct StreamTick {
   double drift = 0;        // ||q_new - q_ref||_inf: market move since J was last computed
 };
 
+template <class Problem = CalibrationProblem>
 class StreamingCalibrator {
  public:
   struct Options {
@@ -43,9 +43,9 @@ class StreamingCalibrator {
     bool exact = true;       // EXACT (iterate to step_tol) vs LINEAR (single step + drift re-anchor)
   };
 
-  StreamingCalibrator(const CalibrationProblem& prob, const Eigen::VectorXd& x0,
+  StreamingCalibrator(const Problem& prob, const Eigen::VectorXd& x0,
                       const Eigen::VectorXd& q0, const Options& opt)
-      : prob_(&prob), cr_(prob), opt_(opt) {
+      : n_res_(prob.n_residuals()), engine_(prob), opt_(opt) {
     set_anchor(x0, q0);
     x_cur_ = x0;
   }
@@ -67,7 +67,7 @@ class StreamingCalibrator {
     Eigen::VectorXd x = x_cur_;  // warm start from the last exact solution (tick-to-tick move is tiny)
     int frozen = 0;
     for (;;) {
-      const Eigen::VectorXd r = cr_.model_rates(x) - q_new;
+      const Eigen::VectorXd r = engine_.model_rates(x) - q_new;
       const Eigen::VectorXd dx = M_ * r;
       x.noalias() -= dx;
       ++t.newton_steps;
@@ -97,7 +97,7 @@ class StreamingCalibrator {
     Eigen::VectorXd x = x_anchor_ + M_ * d;
     int frozen = 0;
     for (;;) {
-      const Eigen::VectorXd r = cr_.model_rates(x) - q_new;
+      const Eigen::VectorXd r = engine_.model_rates(x) - q_new;
       const Eigen::VectorXd dx = M_ * r;
       x.noalias() -= dx;
       ++t.newton_steps;
@@ -115,18 +115,18 @@ class StreamingCalibrator {
     return t;
   }
 
-  // M = J(x)^{-1} (square problem). One ANALYTIC Jacobian + a factor-solve.
+  // M = (J^T J)^{-1} J^T (= J^{-1} when square). One engine Jacobian + a factor-solve.
   void set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     x_anchor_ = x;
     q_anchor_ = q;
-    const Eigen::MatrixXd J = cr_.jacobian(x);
+    const Eigen::MatrixXd J = engine_.jacobian(x);
     M_ = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
-        Eigen::MatrixXd::Identity(prob_->n_residuals(), prob_->n_residuals()));
+        Eigen::MatrixXd::Identity(n_res_, n_res_));
     ++refresh_count_;
   }
 
-  const CalibrationProblem* prob_;
-  CompiledResidual cr_;
+  int n_res_;
+  residual_engine_t<Problem> engine_;
   Options opt_;
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
   Eigen::MatrixXd M_;

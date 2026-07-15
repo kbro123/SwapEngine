@@ -19,6 +19,8 @@
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
 #include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/streaming.hpp"
+#include "swaps/calibration/warm.hpp"
 #include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
@@ -190,6 +192,73 @@ TEST_F(BundleRealistic, MultiCurveBasisMatchesQuantLib) {
   }
   std::cout << "  [bundle-real] FF-SOFR basis max |ours - QuantLib| = " << worst << " over " << n << " tenors\n";
   EXPECT_LT(worst, swaps::tol::curve_rel) << "multi-curve basis pricing must match QuantLib";
+}
+
+TEST_F(BundleRealistic, WarmRecalMatchesColdResolveOnMinorPerturbation) {
+  // Base cold solve (per-curve flat start), then a MINOR (~1bp) market perturbation. The warm
+  // frozen-Jacobian re-cal reusing the base Jacobian must land on an INDEPENDENT cold LM re-solve of
+  // the perturbed market -- and the one-matvec linear update must be first-order accurate. This is the
+  // 4-curve-bundle analogue of the single-curve Warm gate: same WarmCalibrator, driven via BundleProblem.
+  Eigen::VectorXd x0(prob.n_knots());
+  const double start[] = {0.043, 0.043, 0.073, 0.078};
+  for (int c = 0; c < NC; ++c) x0.segment(off[c], prob.curves[c].n_knots()).setConstant(start[c]);
+  const Eigen::VectorXd x_solved = cal::calibrate(prob, x0).x;
+
+  Eigen::VectorXd dq(prob.n_residuals());  // ~1bp move, varied sign/shape across quotes (residual order)
+  for (int i = 0; i < dq.size(); ++i) dq[i] = 1e-4 * std::sin(0.7 * i + 0.3);
+
+  // Ground truth: an independent COLD LM re-solve of the perturbed market (market += dq, residual order).
+  cal::BundleProblem pert = prob;
+  {
+    int i = 0;
+    for (auto& a : pert.avg_futs) a.market_rate += dq[i++];
+    for (auto& c : pert.comp_futs) c.market_rate += dq[i++];
+    for (auto& s : pert.swaps) s.market_rate += dq[i++];
+    for (auto& b : pert.bases) b.market_rate += dq[i++];
+  }
+  const Eigen::VectorXd x_cold = cal::calibrate(pert, x_solved).x;
+
+  // WARM: reuse the base Jacobian; only refresh if the move leaves the envelope (1bp should not).
+  cal::WarmCalibrator<cal::BundleProblem> wc(prob, x_solved);
+  const cal::WarmResult wr = wc.recalibrate(dq);
+  const Eigen::VectorXd x_lin = wc.recalibrate_linear(dq);
+
+  const double warm_err = (wr.x - x_cold).cwiseAbs().maxCoeff();
+  const double lin_err = (x_lin - x_cold).cwiseAbs().maxCoeff();
+  std::cout << "  [bundle-warm] steps=" << wr.steps << " refreshes=" << wr.jacobian_refreshes
+            << " converged=" << wr.converged << "  warm ||x-x_cold||=" << warm_err
+            << "  linear ||x-x_cold||=" << lin_err << "\n";
+  EXPECT_TRUE(wr.converged);
+  EXPECT_LT(warm_err, 1e-7) << "warm frozen-Newton must match an independent cold LM re-solve";
+  EXPECT_LT(lin_err, 1e-5) << "one-matvec linear update is first-order accurate at ~1bp";
+}
+
+TEST_F(BundleRealistic, StreamingExactPathRoundTripsTheBundle) {
+  // The EXACT streaming path, driven by BundleProblem, must reprice the whole 4-curve instrument set
+  // back to each tick's quotes. Quotes are generated from a perturbed curve (so they are achievable
+  // even though the bundle is over-determined), and every tick must round-trip to the Newton tolerance.
+  Eigen::VectorXd x0(prob.n_knots());
+  const double start[] = {0.043, 0.043, 0.073, 0.078};
+  for (int c = 0; c < NC; ++c) x0.segment(off[c], prob.curves[c].n_knots()).setConstant(start[c]);
+  const Eigen::VectorXd x_solved = cal::calibrate(prob, x0).x;
+
+  const Eigen::VectorXd mkt = prob.market();
+  auto model_rates = [&](const Eigen::VectorXd& x) { return (prob.residuals<double>(x) + mkt).eval(); };
+
+  cal::StreamingCalibrator<cal::BundleProblem>::Options opt;  // exact = true
+  cal::StreamingCalibrator sc(prob, x_solved, model_rates(x_solved), opt);
+
+  double worst_rt = 0;
+  for (int t = 1; t <= 120; ++t) {
+    Eigen::VectorXd xp = x_solved;  // a smoothly-drifting curve move (up to ~15bp), quotes from it
+    for (int i = 0; i < xp.size(); ++i) xp[i] += 15e-4 * std::sin(0.05 * t) * std::sin(0.5 * i + 1.0);
+    const Eigen::VectorXd q = model_rates(xp);
+    sc.update(q);
+    worst_rt = std::max(worst_rt, (model_rates(sc.current()) - q).cwiseAbs().maxCoeff());
+  }
+  std::cout << "  [bundle-stream] worst round-trip=" << worst_rt << " recalcs=" << sc.refresh_count() - 1
+            << "\n";
+  EXPECT_LT(worst_rt, 1e-8) << "every tick must reprice the 4-curve bundle back to the input quotes";
 }
 
 // ---- Spread-parameterized bundle curves -------------------------------------------------------

@@ -30,7 +30,7 @@ struct Fixture {
 
   cal::CalibrationProblem prob = rb::build_square_problem(mk);
   Eigen::VectorXd x0 = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
-  cal::WarmCalibrator wc{prob, x0};
+  cal::WarmCalibrator<> wc{prob, x0};
   Eigen::VectorXd dq;  // a small (~1bp) in-envelope market move, residual order
 
   // QuantLib side (IterativeBootstrap)

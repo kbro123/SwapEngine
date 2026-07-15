@@ -138,6 +138,18 @@ class BundleProblem {
     return o;
   }
 
+  // Target quotes in residual order (avg futures, comp futures, swaps, bases) -- the same order
+  // residuals() fills. Lets the generic AadResidualEngine recover model_rates = residuals + market.
+  Eigen::VectorXd market() const {
+    Eigen::VectorXd m(n_residuals());
+    int i = 0;
+    for (const auto& a : avg_futs) m[i++] = a.market_rate;
+    for (const auto& c : comp_futs) m[i++] = c.market_rate;
+    for (const auto& s : swaps) m[i++] = s.market_rate;
+    for (const auto& b : bases) m[i++] = b.market_rate;
+    return m;
+  }
+
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
     const auto C = build_bundle_curves<Scalar>(
