@@ -313,10 +313,15 @@ include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/N
                              curve_module.hpp (runtime ModularCurve: build from CurveModule{knots,scheme}),
                              spread_curve.hpp, ql_term_structure.hpp (generic CurveTermStructure<Curve>)
 include/swaps/calibration/   problem.hpp, lm.hpp, risk.hpp, warm.hpp (cached-Jacobian + linear update),
-                             streaming.hpp (exact frozen-Newton live feed), compiled_residual.hpp,
+                             streaming.hpp (exact frozen-Newton live feed), residual_engine.hpp
+                             (per-problem residual/Jacobian engine trait driving warm/streaming),
+                             compiled_residual.hpp (single-curve = 1-curve delegate to compiled_bundle.hpp),
+                             compiled_bundle.hpp (CompiledBundleResidual: multi-curve W-cache residual),
                              bundle_problem.hpp + bundle_stage.hpp (Stage 3 multi-curve bundle)
 include/swaps/pricing/       templated, QuantLib-free pricing kernel (cashflows.hpp; single- AND
-                             multi-curve OIS: ois_par_rate/basis_par_spread with forecast != discount)
+                             multi-curve OIS: ois_par_rate/basis_par_spread with forecast != discount);
+                             compiled.hpp (integral_weight_matrix W primitive) + compiled_book.hpp
+                             (CompiledCurveSet + role-aware batches: the ONE multi-curve W-cache engine)
 include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
 include/swaps/ad/            AAD scalar typedefs / dual helpers
 include/swaps/portfolio/     portfolio NPV kernel (portfolio.hpp) + vectorized reprice (compiled.hpp)
@@ -388,18 +393,32 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   warm/streaming re-calibrators drive it UNCHANGED. The block-structured Jacobian falls straight out of
   AAD over the stacked residual — a curve-0-only instrument has an identically-zero derivative w.r.t.
   curve-1's knots.
+- **One compiled `W`-cache engine for the whole bundle (`pricing/compiled_book.hpp`).** Bundle
+  log-discounts stay LINEAR in the stacked `x` (a spread curve's integral just adds to its base's), so
+  concatenating every curve's DF into one global vector gives `DF_all = exp(-W_all x)` with a
+  block-structured `W_all` (each row = a curve's own knot weights + its spread-base ancestry). The
+  single-curve gather/reduce and analytic Jacobian then generalize UNCHANGED — the multi-curve-ness lives
+  entirely in the global indices and `W_all`'s blocks. `CompiledCurveSet` + role-aware
+  `BundleFloat/Fixed/Comp/Avg` batches are the shared primitives; `calibration/compiled_bundle.hpp`
+  `CompiledBundleResidual` is the residual view (`J = -(dr/dDF diag(DF)) W_all`, analytic). It matches
+  the templated residual to ~5e-15 and AAD to ~2e-15 (outright) / ~3e-16 (spread).
+- **This is the ONE `CompiledBook`.** The single-curve `CompiledResidual` is now a thin delegate to a
+  1-curve `CompiledBundleResidual`, and `portfolio/compiled.hpp` `CompiledPortfolio` reprices NPVs off the
+  SAME `CompiledCurveSet` + `BundleFloat/Fixed` primitives — one compiled kernel for calibration AND
+  analytics, not three. Perf-neutral (measured): `portfolio_analytics` and `warm_recalibration` gates
+  unchanged. NB the batches materialize the per-coupon vector BEFORE the sparse reduction `R * v` — handing
+  Eigen's sparse×dense an unevaluated gather+divide expression re-does that work per access (~1.28× slower;
+  see `BundleFloatLegs::pv`).
 - **Warm & streaming re-cal are problem-generic (`calibration/residual_engine.hpp`).** `WarmCalibrator`
-  and `StreamingCalibrator` are now templated on the problem via `residual_engine_t<Problem>`:
-  `CalibrationProblem` → the analytic `CompiledResidual` (`W`-cache) microsecond fast path;
-  `BundleProblem` (or any problem exposing `residuals<Scalar>`/`market()`) → an `AadResidualEngine`
-  (templated residual + AAD Jacobian). So the exact same frozen-Jacobian control flow re-calibrates the
-  multi-curve bundle. Measured on the 4-curve bundle at a ~1bp tick (`bench/bundle_build_bench.cpp`,
-  `tests/bundle_test.cpp`): warm exact re-cal **2.76 ms** (~7× vs a 19 ms cold LM re-solve; matches an
-  independent cold solve to ~1.5e-11), one-matvec linear update **411 ns**, streaming exact path
-  round-trips every tick to ~3e-12. The bundle's frozen envelope is *tighter* than the single curve's
-  (the AAD engine + coupled residual is more nonlinear), so a 1bp move already triggers one Jacobian
-  refresh — hence ~7× here vs the single curve's ~55×. A true `W`-cache analytic bundle residual (to
-  recover the single-curve speedup) is a later extension; the linear 411 ns path is already microsecond.
+  and `StreamingCalibrator` are templated on the problem via `residual_engine_t<Problem>`:
+  `CalibrationProblem` → `CompiledResidual`, `BundleProblem` → `CompiledBundleResidual`, anything else →
+  the generic AAD engine. Same frozen-Jacobian control flow, now on the analytic fast path for the bundle.
+  Measured on the 4-curve bundle at a ~1bp tick (`bench/bundle_build_bench.cpp`, `tests/bundle_test.cpp`):
+  warm exact re-cal **~272 µs** (~71× vs a 19 ms cold LM re-solve; matches an independent cold solve to
+  ~1.5e-11), one-matvec linear update **~390 ns**, streaming exact path round-trips every tick to ~3e-12.
+  The bundle's frozen envelope is *tighter* than the single curve's (the coupled multi-curve residual is
+  more nonlinear), so a 1bp move triggers one Jacobian refresh — but the refresh is now ANALYTIC (no AAD
+  sweep), which is what took warm re-cal from ~7× (AAD engine) to ~71×.
 - **Staged solve (`bundle_stage.hpp`).** Decompose the dependency graph (Tarjan SCC), solve each SCC
   in dependency order: a **singleton** SCC → a LOCAL LM over just that curve's block with earlier
   curves FROZEN as constants; a **cycle** → a joint LM over just its members. Frozen curves must carry

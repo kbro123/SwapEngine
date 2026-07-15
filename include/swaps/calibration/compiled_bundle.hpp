@@ -15,9 +15,22 @@
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
+#include "swaps/calibration/problem.hpp"
 #include "swaps/pricing/compiled_book.hpp"
 
 namespace swaps::calibration {
+
+// A single-curve CalibrationProblem IS a 1-curve bundle: one self-discounting outright curve, its
+// futures/swaps all forecasting and discounting curve 0, no basis. This lets the single-curve
+// CompiledResidual be a thin delegate to CompiledBundleResidual -- one compiled engine, not two.
+inline BundleProblem single_curve_bundle(const CalibrationProblem& p) {
+  BundleProblem b;
+  b.curves.push_back({p.meeting_times, p.back_times, -1});
+  for (const auto& a : p.avg_futs) b.avg_futs.push_back({0, a.sched, a.convexity, a.market_rate});
+  for (const auto& c : p.comp_futs) b.comp_futs.push_back({0, c.sched, c.convexity, c.market_rate});
+  for (const auto& s : p.swaps) b.swaps.push_back({0, 0, s.sched, s.market_rate});
+  return b;
+}
 
 class CompiledBundleResidual {
  public:
