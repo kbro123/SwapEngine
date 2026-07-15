@@ -194,6 +194,24 @@ TEST_F(BundleRealistic, MultiCurveBasisMatchesQuantLib) {
   EXPECT_LT(worst, swaps::tol::curve_rel) << "multi-curve basis pricing must match QuantLib";
 }
 
+TEST_F(BundleRealistic, CompiledBundleResidualMatchesAad) {
+  // The multi-curve W-cache residual must reproduce the templated BundleProblem residual to machine
+  // precision, and its ANALYTIC block Jacobian must match the AAD Jacobian -- this is what lets the
+  // warm/streaming re-calibrators drive the bundle on the fast path instead of an AAD sweep.
+  cal::CompiledBundleResidual cr(prob);
+  double worst_r = 0, worst_j = 0;
+  for (double bump : {0.0, 7e-4, -1.3e-3}) {  // at x_true and two off-solution points
+    Eigen::VectorXd x = x_true;
+    for (int i = 0; i < x.size(); ++i) x[i] += bump * std::sin(0.9 * i + 0.2);
+    worst_r = std::max(worst_r, (cr.residuals(x) - prob.residuals<double>(x)).cwiseAbs().maxCoeff());
+    worst_j = std::max(worst_j, (cr.jacobian(x) - cal::aad_jacobian(prob, x)).cwiseAbs().maxCoeff());
+  }
+  std::cout << "  [bundle-compiled] worst |residual - AAD|=" << worst_r
+            << "  worst |Jacobian - AAD|=" << worst_j << "\n";
+  EXPECT_LT(worst_r, 1e-12) << "compiled bundle residual must match the templated residual";
+  EXPECT_LT(worst_j, 1e-8) << "analytic block Jacobian must match AAD";
+}
+
 TEST_F(BundleRealistic, WarmRecalMatchesColdResolveOnMinorPerturbation) {
   // Base cold solve (per-curve flat start), then a MINOR (~1bp) market perturbation. The warm
   // frozen-Jacobian re-cal reusing the base Jacobian must land on an INDEPENDENT cold LM re-solve of
@@ -319,6 +337,32 @@ TEST(BundleSpread, JointAndStagedRecoverSpreadCurve) {
             << (staged.x - x_true).cwiseAbs().maxCoeff() << " iters=" << staged.iterations << "\n";
   EXPECT_LT((joint.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "joint solve recovers base + spread";
   EXPECT_LT((staged.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "staged solve recovers base then spread";
+}
+
+TEST(BundleSpread, CompiledResidualHandlesSpreadCurves) {
+  // The W-cache must handle a SPREAD curve too: DF_spread = exp(-(W_base x_base + W_spread x_spread)),
+  // i.e. its W_all rows carry base-ancestry columns. Compiled residual + Jacobian must still match AAD.
+  cal::BundleProblem prob;
+  const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
+  prob.curves.resize(2);
+  prob.curves[0] = {meeting, back, -1};  // outright base
+  prob.curves[1] = {meeting, back, 0};   // spread over curve 0
+  const int nk = prob.curves[0].n_knots();
+  const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
+  for (double T : mats) prob.swaps.push_back({0, 0, make_annual_ois(T), 0.0});
+  for (double T : mats) prob.bases.push_back({1, 0, 0, make_annual_ois(T), 0.0});
+
+  Eigen::VectorXd x(2 * nk);
+  for (int i = 0; i < nk; ++i) {
+    x[i] = 0.040 + 0.001 * i;
+    x[nk + i] = 0.0050 + 0.0003 * i;
+  }
+  cal::CompiledBundleResidual cr(prob);
+  const double dr = (cr.residuals(x) - prob.residuals<double>(x)).cwiseAbs().maxCoeff();
+  const double dj = (cr.jacobian(x) - cal::aad_jacobian(prob, x)).cwiseAbs().maxCoeff();
+  std::cout << "  [bundle-spread] compiled |residual - AAD|=" << dr << " |Jacobian - AAD|=" << dj << "\n";
+  EXPECT_LT(dr, 1e-14);
+  EXPECT_LT(dj, 1e-9);
 }
 
 TEST(BundleSpread, SpreadHandleMatchesBasePlusSpread) {

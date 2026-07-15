@@ -19,6 +19,7 @@
 
 #include <Eigen/Dense>
 
+#include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/compiled_residual.hpp"
 #include "swaps/calibration/lm.hpp"
 
@@ -44,8 +45,9 @@ class AadResidualEngine {
   Eigen::VectorXd market_;
 };
 
-// CalibrationProblem -> the fast analytic CompiledResidual (which already exposes the same three ops);
-// everything else -> the generic AAD engine.
+// CalibrationProblem -> the single-curve analytic CompiledResidual; BundleProblem -> the multi-curve
+// analytic CompiledBundleResidual (W_all fast path); anything else -> the generic AAD engine. All three
+// expose the same residuals/jacobian/model_rates/n_residuals ops, so warm/streaming are oblivious.
 template <class Problem>
 struct residual_engine {
   using type = AadResidualEngine<Problem>;
@@ -53,6 +55,10 @@ struct residual_engine {
 template <>
 struct residual_engine<CalibrationProblem> {
   using type = CompiledResidual;
+};
+template <>
+struct residual_engine<BundleProblem> {
+  using type = CompiledBundleResidual;
 };
 template <class Problem>
 using residual_engine_t = typename residual_engine<Problem>::type;
