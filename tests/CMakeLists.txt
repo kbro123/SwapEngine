@@ -24,6 +24,7 @@ if(TARGET quantlib_oracle)
     convexity_test.cpp
     pricing_test.cpp
     generic_cashflow_test.cpp
+    extract_test.cpp
     calibration_test.cpp
     aad_test.cpp
     risk_test.cpp
