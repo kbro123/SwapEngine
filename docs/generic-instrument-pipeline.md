@@ -10,6 +10,47 @@ without further input.
 
 ---
 
+## STATUS (reconciled 2026-07-16, branch `feat/generic-instrument-pipeline`, gates green: 74/74 + perf PASS)
+
+**The pipeline is BUILT and TESTED but NOT ADOPTED.** Every section below is implemented EXCEPT the
+retirement in §2 — the generic model was **appended** alongside the legacy one, never substituted.
+That is exactly why "existing numbers unchanged" holds, and it is also the outstanding debt.
+
+| § | Item | Status |
+| --- | --- | --- |
+| 1 | ONE rate formula for every shape | **LANDED** |
+| 2 | `RateObservation`/`FloatCoupon`/`FixedCoupon` + pricing | **LANDED** |
+| 2 | Backward-compat invariant (legacy reduction) | **LANDED** — asserted bit-exact (`EXPECT_EQ(d, 0.0)`) |
+| 2 | **"Retire `OisSwap`/`CompoundedFuture`/`AveragedFuture`"** | **NOT DONE** — still live structs with their own pricing fns in `cashflows.hpp`; still what the reference market and all 4 benchmarks build |
+| 3 | `FloatLeg`/`FixedLeg`, roles on legs | **LANDED** |
+| 3 | `Instrument` + `ParRate`/`ParSpread`/`Rate` | **LANDED** — but constructed ONLY by `tests/{extract,generic_instrument}_test.cpp` |
+| 3 | Documented deterministic residual order | **LANDED** — `avg_futs, comp_futs, swaps, bases, instruments`; generic block appended LAST so no existing row renumbers |
+| 4 | ONE float batch (`BundleFloatBatch`) | **LANDED** — legs + comp + avg futures; both fused fast paths (`sub_is_identity`, `cpn_is_plain`) preserved |
+| 4 | Analytic Jacobian chain vs AAD ~1e-9 | **LANDED** — achieved **6.4e-16** |
+| 5 | Generic extractors, dispatch on coupon type | **LANDED** — legacy per-shape extractors retained alongside |
+| 6 | All 10 regression items | **LANDED** |
+| 7 | Non-goals | respected — `W_all`, interpolation, knot strategy, risk-ladder API untouched |
+| 8 | Both gates green every commit | **HELD** |
+
+**Remaining work (the adoption step), in order:**
+1. Migrate `tests/reference_curve.hpp::build_problem` onto `extract_float_leg`/`extract_fixed_leg` +
+   `Instrument`. **Assert, do not assume:** the generic OIS path uses `valueDates().front()/back()`
+   where the legacy path uses `accrualStartDate()/accrualEndDate()`. They coincide on the reference
+   market (both hit `fairRate` at ~6e-17) — pin it with a test before the call sites move.
+2. Migrate the four benchmarks; re-run the perf gate (baselines are legacy-path numbers today).
+3. Delete the legacy structs, their pricing functions, their extractors and their batches; drop the
+   now-dead residual-order blocks 1–4 and the `cashflows.hpp:107–126` index-naming comments with them.
+
+**Deviations from this document, deliberate and already merged** (see CLAUDE.md §7c for the why):
+- §5's IBOR `[fixingPeriodStart, fixingPeriodEnd]` does not exist in QL 1.34 → `fixingValueDate()` /
+  `fixingEndDate()` (par-coupon approximation; **not** `fixingMaturityDate()`).
+- §5's averaged-OIS `tau_index` "on the index day count" → `accrualPeriod()` (the COUPON's day
+  count), to match QL's pricer. Identical in the standard case.
+- Gearing and partially-fixed compounded coupons fold into the EXISTING weight/`realized` fields; no
+  new fields were added (`P·X − 1 ≡ P·(X−1) + (P−1)`).
+
+---
+
 ## 1. The unifying formula
 
 Every floating rate in scope is:
@@ -73,6 +114,10 @@ bit-comparable** (to ~1e-15). If a test moves numerically, the generalization is
 
 Retire `OisSwap`, `CompoundedFuture`, `AveragedFuture` as distinct *pricing* concepts; they become
 data shapes a test builds. Keep a swap as two legs (see §3).
+
+> **NOT DONE — see STATUS above.** These three are still live pricing structs in `cashflows.hpp`
+> with their own pricing functions, and are still what `tests/reference_curve.hpp` and all four
+> benchmarks build. The generic model was added alongside them, not in place of them.
 
 ## 3. Instruments, legs, roles, quotes
 

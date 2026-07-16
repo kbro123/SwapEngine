@@ -312,17 +312,23 @@ include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/N
                              (make_calibration_curve = MultiRegionCurve<Flat,Hermite> -- the SHIPPED curve),
                              curve_module.hpp (runtime ModularCurve: build from CurveModule{knots,scheme}),
                              spread_curve.hpp, ql_term_structure.hpp (generic CurveTermStructure<Curve>)
-include/swaps/calibration/   problem.hpp, lm.hpp, risk.hpp, warm.hpp (cached-Jacobian + linear update),
-                             streaming.hpp (exact frozen-Newton live feed), residual_engine.hpp
-                             (per-problem residual/Jacobian engine trait driving warm/streaming),
+include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instrument/FloatLeg/FixedLeg/
+                             QuoteKind model -- see §7c), lm.hpp, risk.hpp, warm.hpp (cached-Jacobian +
+                             linear update), streaming.hpp (exact frozen-Newton live feed),
+                             residual_engine.hpp (per-problem residual/Jacobian engine trait driving
+                             warm/streaming),
                              compiled_residual.hpp (single-curve = 1-curve delegate to compiled_bundle.hpp),
                              compiled_bundle.hpp (CompiledBundleResidual: multi-curve W-cache residual),
                              bundle_problem.hpp + bundle_stage.hpp (Stage 3 multi-curve bundle)
-include/swaps/pricing/       templated, QuantLib-free pricing kernel (cashflows.hpp; single- AND
+include/swaps/pricing/       templated, QuantLib-free pricing kernel (cashflows.hpp: the GENERIC
+                             RateObservation/FloatCoupon/FixedCoupon model (§7c) ALONGSIDE the still-live
+                             legacy OisSwap/CompoundedFuture/AveragedFuture structs; single- AND
                              multi-curve OIS: ois_par_rate/basis_par_spread with forecast != discount);
                              compiled.hpp (integral_weight_matrix W primitive) + compiled_book.hpp
-                             (CompiledCurveSet + role-aware batches: the ONE multi-curve W-cache engine)
-include/swaps/ql/            QuantLib -> plain-data schedule extractors (the one QL-touching layer)
+                             (CompiledCurveSet + role-aware batches incl. BundleFloatBatch, the ONE
+                             float primitive: the multi-curve W-cache engine)
+include/swaps/ql/            extract.hpp: QuantLib -> plain-data extractors (the one QL-touching layer);
+                             generic (dispatch on COUPON TYPE) + the legacy per-shape extractors
 include/swaps/ad/            AAD scalar typedefs / dual helpers
 include/swaps/portfolio/     portfolio NPV kernel (portfolio.hpp) + vectorized reprice (compiled.hpp)
 src/                         non-header impl / example drivers
@@ -440,6 +446,88 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   `tests/bundle_test.cpp` `BundleSpread.*` (joint & staged recover base+spread to ~1.5e-15; the handle
   math is exact). Requirement: `base < c` (bases defined before the spreads that reference them).
 
+## 7c. Stage 4 — the generic instrument pipeline (design: `docs/generic-instrument-pipeline.md`)
+
+**Status: the generic pipeline is BUILT, GATE-VERIFIED, and ADDITIVE — but NOT YET ADOPTED.** Read
+that sentence literally. The generic model exists and works end-to-end, but every production call
+site (the reference market in `tests/reference_curve.hpp`, ALL four benchmarks, and therefore every
+number in `baselines/baselines.json`) still runs the LEGACY `OisSwap`/`CompoundedFuture`/
+`AveragedFuture` shapes. The generic path is exercised only by `tests/extract_test.cpp` and
+`tests/generic_instrument_test.cpp`. Design §2's "retire them as distinct pricing concepts" has NOT
+happened — they remain live structs with their own pricing functions in `cashflows.hpp`.
+
+> This dual-path state is deliberate and is WHY existing numbers are unchanged: the generic block was
+> **appended**, never substituted. It is also debt — two ways to say the same thing. Do not describe
+> this stage as "done" or claim the engine is index-generic in practice until §7c's adoption step lands.
+
+### What the generic model IS (all of this is real and tested)
+- **ONE rate formula** (`pricing/cashflows.hpp`):
+  `rate = ( Σ_k w_k·[DF_fc(s_k)/DF_fc(e_k) − 1] + realized ) / tau_index`. `RateObservation` +
+  `FloatCoupon{obs, pay, tau_pay, spread}` + `FixedCoupon{pay, tau}`. Compounded OIS, averaged
+  OIS/FF, IBOR fixings, already-/partially-fixed coupons and all three future flavours are this ONE
+  type with different DATA. `w` empty ⇒ all-ones. It reduces to the legacy OIS form exactly at
+  `tau_pay == tau_index`, `spread = 0`, one sub-period, `realized = 0`.
+- **Roles live on LEGS, not instruments** (`calibration/problem.hpp`): `FloatLeg{coupons, forecast,
+  discount}` / `FixedLeg{coupons, discount}`. That is what makes tenor-basis representable without a
+  new type. `Instrument` = legs + `QuoteKind{ParRate, ParSpread, Rate}` + market quote;
+  `instrument_model_quote<Scalar>(ins, C)` / `instrument_residual<Scalar>(ins, C)` are role-accessor-
+  templated, so ONE residual definition serves `CalibrationProblem`, `BundleProblem` and
+  `BundleBlockProblem`.
+- **Residual order (THE CONTRACT — the Jacobian rows, W-cache batches, `market()`, the risk ladder
+  and warm/streaming all depend on it):**
+  `1. avg_futs | 2. comp_futs | 3. swaps | 4. bases | 5. instruments (insertion order)`.
+  The generic block is LAST precisely so no existing row is renumbered.
+- **The generic instruments ride the analytic W-cache** (`compiled_bundle.hpp`), not a slow path:
+  `ParRate` and `ParSpread` share ONE pair of float batches (ParRate's subtracted leg is empty ⇒ `pv`
+  is exactly 0.0); `q_rows_`/`r_rows_` map batch position → residual row, so a mixed quote-kind list
+  keeps insertion order without grouping by kind. Compiled vs templated kernel: **3.6e-17**; analytic
+  block Jacobian vs AAD: **6.4e-16** (design bar: 1e-9).
+- **`BundleFloatBatch` is the ONE float primitive** — legs, compounded futures and averaged futures
+  are all it. **PERF (measured, do not regress):** it has two fused fast paths detected at
+  `finalize()` — `sub_is_identity` (`R_sub == I`) and `cpn_is_plain` (`konst == 0 && k == 1`).
+  Without `cpn_is_plain` the portfolio book costs **1.28×** (192 µs vs 150 µs). Any new coupon shape
+  must keep the standard shape fused. Always materialize a `VectorXd` BEFORE a sparse reduction `R*v`.
+- **Extractors dispatch on QuantLib COUPON TYPE, never index identity** (`ql/extract.hpp`).
+  `extract_float_coupon` is the ONE type switch (`OvernightIndexedCoupon` / `IborCoupon`).
+  Times use the CURVE day counter; accruals (`tau_pay`, `tau_index`) use the instrument/index's own —
+  that separation is what makes 30/360-fixed vs ACT/360-float correct. Keep it.
+
+### Non-obvious facts worth not rediscovering
+- **Gearing folds into the weights**, no new field: `g·(Σ w_k(…) + realized)/τ ≡ (Σ (g·w_k)(…) +
+  g·realized)/τ`. At `g == 1` the weight vector is left EMPTY so the standard shape stays on the
+  fused fast paths.
+- **A partially-fixed compounded overnight coupon folds in too.** QuantLib's fixed part is
+  *multiplicative* (`P·X − 1`), which looks incompatible with the additive `realized` — but
+  `P·X − 1 ≡ P·(X−1) + (P−1)`, i.e. `weight = P, realized = P − 1`. With no past fixings `P == 1.0`
+  identically ⇒ weight empty, `realized == 0` ⇒ the legacy shape bit for bit.
+- **IBOR sub-period is `fixingValueDate()`/`fixingEndDate()`** — NOT `fixingMaturityDate()`, and the
+  design's `fixingPeriodStart/End` names do not exist in QL 1.34. Under QL's default *par-coupon
+  approximation* the estimation period ends at the next fixing, not at index maturity. These are
+  computed by the coupon's `IborCouponPricer`, so **the coupon must have a pricer** (`IborLeg`/
+  `VanillaSwap` set one). An IBOR *future* is different: its dates come from the INDEX
+  (`valueDate`/`maturityDate`), because it settles on the actual fixing — par-coupon does not apply.
+- **`RateAveraging::Simple` + `telescopicValueDates = true` selects QL's Takada log-approximation**, a
+  different model that will NOT agree. Build averaged coupons non-telescopic.
+- Averaged-OIS `tau_index` uses `accrualPeriod()` (the COUPON's day count) to match QL's pricer, not
+  the index day count the design names; identical whenever the coupon uses the index's day count.
+- In-arrears IBOR is rejected with `QL_REQUIRE` (its timing adjustment is a model ⇒ tests).
+- `Rate` is spelled `rate + (convexity − market)`, NOT `(rate + convexity) − market` — algebraically
+  identical, but the latter is not BIT-identical and would drift every existing futures residual by
+  an ulp. `tests/generic_instrument_test.cpp` asserts `EXPECT_EQ(d, 0.0)` on this.
+
+### Index-specific knowledge in `include/` — audited, and the honest residue
+Zero index/currency/calendar identifiers appear in engine **code**. All 14 name-hits are comments,
+and most are ANTI-leak documentation (`problem.hpp:29`, `compiled_book.hpp:126`, `cashflows.hpp:168`,
+`extract.hpp:107` exist to say "'SOFR 3M future' is not an engine concept, it is DATA") — do not
+delete those, they enforce the rule. Two honest residues:
+- `cashflows.hpp:107–126` section headers DO assert index identity — but only on the **legacy**
+  structs the design retires. They go when those go.
+- **`meeting_times` / `back_times` is FOMC vocabulary threaded through nearly every header**
+  (`problem.hpp`, `bundle_problem.hpp`, `compiled_bundle.hpp`, `risk.hpp`, `curve/`, `portfolio/`).
+  It is *vocabulary*, not strategy — the dates are DATA from `tests/reference_market.hpp` and the
+  engine only takes knot times — so it does not breach the rule, but the name is a CB artifact.
+  Renaming to `front`/`back` touches ~every header for cosmetic gain; deliberately not done.
+
 ## 8. Phased roadmap (update the checkbox as phases land)
 
 - [x] **Phase 0** — Toolchain, repo, CLAUDE.md, CMake skeleton, QuantLib baseline builds.
@@ -501,3 +589,17 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
       (`CurveSpec.base`), so a curve quoted as `base + spread` calibrates jointly (or over a fixed base)
       with no solver change. *(Next: real FF-averaging-futures QuantLib helpers for a fully-faithful build
       benchmark; real-time cross-curve risk ladder.)*
+- [ ] **Stage 4 — generic instrument pipeline (see §7c) — PARTIAL, branch `feat/generic-instrument-pipeline`.**
+      Design `docs/generic-instrument-pipeline.md`. **Landed & gate-verified (74/74, perf PASS):** §2 the
+      generic `RateObservation`/`FloatCoupon` kernel; §4 `BundleFloatBatch`, ONE float primitive for legs +
+      compounded + averaged futures, ridden by BOTH `CompiledPortfolio` and `CompiledBundleResidual`;
+      §5 generic coupon-type-dispatch extractors; §3 the `Instrument`/leg/role/quote model on the analytic
+      W-cache; §6 all ten regression items.
+      **NOT done — the adoption step.** The generic model is ADDITIVE: `tests/reference_curve.hpp` and all
+      four benchmarks still build LEGACY `OisSwap`/`CompoundedFuture`/`AveragedFuture`, which remain live
+      pricing structs. Nothing outside the two new test files constructs an `Instrument`. Remaining:
+      migrate `build_problem` onto `extract_float_leg`/`extract_fixed_leg` + `Instrument`, re-run both
+      gates, then delete the legacy structs/extractors/batches. **Pin, do not assume, the one known
+      difference when those call sites move:** the generic OIS path uses `valueDates().front()/back()`
+      (QL's actual DF arguments) where the legacy path uses `accrualStartDate()/accrualEndDate()`; they
+      coincide on the reference market (both hit `fairRate` at ~6e-17) — assert that equivalence.
