@@ -68,7 +68,7 @@ struct SquareFixture {
       const Date s = rb::sofr_start(Month(q.ref_month), q.ref_year, Quarterly),
                  e = rb::sofr_end(Month(q.ref_month), q.ref_year, Quarterly);
       prob.comp_futs.push_back(
-          {swaps::qlx::extract_compounded_future(s, e, today, dc), 0.0, 1.0 - q.price / 100.0});
+          {swaps::qlx::extract_compounded_future(s, e, today, dc, mk.sofr->dayCounter()), 0.0, 1.0 - q.price / 100.0});
       back.push_back(t(e));
     }
     for (std::size_t i = 0; i < rm::swaps.size(); ++i) {

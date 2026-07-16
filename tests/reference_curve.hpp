@@ -125,7 +125,7 @@ inline swaps::calibration::CalibrationProblem build_problem(const Market& mk) {
     const double market_rate = 1.0 - f.market_price / 100.0;
     if (f.quarterly)
       p.comp_futs.push_back(
-          {swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc), conv,
+          {swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc, mk.sofr->dayCounter()), conv,
            market_rate});
     else
       p.avg_futs.push_back(
@@ -166,7 +166,7 @@ inline swaps::calibration::CalibrationProblem build_square_problem(const Market&
     const Date s = sofr_start(Month(q.ref_month), q.ref_year, Quarterly),
                e = sofr_end(Month(q.ref_month), q.ref_year, Quarterly);
     p.comp_futs.push_back(
-        {swaps::qlx::extract_compounded_future(s, e, mk.today, mk.dc), 0.0, 1.0 - q.price / 100.0});
+        {swaps::qlx::extract_compounded_future(s, e, mk.today, mk.dc, mk.sofr->dayCounter()), 0.0, 1.0 - q.price / 100.0});
     back.push_back(t(e));
   }
   for (std::size_t i = 0; i < rm::swaps.size(); ++i) {

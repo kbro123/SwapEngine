@@ -11,7 +11,6 @@
 // pricing kernel, and any disagreement is our pricing bug, not an interpolation mismatch.
 
 #include <ql/termstructures/yieldtermstructure.hpp>
-#include <ql/time/daycounters/actual365fixed.hpp>
 
 #include "swaps/curve/calibration_curve.hpp"
 

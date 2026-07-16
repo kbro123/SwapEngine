@@ -272,3 +272,41 @@ TEST_F(Extract, GenericObservationReproducesCompoundedFuture) {
     EXPECT_TRUE(close(px::future_rate<double>(o, 0.0, curve), ql_rate, swaps::tol::curve_rel));
   }
 }
+
+// ---- 8. An IBOR future: the SAME path, a different index family --------------------------------
+// The test above drives the generic future path with an OVERNIGHT contract. Design §1 lists the IBOR
+// future as the other single-sub-period shape on that path, and it is a genuinely different market:
+// the sub-period is the INDEX's fixing period (value -> maturity date), not a contract accrual, and
+// the denominator is the index's own accrual over it.
+//
+// Oracle: QuantLib's `IborIndex::forecastFixing`, which computes the settlement rate off our curve
+// through its own index machinery as (DF(d1)/DF(d2) - 1)/t. That is our generic formula with one
+// sub-period and realized = 0, so agreement to curve_rel pins the mapping exactly. Convexity is an
+// INPUT number added outside the index (design §3): the model that produced it lives in tests.
+//
+// NB the dates come from the INDEX (valueDate/maturityDate), not from a coupon: a future settles on
+// the actual fixing, so the par-coupon approximation that governs `extract_ibor_obs` does not apply.
+TEST_F(Extract, IborFutureMatchesQuantLibFixing) {
+  auto index = ext::make_shared<Euribor3M>(hfwd);  // forecast off the +25bp curve
+  const double conv = 2.7e-4;                      // an input NUMBER, never a model in include/
+
+  for (int m : {3, 6, 12, 24}) {
+    const Date fixing = index->fixingCalendar().adjust(mk.today + Period(m, Months));
+    const Date d1 = index->valueDate(fixing);
+    const Date d2 = index->maturityDate(d1);
+    const auto o = qlx::make_observation({{d1, d2}}, 0.0,
+                                         index->dayCounter().yearFraction(d1, d2), mk.today, mk.dc);
+
+    // The IBOR-future shape design §1 specifies: ONE sub-period, nothing realized.
+    ASSERT_EQ(o.sub_start.size(), 1u);
+    EXPECT_EQ(o.realized, 0.0);
+    EXPECT_TRUE(o.weight.empty());  // unit weight => stays on the compiled fused fast path
+
+    const double ours = px::future_rate<double>(o, conv, fwd_curve);
+    EXPECT_TRUE(close(ours, index->fixing(fixing) + conv, swaps::tol::curve_rel));
+
+    // Negative control: the agreement above must come from the mapping, not from the two curves
+    // being interchangeable. Forecasting off the DISCOUNT curve (25bp away) must not agree.
+    EXPECT_GT(std::abs(px::future_rate<double>(o, conv, curve) - ours), 1e-4);
+  }
+}

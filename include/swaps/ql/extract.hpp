@@ -50,17 +50,21 @@ inline pricing::OisSwap extract_ois_swap(const QuantLib::OvernightIndexedSwap& s
   return out;
 }
 
-// 3M compounded future: accrual start/end and the ACT/360 accrual QuantLib uses for the reference
-// rate. (start, end are the IMM value/maturity dates.)
+// Compounded future: accrual start/end in CURVE time, plus the reference rate's accrual on the
+// INDEX's own day count. (start, end are the contract's value/maturity dates.)
+//
+// `indexDc` is a PARAMETER, not a constant: which day count compounds the reference rate is a
+// property of the index the caller chose, and naming one here would put an index convention in
+// engine code (CLAUDE.md §1, design §6). Callers pass `index->dayCounter()`.
 inline pricing::CompoundedFuture extract_compounded_future(const QuantLib::Date& start,
                                                            const QuantLib::Date& end,
                                                            const QuantLib::Date& ref,
-                                                           const QuantLib::DayCounter& curveDc) {
-  using namespace QuantLib;
+                                                           const QuantLib::DayCounter& curveDc,
+                                                           const QuantLib::DayCounter& indexDc) {
   pricing::CompoundedFuture out;
   out.start = curveDc.yearFraction(ref, start);
   out.end = curveDc.yearFraction(ref, end);
-  out.accrual = Actual360().yearFraction(start, end);  // SOFR compounding day count
+  out.accrual = indexDc.yearFraction(start, end);
   return out;
 }
 
@@ -75,7 +79,7 @@ inline pricing::AveragedFuture extract_averaged_future(
   pricing::AveragedFuture out;
   const Date today = Settings::instance().evaluationDate();
   const Calendar cal = index->fixingCalendar();
-  const DayCounter idc = index->dayCounter();  // ACT/360 for SOFR
+  const DayCounter idc = index->dayCounter();  // the index's own accrual day count, whatever it is
   out.period_yf = idc.yearFraction(valueDate, maturityDate);
 
   const TimeSeries<Real>& history = IndexManager::instance().getHistory(index->name());
@@ -83,7 +87,7 @@ inline pricing::AveragedFuture extract_averaged_future(
     const Date d2 = cal.advance(d1, 1, Days);
     if (d1 < today) {
       const Real f = history[d1];
-      QL_REQUIRE(f != Null<Real>(), "missing SOFR fixing on " << d1);
+      QL_REQUIRE(f != Null<Real>(), "missing " << index->name() << " fixing on " << d1);
       out.realized_sum += f * idc.yearFraction(d1, d2);
     } else {
       out.sub_start.push_back(curveDc.yearFraction(ref, d1));

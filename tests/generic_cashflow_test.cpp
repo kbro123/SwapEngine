@@ -100,7 +100,7 @@ TEST_F(Generic, CompoundedFutureReducesBitExact) {
   int n = 0;
   for (const auto& f : mk.futures) {
     if (!f.quarterly) continue;
-    const auto sched = swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc);
+    const auto sched = swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc, mk.sofr->dayCounter());
     const double conv = mk.convexity(f);
     const double legacy = px::compounded_future_rate<double>(sched, curve) + conv;
     const double generic = px::future_rate<double>(as_obs(sched), conv, curve);

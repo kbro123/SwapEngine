@@ -68,7 +68,7 @@ TEST_F(Pricing, CompoundedFutureRateMatchesQuantLib) {
     OvernightIndexFuture qlf(mk.sofr, f.start, f.end, Handle<Quote>(), RateAveraging::Compound);
     const double ql_rate = 1.0 - qlf.NPV() / 100.0;
 
-    const auto sched = swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc);
+    const auto sched = swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc, mk.sofr->dayCounter());
     const double ours = swaps::pricing::compounded_future_rate<double>(sched, curve);
     EXPECT_TRUE(close(ours, ql_rate, swaps::tol::curve_rel))
         << " 3M future " << f.start << ".." << f.end;
