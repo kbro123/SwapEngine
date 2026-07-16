@@ -22,6 +22,7 @@ if(TARGET quantlib_oracle)
   add_executable(swaps_oracle_tests
     convexity_test.cpp
     pricing_test.cpp
+    generic_cashflow_test.cpp
     calibration_test.cpp
     aad_test.cpp
     risk_test.cpp

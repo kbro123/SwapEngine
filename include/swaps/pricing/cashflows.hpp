@@ -151,4 +151,159 @@ Scalar future_price(Scalar rate, double convexity) {
   return (1.0 - (rate + convexity)) * 100.0;
 }
 
+// =================================================================================================
+// GENERIC CASHFLOW MODEL (docs/generic-instrument-pipeline.md §2)
+// =================================================================================================
+// Everything above this line is a SPECIAL CASE of what follows. `OisSwap`, `CompoundedFuture` and
+// `AveragedFuture` are index-flavoured data shapes; the types below are the ONE rate/coupon model
+// the engine will keep. The legacy forms are retained while call sites migrate; each reduces to the
+// generic form BIT-EXACTLY (see the k-form note on float_coupon_pv, and tests/generic_cashflow_test).
+//
+// The unifying formula for every floating rate in scope:
+//
+//   rate = ( Σ_k w_k · [ DF_fc(s_k) / DF_fc(e_k) − 1 ] + realized ) / tau_index
+//
+// A compounded OIS coupon is ONE sub-period (daily compounding telescopes to the DF ratio); an
+// averaged OIS/FF coupon is one sub-period per business day; an IBOR fixing is ONE sub-period over
+// the fixing period. "SOFR 3M future", "FF future", "Euribor future" are not engine concepts — they
+// are different `RateObservation` DATA built by a test (CLAUDE.md §1, design §1/§6).
+
+// One observation of a floating index over a coupon's (or future's) period.
+struct RateObservation {
+  // Sub-period brackets, in FORECAST-curve time. Empty => the whole observation is already fixed
+  // and the rate is a pure constant (`realized / tau_index`).
+  std::vector<double> sub_start;
+  std::vector<double> sub_end;
+  // Per-sub-period weights. EMPTY MEANS ALL-ONES — and we then neither allocate nor multiply, which
+  // is what keeps the standard OIS/IBOR reduction bit-exact (x * 1.0 is exact in IEEE-754, but the
+  // empty path avoids the multiply and the storage entirely).
+  std::vector<double> weight;
+  double realized = 0.0;   // constant contribution of already-fixed days (ZERO derivative)
+  double tau_index = 0.0;  // the denominator, on the INDEX's own day count
+};
+
+// One floating coupon: an observation, discounted at its own pay date on its own accrual basis.
+// `tau_pay` is the PAYMENT accrual (the coupon's day count) and is deliberately distinct from
+// `obs.tau_index` (the index's) — that separation is what makes 30/360-vs-ACT/360 correct.
+struct FloatCoupon {
+  RateObservation obs;
+  double pay = 0.0;      // payment (discount-curve) time
+  double tau_pay = 0.0;  // payment accrual, coupon day count
+  double spread = 0.0;   // additive contractual spread (outside the index), may be 0
+};
+
+// One fixed coupon. The RATE is supplied by the instrument/quote, not stored here, so this type
+// serves both a par-rate annuity and a fixed leg at a contract rate.
+struct FixedCoupon {
+  double pay = 0.0;
+  double tau = 0.0;
+};
+
+// Σ_k w_k · (DF(s_k)/DF(e_k) − 1) — the curve-dependent numerator ONLY.
+// Precondition: at least one sub-period (so the accumulator can be seeded from a curve-dependent
+// term and carry derivatives — see the AAD SAFETY note at the top of this header).
+template <class Scalar, class FCurve>
+Scalar obs_forward_sum(const RateObservation& o, const FCurve& fc) {
+  assert(!o.sub_start.empty());
+  assert(o.sub_start.size() == o.sub_end.size());
+  assert(o.weight.empty() || o.weight.size() == o.sub_start.size());
+  const bool weighted = !o.weight.empty();
+  Scalar num = fc.discount(o.sub_start[0]) / fc.discount(o.sub_end[0]) - 1.0;
+  if (weighted) num = num * o.weight[0];
+  for (std::size_t k = 1; k < o.sub_start.size(); ++k) {
+    Scalar t = fc.discount(o.sub_start[k]) / fc.discount(o.sub_end[k]) - 1.0;
+    if (weighted)
+      num += t * o.weight[k];
+    else
+      num += t;
+  }
+  return num;
+}
+
+// rate = ( Σ_k w_k (DF(s_k)/DF(e_k) − 1) + realized ) / tau_index.
+//
+// AAD CAVEAT: when the observation is fully fixed (no sub-periods) the result is a genuine constant
+// and `Scalar(...)` therefore carries an EMPTY derivative vector. That is fine standalone (a fully
+// fixed future IS a constant residual row — this matches `averaged_future_rate` today), but such a
+// value must NOT be summed with a curve-dependent sibling. `float_coupon_pv` below never does: it
+// keeps the constant as a raw `double` and lets DF(pay) carry the derivatives.
+template <class Scalar, class FCurve>
+Scalar rate(const RateObservation& o, const FCurve& fc) {
+  assert(o.tau_index > 0.0);
+  if (o.sub_start.empty()) return Scalar(o.realized / o.tau_index);
+  return (obs_forward_sum<Scalar>(o, fc) + o.realized) / o.tau_index;
+}
+
+// PV of one floating coupon, forecasting `fc` and discounting `dc`:
+//
+//   pv = DF_dc(pay) · ( rate(obs, fc) + spread ) · tau_pay
+//
+// evaluated in the algebraically identical "k-form"
+//
+//   A  = Σ_k w_k (DF(s_k)/DF(e_k) − 1) + realized + spread·tau_index      (rate × time)
+//   k  = tau_pay / tau_index                                              (build-time constant)
+//   pv = DF_dc(pay) · A · k
+//
+// WHY: the k-form makes the legacy reduction BIT-EXACT rather than merely 1e-15-close. At one
+// sub-period with no weights, realized = 0, spread = 0 and tau_pay == tau_index we get the literal
+// double `k == 1.0` and `A == DF(s)/DF(e) − 1`, so `pv == DF(pay)·(DF(s)/DF(e) − 1)` to the last
+// bit — identical to `ois_float_coupon_pv`. The doc's form `(num/tau)·tau` would drift ~1-2 ulp on
+// every existing OIS number instead. Same model, chosen evaluation order.
+//
+// AAD-safe by construction: DF_dc(pay) always exists and always carries the derivatives, so a fully
+// fixed coupon (empty sub-periods) still returns a correctly-SIZED Scalar and can be summed with
+// live siblings — the empty-derivative trap the legacy `averaged_future_rate` still has.
+template <class Scalar, class FCurve, class DCurve>
+Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc) {
+  assert(c.obs.tau_index > 0.0);
+  const double k = c.tau_pay / c.obs.tau_index;
+  const double konst = c.obs.realized + c.spread * c.obs.tau_index;
+  if (c.obs.sub_start.empty()) return dc.discount(c.pay) * (konst * k);
+  Scalar a = obs_forward_sum<Scalar>(c.obs, fc) + konst;
+  return dc.discount(c.pay) * a * k;
+}
+
+// PV of a floating leg for unit notional.
+template <class Scalar, class FCurve, class DCurve>
+Scalar float_leg_pv(const std::vector<FloatCoupon>& leg, const FCurve& fc, const DCurve& dc) {
+  assert(!leg.empty());
+  Scalar pv = float_coupon_pv<Scalar>(leg[0], fc, dc);
+  for (std::size_t i = 1; i < leg.size(); ++i) pv += float_coupon_pv<Scalar>(leg[i], fc, dc);
+  return pv;
+}
+
+// Annuity per unit rate and unit notional: Σ DF_dc(pay_i) · tau_i.
+template <class Scalar, class DCurve>
+Scalar annuity(const std::vector<FixedCoupon>& leg, const DCurve& dc) {
+  assert(!leg.empty());
+  Scalar a = dc.discount(leg[0].pay) * leg[0].tau;
+  for (std::size_t i = 1; i < leg.size(); ++i) a += dc.discount(leg[i].pay) * leg[i].tau;
+  return a;
+}
+
+// Quote transform `ParRate`: float_leg_pv / annuity.
+template <class Scalar, class FCurve, class DCurve>
+Scalar par_rate(const std::vector<FloatCoupon>& float_leg, const std::vector<FixedCoupon>& fixed_leg,
+                const FCurve& fc, const DCurve& dc) {
+  return float_leg_pv<Scalar>(float_leg, fc, dc) / annuity<Scalar>(fixed_leg, dc);
+}
+
+// Quote transform `ParSpread` (basis): (pv_bench − pv_fwd) / annuity.
+// The two float legs are SEPARATE — they may differ in frequency, day count and spread (design §6.7);
+// they need not share a schedule the way the legacy `basis_par_spread` forces them to.
+template <class Scalar, class FwdCurve, class BenchCurve, class DCurve>
+Scalar par_spread(const std::vector<FloatCoupon>& fwd_leg, const std::vector<FloatCoupon>& bench_leg,
+                  const std::vector<FixedCoupon>& annuity_leg, const FwdCurve& fwd,
+                  const BenchCurve& bench, const DCurve& dc) {
+  return (float_leg_pv<Scalar>(bench_leg, bench, dc) - float_leg_pv<Scalar>(fwd_leg, fwd, dc)) /
+         annuity<Scalar>(annuity_leg, dc);
+}
+
+// Quote transform `Rate` (any future): rate + convexity. `convexity` is an INPUT NUMBER — the
+// convexity MODEL (Hull-White etc.) lives in tests, never in engine code (design §3/§6).
+template <class Scalar, class FCurve>
+Scalar future_rate(const RateObservation& o, double convexity, const FCurve& fc) {
+  return rate<Scalar>(o, fc) + convexity;
+}
+
 }  // namespace swaps::pricing
