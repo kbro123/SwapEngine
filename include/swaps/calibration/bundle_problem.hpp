@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "swaps/calibration/problem.hpp"  // the generic FloatLeg/FixedLeg/Instrument model (design §3)
 #include "swaps/curve/calibration_curve.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
@@ -122,6 +123,12 @@ class BundleProblem {
   std::vector<Basis> bases;
   std::vector<AvgFut> avg_futs;
   std::vector<CompFut> comp_futs;
+  // Generic instruments (design §3): legs carrying their OWN curve roles + a quote transform. The four
+  // vectors above are index-flavoured SHORTHAND for the commonest shapes and force both legs of a swap
+  // onto one schedule; an Instrument does not. Anything the shorthand cannot say — an IBOR leg, a
+  // spread, 30/360-fixed vs ACT/360-float, a semi-annual basis leg against an annual fixed leg,
+  // weighted averaging — is expressed here, and needs no new engine type.
+  std::vector<Instrument> instruments;
 
   int n_curves() const { return static_cast<int>(curves.size()); }
   int n_knots() const {
@@ -130,7 +137,8 @@ class BundleProblem {
     return n;
   }
   int n_residuals() const {
-    return static_cast<int>(swaps.size() + bases.size() + avg_futs.size() + comp_futs.size());
+    return static_cast<int>(swaps.size() + bases.size() + avg_futs.size() + comp_futs.size() +
+                            instruments.size());
   }
   int offset(int k) const {
     int o = 0;
@@ -138,8 +146,20 @@ class BundleProblem {
     return o;
   }
 
-  // Target quotes in residual order (avg futures, comp futures, swaps, bases) -- the same order
-  // residuals() fills. Lets the generic AadResidualEngine recover model_rates = residuals + market.
+  // THE RESIDUAL ORDER (deterministic and DOCUMENTED — the Jacobian rows, the W-cache batches in
+  // CompiledBundleResidual, market(), the risk ladder and the warm/streaming feeds all index off it;
+  // every one of them must fill these rows in exactly this order):
+  //   1. avg_futs     in vector order
+  //   2. comp_futs    in vector order
+  //   3. swaps        in vector order
+  //   4. bases        in vector order
+  //   5. instruments  in vector order   (generic; appended AFTER the legacy groups, so adding the
+  //                                      generic model cannot renumber an existing row)
+  // The generic block keeps INSERTION order even though it mixes quote kinds — the compiled engine
+  // batches by kind internally and scatters each batch back to its residual row.
+
+  // Target quotes in residual order — lets the generic AadResidualEngine recover
+  // model_rates = residuals + market.
   Eigen::VectorXd market() const {
     Eigen::VectorXd m(n_residuals());
     int i = 0;
@@ -147,6 +167,7 @@ class BundleProblem {
     for (const auto& c : comp_futs) m[i++] = c.market_rate;
     for (const auto& s : swaps) m[i++] = s.market_rate;
     for (const auto& b : bases) m[i++] = b.market_rate;
+    for (const auto& ins : instruments) m[i++] = ins.market;
     return m;
   }
 
@@ -167,6 +188,10 @@ class BundleProblem {
       r[row++] =
           pricing::basis_par_spread<Scalar>(b.sched, *C[b.forecast], *C[b.benchmark], *C[b.discount]) -
           Scalar(b.market_rate);
+    // Each generic leg resolves its OWN role, so forecast != discount and cross-curve legs need no
+    // special case here — the role indices are just lookups into the built curve handles.
+    const auto curve_of = [&C](int i) -> const CurveHandle<Scalar>& { return *C[i]; };
+    for (const auto& ins : instruments) r[row++] = instrument_residual<Scalar>(ins, curve_of);
     return r;
   }
 };

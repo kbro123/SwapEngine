@@ -36,6 +36,15 @@ inline std::vector<std::vector<int>> bundle_dependency_order(const BundleProblem
     if (p.curves[c].base >= 0) add(c, p.curves[c].base);
   for (const auto& s : p.swaps) add(s.forecast, s.discount);
   for (const auto& b : p.bases) { add(b.forecast, b.benchmark); add(b.forecast, b.discount); }
+  // A generic instrument pins its quoted leg's forecast curve, which therefore depends on every OTHER
+  // curve its legs reference. A `Rate` instrument references only its own forecast curve -> no edge.
+  for (const auto& ins : p.instruments) {
+    if (ins.quote == QuoteKind::Rate) continue;
+    const int c = ins.primary_curve();
+    add(c, ins.fwd.discount);
+    add(c, ins.fixed.discount);
+    if (ins.quote == QuoteKind::ParSpread) { add(c, ins.bench.forecast); add(c, ins.bench.discount); }
+  }
 
   std::vector<int> idx(N, -1), low(N, 0), stk;
   std::vector<char> onstk(N, 0);
@@ -82,11 +91,14 @@ class BundleBlockProblem {
       if (free_[p.avg_futs[i].forecast]) avg_futs_.push_back(i);
     for (int i = 0; i < static_cast<int>(p.comp_futs.size()); ++i)
       if (free_[p.comp_futs[i].forecast]) comp_futs_.push_back(i);
+    for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i)
+      if (free_[p.instruments[i].primary_curve()]) gen_.push_back(i);
   }
 
   int n_knots() const { return nk_; }
   int n_residuals() const {
-    return static_cast<int>(swaps_.size() + bases_.size() + avg_futs_.size() + comp_futs_.size());
+    return static_cast<int>(swaps_.size() + bases_.size() + avg_futs_.size() + comp_futs_.size() +
+                            gen_.size());
   }
 
   template <class Scalar, class Vec>
@@ -120,6 +132,8 @@ class BundleBlockProblem {
       r[row++] = pricing::basis_par_spread<Scalar>(b.sched, *C[b.forecast], *C[b.benchmark], *C[b.discount]) -
                  Scalar(b.market_rate);
     }
+    const auto curve_of = [&C](int i) -> const CurveHandle<Scalar>& { return *C[i]; };
+    for (int i : gen_) r[row++] = instrument_residual<Scalar>(p_->instruments[i], curve_of);
     return r;
   }
 
@@ -135,7 +149,7 @@ class BundleBlockProblem {
 
  private:
   const BundleProblem* p_;
-  std::vector<int> block_, swaps_, bases_, avg_futs_, comp_futs_;
+  std::vector<int> block_, swaps_, bases_, avg_futs_, comp_futs_, gen_;
   Eigen::VectorXd solved_;
   std::vector<char> free_;
   int nk_ = 0;

@@ -8,6 +8,7 @@ add_executable(swaps_tests
   smoke_test.cpp
   multi_region_test.cpp
   compiled_generic_test.cpp
+  generic_instrument_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
 target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

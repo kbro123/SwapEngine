@@ -334,6 +334,16 @@ struct BundleFixedLegs {
   Eigen::SparseMatrix<double> R;
   int n_inst = 0;
 
+  // One instrument = one fixed leg of generic coupons, discounting `dc`.
+  void add(CompiledCurveSet& cs, int dc, const std::vector<FixedCoupon>& leg) {
+    for (const auto& c : leg) {
+      p_.push_back(cs.reg(dc, c.pay));
+      t_.push_back(c.tau);
+      row_.push_back(n_inst);
+    }
+    ++n_inst;
+  }
+  // Legacy adapter: an OisSwap's fixed leg IS a list of (pay, accrual) coupons.
   void add(CompiledCurveSet& cs, int dc, const OisSwap& s) {
     for (std::size_t i = 0; i < s.fixed_pay.size(); ++i) {
       p_.push_back(cs.reg(dc, s.fixed_pay[i]));
