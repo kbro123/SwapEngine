@@ -1,0 +1,185 @@
+# Generic instrument pipeline — design
+
+**Goal.** One pipeline for any currency, OIS or IBOR, spread or no spread, any averaging /
+compounding / IBOR future. **No index, currency, calendar, or curve-build strategy may appear in
+engine code.** Those live ONLY in tests/fixtures. Engine code sees numbers: sub-period times, accrual
+factors, spreads, convexity, curve indices.
+
+This document is the single source of truth for the refactor. It is complete: implement from it
+without further input.
+
+---
+
+## 1. The unifying formula
+
+Every floating rate in scope is:
+
+```
+rate = ( Σ_k w_k · [ DF_fc(s_k) / DF_fc(e_k) − 1 ] + realized ) / τ_index
+```
+
+| Instrument | sub-periods | realized | τ_index |
+| --- | --- | --- | --- |
+| Compounded OIS coupon (any index) | ONE `[accStart, accEnd]` (daily compounding telescopes to the DF ratio) | 0 | index accrual over the period |
+| Averaged OIS/FF coupon (any index) | one per business day | Σ past `fixing_d · accrual_d` | period year fraction |
+| IBOR fixing (any tenor/ccy) | ONE `[fixingPeriodStart, fixingPeriodEnd]` | 0 | index accrual of that period |
+| Already-fixed coupon | NONE (empty) | `fixing · τ_index` | index accrual |
+| Compounding future | ONE | realized part | index accrual |
+| Averaging future | one per business day | realized part | period year fraction |
+| IBOR future | ONE | 0 | index accrual |
+
+`w_k` defaults to 1 (standard OIS/IBOR/averaging). It exists so weighted schemes are representable
+without another type. Keep the weight vector; if empty, treat as all-ones.
+
+**There is exactly ONE rate type in the engine.** "SOFR 3M compounding future", "FF averaging
+future", "Euribor future" are not engine concepts — they are just different `RateObservation` data
+built by a test.
+
+## 2. Cashflow model (`pricing/cashflows.hpp`)
+
+```
+RateObservation {
+  vector<double> sub_start;    // forecast-curve times
+  vector<double> sub_end;
+  vector<double> weight;       // empty => all 1
+  double realized  = 0.0;      // constant (zero derivative)
+  double tau_index = 0.0;      // denominator
+}
+
+FloatCoupon {
+  RateObservation obs;
+  double pay;      // discount-curve time
+  double tau_pay;  // payment accrual (its OWN day count)
+  double spread;   // additive, may be 0
+}
+
+FixedCoupon { double pay; double tau; }   // rate supplied by the instrument/quote
+```
+
+Pricing (templated on Scalar, AAD-safe — seed accumulators from the first curve-dependent term,
+add constants as raw `double`):
+
+```
+rate(obs, fc)        = ( Σ w_k (DF_fc(s_k)/DF_fc(e_k) − 1) + realized ) / tau_index
+float_coupon_pv(c, fc, dc) = DF_dc(c.pay) · ( rate(c.obs, fc) + c.spread ) · c.tau_pay
+float_leg_pv(leg, fc, dc)  = Σ float_coupon_pv
+annuity(leg, dc)           = Σ DF_dc(pay) · tau
+```
+
+**Backward-compatibility invariant (MUST hold):** with ONE sub-period, `realized=0`, `spread=0`, and
+`tau_pay == tau_index`, `float_coupon_pv` reduces algebraically to today's
+`DF_dc(pay)·(DF_fc(accStart)/DF_fc(accEnd) − 1)`. The existing 43 tests must pass **unchanged and
+bit-comparable** (to ~1e-15). If a test moves numerically, the generalization is wrong.
+
+Retire `OisSwap`, `CompoundedFuture`, `AveragedFuture` as distinct *pricing* concepts; they become
+data shapes a test builds. Keep a swap as two legs (see §3).
+
+## 3. Instruments, legs, roles, quotes
+
+**Curve roles belong to LEGS, not instruments** — that is what makes tenor-basis and cross-currency
+representable without new types.
+
+```
+FloatLeg { vector<FloatCoupon> coupons; int forecast; int discount; }
+FixedLeg { vector<FixedCoupon> coupons; int discount; }
+```
+
+An instrument = legs + a quote transform + a market quote. Quote transforms (all RATE units,
+CLAUDE.md §2):
+
+| Quote | model value |
+| --- | --- |
+| `ParRate` | `float_leg_pv / annuity` |
+| `ParSpread` (basis) | `(pv_bench − pv_fwd) / annuity` |
+| `Rate` (future) | `rate(obs, fc) + convexity` |
+
+`convexity` is an **input number**, never a model in engine code. Hull–White / Ho–Lee live in tests.
+
+`residual = model_quote − market_quote`, in rate units. Residual ORDER must remain deterministic and
+documented (it is depended on by the Jacobian, the W-cache batches, `market()`, and warm/streaming).
+
+## 4. Compiled engine (`pricing/compiled_book.hpp`)
+
+Today `BundleFloatLegs` assumes one sub-period per coupon and `BundleAvgFutures` carries the
+sub-period reduction. **These become ONE primitive**: a float batch with TWO sparse reductions:
+
+1. `R_sub` : sub-periods → per-coupon rate numerator
+2. `R_cpn` : coupons → per-leg PV
+
+```
+num   = R_sub · ( w ⊙ (DF[s]/DF[e] − 1) )          // per coupon
+rate  = (num + realized) / tau_index                // per coupon
+pv    = R_cpn · ( DF[pay] ⊙ (rate + spread) ⊙ tau_pay )
+```
+
+A future is the same batch stopping at `rate + convexity`. **PERF RULE (measured, do not regress):**
+materialize each per-coupon/per-sub-period vector into a `VectorXd` BEFORE any sparse reduction
+`R * v`. Handing Eigen's sparse×dense an unevaluated gather/divide expression re-does the work per
+access (~1.28× slower). See `BundleFloatLegs::pv`.
+
+Analytic Jacobian keeps its factorization `J = −(dr/dDF · diag(DF)) · W_all`. New chain for a float
+coupon (derive and verify against AAD to ~1e-9):
+
+```
+d rate / d DF[s_k] = w_k / (tau_index · DF[e_k])
+d rate / d DF[e_k] = − w_k · DF[s_k] / (tau_index · DF[e_k]^2)
+d pv   / d DF[pay] = (rate + spread) · tau_pay
+d pv   / d (rate)  = DF[pay] · tau_pay          // chain into d rate/dDF above
+```
+
+`W_all` construction (per-curve blocks + spread-base ancestry) is UNCHANGED by this refactor.
+
+## 5. Extractors (`ql/extract.hpp`) — generic QuantLib → plain data
+
+The ONLY QuantLib-touching layer. It must dispatch on **QuantLib coupon type**, never on index
+identity. No index names, no currency, no calendar constants in this file.
+
+- `OvernightIndexedCoupon` → read `averagingMethod()`:
+  - *Compounded* → one sub-period `[accrualStart, accrualEnd]`, `tau_index` = index accrual.
+  - *Simple/averaged* → per-business-day sub-periods; past days fold into `realized` from the index
+    history; `tau_index` = period year fraction on the index day count.
+- `IborCoupon` → one sub-period `[fixingPeriodStart, fixingPeriodEnd]`, `tau_index` =
+  index accrual of that period, `spread` = coupon spread, `tau_pay` = `accrualPeriod()`.
+- `FixedRateCoupon` → `FixedCoupon{ pay, accrualPeriod() }`.
+- Already-fixed coupons → empty sub-periods + `realized`.
+
+All *times* use the CURVE day counter (`dc.yearFraction(ref, date)`); all *accruals* (`tau_pay`,
+`tau_index`) come from the instrument/index's own day counter. This separation is what makes
+30/360-vs-ACT/360 correct — keep it.
+
+Futures: the caller supplies the sub-periods (or a QL schedule) and the convexity NUMBER.
+
+## 6. What moves to tests
+
+Everything index/market specific: SOFR / FF / EURIBOR index objects, FOMC & ECB meeting dates, the
+reference market, Hull–White convexity computation, knot-placement strategy, which instruments pin
+which knots. Engine code must not name them.
+
+Required regression coverage (each vs a QuantLib oracle where one exists, else vs a known analytic
+value; tolerances per `tests/tolerances.hpp`):
+
+1. OIS compounded swap (existing reference market) — **numbers unchanged**.
+2. Averaged (1M) and compounded (3M) futures — **numbers unchanged**.
+3. Vanilla IBOR swap (e.g. EURIBOR 3M) vs QuantLib `VanillaSwap::fairRate`, single curve.
+4. IBOR swap multi-curve (forecast ≠ discount) vs QuantLib.
+5. Float coupon **with a spread** vs QuantLib.
+6. **30/360 fixed vs ACT/360 float** — mixed day counts.
+7. **Mixed frequency**: semi-annual basis + annual outright in ONE calibration.
+8. IBOR future (single-period) — generic future path.
+9. Already-fixed / partially-fixed coupon (realized).
+10. Analytic Jacobian vs AAD for every new coupon shape (~1e-9).
+
+## 7. Non-goals for this pass
+
+Cross-currency FX-linked instruments; a new convexity model; changing the interpolation or knot
+strategy; changing `W_all`; touching the risk-ladder API.
+
+## 8. Invariants (non-negotiable)
+
+- **Both gates green at every commit** (CLAUDE.md §3). Never commit red.
+- Existing 43 tests keep passing with unchanged numbers.
+- No perf regression on `curve_build`, `risk_full_jacobian`, `portfolio_analytics`,
+  `warm_recalibration` (hard gate = speedup vs QuantLib).
+- Hot paths stay templated on `Scalar`, header-only, no QuantLib, no virtual dispatch, no heap in
+  inner loops, no hard-coded SIMD width.
+- Residual order stays deterministic and documented.
