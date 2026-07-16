@@ -9,7 +9,7 @@
 //     annuity_p  = R_fixed · (tau·DF[pay])
 //     NPV_p      = notional_p·(float_pv_p - fixed_rate_p·annuity_p)
 // No per-swap / per-coupon scalar loop and no QuantLib object dispatch in the hot path. Sharing the
-// BundleFloatLegs / BundleFixedLegs primitives means one compiled kernel for calibration AND analytics.
+// BundleFloatBatch / BundleFixedLegs primitives means one compiled kernel for calibration AND analytics.
 
 #include <Eigen/Core>
 
@@ -55,7 +55,7 @@ class CompiledPortfolio {
 
  private:
   pricing::CompiledCurveSet cs_;
-  pricing::BundleFloatLegs float_;
+  pricing::BundleFloatBatch float_;
   pricing::BundleFixedLegs fixed_;
   Eigen::VectorXd fixed_rate_, notional_;
 };

@@ -46,8 +46,8 @@ class CompiledBundleResidual {
     cs_.init(specs);
 
     // Register instruments in residual order (avg, comp, swaps, bases), each on its role curves.
-    for (const auto& a : p.avg_futs) avg_.add(cs_, a.forecast, a.sched, a.convexity);
-    for (const auto& c : p.comp_futs) comp_.add(cs_, c.forecast, c.sched, c.convexity);
+    for (const auto& a : p.avg_futs) avg_.add_future(cs_, a.forecast, a.sched, a.convexity);
+    for (const auto& c : p.comp_futs) comp_.add_future(cs_, c.forecast, c.sched, c.convexity);
     for (const auto& s : p.swaps) {
       swap_float_.add(cs_, s.forecast, s.discount, s.sched);
       swap_fixed_.add(cs_, s.discount, s.sched);
@@ -101,26 +101,19 @@ class CompiledBundleResidual {
     Eigen::MatrixXd G = Eigen::MatrixXd::Zero(N, T);
     int o = 0;
 
-    for (int k = 0; k < static_cast<int>(avg_.subS.size()); ++k) {
-      const int j = o + avg_.fut[k], sd = avg_.subS[k], se = avg_.subE[k];
-      const double ip = avg_.inv_period[avg_.fut[k]];
-      G(j, sd) += ip / DF[se];
-      G(j, se) += -ip * DF[sd] / (DF[se] * DF[se]);
-    }
+    // Futures rows ARE the batch's rate rows -- scatter straight into G at the segment offset.
+    avg_.d_rate(DF, G, o);
     o += n_avg_;
-    for (int j = 0; j < comp_.size(); ++j) {
-      const int row = o + j, s = comp_.s[j], e = comp_.e[j];
-      const double it = comp_.inv_tau[j];
-      G(row, s) += it / DF[e];
-      G(row, e) += -it * DF[s] / (DF[e] * DF[e]);
-    }
+    comp_.d_rate(DF, G, o);
     o += n_comp_;
+    // Swap/basis rows are a QUOTIENT of a float PV and an annuity, so each leg's dPV/dDF is gathered
+    // into a local block first and combined by the quotient rule.
     if (n_swap_) {
       const Eigen::VectorXd fpv = swap_float_.pv(DF), ann = swap_fixed_.annuity(DF);
       Eigen::MatrixXd dfpv = Eigen::MatrixXd::Zero(n_swap_, T), dann = Eigen::MatrixXd::Zero(n_swap_, T);
-      scatter_float(swap_float_, DF, dfpv, 1.0);
-      scatter_fixed(swap_fixed_, dann);
-      for (int j = 0; j < n_swap_; ++j)
+      swap_float_.d_pv(DF, dfpv, 0, 1.0);
+      swap_fixed_.d_annuity(dann, 0);
+      for (int j = 0; j < n_swap_; ++j)  // d(fpv/ann) = dfpv/ann - fpv·dann/ann²
         G.row(o + j) = dfpv.row(j) / ann[j] - fpv[j] * dann.row(j) / (ann[j] * ann[j]);
     }
     o += n_swap_;
@@ -128,9 +121,9 @@ class CompiledBundleResidual {
       const Eigen::VectorXd num = basis_bench_.pv(DF) - basis_fwd_.pv(DF);
       const Eigen::VectorXd ann = basis_fixed_.annuity(DF);
       Eigen::MatrixXd dnum = Eigen::MatrixXd::Zero(n_basis_, T), dann = Eigen::MatrixXd::Zero(n_basis_, T);
-      scatter_float(basis_bench_, DF, dnum, 1.0);   // benchmark leg: +
-      scatter_float(basis_fwd_, DF, dnum, -1.0);    // spread (fwd) leg: -
-      scatter_fixed(basis_fixed_, dann);
+      basis_bench_.d_pv(DF, dnum, 0, 1.0);  // benchmark leg: +
+      basis_fwd_.d_pv(DF, dnum, 0, -1.0);   // spread (fwd) leg: -
+      basis_fixed_.d_annuity(dann, 0);
       for (int j = 0; j < n_basis_; ++j)
         G.row(o + j) = dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]);
     }
@@ -138,26 +131,9 @@ class CompiledBundleResidual {
   }
 
  private:
-  // d(float_pv)/dDF for each coupon, scattered (with sign) into the owning instrument's row.
-  static void scatter_float(const pricing::BundleFloatLegs& fl, const Eigen::VectorXd& DF,
-                            Eigen::MatrixXd& d, double sign) {
-    for (int i = 0; i < static_cast<int>(fl.pay.size()); ++i) {
-      const int r = fl.inst[i], pay = fl.pay[i], aS = fl.accS[i], aE = fl.accE[i];
-      d(r, pay) += sign * (DF[aS] / DF[aE] - 1.0);
-      d(r, aS) += sign * (DF[pay] / DF[aE]);
-      d(r, aE) += sign * (-DF[pay] * DF[aS] / (DF[aE] * DF[aE]));
-    }
-  }
-  static void scatter_fixed(const pricing::BundleFixedLegs& fx, Eigen::MatrixXd& d) {
-    for (int i = 0; i < static_cast<int>(fx.pay.size()); ++i)
-      d(fx.inst[i], fx.pay[i]) += fx.tau[i];
-  }
-
   int n_avg_, n_comp_, n_swap_, n_basis_;
   pricing::CompiledCurveSet cs_;
-  pricing::BundleAvgFutures avg_;
-  pricing::BundleCompFutures comp_;
-  pricing::BundleFloatLegs swap_float_, basis_bench_, basis_fwd_;
+  pricing::BundleFloatBatch avg_, comp_, swap_float_, basis_bench_, basis_fwd_;
   pricing::BundleFixedLegs swap_fixed_, basis_fixed_;
   Eigen::VectorXd market_;
 };
