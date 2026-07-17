@@ -67,7 +67,14 @@ num ≈ ∫_a^b f  +  ½ · (Σ_d τ_d²/(b−a)-weighted) · ∫_a^b f²  +  O(
 - **Correction `½·⟨τ²⟩·∫f²`** couples the curve's `integral2` with a PRECOMPUTED per-window day-count
   moment `Σ_d τ_d²` (encodes weekends/holidays from the real fixing calendar — this is what makes it
   match QuantLib's daily arithmetic, not a pure continuous approximation).
-- Truncation: two moments give ~1e-6 bp (measured); if the gate (`rel ≤ 1e-10`) needs it, add `∫f³`.
+- Truncation & the REAL-CALENDAR floor (measured, honest): on UNIFORM daily fixings 2 moments give
+  ~7e-11. On a REAL calendar (weekend 3-day accruals) the moment averaging floors at ~5e-9 (= 5e-5
+  bp) vs QuantLib's exact averaged future -- the residual is the f-variation x weekend-day-structure
+  correlation in the 2nd-moment coefficient (exact only for constant f); higher moments do NOT remove
+  it. So the moment path is a FAST APPROXIMATION (~5e-9, far below market relevance), NOT a 1e-10
+  replacement. The exact sub-period path (fixing_step==0) stays available whenever 1e-10 is required.
+  Gate: tests/bspline_oracle_test.cpp isolates moment-vs-exact-daily (~5e-9) from exact-daily-vs-
+  QuantLib (~1e-16, the calendar walk is exact).
 
 Terminal transforms:
 - **Averaging:** `rate = num / τ_index`.

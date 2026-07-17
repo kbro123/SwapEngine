@@ -185,6 +185,9 @@ struct RateObservation {
   // day-by-day sum, with `fixing_step` the (uniform) daily accrual fraction. Default 0 => the exact
   // sub-period path, bit-for-bit unchanged.
   double fixing_step = 0.0;
+  // Third day-count moment Sum_d (day step)^3 / (b-a). Real calendars (weekend 3-day accruals) make
+  // the 3rd moment significant; default 0 keeps the 2-moment form (enough for uniform daily).
+  double fixing_step3 = 0.0;
 };
 
 // One floating coupon: an observation, discounted at its own pay date on its own accrual basis.
@@ -207,6 +210,8 @@ struct FixedCoupon {
 // Composite ∫f² over the curve for the moment path (defined at the end of this header).
 template <class Scalar, class Curve>
 Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv = 32);
+template <class Scalar, class Curve>
+Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdiv = 32);
 
 // Σ_k w_k · (DF(s_k)/DF(e_k) − 1) — the curve-dependent numerator ONLY.
 // Precondition: at least one sub-period (so the accumulator can be seeded from a curve-dependent
@@ -235,9 +240,14 @@ Scalar obs_forward_sum(const RateObservation& o, const FCurve& fc) {
 // One entry point so rate() and float_coupon_pv() share the moment/sub-period choice.
 template <class Scalar, class FCurve>
 Scalar obs_numerator(const RateObservation& o, const FCurve& fc) {
-  if (o.fixing_step > 0.0)
-    return (fc.integral(o.sub_end[0]) - fc.integral(o.sub_start[0])) +
-           0.5 * o.fixing_step * curve_forward_sq_integral<Scalar>(fc, o.sub_start[0], o.sub_end[0]);
+  if (o.fixing_step > 0.0) {
+    const double a = o.sub_start[0], b = o.sub_end[0];
+    Scalar n = (fc.integral(b) - fc.integral(a)) +
+               0.5 * o.fixing_step * curve_forward_sq_integral<Scalar>(fc, a, b);
+    if (o.fixing_step3 > 0.0)
+      n += (1.0 / 6.0) * o.fixing_step3 * curve_forward_cube_integral<Scalar>(fc, a, b);
+    return n;
+  }
   return obs_forward_sum<Scalar>(o, fc);
 }
 
@@ -357,11 +367,33 @@ Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv)
   return acc;
 }
 
+// Composite int_a^b f(u)^3 du (the 3rd-moment term; 2-pt Gauss per sub-interval, enough for the
+// small correction it feeds).
+template <class Scalar, class Curve>
+Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdiv) {
+  if (b <= a) return Scalar(0.0);
+  const double gx = 0.5773502691896257;
+  const double H = (b - a) / subdiv;
+  Scalar acc{0.0};
+  bool first = true;
+  for (int s = 0; s < subdiv; ++s) {
+    const double mid = a + (s + 0.5) * H, h = 0.5 * H;
+    for (int sg = -1; sg <= 1; sg += 2) {
+      const Scalar f = c.forward(mid + sg * gx * h);
+      const Scalar term = f * f * f * h;
+      if (first) { acc = term; first = false; } else acc += term;
+    }
+  }
+  return acc;
+}
+
 // Arithmetic average rate over [a,b], moment form: rate = num / tau_index.
 template <class Scalar, class Curve>
-Scalar moment_average_rate(const Curve& c, double a, double b, double fixing_step, double tau_index) {
-  const Scalar num =
+Scalar moment_average_rate(const Curve& c, double a, double b, double fixing_step, double tau_index,
+                           double fixing_step3 = 0.0) {
+  Scalar num =
       (c.integral(b) - c.integral(a)) + 0.5 * fixing_step * curve_forward_sq_integral<Scalar>(c, a, b);
+  if (fixing_step3 > 0.0) num += (1.0 / 6.0) * fixing_step3 * curve_forward_cube_integral<Scalar>(c, a, b);
   return num / tau_index;
 }
 
