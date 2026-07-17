@@ -10,6 +10,8 @@
 #include <cmath>
 #include <vector>
 
+#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/multi_region_curve.hpp"
 #include "swaps/curve/regions.hpp"
 
 using swaps::curve::BSpline;
@@ -91,6 +93,31 @@ TEST(BSpline, IntegralIsLinearInControlPoints) {
     worst = std::max(worst, std::abs(bm.integral(t) - (alpha * ba.integral(t) + (1 - alpha) * bd.integral(t))));
   std::cout << "  [bspline] max linearity residual = " << worst << "\n";
   EXPECT_LT(worst, 1e-13);
+}
+
+TEST(BSpline, ComposesIntoAValidCurve) {
+  // MultiRegionCurve<Flat, BSpline>: flat meeting-date front + control-point B-spline back. Must be a
+  // valid discount curve -- DF(0)=1, positive & strictly decreasing (positive forwards), C0 across the
+  // Flat->BSpline join -- and stay on the linear-map fast path.
+  static_assert(swaps::curve::BSplineCurve<double>::is_linear_map, "B-spline curve must be a linear map");
+  const std::vector<double> meeting{0.25, 0.5}, back{1, 2, 3, 5, 7, 10};
+  auto c = swaps::curve::make_bspline_curve<double>(meeting, back);
+  Eigen::VectorXd x(8);  // 2 front forwards + 6 back control points
+  x << 0.030, 0.033, 0.036, 0.040, 0.038, 0.042, 0.041, 0.045;
+  c.set_forwards(x);
+
+  EXPECT_DOUBLE_EQ(c.discount(0.0), 1.0);
+  double prev = 1.0;
+  for (double t = 0.1; t <= 12.0; t += 0.1) {
+    const double df = c.discount(t);
+    EXPECT_GT(df, 0.0) << " DF must stay positive at t=" << t;
+    EXPECT_LT(df, prev + 1e-15) << " DF must not increase (positive forward) at t=" << t;
+    prev = df;
+  }
+  // C0 join: forward just left/right of the last meeting date agrees.
+  const double h = 1e-6;
+  EXPECT_NEAR(c.forward(0.5 - h), c.forward(0.5 + h), 1e-3) << "forward continuous across the front/back join";
+  std::cout << "  [bspline-curve] DF(1y)=" << c.discount(1.0) << " DF(10y)=" << c.discount(10.0) << "\n";
 }
 
 TEST(BSpline, ForwardIsC1) {

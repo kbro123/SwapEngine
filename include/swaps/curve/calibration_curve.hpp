@@ -33,4 +33,19 @@ inline CalibrationCurve<S> make_calibration_curve(const std::vector<double>& mee
   return CalibrationCurve<S>{Flat<S>(meeting), Hermite<S>(back)};
 }
 
+// Alternative back end: a control-point cubic B-spline (C2, convex-hull, positivity-friendly). Same
+// flat meeting-date front; the back free variables are B-SPLINE CONTROL POINTS, not forward-at-knot
+// (docs/bezier-and-moments.md Part A). Drop-in wherever a curve type is templated.
+template <class S>
+using BSplineCurve = MultiRegionCurve<S, Flat, BSpline>;
+
+template <class S>
+inline BSplineCurve<S> make_bspline_curve(const std::vector<double>& meeting,
+                                          const std::vector<double>& back) {
+  if (!meeting.empty() && !back.empty() && !(back.front() > meeting.back()))
+    throw std::invalid_argument("make_bspline_curve: first back knot (" + std::to_string(back.front()) +
+                                ") must exceed last front knot (" + std::to_string(meeting.back()) + ")");
+  return BSplineCurve<S>{Flat<S>(meeting), BSpline<S>(back)};
+}
+
 }  // namespace swaps::curve
