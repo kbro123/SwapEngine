@@ -329,4 +329,114 @@ class Hermite {
   Scalar end_slope_{0.0};
 };
 
+// Clamped cubic B-SPLINE, CONTROL-POINT parameterization (docs/bezier-and-moments.md, Part A).
+// The `n` free values are control points P_1..P_n; P_0 is PINNED to the incoming boundary value for a
+// C0 join, exactly like Hermite/NaturalCubic pin their leading value. Distinctive vs those:
+//   * C2 (a cubic B-spline is automatically C2 across its interior knots) -- smoother than Hermite's C1;
+//   * the CONVEX-HULL property -- f stays within [min P, max P], so forwards do not overshoot and
+//     positivity is enforceable by keeping control points >= 0;
+//   * the control points do NOT lie on the curve (except the clamped ends) -- so the calibrated x are
+//     control points, mapped to forward-at-knot for risk by a fixed invertible collocation.
+// Still a LINEAR MAP of the control points (de Boor is an affine combination with knot-only weights),
+// so is_linear_map = true and the W-cache / analytic-Jacobian fast path is preserved.
+//
+// Interior breakpoints are UNIFORM in time over the region (the standard, well-conditioned default; a
+// control-point B-spline is approximating, not interpolating, so instrument maturities need not be
+// breakpoints). n free control points + the pinned P_0 => a clamped cubic over n-2 segments.
+//
+// `integral(t)` uses 2-point Gauss-Legendre per breakpoint segment: EXACT for a cubic (deg <= 3), not
+// an approximation, and AAD-safe (nodes/weights are double, f(node) carries the derivatives). It is a
+// setup-only cost -- the W-cache calls integral() once per node to build W, never on the hot path.
+template <class Scalar>
+class BSpline {
+ public:
+  explicit BSpline(std::vector<double> knots) : s_(std::move(knots)) {
+    require_increasing_knots(s_, "BSpline");
+  }
+  int n_values() const { return static_cast<int>(s_.size()); }
+  double t_end() const { return s_.back(); }
+  static constexpr bool is_linear_map = true;
+
+  template <class Vec>
+  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
+    if (n < 3) throw std::invalid_argument("BSpline: needs >= 3 back knots for a cubic B-spline");
+    t0_ = in.time;
+    I0_ = in.integral;
+    const double te = s_.back();
+    const int m = n + 1;  // control points: P_0 (pinned) + n free
+    // Clamped cubic knot vector: 4x t0, (n-3) uniform interior, 4x te  (length m+4 = n+5).
+    tau_.assign(m + 4, te);
+    for (int i = 0; i < 4; ++i) tau_[i] = t0_;
+    for (int j = 1; j <= n - 3; ++j) tau_[3 + j] = t0_ + (te - t0_) * (static_cast<double>(j) / (n - 2));
+    cp_.resize(m);
+    cp_[0] = in.value;  // C0 pin
+    for (int i = 0; i < n; ++i) cp_[i + 1] = x[off + i];
+    // Distinct breakpoints (t0, interior knots, te) for exact segment-wise integration.
+    brk_.clear();
+    brk_.push_back(t0_);
+    for (int j = 1; j <= n - 3; ++j) brk_.push_back(tau_[3 + j]);
+    brk_.push_back(te);
+    // Whole-region integral, for out() and flat extrapolation. Seed from the first segment so the
+    // accumulator carries derivatives (AAD SAFETY, top of this header).
+    region_int_ = gauss2(brk_[0], brk_[1]);
+    for (std::size_t k = 1; k + 1 < brk_.size(); ++k) region_int_ += gauss2(brk_[k], brk_[k + 1]);
+  }
+
+  Scalar forward(double t) const {
+    const double te = s_.back();
+    if (t <= t0_) return cp_.front();
+    if (t >= te) return deboor(te);  // flat extrapolation beyond the region
+    return deboor(t);
+  }
+  Scalar integral(double t) const {
+    if (t <= t0_) return I0_;
+    const double te = s_.back();
+    if (t >= te) return I0_ + region_int_ + deboor(te) * (t - te);
+    Scalar acc = I0_;  // I0_ carries the front's derivatives
+    for (std::size_t k = 0; k + 1 < brk_.size(); ++k) {
+      const double lo = brk_[k], hi = brk_[k + 1];
+      if (t <= lo) break;
+      acc += gauss2(lo, t < hi ? t : hi);
+      if (t <= hi) break;
+    }
+    return acc;
+  }
+  Boundary<Scalar> out() const { return {s_.back(), deboor(s_.back()), Scalar(0.0), I0_ + region_int_}; }
+
+ private:
+  int find_span(double t) const {
+    const int m = static_cast<int>(cp_.size());
+    if (t >= tau_[m]) return m - 1;
+    int lo = 3, hi = m;  // clamped cubic: valid spans are [3, m-1]
+    while (hi - lo > 1) {
+      const int mid = (lo + hi) / 2;
+      (t < tau_[mid] ? hi : lo) = mid;
+    }
+    return lo;
+  }
+  Scalar deboor(double t) const {
+    const int p = 3, k = find_span(t);
+    Scalar d[4];
+    for (int j = 0; j <= p; ++j) d[j] = cp_[k - p + j];
+    for (int r = 1; r <= p; ++r)
+      for (int j = p; j >= r; --j) {
+        const double den = tau_[k + 1 + j - r] - tau_[k - p + j];
+        const double a = den > 0.0 ? (t - tau_[k - p + j]) / den : 0.0;
+        d[j] = d[j - 1] * (1.0 - a) + d[j] * a;  // affine in the control points; weights are knot-only
+      }
+    return d[p];
+  }
+  // 2-point Gauss-Legendre on [a,b] -- exact for the per-segment cubic.
+  Scalar gauss2(double a, double b) const {
+    if (b <= a) return Scalar(0.0);
+    const double h = 0.5 * (b - a), c = 0.5 * (a + b), g = 0.5773502691896257 * h;  // g = h/sqrt(3)
+    return (deboor(c - g) + deboor(c + g)) * h;
+  }
+
+  std::vector<double> s_, tau_, brk_;
+  std::vector<Scalar> cp_;
+  double t0_ = 0.0;
+  Scalar I0_{0.0}, region_int_{0.0};
+};
+
 }  // namespace swaps::curve
