@@ -120,6 +120,27 @@ TEST(BSpline, ComposesIntoAValidCurve) {
   std::cout << "  [bspline-curve] DF(1y)=" << c.discount(1.0) << " DF(10y)=" << c.discount(10.0) << "\n";
 }
 
+TEST(BSpline, SecondMomentMatchesQuadrature) {
+  // integral2(a,b) = int_a^b f^2 -- the moment scheme's convexity term. 4-pt Gauss is exact for f^2
+  // (degree 6); the residual vs a dense quadrature reference is the reference's own error.
+  const auto b = make(cp());
+  auto quad2 = [&](double a, double t) {
+    const int N = 200000;
+    const double h = (t - a) / N;
+    double s = 0.5 * (b.forward(a) * b.forward(a) + b.forward(t) * b.forward(t));
+    for (int i = 1; i < N; ++i) {
+      const double f = b.forward(a + i * h);
+      s += f * f;
+    }
+    return s * h;
+  };
+  double worst = 0;
+  for (auto ab : {std::pair{1.5, 4.0}, std::pair{2.0, 9.0}, std::pair{3.3, 7.7}, std::pair{1.0, 10.0}})
+    worst = std::max(worst, std::abs(b.integral2(ab.first, ab.second) - quad2(ab.first, ab.second)));
+  std::cout << "  [bspline] max |integral2 - dense quadrature| = " << worst << "\n";
+  EXPECT_LT(worst, 1e-8) << "4-pt Gauss is exact for the per-segment f^2 (degree 6)";
+}
+
 TEST(BSpline, ForwardIsC1) {
   const auto b = make(cp());
   const double h = 1e-5;

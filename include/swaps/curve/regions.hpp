@@ -403,7 +403,41 @@ class BSpline {
   }
   Boundary<Scalar> out() const { return {s_.back(), deboor(s_.back()), Scalar(0.0), I0_ + region_int_}; }
 
+  // Second moment ∫_a^b f(u)^2 du over this region -- the convexity term of the moment scheme
+  // (docs/bezier-and-moments.md Part B). QUADRATIC in the control points (not linear): a separate
+  // primitive beside the linear W. Integrated per breakpoint segment with 4-point Gauss-Legendre,
+  // EXACT for f^2 (degree 6 <= 7). AAD-safe and setup-only. [a,b] is clamped to the region.
+  Scalar integral2(double a, double b) const {
+    a = std::max(a, t0_);
+    b = std::min(b, s_.back());
+    if (b <= a) return Scalar(0.0);
+    Scalar acc{0.0};
+    bool first = true;
+    for (std::size_t k = 0; k + 1 < brk_.size(); ++k) {  // integrate each breakpoint cubic exactly
+      const double lo = std::max(a, brk_[k]), hi = std::min(b, brk_[k + 1]);
+      if (hi <= lo) continue;
+      const Scalar seg = gauss4sq(lo, hi);
+      if (first) { acc = seg; first = false; } else acc += seg;
+    }
+    return acc;
+  }
+
  private:
+  Scalar gauss4sq(double a, double b) const {  // ∫_a^b f^2, 4-pt Gauss (exact for f^2, a single cubic)
+    if (b <= a) return Scalar(0.0);
+    static const double gx[2] = {0.3399810435848563, 0.8611363115940526};
+    static const double gw[2] = {0.6521451548625461, 0.3478548451374538};
+    const double h = 0.5 * (b - a), c = 0.5 * (a + b);
+    Scalar s{0.0};
+    bool first = true;
+    for (int i = 0; i < 2; ++i)
+      for (int sgn = -1; sgn <= 1; sgn += 2) {
+        const Scalar f = deboor(c + sgn * gx[i] * h);
+        const Scalar term = f * f * (gw[i] * h);
+        if (first) { s = term; first = false; } else s += term;
+      }
+    return s;
+  }
   int find_span(double t) const {
     const int m = static_cast<int>(cp_.size());
     if (t >= tau_[m]) return m - 1;
