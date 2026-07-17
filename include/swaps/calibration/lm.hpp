@@ -13,28 +13,11 @@
 #include <cmath>
 
 #include "swaps/ad/dual.hpp"
+#include "swaps/calibration/jacobian.hpp"        // aad_jacobian (re-exported here for back-compat)
 #include "swaps/calibration/problem.hpp"
+#include "swaps/calibration/residual_engine.hpp"  // residual_engine_t: the analytic fast path for cold calibrate
 
 namespace swaps::calibration {
-
-// Analytic Jacobian J[i][k] = d residual_i / d knot_k via forward-mode AAD, in one differentiated
-// evaluation of the residual code. This is the north-star (CLAUDE.md §1) — no bump-and-reprice.
-// `Problem` is any type exposing residuals<Scalar>(x), n_knots(), n_residuals() — i.e. either a
-// CalibrationProblem or a SpreadCalibrationProblem.
-template <class Problem>
-Eigen::MatrixXd aad_jacobian(const Problem& prob, const Eigen::VectorXd& x) {
-  const auto rd = prob.template residuals<ad::Dual>(ad::seed(x));
-  const int n = prob.n_residuals(), m = prob.n_knots();
-  Eigen::MatrixXd J(n, m);
-  for (int i = 0; i < n; ++i) {
-    // A residual with no curve dependence would have an empty gradient; guard defensively.
-    if (rd[i].derivatives().size() == m)
-      J.row(i) = rd[i].derivatives().transpose();
-    else
-      J.row(i).setZero();
-  }
-  return J;
-}
 
 // Eigen NonLinearOptimization functor: fvec = r(x), rate units.
 template <class Problem>
@@ -80,6 +63,34 @@ struct ResidualFunctorAAD {
   }
 };
 
+// LM functor driven by a residual ENGINE (residual_engine_t<Problem>): residuals + the ANALYTIC
+// Jacobian, both from the compiled W-cache when the problem has one (CalibrationProblem, BundleProblem)
+// and from AAD otherwise. This is what makes cold calibrate() skip the per-iteration AAD sweep AND the
+// per-eval curve rebuild -- the engine is built ONCE and reprices off DF = exp(-Wx).
+template <class Problem>
+struct EngineFunctor {
+  using Scalar = double;
+  using InputType = Eigen::VectorXd;
+  using ValueType = Eigen::VectorXd;
+  using JacobianType = Eigen::MatrixXd;
+  enum { InputsAtCompileTime = Eigen::Dynamic, ValuesAtCompileTime = Eigen::Dynamic };
+
+  const residual_engine_t<Problem>* eng;
+  int n_knots_, n_res_;
+  EngineFunctor(const residual_engine_t<Problem>& e, int knots, int res)
+      : eng(&e), n_knots_(knots), n_res_(res) {}
+  int inputs() const { return n_knots_; }
+  int values() const { return n_res_; }
+  int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec) const {
+    fvec = eng->residuals(x);
+    return 0;
+  }
+  int df(const Eigen::VectorXd& x, Eigen::MatrixXd& fjac) const {
+    fjac = eng->jacobian(x);
+    return 0;
+  }
+};
+
 struct CalibrationResult {
   Eigen::VectorXd x;
   int iterations = 0;
@@ -88,32 +99,38 @@ struct CalibrationResult {
   double stationarity = 0;  // ||J^T r||_inf  -- the over-determined optimality measure
 };
 
-// use_aad = analytic AAD Jacobian (default) or Eigen NumericalDiff. `Problem` is a
-// CalibrationProblem or a SpreadCalibrationProblem.
+// use_aad = drive the LM with the ANALYTIC residual engine (default; compiled W-cache Jacobian for
+// CalibrationProblem/BundleProblem, AAD otherwise) or Eigen NumericalDiff. The engine is built ONCE, so
+// cold calibrate no longer does a per-iteration AAD sweep or a per-eval curve rebuild.
 template <class Problem>
 CalibrationResult calibrate(const Problem& prob, const Eigen::VectorXd& x0, bool use_aad = true) {
   CalibrationResult res;
   res.x = x0;
 
   if (use_aad) {
-    ResidualFunctorAAD<Problem> functor(prob);
-    Eigen::LevenbergMarquardt<ResidualFunctorAAD<Problem>> lm(functor);
+    const residual_engine_t<Problem> engine(prob);  // W-cache built once; analytic Jacobian per iter
+    EngineFunctor<Problem> functor(engine, prob.n_knots(), prob.n_residuals());
+    Eigen::LevenbergMarquardt<EngineFunctor<Problem>> lm(functor);
     lm.parameters.xtol = 1e-14;
     lm.parameters.ftol = 1e-14;
     lm.parameters.maxfev = 4000;
     res.info = lm.minimize(res.x);
     res.iterations = lm.iter;
-  } else {
-    ResidualFunctor<Problem> functor(prob);
-    Eigen::NumericalDiff<ResidualFunctor<Problem>> num_diff(functor);
-    Eigen::LevenbergMarquardt<Eigen::NumericalDiff<ResidualFunctor<Problem>>> lm(num_diff);
-    lm.parameters.xtol = 1e-14;
-    lm.parameters.ftol = 1e-14;
-    lm.parameters.maxfev = 4000;
-    res.info = lm.minimize(res.x);
-    res.iterations = lm.iter;
+    const Eigen::VectorXd r = engine.residuals(res.x);
+    res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
+    const Eigen::MatrixXd J = engine.jacobian(res.x);
+    res.stationarity = (J.transpose() * r).cwiseAbs().maxCoeff();
+    return res;
   }
 
+  ResidualFunctor<Problem> functor(prob);
+  Eigen::NumericalDiff<ResidualFunctor<Problem>> num_diff(functor);
+  Eigen::LevenbergMarquardt<Eigen::NumericalDiff<ResidualFunctor<Problem>>> lm(num_diff);
+  lm.parameters.xtol = 1e-14;
+  lm.parameters.ftol = 1e-14;
+  lm.parameters.maxfev = 4000;
+  res.info = lm.minimize(res.x);
+  res.iterations = lm.iter;
   const Eigen::VectorXd r = prob.template residuals<double>(res.x);
   res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
   const Eigen::MatrixXd J = aad_jacobian(prob, res.x);

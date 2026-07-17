@@ -21,28 +21,32 @@
 
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/compiled_residual.hpp"
-#include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/jacobian.hpp"
 
 namespace swaps::calibration {
 
-// Generic engine for any Problem exposing residuals<Scalar>(x), n_residuals(), and market().
-// The AAD Jacobian (lm.hpp) is templated on the problem, so the block-structured bundle Jacobian
+// Generic engine for any Problem exposing residuals<Scalar>(x), n_residuals() (and, for streaming,
+// market()). The AAD Jacobian is templated on the problem, so the block-structured bundle Jacobian
 // falls straight out of one differentiated sweep of the stacked residual.
+//
+// market() is fetched LAZILY (only in model_rates), NOT at construction: cold calibrate() drives this
+// engine too but never needs model_rates, so a Problem WITHOUT a market() (SpreadCalibrationProblem,
+// BundleBlockProblem) still calibrates through the analytic engine -- model_rates is simply never
+// instantiated for it. Only the streaming path calls model_rates, and only for problems that have market().
 template <class Problem>
 class AadResidualEngine {
  public:
-  explicit AadResidualEngine(const Problem& p) : p_(&p), market_(p.market()) {}
+  explicit AadResidualEngine(const Problem& p) : p_(&p) {}
 
   int n_residuals() const { return p_->n_residuals(); }
   Eigen::VectorXd residuals(const Eigen::VectorXd& x) const { return p_->template residuals<double>(x); }
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const { return aad_jacobian(*p_, x); }
   // model_rates(x) = residuals(x) + market: residuals is (model - market) by construction, so adding
   // the stored targets back recovers the model-implied quotes the streaming feed compares against.
-  Eigen::VectorXd model_rates(const Eigen::VectorXd& x) const { return residuals(x) + market_; }
+  Eigen::VectorXd model_rates(const Eigen::VectorXd& x) const { return residuals(x) + p_->market(); }
 
  private:
   const Problem* p_;
-  Eigen::VectorXd market_;
 };
 
 // CalibrationProblem -> the single-curve analytic CompiledResidual; BundleProblem -> the multi-curve
