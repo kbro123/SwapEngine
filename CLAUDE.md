@@ -102,12 +102,20 @@ compile-time sequence of region policies (`curve/regions.hpp`), each **linear in
 stitched with a C⁰ (level) `Boundary` handoff by default (optional C¹ where both regions support it).
 The **shipped** curve is `make_calibration_curve` = `MultiRegionCurve<Flat, Hermite>` (flat meeting-date
 front, **local C¹ Hermite** back) — used everywhere: calibration, pricing, risk, streaming, the bundle.
-The old `TwoRegionForwardCurve` (Flat+NaturalCubic) wrapper was retired; `NaturalCubic`/`Linear` remain
-as available region policies. Region ctors reject duplicate/unsorted knots (a zero-length segment is a
-0/0 → silent NaN; caught at construction).
+The old `TwoRegionForwardCurve` (Flat+NaturalCubic) wrapper was retired; `NaturalCubic`/`Linear`/`BSpline`
+remain as available region policies. Region ctors reject duplicate/unsorted knots (a zero-length segment
+is a 0/0 → silent NaN; caught at construction).
+- **`BSpline` (clamped cubic, CONTROL-POINT) is an alternative back end** (`make_bspline_curve` =
+  `MultiRegionCurve<Flat, BSpline>`; branch `feat/bezier-and-moment-integration`). Free vars are B-spline
+  control points (P₀ pinned to the front boundary for a C⁰ join), giving **C²** and the **convex-hull**
+  property (forwards can't overshoot; positivity enforceable) that Hermite's C¹ does not. de Boor eval,
+  2-pt-Gauss `integral` (exact for the cubic). Fully validated: QuantLib OIS oracle 6.9e-17, calibration
+  fit (identifiable), W-cache reprice 1.1e-16, and a `bspline_collocation` risk transform (control-point ↔
+  forward-at-knot deltas, invertible). Control points don't lie on the curve, so risk is reported in the
+  forward basis via that transform. `integral_weight_matrix(..., BackScheme::BSpline)` puts it on the fast path.
 - **Rule: the interpolation must be a LINEAR MAP of the knot values to keep the microsecond path.**
-  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`) preserve `integral(t)=w(t)·x`, hence
-  the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over regions) gates that tier.
+  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`, `BSpline`) preserve `integral(t)=w(t)·x`,
+  hence the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over regions) gates that tier.
 - **Value-dependent schemes (monotone-convex / Hyman) are allowed but drop to the AAD tier** — they
   regime-switch on the data, so `W` is no longer constant. Support them as `is_linear_map=false`
   policies; calibration still works via AAD, just without the linear warm update.
@@ -603,3 +611,24 @@ delete those, they enforce the rule. Two honest residues:
       difference when those call sites move:** the generic OIS path uses `valueDates().front()/back()`
       (QL's actual DF arguments) where the legacy path uses `accrualStartDate()/accrualEndDate()`; they
       coincide on the reference market (both hit `fairRate` at ~6e-17) — assert that equivalence.
+- [ ] **Stage 5 — B-spline curve type + moment integration — PARTIAL, branch `feat/bezier-and-moment-integration`.**
+      Design `docs/bezier-and-moments.md`. **DONE & gate-verified (89/89, perf PASS):**
+      - **B-spline curve type (Part A) — COMPLETE.** Control-point clamped cubic (`BSpline` region,
+        `make_bspline_curve`): C² + convex-hull, `is_linear_map`, validated end to end — QuantLib OIS
+        oracle 6.9e-17, calibration fit (identifiable), W-cache reprice 1.1e-16, `bspline_collocation`
+        risk transform. See the interpolation bullet in §2.
+      - **Moment-integrated averaging (Part B) — landed as a FAST APPROXIMATION, additive/opt-in.**
+        `RateObservation.fixing_step > 0` selects it in the ordinary coupon path; the numerator is
+        `∫f + ½·⟨τ²⟩·∫f² (+ ⅙·⟨τ³⟩·∫f³)` — closed-form curve moments instead of a day-by-day sum. **HONEST
+        LIMIT:** it matches the exact daily average to ~7e-11 on UNIFORM daily fixings but floors at **~5e-9
+        on a REAL calendar** (weekend 3-day accruals; the `f`-variation × day-structure correlation in the
+        2nd-moment coefficient, which higher moments do NOT remove). So it is a fast approximation (~5e-5 bp,
+        far below market relevance), NOT a 1e-10 replacement; the exact sub-period path (`fixing_step==0`)
+        stays available and bit-for-bit unchanged. `tests/bspline_oracle_test.cpp` isolates
+        moment-vs-exact-daily (~5e-9) from exact-daily-vs-QuantLib (~1e-16).
+      **NOT done:** observation shift & lookback/lockout — **QuantLib 1.34's `OvernightIndexedCoupon` has NO
+      observation-shift/lookback API**, so there is no oracle for them here; deliberately not built rather
+      than ship unvalidatable code. Obs-shift telescopes (exact, would reuse the 1-sub-period path); lookback
+      would carry the same ~5e-9 moment floor. Also not done: a `scheme` selector on the problem structs so a
+      real Bundle/CalibrationProblem *selects* B-spline (the W-cache supports it; only the standalone
+      `BSplineProblem` test exercises it today).
