@@ -10,12 +10,18 @@
 #include <cmath>
 #include <vector>
 
+#include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/problem.hpp"
 #include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/multi_region_curve.hpp"
 #include "swaps/curve/regions.hpp"
+#include "swaps/pricing/cashflows.hpp"
 
 using swaps::curve::BSpline;
 using swaps::curve::Boundary;
+namespace cal = swaps::calibration;
+namespace px = swaps::pricing;
+namespace cv = swaps::curve;
 
 namespace {
 const std::vector<double> kKnots{2, 3, 5, 7, 10};  // n = 5 -> 6 control points, 3 segments
@@ -139,6 +145,58 @@ TEST(BSpline, SecondMomentMatchesQuadrature) {
     worst = std::max(worst, std::abs(b.integral2(ab.first, ab.second) - quad2(ab.first, ab.second)));
   std::cout << "  [bspline] max |integral2 - dense quadrature| = " << worst << "\n";
   EXPECT_LT(worst, 1e-8) << "4-pt Gauss is exact for the per-segment f^2 (degree 6)";
+}
+
+// A calibration problem whose curve is a B-SPLINE (control-point). Duck-types CalibrationProblem
+// (residuals<Scalar> / n_knots / n_residuals), so the generic LM + AAD Jacobian drive it unchanged --
+// the same trick spread/bundle problems use. This is the real curve-FIT proof (vs the pricing-only
+// oracle): the calibrated B-spline curve must reprice the market it was fit to.
+namespace {
+struct BSplineProblem {
+  cal::CalibrationProblem inst;  // instruments + knot times (front meetings, back control-point knots)
+  int n_knots() const { return inst.n_knots(); }
+  int n_residuals() const { return inst.n_residuals(); }
+  template <class Scalar, class Vec>
+  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
+    auto c = cv::make_bspline_curve<Scalar>(inst.meeting_times, inst.back_times);
+    c.set_forwards(x);
+    return inst.price_residuals<Scalar>(c);
+  }
+};
+px::OisSwap make_ois(double T) {  // annual coupons to T (single coupon if T < 1), self-discounting
+  px::OisSwap s;
+  double prev = 0.0;
+  for (double u = 1.0; u < T - 1e-9; u += 1.0) {
+    s.float_acc_start.push_back(prev); s.float_acc_end.push_back(u); s.float_pay.push_back(u);
+    s.fixed_pay.push_back(u); s.fixed_accrual.push_back(u - prev); prev = u;
+  }
+  s.float_acc_start.push_back(prev); s.float_acc_end.push_back(T); s.float_pay.push_back(T);
+  s.fixed_pay.push_back(T); s.fixed_accrual.push_back(T - prev);
+  return s;
+}
+}  // namespace
+
+TEST(BSpline, CalibratesToMarketAndReprices) {
+  BSplineProblem prob;
+  prob.inst.meeting_times = {0.5};
+  prob.inst.back_times = {1, 2, 3, 4, 5, 7, 10};  // 7 back control points + 1 front = 8 free vars
+  const std::vector<double> mats{0.5, 1, 2, 3, 4, 5, 7, 10};  // 8 instruments (square, consistent)
+  for (double T : mats) prob.inst.swaps.push_back({make_ois(T), 0.0});
+
+  // Self-consistent market generated from a KNOWN B-spline curve, so x_true is the exact solution.
+  Eigen::VectorXd xt(8);
+  xt << 0.030, 0.033, 0.036, 0.039, 0.041, 0.043, 0.044, 0.046;
+  auto ct = cv::make_bspline_curve<double>(prob.inst.meeting_times, prob.inst.back_times);
+  ct.set_forwards(xt);
+  for (auto& s : prob.inst.swaps) s.market_rate = px::ois_par_rate<double>(s.sched, ct);
+  ASSERT_LT(prob.residuals<double>(xt).cwiseAbs().maxCoeff(), 1e-13) << "x_true must zero the residual";
+
+  const auto res = cal::calibrate(prob, Eigen::VectorXd::Constant(8, 0.035));
+  const double reprice = prob.residuals<double>(res.x).cwiseAbs().maxCoeff();
+  std::cout << "  [bspline-calib] reprice=" << reprice << " ||x*-xt||=" << (res.x - xt).cwiseAbs().maxCoeff()
+            << " stat=" << res.stationarity << " iters=" << res.iterations << "\n";
+  EXPECT_LT(reprice, 1e-9) << "calibrated B-spline curve must reprice the market it was fit to";
+  EXPECT_LT(res.stationarity, 1e-7) << "first-order optimality";
 }
 
 TEST(BSpline, ForwardIsC1) {
