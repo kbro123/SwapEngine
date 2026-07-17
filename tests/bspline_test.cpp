@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <Eigen/Core>
+#include <Eigen/Dense>
 
 #include <algorithm>
 #include <cmath>
@@ -275,6 +276,28 @@ TEST(BSpline, WCacheReproducesDiscounts) {
   for (std::size_t i = 0; i < times.size(); ++i) worst = std::max(worst, std::abs(DF[i] - c.discount(times[i])));
   std::cout << "  [bspline-wcache] max |exp(-Wx) - curve.discount| = " << worst << "\n";
   EXPECT_LT(worst, 1e-13) << "B-spline curve must reprice exactly through the W-cache";
+}
+
+TEST(BSpline, CollocationMapsControlPointsToForwardsAndIsInvertible) {
+  // The risk transform: B x = forward-at-knot values (control-point basis -> forward basis). Must map
+  // correctly AND be invertible so a control-point risk ladder can be presented as forward-at-knot deltas.
+  const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 7, 10};
+  const Eigen::MatrixXd B = px::bspline_collocation(meeting, back);
+  const Eigen::FullPivLU<Eigen::MatrixXd> lu(B);
+  ASSERT_EQ(lu.rank(), B.rows()) << "collocation must be invertible to convert risk between bases";
+
+  Eigen::VectorXd x(7);
+  x << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
+  auto c = cv::make_bspline_curve<double>(meeting, back);
+  c.set_forwards(x);
+  const Eigen::VectorXd fwd = B * x;
+  const std::vector<double> knots{0.5, 1, 2, 3, 5, 7, 10};
+  double worst = 0;
+  for (std::size_t i = 0; i < knots.size(); ++i) worst = std::max(worst, std::abs(fwd[i] - c.forward(knots[i])));
+  std::cout << "  [bspline-collocation] max |Bx - forward@knot| = " << worst << " rank=" << lu.rank() << "\n";
+  EXPECT_LT(worst, 1e-12) << "B x must equal the forward at each knot";
+  // Round-trip: recover control points from forward values via B^{-1}.
+  EXPECT_LT((lu.solve(fwd) - x).cwiseAbs().maxCoeff(), 1e-10) << "B^{-1} (B x) == x";
 }
 
 TEST(BSpline, ForwardIsC1) {

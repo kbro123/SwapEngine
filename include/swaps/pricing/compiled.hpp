@@ -48,6 +48,31 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<double>& meeting
   return W;
 }
 
+// B-spline RISK TRANSFORM (docs/bezier-and-moments.md Part A). The B-spline free variables are CONTROL
+// POINTS, which do not lie on the curve, so a raw risk ladder is control-point sensitivity. B maps the
+// free vars x to the forward-at-knot values (front forwards are identity; back = de Boor of the control
+// points): forward_at_knot = B x, with B fixed by the knot structure (extracted once via one AAD pass).
+// So a control-point gradient g_P and the familiar forward-at-knot gradient g_f relate by g_f = B^{-T} g_P
+// (i.e. present the ladder in either basis). Same shape as integral_weight_matrix -- a linear map of the
+// curve extracted at setup.
+inline Eigen::MatrixXd bspline_collocation(const std::vector<double>& meeting,
+                                           const std::vector<double>& back) {
+  const int m = static_cast<int>(meeting.size() + back.size());
+  std::vector<double> knots = meeting;
+  knots.insert(knots.end(), back.begin(), back.end());
+  auto c = curve::make_bspline_curve<ad::Dual>(meeting, back);
+  c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
+  Eigen::MatrixXd B(m, m);
+  for (int i = 0; i < m; ++i) {
+    const ad::Dual f = c.forward(knots[i]);
+    if (f.derivatives().size() == m)
+      B.row(i) = f.derivatives().transpose();
+    else
+      B.row(i).setZero();
+  }
+  return B;
+}
+
 namespace detail {
 inline Eigen::VectorXi to_vec(const std::vector<int>& v) {
   return Eigen::Map<const Eigen::VectorXi>(v.data(), static_cast<int>(v.size()));
