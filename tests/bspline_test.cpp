@@ -228,6 +228,35 @@ TEST(BSpline, MomentAverageRateMatchesExactDailySum) {
   EXPECT_LT(worst, 1e-9) << "2-moment averaging must match the exact daily arithmetic sum to the gate";
 }
 
+TEST(BSpline, MomentCouponPricesThroughFloatCouponPv) {
+  // The moment path wired into the coupon model: a FloatCoupon with fixing_step>0 must price (through
+  // float_coupon_pv) equal to an exact daily-averaged coupon -- proving obs_numerator routing works
+  // end-to-end, not just the standalone primitive. tau_pay == tau_index, no spread => pv = DF(pay)*num.
+  const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 7, 10};
+  auto c = cv::make_bspline_curve<double>(meeting, back);
+  Eigen::VectorXd cpv(7);
+  cpv << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
+  c.set_forwards(cpv);
+
+  const double a = 2.0, b = 3.0, T = b - a;
+  const int nd = static_cast<int>(std::round(T * 360));
+  px::FloatCoupon mc;
+  mc.pay = b;
+  mc.tau_pay = T;
+  mc.obs.sub_start = {a};
+  mc.obs.sub_end = {b};
+  mc.obs.tau_index = T;
+  mc.obs.fixing_step = T / nd;  // selects the moment path
+
+  const double ours = px::float_coupon_pv<double>(mc, c, c);
+  double exact_num = 0;
+  for (int d = 0; d < nd; ++d)
+    exact_num += c.discount(a + d * (T / nd)) / c.discount(a + (d + 1) * (T / nd)) - 1.0;
+  const double exact_pv = c.discount(b) * exact_num;  // avg_rate*tau_pay discounted; tau_pay==tau_index
+  std::cout << "  [bspline-moment-coupon] rel err = " << std::abs(ours - exact_pv) / std::max(1.0, std::abs(exact_pv)) << "\n";
+  EXPECT_LT(std::abs(ours - exact_pv) / std::max(1.0, std::abs(exact_pv)), 1e-9);
+}
+
 TEST(BSpline, ForwardIsC1) {
   const auto b = make(cp());
   const double h = 1e-5;

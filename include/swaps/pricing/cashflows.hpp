@@ -180,6 +180,11 @@ struct RateObservation {
   std::vector<double> weight;
   double realized = 0.0;   // constant contribution of already-fixed days (ZERO derivative)
   double tau_index = 0.0;  // the denominator, on the INDEX's own day count
+  // > 0 selects the MOMENT path (docs/bezier-and-moments.md Part B): the arithmetic average over the
+  // SINGLE window [sub_start[0], sub_end[0]] is computed from closed-form curve moments instead of a
+  // day-by-day sum, with `fixing_step` the (uniform) daily accrual fraction. Default 0 => the exact
+  // sub-period path, bit-for-bit unchanged.
+  double fixing_step = 0.0;
 };
 
 // One floating coupon: an observation, discounted at its own pay date on its own accrual basis.
@@ -198,6 +203,10 @@ struct FixedCoupon {
   double pay = 0.0;
   double tau = 0.0;
 };
+
+// Composite ∫f² over the curve for the moment path (defined at the end of this header).
+template <class Scalar, class Curve>
+Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv = 32);
 
 // Σ_k w_k · (DF(s_k)/DF(e_k) − 1) — the curve-dependent numerator ONLY.
 // Precondition: at least one sub-period (so the accumulator can be seeded from a curve-dependent
@@ -220,6 +229,18 @@ Scalar obs_forward_sum(const RateObservation& o, const FCurve& fc) {
   return num;
 }
 
+// The curve-dependent numerator: the sub-period sum, OR (fixing_step > 0) the moment-integrated
+// arithmetic-average numerator over the single window [sub_start[0], sub_end[0]]:
+//   int_a^b f + 1/2 * fixing_step * int_a^b f^2   (Part B; matches the exact daily sum to the gate).
+// One entry point so rate() and float_coupon_pv() share the moment/sub-period choice.
+template <class Scalar, class FCurve>
+Scalar obs_numerator(const RateObservation& o, const FCurve& fc) {
+  if (o.fixing_step > 0.0)
+    return (fc.integral(o.sub_end[0]) - fc.integral(o.sub_start[0])) +
+           0.5 * o.fixing_step * curve_forward_sq_integral<Scalar>(fc, o.sub_start[0], o.sub_end[0]);
+  return obs_forward_sum<Scalar>(o, fc);
+}
+
 // rate = ( Σ_k w_k (DF(s_k)/DF(e_k) − 1) + realized ) / tau_index.
 //
 // AAD CAVEAT: when the observation is fully fixed (no sub-periods) the result is a genuine constant
@@ -231,7 +252,7 @@ template <class Scalar, class FCurve>
 Scalar rate(const RateObservation& o, const FCurve& fc) {
   assert(o.tau_index > 0.0);
   if (o.sub_start.empty()) return Scalar(o.realized / o.tau_index);
-  return (obs_forward_sum<Scalar>(o, fc) + o.realized) / o.tau_index;
+  return (obs_numerator<Scalar>(o, fc) + o.realized) / o.tau_index;
 }
 
 // PV of one floating coupon, forecasting `fc` and discounting `dc`:
@@ -259,7 +280,7 @@ Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc)
   const double k = c.tau_pay / c.obs.tau_index;
   const double konst = c.obs.realized + c.spread * c.obs.tau_index;
   if (c.obs.sub_start.empty()) return dc.discount(c.pay) * (konst * k);
-  Scalar a = obs_forward_sum<Scalar>(c.obs, fc) + konst;
+  Scalar a = obs_numerator<Scalar>(c.obs, fc) + konst;
   return dc.discount(c.pay) * a * k;
 }
 
@@ -319,7 +340,7 @@ Scalar future_rate(const RateObservation& o, double convexity, const FCurve& fc)
 
 // Composite int_a^b f(u)^2 du over the curve (piecewise-polynomial), 2-point Gauss per sub-interval.
 template <class Scalar, class Curve>
-Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv = 32) {
+Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv) {
   if (b <= a) return Scalar(0.0);
   const double gx = 0.5773502691896257;  // 1/sqrt(3)
   const double H = (b - a) / subdiv;
