@@ -16,6 +16,7 @@
 #include "swaps/curve/multi_region_curve.hpp"
 #include "swaps/curve/regions.hpp"
 #include "swaps/pricing/cashflows.hpp"
+#include "swaps/pricing/compiled.hpp"
 
 using swaps::curve::BSpline;
 using swaps::curve::Boundary;
@@ -255,6 +256,25 @@ TEST(BSpline, MomentCouponPricesThroughFloatCouponPv) {
   const double exact_pv = c.discount(b) * exact_num;  // avg_rate*tau_pay discounted; tau_pay==tau_index
   std::cout << "  [bspline-moment-coupon] rel err = " << std::abs(ours - exact_pv) / std::max(1.0, std::abs(exact_pv)) << "\n";
   EXPECT_LT(std::abs(ours - exact_pv) / std::max(1.0, std::abs(exact_pv)), 1e-9);
+}
+
+TEST(BSpline, WCacheReproducesDiscounts) {
+  // The B-spline curve on the compiled fast path: integral_weight_matrix(scheme=BSpline) builds W once
+  // (control points are the free vars), then DF = exp(-W x) must equal the direct curve.discount() --
+  // proving a B-spline curve reprices through the W-cache with NO curve rebuild, the whole point of
+  // fast B-spline calibration.
+  const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 7, 10};
+  auto c = cv::make_bspline_curve<double>(meeting, back);
+  Eigen::VectorXd x(7);
+  x << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
+  c.set_forwards(x);
+  const std::vector<double> times{0.3, 0.8, 1.5, 3.0, 6.0, 9.5, 10.0};
+  const Eigen::MatrixXd W = px::integral_weight_matrix(meeting, back, times, px::BackScheme::BSpline);
+  const Eigen::VectorXd DF = (-(W * x).array()).exp();
+  double worst = 0;
+  for (std::size_t i = 0; i < times.size(); ++i) worst = std::max(worst, std::abs(DF[i] - c.discount(times[i])));
+  std::cout << "  [bspline-wcache] max |exp(-Wx) - curve.discount| = " << worst << "\n";
+  EXPECT_LT(worst, 1e-13) << "B-spline curve must reprice exactly through the W-cache";
 }
 
 TEST(BSpline, ForwardIsC1) {

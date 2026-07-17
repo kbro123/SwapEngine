@@ -16,21 +16,34 @@
 
 namespace swaps::pricing {
 
+// Which back-end interpolation the W-cache builds. Default Hermite = the shipped curve, unchanged.
+enum class BackScheme { Hermite, BSpline };
+
 // W(i,:) such that integral(times[i]) = W(i,:)*x. Built via one AAD pass (integral is linear, so the
-// gradient is the weight row, independent of x). Setup only, not the hot path.
+// gradient is the weight row, independent of x). Setup only, not the hot path. `scheme` selects the
+// back-end interpolation; for BSpline the free values x are B-spline CONTROL POINTS (Part A).
 inline Eigen::MatrixXd integral_weight_matrix(const std::vector<double>& meeting,
                                               const std::vector<double>& back,
-                                              const std::vector<double>& times) {
+                                              const std::vector<double>& times,
+                                              BackScheme scheme = BackScheme::Hermite) {
   const int m = static_cast<int>(meeting.size() + back.size());
-  auto c = curve::make_calibration_curve<ad::Dual>(meeting, back);
-  c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
   Eigen::MatrixXd W(static_cast<int>(times.size()), m);
-  for (std::size_t i = 0; i < times.size(); ++i) {
-    const ad::Dual I = c.integral(times[i]);
-    if (I.derivatives().size() == m)
-      W.row(static_cast<int>(i)) = I.derivatives().transpose();
-    else
-      W.row(static_cast<int>(i)).setZero();
+  auto fill = [&](auto& c) {
+    c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
+    for (std::size_t i = 0; i < times.size(); ++i) {
+      const ad::Dual I = c.integral(times[i]);
+      if (I.derivatives().size() == m)
+        W.row(static_cast<int>(i)) = I.derivatives().transpose();
+      else
+        W.row(static_cast<int>(i)).setZero();
+    }
+  };
+  if (scheme == BackScheme::BSpline) {
+    auto c = curve::make_bspline_curve<ad::Dual>(meeting, back);
+    fill(c);
+  } else {
+    auto c = curve::make_calibration_curve<ad::Dual>(meeting, back);
+    fill(c);
   }
   return W;
 }
