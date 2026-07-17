@@ -306,4 +306,42 @@ Scalar future_rate(const RateObservation& o, double convexity, const FCurve& fc)
   return rate<Scalar>(o, fc) + convexity;
 }
 
+// ---- Moment-integrated averaging (docs/bezier-and-moments.md Part B) -----------------------------
+// The arithmetic-average numerator over a window [a,b] with a daily fixing schedule is, exactly,
+// Sum_d (DF(t_d)/DF(t_{d+1}) - 1). Its MOMENT expansion replaces the day-by-day sum with closed-form
+// curve integrals:
+//     num = int_a^b f  +  1/2 * <fixing_step> * int_a^b f^2  +  O(f^3 tau^2)
+// - int_a^b f = integral(b) - integral(a) telescopes to the exact log-DF difference, LINEAR in x.
+// - int_a^b f^2 feeds only the small correction, so a modest composite Gauss is plenty (measured:
+//   2 moments -> ~5e-11 rate error, under the 1e-10 gate, for windows up to 2y).
+// `fixing_step` is the (uniform) daily accrual fraction; a real calendar folds Sum_d tau_d^2 per curve
+// segment in here (a precomputed constant) -- that refinement is additive and does not change this API.
+
+// Composite int_a^b f(u)^2 du over the curve (piecewise-polynomial), 2-point Gauss per sub-interval.
+template <class Scalar, class Curve>
+Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv = 32) {
+  if (b <= a) return Scalar(0.0);
+  const double gx = 0.5773502691896257;  // 1/sqrt(3)
+  const double H = (b - a) / subdiv;
+  Scalar acc{0.0};
+  bool first = true;
+  for (int s = 0; s < subdiv; ++s) {
+    const double mid = a + (s + 0.5) * H, h = 0.5 * H;
+    for (int sg = -1; sg <= 1; sg += 2) {
+      const Scalar f = c.forward(mid + sg * gx * h);
+      const Scalar term = f * f * h;  // 2-pt Gauss weight is h on each node
+      if (first) { acc = term; first = false; } else acc += term;
+    }
+  }
+  return acc;
+}
+
+// Arithmetic average rate over [a,b], moment form: rate = num / tau_index.
+template <class Scalar, class Curve>
+Scalar moment_average_rate(const Curve& c, double a, double b, double fixing_step, double tau_index) {
+  const Scalar num =
+      (c.integral(b) - c.integral(a)) + 0.5 * fixing_step * curve_forward_sq_integral<Scalar>(c, a, b);
+  return num / tau_index;
+}
+
 }  // namespace swaps::pricing

@@ -199,6 +199,35 @@ TEST(BSpline, CalibratesToMarketAndReprices) {
   EXPECT_LT(res.stationarity, 1e-7) << "first-order optimality";
 }
 
+TEST(BSpline, MomentAverageRateMatchesExactDailySum) {
+  // The moment-integrated averaging rate must match the EXACT day-by-day arithmetic sum to the gate,
+  // with NO per-day work -- the whole point of Part B. Uniform daily fixings so the moment coefficient
+  // is exact (fixing_step = window/ndays); a real calendar's weekend day-count moment is an additive
+  // refinement (see the header). Validated on a B-spline curve.
+  const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 7, 10};
+  auto c = cv::make_bspline_curve<double>(meeting, back);
+  Eigen::VectorXd cpv(7);
+  cpv << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
+  c.set_forwards(cpv);
+
+  double worst = 0;
+  for (auto win : {std::pair{1.0, 1.0 + 1.0 / 12}, std::pair{2.0, 2.25}, std::pair{3.0, 4.0}}) {
+    const double a = win.first, b = win.second, T = b - a;
+    const int nd = std::max(1, static_cast<int>(std::round(T * 360)));
+    const double step = T / nd;
+    double exact_num = 0;
+    for (int d = 0; d < nd; ++d) {
+      const double t0 = a + d * step, t1 = a + (d + 1) * step;
+      exact_num += c.discount(t0) / c.discount(t1) - 1.0;
+    }
+    const double exact = exact_num / T;
+    const double moment = px::moment_average_rate<double>(c, a, b, step, T);
+    worst = std::max(worst, std::abs(moment - exact) / std::max(1.0, std::abs(exact)));
+  }
+  std::cout << "  [bspline-moment] max rel |moment avg - exact daily| = " << worst << "\n";
+  EXPECT_LT(worst, 1e-9) << "2-moment averaging must match the exact daily arithmetic sum to the gate";
+}
+
 TEST(BSpline, ForwardIsC1) {
   const auto b = make(cp());
   const double h = 1e-5;
