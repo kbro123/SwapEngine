@@ -440,6 +440,20 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   mismatched-size derivative vectors → NaN. Honest result: staging beats the joint solve on small
   bundles but ~ties it at production size (curve-rebuild-per-eval dominates); the real win is that both
   are **~20× faster than QuantLib IterativeBootstrap, ~64× vs GlobalBootstrap** (`bench/bundle_build_bench.cpp`).
+- **PLANNED — branch detection + parallel SCC solve (do AFTER the single-solve hot-path optimization is
+  exhausted).** The staged solver already condenses the dependency graph into SCCs solved in dependency
+  order. When that DAG BRANCHES (a star/forest topology — several curves each spread directly off the
+  base, mutually independent), the independent SCCs can be solved CONCURRENTLY on a thread pool. This is
+  the ONE architecture-aligned intra-calibration parallelism that stays DETERMINISTIC (each SCC is a
+  separate independent solve — no shared FP reduction, so §5 reproducibility holds), and it drops
+  straight out of the existing Tarjan decomposition: add a topological-level grouping (SCCs with all
+  dependencies already solved form a parallel wave) and dispatch each wave across threads. NOT started —
+  it is deliberately gated behind finishing the single-solve wins (compiled staged engine so each block
+  is fast; analytic `W_all` build; leaner LM linear algebra), because those shrink the SERIAL fraction
+  that otherwise caps any parallel speedup (Amdahl). Process-level parallelism is NOT the target here —
+  a solve is 1–22 ms, far below process/IPC overhead; threads over independent SCCs is. (Across-problem
+  parallelism — many independent calibrations for a scenario grid / multi-currency book — is already
+  trivially available given the single-threaded, allocation-light engine; that needs no new code.)
 - **Outright vs spread is in the curve DEFINITION, not the solver.** `CurveSpec` carries `base`:
   `base < 0` = OUTRIGHT (free vars are its own forwards); `base >= 0` = SPREAD, i.e. the curve IS
   `curves[base] + spread` and its free vars are the forward SPREADs. `build_bundle_curves<Scalar>`

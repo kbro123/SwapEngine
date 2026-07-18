@@ -18,6 +18,7 @@
 
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
+#include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/warm.hpp"
 
@@ -150,5 +151,38 @@ static void BM_BundleScale_WarmRecal(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_BundleScale_WarmRecal);
+
+// ---- Profiling probes: isolate the pieces of one cold joint solve (measure before optimizing). ----
+// EngineCtor builds W_all (currently one AAD pass per curve) + the compiled batches -- the one-time
+// per-calibrate setup. OneResidual / OneJacobian are the per-LM-iteration costs. A full ColdJoint is
+// ~ EngineCtor + n_iters*(OneResidual*trials + OneJacobian) + LM's own QR/step algebra.
+static void BM_BundleScale_EngineCtor(benchmark::State& state) {
+  const auto& f = fx();
+  for (auto _ : state) {
+    cal::CompiledBundleResidual eng(f.prob);
+    benchmark::DoNotOptimize(&eng);
+  }
+}
+BENCHMARK(BM_BundleScale_EngineCtor);
+
+static void BM_BundleScale_OneResidual(benchmark::State& state) {
+  const auto& f = fx();
+  const cal::CompiledBundleResidual eng(f.prob);
+  for (auto _ : state) {
+    Eigen::VectorXd r = eng.residuals(f.x_solved);
+    benchmark::DoNotOptimize(r.data());
+  }
+}
+BENCHMARK(BM_BundleScale_OneResidual);
+
+static void BM_BundleScale_OneJacobian(benchmark::State& state) {
+  const auto& f = fx();
+  const cal::CompiledBundleResidual eng(f.prob);
+  for (auto _ : state) {
+    Eigen::MatrixXd J = eng.jacobian(f.x_solved);
+    benchmark::DoNotOptimize(J.data());
+  }
+}
+BENCHMARK(BM_BundleScale_OneJacobian);
 
 BENCHMARK_MAIN();
