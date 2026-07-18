@@ -404,6 +404,27 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   *WarmCalibrator small-perturbation* use, not the live tick feed. Gate: `tests/streaming_test.cpp`
   (round-trip + exactness every tick). Demo: `tools/stream_sim.cpp` (trending day, both modes).
 
+### The async pricer/calibrator split — the "pricing branch" (`calibration/live_curve.hpp`)
+A live desk runs the CALIBRATOR on one thread and PRICES on others; the pricers must never block the
+calibrator and never read a half-updated curve. `LiveCurveFeed` is the lock-free hand-off: ONE writer
+(the `StreamingCalibrator` thread) `publish(x)`es the newest knot vector each tick; any number of
+readers (pricer threads) take a consistent `snapshot(out)` LOCK-FREE and price off it.
+- **Mechanism = atomic pointer swap over a preallocated buffer ring + a per-slot seqlock.** `publish`
+  fills the NEXT ring slot (round-robin, so a slot a reader just grabbed is not overwritten for ring−1
+  more publishes), brackets the payload write with an odd/even generation counter, then **release-stores**
+  the slot index into `published_`. `snapshot` **acquire-loads** `published_`, copies that slot, then
+  re-checks the slot generation AND that `published_` still points there — retrying only if a publish
+  lapped it mid-copy (rare: a publish is per-tick, a copy is ~µs). No locks, **no allocation after the
+  ctor** (the writer never blocks; the reader is bounded-retry).
+- **Guarantees:** release/acquire on `version_` gives a reader a happens-before view of the whole payload,
+  so it always prices off SOME wholly-published `x`, never a blend of two (§5 determinism across threads).
+- Gates (`tests/live_curve_test.cpp`, `tests/streaming_test.cpp` `AsyncPricer…`): 1 writer + 4 readers
+  over 300k publishes → **zero torn reads, zero version regressions**; and a real
+  `StreamingCalibrator` thread + a `CompiledResidual` pricer thread (its OWN scratch — the compiled
+  engine's per-instance memo buffers are NOT shared) → every snapshot equals EXACTLY the curve published
+  at that version. NB each pricer needs its own `CompiledResidual` (mutable DF/scratch memo); the
+  `LiveCurveFeed` is the only shared state and it is all atomics.
+
 ## 7b. Stage 3 — the curve bundle (N curves calibrated together)
 
 `BundleProblem` (`calibration/bundle_problem.hpp`) calibrates **N curves simultaneously** over one
