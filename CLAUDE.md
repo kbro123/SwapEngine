@@ -664,9 +664,25 @@ delete those, they enforce the rule. Two honest residues:
         far below market relevance), NOT a 1e-10 replacement; the exact sub-period path (`fixing_step==0`)
         stays available and bit-for-bit unchanged. `tests/bspline_oracle_test.cpp` isolates
         moment-vs-exact-daily (~5e-9) from exact-daily-vs-QuantLib (~1e-16).
-      **NOT done:** observation shift & lookback/lockout — **QuantLib 1.34's `OvernightIndexedCoupon` has NO
-      observation-shift/lookback API**, so there is no oracle for them here; deliberately not built rather
-      than ship unvalidatable code. Obs-shift telescopes (exact, would reuse the 1-sub-period path); lookback
-      would carry the same ~5e-9 moment floor. Also not done: a `scheme` selector on the problem structs so a
-      real Bundle/CalibrationProblem *selects* B-spline (the W-cache supports it; only the standalone
-      `BSplineProblem` test exercises it today).
+      **NOT done:** observation shift & lookback/lockout. The **vendored QuantLib is 1.34, whose
+      `OvernightIndexedCoupon` has NO observation-shift/lookback/lockout API** (verified: the ctor takes only
+      gearing/spread/dayCounter/telescopicValueDates/averagingMethod, and `averageRate` walks the schedule
+      value dates with no shift). So there is no oracle *at the pinned version* — but this is an
+      **oracle-behind-an-upgrade, not an unvalidatable feature**: **QuantLib 1.35 ADDED lookback days, lockout
+      days and observation shift** to `OvernightIndexedCoupon`/`OvernightIndexedSwap` + helpers (Marcin
+      Rybacki). The path to building it is therefore: bump `QL_VER` 1.34→1.35 (`tools/bootstrap_deps.sh`),
+      re-capture the perf baseline (the machine+toolchain fingerprint is UNCHANGED — QuantLib version is not
+      in it — but the committed *QuantLib comparison timings* must be refreshed), then build + validate the
+      shift/lookback against the new QuantLib coupon. The 1.34→1.35 bump is **low-risk for our code**: our QL
+      surface is narrow (base types + `OvernightIndexedCoupon`/`IborCoupon` inspectors we don't remove), we
+      build with **no `-Werror`**, and none of 1.35's *removed* symbols (dividend-option / swaption-cube
+      classes deprecated in 1.30) are used; the one deprecation we brush (`RelinkableHandle` raw-pointer ctor)
+      doesn't apply — we use the default ctor + `linkTo`. Watch items at bump time: (a) the `std::format` ADL
+      collision that forces the macOS-14.5-SDK libc++ on the Mac Pro (QL 1.35 may change `ql/errors` formatting
+      — could fix it or still need the workaround; test empirically), and (b) `migration_guard_test` + the full
+      oracle suite must stay green, proving default OIS pricing is byte-identical (the new params are additive,
+      default off). NB the changelog warns lookback is **incompatible with the telescoping formula** unless the
+      observation shift is also applied — relevant when we later USE it, not for the bump itself.
+      Also not done: a `scheme` selector on the problem structs so a real Bundle/CalibrationProblem *selects*
+      B-spline or the new MonotoneCubic (the W-cache supports the linear ones; only the standalone
+      `BSplineProblem`/`MonotoneCubicProblem` tests exercise a non-default scheme today).
