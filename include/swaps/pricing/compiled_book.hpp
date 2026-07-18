@@ -218,6 +218,21 @@ struct BundleFloatBatch {
     return R_cpn * coupon;
   }
 
+  // Per-instrument PV from a PRECOMPUTED per-coupon numerator `num_cpn` (== num(DF)). Lets the
+  // Jacobian's value pass share the single sub-period gather with its derivative pass (d_pv_from_num)
+  // instead of each re-gathering. BIT-IDENTICAL to pv(DF): on the plain path (konst == 0, k == 1) it
+  // is DF[pay]*num_cpn, exactly the fused pv coupon; otherwise the same DF[pay]*(num+konst)*k form.
+  Eigen::VectorXd pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF) const {
+    assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv_from_num() needs pay dates");
+    if (n_cpn_ == 0) return Eigen::VectorXd::Zero(n_inst);
+    Eigen::VectorXd coupon;
+    if (cpn_is_plain)
+      coupon = (DF(pay).array() * num_cpn.array()).matrix();
+    else
+      coupon = (DF(pay).array() * (num_cpn.array() + konst.array()) * k.array()).matrix();
+    return R_cpn * coupon;
+  }
+
   // Per-instrument (per-future) rate = (num + realized)*inv_tau + convexity.
   Eigen::VectorXd rate(const Eigen::VectorXd& DF) const {
     if (sub_is_identity)
@@ -242,10 +257,15 @@ struct BundleFloatBatch {
   // `+=` (never `=`) is load-bearing -- two structural aliases are live and MUST accumulate:
   // consecutive averaged sub-periods share a registered time (e_k == s_{k+1}), and pay == e_k when
   // the forecast and discount curves coincide with no payment lag.
-  void d_pv(const Eigen::VectorXd& DF, Eigen::MatrixXd& d, int row0, double sign) const {
-    assert((pay.size() == 0 || pay.minCoeff() >= 0) && "d_pv() needs pay dates: this is a futures batch");
-    const Eigen::VectorXd A = (num(DF).array() + konst.array()).matrix();
-    for (int i = 0; i < n_cpn_; ++i) d(row0 + inst[i], pay[i]) += sign * A[i] * k[i];
+  // Takes the SAME PRECOMPUTED per-coupon numerator `num_cpn` (== num(DF)) that pv_from_num used, so
+  // the sub-period gather is done ONCE per Jacobian call, not once for the value and again for the
+  // derivative. A == num_cpn + konst is the k-form numerator; the pay-column term uses it and the
+  // s/e-column terms use DF directly. BIT-IDENTICAL to the previous d_pv (which recomputed num(DF)).
+  void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, Eigen::MatrixXd& d,
+                     int row0, double sign) const {
+    assert((pay.size() == 0 || pay.minCoeff() >= 0) && "d_pv_from_num() needs pay dates");
+    for (int i = 0; i < n_cpn_; ++i)
+      d(row0 + inst[i], pay[i]) += sign * (num_cpn[i] + konst[i]) * k[i];
     for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
       const int i = sub_cpn[j], s = subS[j], e = subE[j];
       const double f = sign * DF[pay[i]] * k[i] * sub_w[j];

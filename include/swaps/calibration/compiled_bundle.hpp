@@ -52,6 +52,14 @@ class CompiledBundleResidual {
     gen_neg_.finalize();
     gen_fixed_.finalize();
     gen_rate_.finalize();
+
+    // Jacobian scratch buffers, sized ONCE here and reused (setZero) every call -- no per-iteration
+    // allocation of the N×T / nq×T / nr×T dense matrices.
+    const int T = cs_.n_times();
+    G_.resize(n_gen_, T);
+    dnum_.resize(static_cast<int>(q_rows_.size()), T);
+    dann_.resize(static_cast<int>(q_rows_.size()), T);
+    dr_.resize(static_cast<int>(r_rows_.size()), T);
   }
 
   int n_residuals() const { return n_gen_; }
@@ -60,7 +68,7 @@ class CompiledBundleResidual {
   // Model rates in BundleProblem's residual order: the generic instruments in insertion order, batched
   // by quote kind internally then scattered back to each instrument's own row.
   Eigen::VectorXd model_rates(const Eigen::VectorXd& x) const {
-    const Eigen::VectorXd DF = cs_.df(x);
+    const Eigen::VectorXd& DF = df_at(x);
     Eigen::VectorXd out(n_residuals());
     if (!q_rows_.empty()) {
       const Eigen::VectorXd ann = gen_fixed_.annuity(DF);
@@ -81,19 +89,28 @@ class CompiledBundleResidual {
   // the stacked knot space. Block structure (an instrument touches only its role curves' knots) falls
   // out automatically because those are the only nonzero W_all columns for its DF entries.
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
-    const Eigen::VectorXd DF = cs_.df(x);
-    const int N = n_residuals(), T = cs_.n_times();
-    Eigen::MatrixXd G = Eigen::MatrixXd::Zero(N, T);
+    const Eigen::VectorXd& DF = df_at(x);
+    G_.setZero();  // reuse the scratch buffer (sized once in the ctor)
+    Eigen::MatrixXd& G = G_;
 
     // Quotient rows: (pv_pos - pv_neg)/annuity, the ONE transform behind both ParRate (an empty `neg`
     // leg => pv_neg == 0) and ParSpread. Each batch row j lands on the instrument's own residual row.
     if (!q_rows_.empty()) {
       const int nq = static_cast<int>(q_rows_.size());
-      const Eigen::VectorXd num = gen_pos_.pv(DF) - gen_neg_.pv(DF);
+      // Compute each batch's per-coupon numerator (the sub-period gather + reduce) ONCE, then feed it
+      // to BOTH the value pass (pv_from_num) and the derivative pass (d_pv_from_num) -- the gather no
+      // longer runs a second time for the derivative.
+      const Eigen::VectorXd num_pos = gen_pos_.num(DF);
+      const Eigen::VectorXd num_neg = gen_neg_.num(DF);
+      const Eigen::VectorXd num =
+          gen_pos_.pv_from_num(num_pos, DF) - gen_neg_.pv_from_num(num_neg, DF);
       const Eigen::VectorXd ann = gen_fixed_.annuity(DF);
-      Eigen::MatrixXd dnum = Eigen::MatrixXd::Zero(nq, T), dann = Eigen::MatrixXd::Zero(nq, T);
-      gen_pos_.d_pv(DF, dnum, 0, 1.0);
-      gen_neg_.d_pv(DF, dnum, 0, -1.0);
+      dnum_.setZero();
+      dann_.setZero();
+      Eigen::MatrixXd& dnum = dnum_;
+      Eigen::MatrixXd& dann = dann_;
+      gen_pos_.d_pv_from_num(num_pos, DF, dnum, 0, 1.0);
+      gen_neg_.d_pv_from_num(num_neg, DF, dnum, 0, -1.0);
       gen_fixed_.d_annuity(dann, 0);
       for (int j = 0; j < nq; ++j)  // d(num/ann) = dnum/ann - num·dann/ann²
         G.row(q_rows_[j]) = dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]);
@@ -101,7 +118,8 @@ class CompiledBundleResidual {
     // `Rate` rows ARE the futures batch's rate rows (convexity is a constant -> zero row).
     if (!r_rows_.empty()) {
       const int nr = static_cast<int>(r_rows_.size());
-      Eigen::MatrixXd dr = Eigen::MatrixXd::Zero(nr, T);
+      dr_.setZero();
+      Eigen::MatrixXd& dr = dr_;
       gen_rate_.d_rate(DF, dr, 0);
       for (int j = 0; j < nr; ++j) G.row(r_rows_[j]) = dr.row(j);
     }
@@ -109,6 +127,17 @@ class CompiledBundleResidual {
   }
 
  private:
+  // DF = exp(-W_all x), memoized on x. model_rates(x) and jacobian(x) are called at the SAME x within
+  // an LM step (the accepted point), so they share ONE W*x + exp instead of recomputing it. The gate is
+  // exact equality on x (short-circuit on size), so the returned DF is bit-identical to cs_.df(x).
+  const Eigen::VectorXd& df_at(const Eigen::VectorXd& x) const {
+    if (x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {
+      df_ = cs_.df(x);
+      df_x_ = x;
+    }
+    return df_;
+  }
+
   // Register the generic instruments, preserving their insertion order in the RESIDUAL rows while
   // batching them by quote kind (a batch must be homogeneous, and d_pv/d_rate scatter into a
   // CONTIGUOUS row block). q_rows_/r_rows_ map a batch position back to its residual row, so a mixed
@@ -146,6 +175,10 @@ class CompiledBundleResidual {
   pricing::BundleFixedLegs gen_fixed_;
   std::vector<int> q_rows_, r_rows_;  // batch position -> residual row
   Eigen::VectorXd market_;
+  // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
+  // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.
+  mutable Eigen::VectorXd df_, df_x_;
+  mutable Eigen::MatrixXd G_, dnum_, dann_, dr_;
 };
 
 }  // namespace swaps::calibration

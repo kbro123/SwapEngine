@@ -139,7 +139,7 @@ TEST(CompiledGeneric, AnalyticJacobianMatchesAadOnEveryCouponShape) {
 
   // Analytic: J = -(dpv/dDF · diag(DF)) · W_all, exactly the factorization the residual uses.
   Eigen::MatrixXd G = Eigen::MatrixXd::Zero(2, bk.cs.n_times());
-  bk.fl.d_pv(bk.DF, G, /*row0=*/0, /*sign=*/1.0);
+  bk.fl.d_pv_from_num(bk.fl.num(bk.DF), bk.DF, G, /*row0=*/0, /*sign=*/1.0);
   const Eigen::MatrixXd J = -((G * bk.DF.asDiagonal()) * bk.cs.W());
 
   // AAD: one differentiated pass of the templated kernel over the stacked x.
@@ -163,7 +163,7 @@ TEST(CompiledGeneric, AnalyticJacobianMatchesAadWithOppositeSign) {
   Book bk = build(x, a, b);
 
   Eigen::MatrixXd G = Eigen::MatrixXd::Zero(2, bk.cs.n_times());
-  bk.fl.d_pv(bk.DF, G, /*row0=*/0, /*sign=*/-1.0);
+  bk.fl.d_pv_from_num(bk.fl.num(bk.DF), bk.DF, G, /*row0=*/0, /*sign=*/-1.0);
   const Eigen::MatrixXd J = -((G * bk.DF.asDiagonal()) * bk.cs.W());
 
   const auto xd = swaps::ad::seed(x);
