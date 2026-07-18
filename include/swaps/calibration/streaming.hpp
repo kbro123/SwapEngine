@@ -64,16 +64,17 @@ class StreamingCalibrator {
   StreamTick update_exact(const Eigen::VectorXd& q_new) {
     StreamTick t;
     t.drift = (q_new - q_anchor_).cwiseAbs().maxCoeff();
-    Eigen::VectorXd x = x_cur_;  // warm start from the last exact solution (tick-to-tick move is tiny)
+    x_ = x_cur_;              // warm start from the last exact solution (tick-to-tick move is tiny)
+    Eigen::VectorXd& x = x_;  // reused scratch: the frozen-Newton loop below allocates nothing
     int frozen = 0;
     for (;;) {
-      const Eigen::VectorXd r = engine_.model_rates(x) - q_new;
-      const Eigen::VectorXd dx = M_ * r;
-      x.noalias() -= dx;
+      r_.noalias() = engine_.model_rates(x) - q_new;  // engine reprice writes into its own scratch
+      dx_.noalias() = M_ * r_;
+      x.noalias() -= dx_;
       ++t.newton_steps;
-      if (dx.cwiseAbs().maxCoeff() < opt_.step_tol) break;  // EXACT reprice reached
-      if (++frozen >= opt_.max_frozen) {                    // M stale as a preconditioner -> refresh
-        if (t.refreshes >= opt_.max_refresh) break;         // safety (never hit on smooth feeds)
+      if (dx_.cwiseAbs().maxCoeff() < opt_.step_tol) break;  // EXACT reprice reached
+      if (++frozen >= opt_.max_frozen) {                     // M stale as a preconditioner -> refresh
+        if (t.refreshes >= opt_.max_refresh) break;          // safety (never hit on smooth feeds)
         set_anchor(x, q_new);
         t.refreshed = true;
         ++t.refreshes;
@@ -131,6 +132,8 @@ class StreamingCalibrator {
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
   Eigen::MatrixXd M_;
   int refresh_count_ = 0;
+  // Per-tick scratch so the exact frozen-Newton loop allocates nothing (sized on first use).
+  Eigen::VectorXd x_, r_, dx_;
 };
 
 }  // namespace swaps::calibration

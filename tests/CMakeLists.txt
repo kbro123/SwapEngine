@@ -19,6 +19,13 @@ target_compile_definitions(swaps_tests PRIVATE
 
 gtest_discover_tests(swaps_tests)
 
+# Allocation-free hot-path proof -- SEPARATE executable: this TU compiles Eigen with
+# EIGEN_RUNTIME_NO_MALLOC, which must not ODR-clash with the normally-compiled Eigen in swaps_tests.
+add_executable(swaps_allocfree_tests alloc_free_test.cpp)
+target_link_libraries(swaps_allocfree_tests PRIVATE swaps GTest::gtest_main)
+target_include_directories(swaps_allocfree_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+gtest_discover_tests(swaps_allocfree_tests)
+
 # Oracle-linked tests: these self-check the reference market against QuantLib itself. Kept in a
 # SEPARATE binary so the engine's own gate (swaps_tests) never links QuantLib.
 if(TARGET quantlib_oracle)

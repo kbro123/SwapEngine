@@ -69,22 +69,29 @@ class CompiledBundleResidual {
 
   // Model rates in BundleProblem's residual order: the generic instruments in insertion order, batched
   // by quote kind internally then scattered back to each instrument's own row.
-  Eigen::VectorXd model_rates(const Eigen::VectorXd& x) const {
+  const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
     const Eigen::VectorXd& DF = df_at(x);
-    Eigen::VectorXd out(n_residuals());
+    out_.resize(n_residuals());  // engine scratch: reused, no per-tick allocation
     if (!q_rows_.empty()) {
-      const Eigen::VectorXd ann = gen_fixed_.annuity(DF);
-      const Eigen::VectorXd v = ((gen_pos_.pv(DF) - gen_neg_.pv(DF)).array() / ann.array()).matrix();
-      for (std::size_t j = 0; j < q_rows_.size(); ++j) out[q_rows_[j]] = v[static_cast<int>(j)];
+      const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);  // refs into DISTINCT batch objects,
+      const Eigen::VectorXd& pp = gen_pos_.pv(DF);          // so all three are simultaneously live
+      const Eigen::VectorXd& pn = gen_neg_.pv(DF);
+      for (std::size_t j = 0; j < q_rows_.size(); ++j) {
+        const int i = static_cast<int>(j);
+        out_[q_rows_[j]] = (pp[i] - pn[i]) / ann[i];  // bit-identical to (pp-pn)/ann then scatter
+      }
     }
     if (!r_rows_.empty()) {
-      const Eigen::VectorXd v = gen_rate_.rate(DF);
-      for (std::size_t j = 0; j < r_rows_.size(); ++j) out[r_rows_[j]] = v[static_cast<int>(j)];
+      const Eigen::VectorXd& v = gen_rate_.rate(DF);
+      for (std::size_t j = 0; j < r_rows_.size(); ++j) out_[r_rows_[j]] = v[static_cast<int>(j)];
     }
-    return out;
+    return out_;
   }
 
-  Eigen::VectorXd residuals(const Eigen::VectorXd& x) const { return model_rates(x) - market_; }
+  const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const {
+    res_ = model_rates(x) - market_;  // model_rates fills out_; res_ (a distinct member) holds r
+    return res_;
+  }
 
   // Analytic block Jacobian J = dr/dx = -(dr/dDF diag(DF)) W_all. dr/dDF (G) is the per-instrument
   // pricing sensitivity scattered into the global DF columns; the W_all matmul maps DF-space back to
@@ -134,7 +141,7 @@ class CompiledBundleResidual {
   // exact equality on x (short-circuit on size), so the returned DF is bit-identical to cs_.df(x).
   const Eigen::VectorXd& df_at(const Eigen::VectorXd& x) const {
     if (x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {
-      df_ = cs_.df(x);
+      cs_.df_into(x, df_);  // allocation-free recompute into the df_ scratch
       df_x_ = x;
     }
     return df_;
@@ -180,6 +187,7 @@ class CompiledBundleResidual {
   // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.
   mutable Eigen::VectorXd df_, df_x_;
+  mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
   mutable Eigen::MatrixXd G_, dnum_, dann_, dr_;
 };
 

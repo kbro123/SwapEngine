@@ -43,12 +43,14 @@ class CompiledPortfolio {
   int n_swaps() const { return static_cast<int>(notional_.size()); }
   int n_times() const { return cs_.n_times(); }
 
-  // Per-swap NPV for knot forwards x. Fully vectorized.
-  Eigen::VectorXd npv(const Eigen::VectorXd& x) const {
-    const Eigen::VectorXd DF = cs_.df(x);
-    return (notional_.array() *
-            (float_.pv(DF).array() - fixed_rate_.array() * fixed_.annuity(DF).array()))
-        .matrix();
+  // Per-swap NPV for knot forwards x. Fully vectorized AND allocation-free per call (writes into
+  // reusable scratch, returns a const ref) -- so a real-time book reprice never touches the allocator.
+  const Eigen::VectorXd& npv(const Eigen::VectorXd& x) const {
+    cs_.df_into(x, df_);  // DF into scratch; float_/fixed_ pv/annuity return refs into their own scratch
+    const Eigen::VectorXd& pv = float_.pv(df_);
+    const Eigen::VectorXd& ann = fixed_.annuity(df_);
+    npv_ = (notional_.array() * (pv.array() - fixed_rate_.array() * ann.array())).matrix();
+    return npv_;
   }
 
   double total_npv(const Eigen::VectorXd& x) const { return npv(x).sum(); }
@@ -58,6 +60,7 @@ class CompiledPortfolio {
   pricing::BundleFloatBatch float_;
   pricing::BundleFixedLegs fixed_;
   Eigen::VectorXd fixed_rate_, notional_;
+  mutable Eigen::VectorXd df_, npv_;  // reusable per-reprice scratch
 };
 
 }  // namespace swaps::portfolio

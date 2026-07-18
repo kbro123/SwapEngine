@@ -22,8 +22,8 @@ class CompiledResidual {
 
   int n_residuals() const { return impl_.n_residuals(); }
   int n_times() const { return impl_.n_times(); }
-  Eigen::VectorXd model_rates(const Eigen::VectorXd& x) const { return impl_.model_rates(x); }
-  Eigen::VectorXd residuals(const Eigen::VectorXd& x) const { return impl_.residuals(x); }
+  const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const { return impl_.model_rates(x); }
+  const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const { return impl_.residuals(x); }
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const { return impl_.jacobian(x); }
 
  private:
