@@ -41,48 +41,29 @@ struct SquareFixture {
   Date today = mk.today;
   Date far = mk.today + 29 * Years;
 
-  std::vector<ext::shared_ptr<RateHelper>> helpers;  // QuantLib side
-  cal::CalibrationProblem prob;                      // our side
+  std::vector<ext::shared_ptr<RateHelper>> helpers;             // QuantLib side
+  cal::CalibrationProblem prob = rb::build_square_problem(mk);  // our side (generic Instruments)
   Eigen::VectorXd x0;
 
   SquareFixture() {
-    auto t = [&](const Date& d) { return dc.yearFraction(today, d); };
-    std::vector<double> front, back;
-
+    // QuantLib rate helpers for the SAME 23 instruments; our side (`prob`) is built generically by
+    // build_square_problem, so this benchmark now measures the ADOPTED (generic-instrument) path.
     for (int i = 0; i < 6; ++i) {
       const auto& q = rm::futures_1m[i];
       helpers.push_back(ext::make_shared<SofrFutureRateHelper>(
           Handle<Quote>(ext::make_shared<SimpleQuote>(q.price)), Month(q.ref_month), q.ref_year,
           Monthly));
-      const Date s = rb::sofr_start(Month(q.ref_month), q.ref_year, Monthly),
-                 e = rb::sofr_end(Month(q.ref_month), q.ref_year, Monthly);
-      prob.avg_futs.push_back(
-          {swaps::qlx::extract_averaged_future(mk.sofr, s, e, today, dc), 0.0, 1.0 - q.price / 100.0});
-      front.push_back(t(e));
     }
     for (int i = 0; i < 8; ++i) {
       const auto& q = rm::futures_3m[i];
       helpers.push_back(ext::make_shared<SofrFutureRateHelper>(
           Handle<Quote>(ext::make_shared<SimpleQuote>(q.price)), Month(q.ref_month), q.ref_year,
           Quarterly));
-      const Date s = rb::sofr_start(Month(q.ref_month), q.ref_year, Quarterly),
-                 e = rb::sofr_end(Month(q.ref_month), q.ref_year, Quarterly);
-      prob.comp_futs.push_back(
-          {swaps::qlx::extract_compounded_future(s, e, today, dc, mk.sofr->dayCounter()), 0.0, 1.0 - q.price / 100.0});
-      back.push_back(t(e));
     }
-    for (std::size_t i = 0; i < rm::swaps.size(); ++i) {
+    for (std::size_t i = 0; i < rm::swaps.size(); ++i)
       helpers.push_back(ext::make_shared<OISRateHelper>(
           2, Period(rm::swaps[i].tenor_years, Years),
           Handle<Quote>(ext::make_shared<SimpleQuote>(rm::swaps[i].par_rate)), mk.sofr));
-      prob.swaps.push_back(
-          {swaps::qlx::extract_ois_swap(*mk.swaps[i], today, dc), rm::swaps[i].par_rate});
-      back.push_back(t(mk.swaps[i]->maturityDate()));
-    }
-    std::sort(front.begin(), front.end());
-    std::sort(back.begin(), back.end());
-    prob.meeting_times = front;
-    prob.back_times = back;
     x0 = Eigen::VectorXd::Constant(prob.n_knots(), 0.035);
   }
 };

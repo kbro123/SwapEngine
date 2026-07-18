@@ -59,7 +59,9 @@ struct Fixture {
       ext::shared_ptr<OvernightIndexedSwap> sw =
           MakeOIS(Period(s.tenor_years, Years), mk.sofr, fixed).withNominal(notl).withDiscountingTermStructure(h);
       ql_book.push_back(sw);
-      pf.positions.push_back({swaps::qlx::extract_ois_swap(*sw, mk.today, mk.dc), fixed, notl});
+      pf.positions.push_back({swaps::qlx::extract_float_leg(sw->overnightLeg(), mk.today, mk.dc),
+                              swaps::qlx::extract_fixed_leg(sw->fixedLeg(), mk.today, mk.dc), fixed,
+                              notl});
     }
     cp = std::make_unique<swaps::portfolio::CompiledPortfolio>(prob.meeting_times, prob.back_times, pf);
   }

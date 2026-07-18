@@ -28,9 +28,10 @@ struct PortfolioVec : ::testing::Test {
     // Repeat the 9 swaps several times with varied fixed rates/notionals -> 45-position book.
     for (int rep = 0; rep < 5; ++rep)
       for (std::size_t i = 0; i < mk.swaps.size(); ++i)
-        pf.positions.push_back({swaps::qlx::extract_ois_swap(*mk.swaps[i], mk.today, mk.dc),
-                                rm::swaps[i].par_rate + 0.001 * (rep - 2),
-                                (i % 2 ? 1.0 : -1.0) * (1.0 + rep)});
+        pf.positions.push_back(
+            {swaps::qlx::extract_float_leg(mk.swaps[i]->overnightLeg(), mk.today, mk.dc),
+             swaps::qlx::extract_fixed_leg(mk.swaps[i]->fixedLeg(), mk.today, mk.dc),
+             rm::swaps[i].par_rate + 0.001 * (rep - 2), (i % 2 ? 1.0 : -1.0) * (1.0 + rep)});
   }
 
   double scalar_total(const Eigen::VectorXd& x) const {
@@ -60,9 +61,9 @@ TEST_F(PortfolioVec, MatchesScalarKernelAtManyCurves) {
     auto c = swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
     c.set_forwards(x);
     for (int p = 0; p < cp.n_swaps(); ++p) {
-      const double scal = pf.positions[p].notional *
-                          swaps::pricing::ois_swap_npv<double>(pf.positions[p].sched,
-                                                               pf.positions[p].fixed_rate, c);
+      const double scal =
+          pf.positions[p].notional *
+          swaps::portfolio::Portfolio::position_npv<double>(pf.positions[p], c);
       worst = std::max(worst, std::abs(vec[p] - scal));
     }
     // total agreement

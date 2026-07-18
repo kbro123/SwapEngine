@@ -56,7 +56,8 @@ struct Fixture {
               .withNominal(notl)
               .withDiscountingTermStructure(h);
       book.push_back(s);
-      pf.positions.push_back({swaps::qlx::extract_ois_swap(*s, today, dc), fixed, notl});
+      pf.positions.push_back({swaps::qlx::extract_float_leg(s->overnightLeg(), today, dc),
+                              swaps::qlx::extract_fixed_leg(s->fixedLeg(), today, dc), fixed, notl});
     }
     xstar = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
   }

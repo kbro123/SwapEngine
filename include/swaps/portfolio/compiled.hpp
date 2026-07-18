@@ -32,8 +32,8 @@ class CompiledPortfolio {
       const auto& pos = pf.positions[p];
       fixed_rate_[p] = pos.fixed_rate;
       notional_[p] = pos.notional;
-      float_.add(cs_, 0, 0, pos.sched);  // forecast = discount = curve 0
-      fixed_.add(cs_, 0, pos.sched);
+      float_.add(cs_, 0, 0, pos.float_coupons);  // forecast = discount = curve 0
+      fixed_.add(cs_, 0, pos.fixed_coupons);
     }
     cs_.finalize();
     float_.finalize();

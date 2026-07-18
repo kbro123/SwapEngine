@@ -49,8 +49,10 @@ struct Risk : ::testing::Test {
   void SetUp() override {
     // A non-trivial book: the 9 swaps at 50bp off market, alternating pay/receive, varied notional.
     for (std::size_t i = 0; i < mk.swaps.size(); ++i)
-      pf.positions.push_back({swaps::qlx::extract_ois_swap(*mk.swaps[i], mk.today, mk.dc),
-                              rm::swaps[i].par_rate + 0.005, (i % 2 ? 1.0 : -1.0) * (1.0 + i)});
+      pf.positions.push_back(
+          {swaps::qlx::extract_float_leg(mk.swaps[i]->overnightLeg(), mk.today, mk.dc),
+           swaps::qlx::extract_fixed_leg(mk.swaps[i]->fixedLeg(), mk.today, mk.dc),
+           rm::swaps[i].par_rate + 0.005, (i % 2 ? 1.0 : -1.0) * (1.0 + i)});
     Eigen::VectorXd x0 = Eigen::VectorXd::Constant(prob.n_knots(), 0.035);
     xstar = cal::calibrate(prob, x0, true).x;
   }
