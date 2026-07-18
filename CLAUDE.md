@@ -116,9 +116,23 @@ is a 0/0 → silent NaN; caught at construction).
 - **Rule: the interpolation must be a LINEAR MAP of the knot values to keep the microsecond path.**
   Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`, `BSpline`) preserve `integral(t)=w(t)·x`,
   hence the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over regions) gates that tier.
-- **Value-dependent schemes (monotone-convex / Hyman) are allowed but drop to the AAD tier** — they
-  regime-switch on the data, so `W` is no longer constant. Support them as `is_linear_map=false`
-  policies; calibration still works via AAD, just without the linear warm update.
+- **Value-dependent schemes drop to the AAD tier — and `MonotoneCubic` is the first one BUILT and
+  gate-verified** (`make_monotone_curve` = `MultiRegionCurve<Flat, MonotoneCubic>`). It is a C² natural
+  cubic whose node tangents pass through **Hyman's monotonicity filter**, transcribed to match QuantLib's
+  `MonotonicCubicNaturalSpline` **bit-for-bit** (`tests/monotone_cubic_oracle_test.cpp`: `forward` and
+  `integral` vs QuantLib to ~1e-11 on monotone AND filter-firing data). Because the filter clamps with
+  data-dependent `min/max/sign` branches, the coefficients are NOT a linear map of the knot values →
+  `is_linear_map = false`, so `W` is not constant and the W-cache does not apply. Calibration still works
+  through the **AAD engine** (the filter branches are piecewise-differentiable, so `AutoDiffScalar` carries
+  a valid one-sided gradient); `tests/monotone_cubic_test.cpp` calibrates it and reprices to <1e-9.
+- **THE GUARD (detect non-linear → route to AAD, never the W-cache):** `is_linear_map` is now enforced,
+  not just documented. (a) Compile-time: `integral_weight_matrix` (`pricing/compiled.hpp`) `static_assert`s
+  its curve `is_linear_map`, so a value-dependent scheme can NEVER silently reach the W-cache — it is a
+  compile error. (b) Type-routing: `residual_engine_t<Problem>` maps only `CalibrationProblem`/`BundleProblem`
+  (both hard-wired linear) to the compiled engine; every other problem (incl. a non-linear-curve problem)
+  falls to `AadResidualEngine` by default — locked by a `static_assert` in `monotone_cubic_test.cpp`.
+  (c) Runtime: `ModularCurve::is_linear_map()` returns false when it contains the `Scheme::MonotoneCubic`
+  region. Any FUTURE non-linear scheme (monotone-convex / Hyman-on-Hermite) inherits this guard for free.
 - Locality is a real design axis even among linear schemes: natural cubic is C² but *global* (dense
   `W`, non-local deltas); a local C¹ `Hermite`/`B-spline` back end gives local deltas **without**
   leaving the fast path. Prefer it when hedging stability matters.

@@ -8,6 +8,7 @@ add_executable(swaps_tests
   smoke_test.cpp
   multi_region_test.cpp
   bspline_test.cpp
+  monotone_cubic_test.cpp
   compiled_generic_test.cpp
   generic_instrument_test.cpp
 )
@@ -44,6 +45,7 @@ if(TARGET quantlib_oracle)
     bundle_test.cpp
     compiled_residual_test.cpp
     bspline_oracle_test.cpp
+    monotone_cubic_oracle_test.cpp
     migration_guard_test.cpp
   )
   target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)

@@ -47,7 +47,10 @@ struct RegionHolder final : RegionIface<S> {
   Boundary<S> out() const override { return p.out(); }
 };
 
-enum class Scheme { Flat, Linear, NaturalCubic, Hermite };
+// MonotoneCubic is the one NON-LINEAR scheme here: RegionHolder<S,MonotoneCubic>::linear() returns false,
+// so a ModularCurve containing it reports is_linear_map()==false -- the runtime signal to route that curve
+// through the AAD engine rather than the W-cache (which its static_assert would reject at compile time).
+enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic };
 
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
@@ -72,6 +75,7 @@ class ModularCurve {
       case Scheme::Linear: return add<Linear>(m.knots);
       case Scheme::NaturalCubic: return add<NaturalCubic>(m.knots);
       case Scheme::Hermite: return add<Hermite>(m.knots);
+      case Scheme::MonotoneCubic: return add<MonotoneCubic>(m.knots);
     }
     return *this;
   }

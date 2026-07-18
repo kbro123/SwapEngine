@@ -329,6 +329,179 @@ class Hermite {
   Scalar end_slope_{0.0};
 };
 
+// Hyman-filtered MONOTONE cubic on the forward-at-knot values -- the first NON-LINEAR region policy
+// (is_linear_map = false). It is a C2 natural cubic spline whose node first-derivatives are passed
+// through Hyman's monotonicity filter, so the interpolated forward cannot overshoot / oscillate the way
+// an unconstrained spline can. This is a standard production choice for rate curves; here it is also the
+// concrete curve that EXERCISES the AAD fallback tier -- because the filter clamps the derivatives with
+// data-dependent min/max/sign branches, the coefficients (and hence integral(t)) are NOT a linear map of
+// the knot values, so the W-cache / analytic-Jacobian fast path does NOT apply. Calibration must (and
+// does) route through the templated AAD engine instead; the min/max/abs branches are piecewise
+// differentiable, so AutoDiffScalar carries a valid (one-sided at kinks) gradient through them.
+//
+// Transcribed to match QuantLib's MonotonicCubicNaturalSpline exactly (CubicInterpolation with da=Spline,
+// monotonic=true, SecondDerivative=0 at both ends): same first-derivative tridiagonal, same Hyman filter,
+// validated to ~1e-12 in tests/monotone_cubic_test.cpp. Node 0 is the pinned join value (C0 handoff, like
+// NaturalCubic/Hermite). The per-segment cubic build + analytic quartic integral are identical to Hermite;
+// only the tangents differ (spline + filter, vs Hermite's Bessel tangents).
+template <class Scalar>
+class MonotoneCubic {
+ public:
+  explicit MonotoneCubic(std::vector<double> knots) : s_(std::move(knots)) {
+    require_increasing_knots(s_, "MonotoneCubic");
+  }
+  int n_values() const { return static_cast<int>(s_.size()); }
+  double t_end() const { return s_.back(); }
+  static constexpr bool is_linear_map = false;  // Hyman filter is value-dependent -> AAD tier, not W-cache
+
+  template <class Vec>
+  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
+    const int N = n + 1;  // spline nodes: [in.time, s_...]; node 0 pinned to the boundary value (C0 join)
+    if (N < 2) throw std::invalid_argument("MonotoneCubic: needs >= 1 back knot");
+    xs_.resize(N);
+    ys_.resize(N);
+    xs_[0] = in.time;
+    ys_[0] = in.value;
+    for (int i = 0; i < n; ++i) {
+      xs_[i + 1] = s_[i];
+      ys_[i + 1] = x[off + i];
+    }
+    const int nseg = N - 1;
+    std::vector<double> h(nseg);
+    std::vector<Scalar> S(nseg);  // secant slopes
+    for (int i = 0; i < nseg; ++i) {
+      h[i] = xs_[i + 1] - xs_[i];
+      S[i] = (ys_[i + 1] - ys_[i]) / h[i];
+    }
+
+    // First derivatives m[0..N-1] from the C2 (Spline) tridiagonal with natural (2nd-deriv=0) ends --
+    // QuantLib CubicInterpolation(Spline, SecondDerivative=0): the SAME spline as NaturalCubic, expressed
+    // directly in first-derivative (Hermite) form so the Hyman filter can act on the tangents.
+    //   row 0:   2 m0 + m1                       = 3 S0
+    //   row i:   h[i] m_{i-1} + 2(h[i]+h[i-1]) m_i + h[i-1] m_{i+1} = 3(h[i] S_{i-1} + h[i-1] S_i)
+    //   row N-1: m_{N-2} + 2 m_{N-1}             = 3 S_{N-2}
+    std::vector<double> lower(N), diag(N), upper(N);
+    std::vector<Scalar> rhs(N);
+    diag[0] = 2.0; upper[0] = 1.0; rhs[0] = 3.0 * S[0];
+    for (int i = 1; i < N - 1; ++i) {
+      lower[i] = h[i];
+      diag[i] = 2.0 * (h[i] + h[i - 1]);
+      upper[i] = h[i - 1];
+      rhs[i] = 3.0 * (h[i] * S[i - 1] + h[i - 1] * S[i]);
+    }
+    lower[N - 1] = 1.0; diag[N - 1] = 2.0; rhs[N - 1] = 3.0 * S[nseg - 1];
+    std::vector<Scalar> m(N);
+    thomas_solve(lower, diag, upper, rhs, m);
+
+    // Hyman monotonicity filter (bit-for-bit QuantLib): clamp each tangent so no segment overshoots.
+    // The `!= ` comparisons + min/max/sign are exactly the value-dependent branches that break linearity.
+    hyman_filter(h, S, m);
+
+    // Per-segment cubic f(u) = a + b u + c u^2 + d u^3, u = t - xs_[i]  (identical form to Hermite).
+    a_.resize(nseg); b_.resize(nseg); c_.resize(nseg); d_.resize(nseg);
+    for (int i = 0; i < nseg; ++i) {
+      const double hi = h[i];
+      a_[i] = ys_[i];
+      b_[i] = m[i];
+      c_[i] = 3.0 * S[i] / hi - (2.0 * m[i] + m[i + 1]) / hi;
+      d_[i] = (m[i] + m[i + 1]) / (hi * hi) - 2.0 * S[i] / (hi * hi);
+    }
+    Is_.resize(N);
+    Is_[0] = in.integral;
+    for (int i = 0; i < nseg; ++i) {
+      const double u = h[i];
+      Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
+    }
+    end_slope_ = m[N - 1];
+  }
+
+  Scalar forward(double t) const {
+    if (t >= xs_.back()) return ys_.back();
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
+  }
+  Scalar integral(double t) const {
+    if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
+  }
+  Boundary<Scalar> out() const { return {xs_.back(), ys_.back(), end_slope_, Is_.back()}; }
+
+ private:
+  int seg(double t) const {
+    auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
+    return static_cast<int>(it - xs_.begin()) - 1;
+  }
+  // Thomas algorithm for a tridiagonal system (double bands, Scalar rhs/solution -> AAD flows via rhs).
+  static void thomas_solve(std::vector<double>& lo, std::vector<double>& di, std::vector<double>& up,
+                           std::vector<Scalar>& r, std::vector<Scalar>& out) {
+    const int N = static_cast<int>(di.size());
+    for (int i = 1; i < N; ++i) {
+      const double w = lo[i] / di[i - 1];
+      di[i] -= w * up[i - 1];
+      r[i] = r[i] - w * r[i - 1];
+    }
+    out.resize(N);
+    out[N - 1] = r[N - 1] / di[N - 1];
+    for (int i = N - 1; i-- > 0;) out[i] = (r[i] - up[i] * out[i + 1]) / di[i];
+  }
+  // min/max on the SCALAR type via comparison (Eigen's AutoDiffScalar min/max overloads are ambiguous for
+  // two duals; these pick a branch by value and return it by value, so the chosen dual's derivatives ride
+  // along). abs() is the unary Eigen/std global (unambiguous), pulled in per-call with `using std::abs`.
+  static Scalar smin(const Scalar& a, const Scalar& b) { return b < a ? b : a; }
+  static Scalar smax(const Scalar& a, const Scalar& b) { return a < b ? b : a; }
+  // QuantLib's Hyman monotonicity filter on the node tangents m, given segment lengths h and secants S.
+  static void hyman_filter(const std::vector<double>& h, const std::vector<Scalar>& S,
+                           std::vector<Scalar>& m) {
+    using std::abs;
+    const int N = static_cast<int>(m.size());
+    for (int i = 0; i < N; ++i) {
+      Scalar correction, pm, pu, pd, M;
+      if (i == 0) {
+        if (m[i] * S[0] > 0.0)
+          correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[0]));
+        else
+          correction = Scalar(0.0);
+        if (correction != m[i]) m[i] = correction;
+      } else if (i == N - 1) {
+        if (m[i] * S[N - 2] > 0.0)
+          correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[N - 2]));
+        else
+          correction = Scalar(0.0);
+        if (correction != m[i]) m[i] = correction;
+      } else {
+        pm = (S[i - 1] * h[i] + S[i] * h[i - 1]) / (h[i - 1] + h[i]);
+        M = 3.0 * smin(smin(abs(S[i - 1]), abs(S[i])), abs(pm));
+        if (i > 1) {
+          if ((S[i - 1] - S[i - 2]) * (S[i] - S[i - 1]) > 0.0) {
+            pd = (S[i - 1] * (2.0 * h[i - 1] + h[i - 2]) - S[i - 2] * h[i - 1]) / (h[i - 2] + h[i - 1]);
+            if (pm * pd > 0.0 && pm * (S[i - 1] - S[i - 2]) > 0.0)
+              M = smax(M, Scalar(1.5) * smin(abs(pm), abs(pd)));
+          }
+        }
+        if (i < N - 2) {
+          if ((S[i] - S[i - 1]) * (S[i + 1] - S[i]) > 0.0) {
+            pu = (S[i] * (2.0 * h[i] + h[i + 1]) - S[i + 1] * h[i]) / (h[i] + h[i + 1]);
+            if (pm * pu > 0.0 && -pm * (S[i] - S[i - 1]) > 0.0)
+              M = smax(M, Scalar(1.5) * smin(abs(pm), abs(pu)));
+          }
+        }
+        if (m[i] * pm > 0.0)
+          correction = m[i] / abs(m[i]) * smin(abs(m[i]), M);
+        else
+          correction = Scalar(0.0);
+        if (correction != m[i]) m[i] = correction;
+      }
+    }
+  }
+
+  std::vector<double> s_, xs_;
+  std::vector<Scalar> ys_, a_, b_, c_, d_, Is_;
+  Scalar end_slope_{0.0};
+};
+
 // Clamped cubic B-SPLINE, CONTROL-POINT parameterization (docs/bezier-and-moments.md, Part A).
 // The `n` free values are control points P_1..P_n; P_0 is PINNED to the incoming boundary value for a
 // C0 join, exactly like Hermite/NaturalCubic pin their leading value. Distinctive vs those:

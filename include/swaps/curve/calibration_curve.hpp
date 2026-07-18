@@ -48,4 +48,21 @@ inline BSplineCurve<S> make_bspline_curve(const std::vector<double>& meeting,
   return BSplineCurve<S>{Flat<S>(meeting), BSpline<S>(back)};
 }
 
+// Non-linear back end: a Hyman-filtered MONOTONE cubic (matches QuantLib MonotonicCubicNaturalSpline).
+// Same flat meeting-date front; the back free variables are still forward-at-knot values. Because the
+// monotonicity filter is VALUE-DEPENDENT, MonotoneCubicCurve::is_linear_map == false, so this curve does
+// NOT ride the W-cache / analytic-Jacobian fast path -- it is the concrete curve that exercises the AAD
+// fallback tier (CLAUDE.md §2). Calibration routes through the templated AAD engine automatically.
+template <class S>
+using MonotoneCubicCurve = MultiRegionCurve<S, Flat, MonotoneCubic>;
+
+template <class S>
+inline MonotoneCubicCurve<S> make_monotone_curve(const std::vector<double>& meeting,
+                                                 const std::vector<double>& back) {
+  if (!meeting.empty() && !back.empty() && !(back.front() > meeting.back()))
+    throw std::invalid_argument("make_monotone_curve: first back knot (" + std::to_string(back.front()) +
+                                ") must exceed last front knot (" + std::to_string(meeting.back()) + ")");
+  return MonotoneCubicCurve<S>{Flat<S>(meeting), MonotoneCubic<S>(back)};
+}
+
 }  // namespace swaps::curve

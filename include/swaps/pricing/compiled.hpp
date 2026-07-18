@@ -9,6 +9,7 @@
 
 #include <Eigen/Core>
 
+#include <type_traits>
 #include <vector>
 
 #include "swaps/ad/dual.hpp"
@@ -17,6 +18,11 @@
 namespace swaps::pricing {
 
 // Which back-end interpolation the W-cache builds. Default Hermite = the shipped curve, unchanged.
+// GUARD (CLAUDE.md §2): every scheme listed here MUST be a linear map -- the W-cache stores ONE constant
+// weight matrix W with integral(t) = w(t)·x, which is only valid when the curve is linear in x. A
+// value-dependent scheme (MonotoneCubic's Hyman filter, monotone-convex, Hyman) has NO constant W and
+// must NOT appear here; it routes through the AAD engine instead. The static_assert in fill() below turns
+// "someone added a non-linear scheme to this enum" into a compile error rather than a silent wrong W.
 enum class BackScheme { Hermite, BSpline };
 
 // W(i,:) such that integral(times[i]) = W(i,:)*x. Built via one AAD pass (integral is linear, so the
@@ -29,6 +35,11 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<double>& meeting
   const int m = static_cast<int>(meeting.size() + back.size());
   Eigen::MatrixXd W(static_cast<int>(times.size()), m);
   auto fill = [&](auto& c) {
+    // GUARD: the W-cache is only meaningful for a curve whose integral is LINEAR in x (a constant W).
+    // Reject any non-linear curve at compile time -- it belongs on the AAD tier, not here.
+    static_assert(std::decay_t<decltype(c)>::is_linear_map,
+                  "integral_weight_matrix: W-cache requires a linear-map curve; a value-dependent scheme "
+                  "(e.g. MonotoneCubic) must calibrate through the AAD engine, not the W-cache.");
     c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
     for (std::size_t i = 0; i < times.size(); ++i) {
       const ad::Dual I = c.integral(times[i]);
