@@ -10,6 +10,11 @@ add_executable(swaps_bench
 )
 target_link_libraries(swaps_bench PRIVATE swaps benchmark::benchmark_main)
 
+# Large-scale spread-chain bundle -- ours-only scaling probe for the compiled-engine hot-path
+# optimizations (no QuantLib needed; not a fingerprint gate metric).
+add_executable(bundle_scale_bench bundle_scale_bench.cpp)
+target_link_libraries(bundle_scale_bench PRIVATE swaps benchmark::benchmark_main)
+
 # AAD vs bump / calibration benchmarks (link the QuantLib oracle for problem setup).
 if(TARGET quantlib_oracle)
   add_executable(calibration_bench calibration_bench.cpp)

@@ -43,7 +43,7 @@ struct BundleRealistic : ::testing::Test {
 
   std::vector<RelinkableHandle<YieldTermStructure>> h;
   std::vector<ext::shared_ptr<OvernightIndex>> idx;   // FF/PRIME/PRIME2 forecast indices
-  std::vector<cv::CalibrationCurve<double>> curves;
+  std::vector<std::unique_ptr<cal::CurveHandle<double>>> curve_handles;  // actual fwd curves (base+spread)
   std::vector<ext::shared_ptr<YieldTermStructure>> ts;
   cal::BundleProblem prob;
   Eigen::VectorXd x_true;
@@ -65,21 +65,27 @@ struct BundleRealistic : ::testing::Test {
     std::vector<double> mon_t;
     for (const Period& p : mon_periods) mon_t.push_back(dc.yearFraction(today, today + p));
 
+    // Convention (matches a trading desk): only SOFR is an OUTRIGHT curve; every other curve is a
+    // SPREAD to the one below it, so its free variables are forward SPREADS (base < curve index):
+    //   FF = SOFR + spread, PRIME = FF + spread, PRIME2 = PRIME + spread.
     prob.curves.resize(NC);
-    prob.curves[SOFR] = {sofr.meeting_times, sofr.back_times};
-    prob.curves[FF] = {sofr.meeting_times, back_t};  // FOMC meeting-date front (same as SOFR)
-    prob.curves[PRIME] = {mon_t, back_t};
-    prob.curves[PRIME2] = {mon_t, back_t};
+    prob.curves[SOFR] = {sofr.meeting_times, sofr.back_times, -1};        // outright
+    prob.curves[FF] = {sofr.meeting_times, back_t, SOFR};                 // spread over SOFR
+    prob.curves[PRIME] = {mon_t, back_t, FF};                            // spread over FF
+    prob.curves[PRIME2] = {mon_t, back_t, PRIME};                        // spread over PRIME
     off.assign(NC, 0);
     for (int c = 1; c < NC; ++c) off[c] = off[c - 1] + prob.curves[c - 1].n_knots();
     const int N = off[NC - 1] + prob.curves[NC - 1].n_knots();
 
-    // Known forwards: SOFR ~4.3%, FF -6bp, PRIME +300bp, PRIME2 +50bp (gentle upward slope each).
-    const double base[] = {0.0430, 0.0424, 0.0730, 0.0780};
+    // x_true: SOFR is a FORWARD level (~4.3%); FF/PRIME/PRIME2 are forward SPREADS to their base
+    // (FF ~ -6bp vs SOFR, PRIME ~ +306bp vs FF, PRIME2 ~ +50bp vs PRIME -- so the resulting forwards
+    // are SOFR ~4.3%, FF ~4.24%, PRIME ~7.3%, PRIME2 ~7.8%, as before). Gentle slope on each block.
+    const double base[] = {0.0430, -0.0006, 0.0306, 0.0050};
     x_true.resize(N);
     for (int c = 0; c < NC; ++c) {
       const int nk = prob.curves[c].n_knots();
-      for (int i = 0; i < nk; ++i) x_true[off[c] + i] = base[c] + 0.0003 * i;
+      const double slope = (c == SOFR) ? 0.0003 : 0.0001;  // spreads slope gently
+      for (int i = 0; i < nk; ++i) x_true[off[c] + i] = base[c] + slope * i;
     }
 
     // A ParSpread basis instrument from a QuantLib OIS: the spread (quoted) leg forecasts `fwd_fc`, the
@@ -136,16 +142,15 @@ struct BundleRealistic : ::testing::Test {
         prob.instruments.push_back(basis_inst(*o, c, c - 1, SOFR));
       }
 
-    // ---- Curves at x_true, exposed to QuantLib as YieldTermStructures ----
-    curves.reserve(NC);
-    for (int c = 0; c < NC; ++c) curves.push_back(cv::make_calibration_curve<double>(prob.curves[c].meeting, prob.curves[c].back));
-    for (int c = 0; c < NC; ++c) {
-      Eigen::VectorXd xi = x_true.segment(off[c], prob.curves[c].n_knots());
-      curves[c].set_forwards(xi);
-    }
+    // ---- Actual forward curves at x_true (SOFR outright; FF/PRIME/PRIME2 = base+spread), exposed to
+    // QuantLib as YieldTermStructures. build_bundle_curves resolves the spread chain exactly, and the
+    // resulting CurveHandle (virtual discount) plugs straight into CurveTermStructure. ----
+    curve_handles = cal::build_bundle_curves<double>(
+        prob.curves, [&](int c, int i) { return x_true[off[c] + i]; });
     ts.resize(NC);
     for (int c = 0; c < NC; ++c) {
-      auto t = ext::make_shared<swaps::qlx::CurveTermStructure<cv::CalibrationCurve<double>>>(today, dc, &curves[c]);
+      auto t = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
+          today, dc, curve_handles[c].get());
       t->enableExtrapolation();
       ts[c] = t;
       h[c].linkTo(t);
@@ -166,7 +171,7 @@ TEST_F(BundleRealistic, JointAndStagedRecoverAllFourCurves) {
   EXPECT_LT(prob.residuals<double>(x_true).cwiseAbs().maxCoeff(), 1e-12);
 
   Eigen::VectorXd x0(prob.n_knots());  // per-curve flat start near each curve's level
-  const double start[] = {0.043, 0.043, 0.073, 0.078};
+  const double start[] = {0.043, -0.0006, 0.0306, 0.0050};  // SOFR forward; FF/PRIME/PRIME2 SPREADS
   for (int c = 0; c < NC; ++c) x0.segment(off[c], prob.curves[c].n_knots()).setConstant(start[c]);
   const auto joint = cal::calibrate(prob, x0);
   const auto staged = cal::calibrate_staged(prob, x0);
@@ -203,7 +208,8 @@ TEST_F(BundleRealistic, MultiCurveBasisMatchesQuantLib) {
     const auto fx = swaps::qlx::extract_fixed_leg(ff->fixedLeg(), today, dc);
     // par_spread(fwd_leg, bench_leg, annuity, fwd, bench, disc) = r_bench - r_fwd; fwd=FF, bench=SOFR.
     const double ours =
-        swaps::pricing::par_spread<double>(fl, fl, fx, curves[FF], curves[SOFR], curves[SOFR]);
+        swaps::pricing::par_spread<double>(fl, fl, fx, *curve_handles[FF], *curve_handles[SOFR],
+                                           *curve_handles[SOFR]);
     worst = std::max(worst, std::abs(ours - ql));
     ++n;
   }
@@ -235,7 +241,7 @@ TEST_F(BundleRealistic, WarmRecalMatchesColdResolveOnMinorPerturbation) {
   // the perturbed market -- and the one-matvec linear update must be first-order accurate. This is the
   // 4-curve-bundle analogue of the single-curve Warm gate: same WarmCalibrator, driven via BundleProblem.
   Eigen::VectorXd x0(prob.n_knots());
-  const double start[] = {0.043, 0.043, 0.073, 0.078};
+  const double start[] = {0.043, -0.0006, 0.0306, 0.0050};  // SOFR forward; FF/PRIME/PRIME2 SPREADS
   for (int c = 0; c < NC; ++c) x0.segment(off[c], prob.curves[c].n_knots()).setConstant(start[c]);
   const Eigen::VectorXd x_solved = cal::calibrate(prob, x0).x;
 
@@ -267,7 +273,7 @@ TEST_F(BundleRealistic, StreamingExactPathRoundTripsTheBundle) {
   // back to each tick's quotes. Quotes are generated from a perturbed curve (so they are achievable
   // even though the bundle is over-determined), and every tick must round-trip to the Newton tolerance.
   Eigen::VectorXd x0(prob.n_knots());
-  const double start[] = {0.043, 0.043, 0.073, 0.078};
+  const double start[] = {0.043, -0.0006, 0.0306, 0.0050};  // SOFR forward; FF/PRIME/PRIME2 SPREADS
   for (int c = 0; c < NC; ++c) x0.segment(off[c], prob.curves[c].n_knots()).setConstant(start[c]);
   const Eigen::VectorXd x_solved = cal::calibrate(prob, x0).x;
 

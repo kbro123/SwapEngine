@@ -61,26 +61,29 @@ struct BundleFixture {
       const double tt = dc.yearFraction(today, today + pil[i]);
       (i == 0 ? meeting : back).push_back(tt);
     }
-    cal::BundleProblem::CurveSpec spec{meeting, back};
-    prob.curves.assign(NC, spec);
-    const int nk = spec.n_knots();
+    // Desk convention: curve 0 OUTRIGHT, every other curve a SPREAD over the previous (a spread chain).
+    prob.curves.resize(NC);
+    prob.curves[0] = {meeting, back, -1};
+    for (int c = 1; c < NC; ++c) prob.curves[c] = {meeting, back, c - 1};
+    const int nk = prob.curves[0].n_knots();
 
-    const double base[] = {0.0400, 0.0392, 0.0700, 0.0750};
+    // x_true: curve 0 forward level (~4%); curves 1+ forward SPREADS to their base (~-8bp, +308bp,
+    // +50bp), so the resulting forwards land ~4.00 / 3.92 / 7.00 / 7.50% as before.
+    const double base[] = {0.0400, -0.0008, 0.0308, 0.0050};
     Eigen::VectorXd x_true(NC * nk);
-    for (int c = 0; c < NC; ++c)
-      for (int i = 0; i < nk; ++i) x_true[c * nk + i] = base[c] + 0.0004 * i;
-
-    // Build the OIS at x_true (link handles to the real curves) to read fair rates.
-    std::vector<cv::CalibrationCurve<double>> curves;
-    curves.reserve(NC);
-    for (int c = 0; c < NC; ++c) curves.push_back(cv::make_calibration_curve<double>(meeting, back));
     for (int c = 0; c < NC; ++c) {
-      Eigen::VectorXd xi = x_true.segment(c * nk, nk);
-      curves[c].set_forwards(xi);
+      const double slope = (c == 0) ? 0.0004 : 0.0001;
+      for (int i = 0; i < nk; ++i) x_true[c * nk + i] = base[c] + slope * i;
     }
+
+    // Actual forward curves at x_true (SOFR outright; others base+spread) via the engine's spread-aware
+    // handle, exposed to QuantLib to read fair rates.
+    auto curve_handles = cal::build_bundle_curves<double>(
+        prob.curves, [&](int c, int i) { return x_true[c * nk + i]; });
     std::vector<ext::shared_ptr<YieldTermStructure>> ts(NC);
     for (int c = 0; c < NC; ++c) {
-      auto t = ext::make_shared<swaps::qlx::CurveTermStructure<cv::CalibrationCurve<double>>>(today, dc, &curves[c]);
+      auto t = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
+          today, dc, curve_handles[c].get());
       t->enableExtrapolation();
       ts[c] = t;
       h[c].linkTo(t);
@@ -124,7 +127,10 @@ struct BundleFixture {
         auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(pil[i], idx[c], 0.03).withDiscountingTermStructure(h[0]));
         prob.instruments.push_back(basis_inst(*o, c, c - 1, 0, quote[c - 1][i]->value() - quote[c][i]->value()));
       }
-    x0 = Eigen::VectorXd::Constant(prob.n_knots(), 0.05);
+    // Per-curve flat start: curve 0 near its forward level, spread curves near a small spread.
+    x0 = Eigen::VectorXd::Zero(prob.n_knots());
+    for (int c = 0; c < NC; ++c)
+      x0.segment(prob.offset(c), prob.curves[c].n_knots()).setConstant(c == 0 ? 0.04 : 0.005);
   }
 
   // QuantLib multi-curve chain: SOFR self-disc, then each curve SOFR-discounted; N sequential bootstraps.

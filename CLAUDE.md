@@ -453,6 +453,14 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   builds the base first (singleton SCCs) or forces a cycle into one joint block automatically. Gate:
   `tests/bundle_test.cpp` `BundleSpread.*` (joint & staged recover base+spread to ~1.5e-15; the handle
   math is exact). Requirement: `base < c` (bases defined before the spreads that reference them).
+- **TEST/BENCH CONVENTION (desk-realistic): only the base curve is OUTRIGHT; every OTHER curve is a
+  SPREAD over the one below it.** In `tests/bundle_test.cpp` `BundleRealistic` and `bench/bundle_*_bench.cpp`
+  SOFR is outright and FF = SOFR+spread, PRIME = FF+spread, PRIME2 = PRIME+spread (a spread chain) —
+  this is how a trading desk quotes basis curves, and it exercises the spread-calibration path in the
+  realistic bundle, not just the hand-built `BundleSpread` machinery tests. `x_true`/`x0` for a spread
+  block are SPREAD levels (~bp), not forward levels. The QuantLib oracle wraps the engine's spread-aware
+  `CurveHandle` (`CurveTermStructure<CurveHandle<double>>`) so QuantLib prices the ACTUAL forward curve
+  (base+spread), not the raw spread. New realistic multi-curve tests should follow this convention.
 
 ## 7c. Stage 4 — the generic instrument pipeline (design: `docs/generic-instrument-pipeline.md`)
 
