@@ -29,6 +29,7 @@
 using namespace QuantLib;
 namespace cv = swaps::curve;
 namespace cal = swaps::calibration;
+namespace px = swaps::pricing;
 namespace rb = swaps::refbuild;
 namespace rm = swaps::refmkt;
 
@@ -81,21 +82,23 @@ struct BundleRealistic : ::testing::Test {
       for (int i = 0; i < nk; ++i) x_true[off[c] + i] = base[c] + 0.0003 * i;
     }
 
-    // ---- SOFR instruments (curve 0): the reference futures + swaps, extracted directly from the
-    // market. (build_problem now yields generic Instruments; this bundle still consumes the legacy
-    // shorthand internally until the Stage-4 bundle migration, so re-extract the legacy schedules
-    // here. Order preserved: 1M averaging, then 3M compounding, then swaps.) ----
-    for (const auto& f : mk.futures)
-      if (!f.quarterly)
-        prob.avg_futs.push_back(
-            {SOFR, swaps::qlx::extract_averaged_future(mk.sofr, f.start, f.end, today, dc), 0.0, 0.0});
-    for (const auto& f : mk.futures)
-      if (f.quarterly)
-        prob.comp_futs.push_back(
-            {SOFR, swaps::qlx::extract_compounded_future(f.start, f.end, today, dc, mk.sofr->dayCounter()),
-             0.0, 0.0});
-    for (std::size_t i = 0; i < mk.swaps.size(); ++i)
-      prob.swaps.push_back({SOFR, SOFR, swaps::qlx::extract_ois_swap(*mk.swaps[i], today, dc), 0.0});
+    // A ParSpread basis instrument from a QuantLib OIS: the spread (quoted) leg forecasts `fwd_fc`, the
+    // benchmark leg forecasts `bench_fc` (SAME coupons), both discount `disc`. This is exactly the old
+    // basis_par_spread(sched, fwd_fc, bench_fc, disc) as one generic instrument.
+    auto basis_inst = [&](const OvernightIndexedSwap& o, int fwd_fc, int bench_fc, int disc) {
+      const auto fl = swaps::qlx::extract_float_leg(o.overnightLeg(), today, dc);
+      const auto fx = swaps::qlx::extract_fixed_leg(o.fixedLeg(), today, dc);
+      cal::Instrument ins;
+      ins.quote = cal::QuoteKind::ParSpread;
+      ins.fwd = {fl, fwd_fc, disc};
+      ins.bench = {fl, bench_fc, disc};
+      ins.fixed = {fx, disc};
+      return ins;
+    };
+
+    // ---- SOFR instruments (curve 0): the reference market as generic Instruments. build_problem's
+    // instruments already carry role 0 = SOFR (single-curve => every role is curve 0), so reuse them. ----
+    for (const auto& ins : sofr.instruments) prob.instruments.push_back(ins);
 
     // ---- FF/PRIME/PRIME2 indices ----
     const char* names[] = {"", "FFx", "PRIMEx", "PRIME2x"};
@@ -107,17 +110,22 @@ struct BundleRealistic : ::testing::Test {
       idx[c] = ext::make_shared<OvernightIndex>(names[c], 0, USDCurrency(), cal, Actual360(), h[c]);
     }
 
-    // FF front: 12 1M FF averaging futures (schedule from the SOFR 1M-future dates, forecast off FF).
+    // FF front: 12 1M FF averaging futures (Rate; observation from the SOFR 1M-future dates, forecast
+    // off FF -- the observation is curve-agnostic, only the forecast role selects the curve).
     for (int i = 0; i < 12; ++i) {
       const auto& q = rm::futures_1m[i];
       const Date s = rb::sofr_start(Month(q.ref_month), q.ref_year, Monthly),
                  e = rb::sofr_end(Month(q.ref_month), q.ref_year, Monthly);
-      prob.avg_futs.push_back({FF, swaps::qlx::extract_averaged_future(mk.sofr, s, e, today, dc), 0.0, 0.0});
+      cal::Instrument ins;
+      ins.quote = cal::QuoteKind::Rate;
+      ins.obs = rb::avg_future_obs(mk, rb::Future{s, e, false, q.price});
+      ins.forecast = FF;
+      prob.instruments.push_back(ins);
     }
-    // FF back: FF-SOFR basis at the back-tenor knots.
+    // FF back: FF-SOFR basis (spread leg forecasts FF, benchmark SOFR, both discount SOFR).
     for (const Period& p : back_periods) {
       auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(p, idx[FF], 0.03).withDiscountingTermStructure(hS));
-      prob.bases.push_back({FF, SOFR, SOFR, swaps::qlx::extract_ois_swap(*o, today, dc), 0.0});
+      prob.instruments.push_back(basis_inst(*o, FF, SOFR, SOFR));
     }
     // PRIME / PRIME2: basis over the previous curve at the monthly front + back tenors.
     std::vector<Period> all = mon_periods;
@@ -125,7 +133,7 @@ struct BundleRealistic : ::testing::Test {
     for (int c = PRIME; c <= PRIME2; ++c)
       for (const Period& p : all) {
         auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(p, idx[c], 0.03).withDiscountingTermStructure(hS));
-        prob.bases.push_back({c, c - 1, SOFR, swaps::qlx::extract_ois_swap(*o, today, dc), 0.0});
+        prob.instruments.push_back(basis_inst(*o, c, c - 1, SOFR));
       }
 
     // ---- Curves at x_true, exposed to QuantLib as YieldTermStructures ----
@@ -146,11 +154,7 @@ struct BundleRealistic : ::testing::Test {
 
     // Market quotes generated from x_true (self-consistent), so the joint solve recovers x_true.
     const Eigen::VectorXd r0 = prob.residuals<double>(x_true);
-    int i = 0;
-    for (auto& a : prob.avg_futs) a.market_rate += r0[i++];
-    for (auto& c : prob.comp_futs) c.market_rate += r0[i++];
-    for (auto& s : prob.swaps) s.market_rate += r0[i++];
-    for (auto& b : prob.bases) b.market_rate += r0[i++];
+    for (int i = 0; i < static_cast<int>(prob.instruments.size()); ++i) prob.instruments[i].market += r0[i];
   }
 };
 
@@ -195,9 +199,11 @@ TEST_F(BundleRealistic, MultiCurveBasisMatchesQuantLib) {
     // Our basis_par_spread(fwd, bench, disc) = r_bench - r_fwd, so with fwd=FF, bench=SOFR it is
     // r_SOFR - r_FF = sf.fairRate - ff.fairRate.
     const double ql = sf->fairRate() - ff->fairRate();
-    const auto sched = swaps::qlx::extract_ois_swap(*ff, today, dc);
+    const auto fl = swaps::qlx::extract_float_leg(ff->overnightLeg(), today, dc);
+    const auto fx = swaps::qlx::extract_fixed_leg(ff->fixedLeg(), today, dc);
+    // par_spread(fwd_leg, bench_leg, annuity, fwd, bench, disc) = r_bench - r_fwd; fwd=FF, bench=SOFR.
     const double ours =
-        swaps::pricing::basis_par_spread<double>(sched, curves[FF], curves[SOFR], curves[SOFR]);
+        swaps::pricing::par_spread<double>(fl, fl, fx, curves[FF], curves[SOFR], curves[SOFR]);
     worst = std::max(worst, std::abs(ours - ql));
     ++n;
   }
@@ -238,13 +244,7 @@ TEST_F(BundleRealistic, WarmRecalMatchesColdResolveOnMinorPerturbation) {
 
   // Ground truth: an independent COLD LM re-solve of the perturbed market (market += dq, residual order).
   cal::BundleProblem pert = prob;
-  {
-    int i = 0;
-    for (auto& a : pert.avg_futs) a.market_rate += dq[i++];
-    for (auto& c : pert.comp_futs) c.market_rate += dq[i++];
-    for (auto& s : pert.swaps) s.market_rate += dq[i++];
-    for (auto& b : pert.bases) b.market_rate += dq[i++];
-  }
+  for (int i = 0; i < static_cast<int>(pert.instruments.size()); ++i) pert.instruments[i].market += dq[i];
   const Eigen::VectorXd x_cold = cal::calibrate(pert, x_solved).x;
 
   // WARM: reuse the base Jacobian; only refresh if the move leaves the envelope (1bp should not).
@@ -296,21 +296,50 @@ TEST_F(BundleRealistic, StreamingExactPathRoundTripsTheBundle) {
 // alone. These are QuantLib-free machinery tests: hand-built annual OIS schedules, self-consistent
 // market from a known x, recovered by the joint + staged solvers.
 namespace {
-swaps::pricing::OisSwap make_annual_ois(double T) {
-  swaps::pricing::OisSwap s;
+// An annual OIS in the generic coupon model: each float coupon is one telescoped sub-period
+// [prev, u] (tau cancels via k == 1), each fixed coupon accrues (u - prev). This is make_annual_ois's
+// legacy OisSwap re-expressed as generic legs.
+struct AnnualOis {
+  std::vector<px::FloatCoupon> flt;
+  std::vector<px::FixedCoupon> fix;
+};
+AnnualOis make_annual_ois(double T) {
+  AnnualOis s;
   std::vector<double> t;
   for (double u = 1.0; u < T - 1e-9; u += 1.0) t.push_back(u);
   t.push_back(T);
   double prev = 0.0;
   for (double u : t) {
-    s.float_acc_start.push_back(prev);
-    s.float_acc_end.push_back(u);
-    s.float_pay.push_back(u);
-    s.fixed_pay.push_back(u);
-    s.fixed_accrual.push_back(u - prev);
+    px::FloatCoupon c;
+    c.obs.sub_start = {prev};
+    c.obs.sub_end = {u};
+    c.obs.tau_index = u - prev;
+    c.pay = u;
+    c.tau_pay = u - prev;
+    s.flt.push_back(c);
+    s.fix.push_back({u, u - prev});
     prev = u;
   }
   return s;
+}
+// An annual OIS as a ParRate instrument (fwd leg forecasts `fc`, discounts `dc`).
+cal::Instrument annual_par_rate(double T, int fc, int dc) {
+  const AnnualOis s = make_annual_ois(T);
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::ParRate;
+  ins.fwd = {s.flt, fc, dc};
+  ins.fixed = {s.fix, dc};
+  return ins;
+}
+// An annual OIS basis as a ParSpread instrument (spread leg forecasts `fwd_fc`, benchmark `bench_fc`).
+cal::Instrument annual_basis(double T, int fwd_fc, int bench_fc, int dc) {
+  const AnnualOis s = make_annual_ois(T);
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::ParSpread;
+  ins.fwd = {s.flt, fwd_fc, dc};
+  ins.bench = {s.flt, bench_fc, dc};
+  ins.fixed = {s.fix, dc};
+  return ins;
 }
 }  // namespace
 
@@ -324,8 +353,8 @@ TEST(BundleSpread, JointAndStagedRecoverSpreadCurve) {
   prob.curves[1] = {meeting, back, 0};   // spread over curve 0
   const int nk = prob.curves[0].n_knots();
   const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
-  for (double T : mats) prob.swaps.push_back({0, 0, make_annual_ois(T), 0.0});     // pin the base
-  for (double T : mats) prob.bases.push_back({1, 0, 0, make_annual_ois(T), 0.0});  // pin the spread
+  for (double T : mats) prob.instruments.push_back(annual_par_rate(T, 0, 0));     // pin the base
+  for (double T : mats) prob.instruments.push_back(annual_basis(T, 1, 0, 0));     // pin the spread
 
   Eigen::VectorXd x_true(2 * nk);
   for (int i = 0; i < nk; ++i) {
@@ -333,9 +362,7 @@ TEST(BundleSpread, JointAndStagedRecoverSpreadCurve) {
     x_true[nk + i] = 0.0050 + 0.0003 * i;  // forward spreads
   }
   const Eigen::VectorXd r0 = prob.residuals<double>(x_true);  // make x_true the exact solution
-  int k = 0;
-  for (auto& s : prob.swaps) s.market_rate += r0[k++];
-  for (auto& b : prob.bases) b.market_rate += r0[k++];
+  for (int i = 0; i < static_cast<int>(prob.instruments.size()); ++i) prob.instruments[i].market += r0[i];
   ASSERT_LT(prob.residuals<double>(x_true).cwiseAbs().maxCoeff(), 1e-14);
 
   Eigen::VectorXd x0(2 * nk);
@@ -360,8 +387,8 @@ TEST(BundleSpread, CompiledResidualHandlesSpreadCurves) {
   prob.curves[1] = {meeting, back, 0};   // spread over curve 0
   const int nk = prob.curves[0].n_knots();
   const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
-  for (double T : mats) prob.swaps.push_back({0, 0, make_annual_ois(T), 0.0});
-  for (double T : mats) prob.bases.push_back({1, 0, 0, make_annual_ois(T), 0.0});
+  for (double T : mats) prob.instruments.push_back(annual_par_rate(T, 0, 0));
+  for (double T : mats) prob.instruments.push_back(annual_basis(T, 1, 0, 0));
 
   Eigen::VectorXd x(2 * nk);
   for (int i = 0; i < nk; ++i) {

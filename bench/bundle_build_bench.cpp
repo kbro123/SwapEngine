@@ -94,16 +94,35 @@ struct BundleFixture {
         quote[c].push_back(ext::make_shared<SimpleQuote>(o->fairRate()));  // outright SOFR-discounted par
       }
 
-    // Our bundle: curve 0 by single-curve OIS, curve c>0 by a basis over c-1 (SOFR-discounted).
+    // Our bundle as generic Instruments: curve 0 by single-curve OIS (ParRate), curve c>0 by a basis
+    // over c-1 (ParSpread, SOFR-discounted).
+    auto par_inst = [&](const OvernightIndexedSwap& o, int fc, int disc, double mkt) {
+      cal::Instrument ins;
+      ins.quote = cal::QuoteKind::ParRate;
+      ins.fwd = {swaps::qlx::extract_float_leg(o.overnightLeg(), today, dc), fc, disc};
+      ins.fixed = {swaps::qlx::extract_fixed_leg(o.fixedLeg(), today, dc), disc};
+      ins.market = mkt;
+      return ins;
+    };
+    auto basis_inst = [&](const OvernightIndexedSwap& o, int fwd_fc, int bench_fc, int disc, double mkt) {
+      const auto fl = swaps::qlx::extract_float_leg(o.overnightLeg(), today, dc);
+      const auto fx = swaps::qlx::extract_fixed_leg(o.fixedLeg(), today, dc);
+      cal::Instrument ins;
+      ins.quote = cal::QuoteKind::ParSpread;
+      ins.fwd = {fl, fwd_fc, disc};
+      ins.bench = {fl, bench_fc, disc};
+      ins.fixed = {fx, disc};
+      ins.market = mkt;
+      return ins;
+    };
     for (std::size_t i = 0; i < pil.size(); ++i) {
       auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(pil[i], idx[0], 0.03).withDiscountingTermStructure(h[0]));
-      prob.swaps.push_back({0, 0, swaps::qlx::extract_ois_swap(*o, today, dc), quote[0][i]->value()});
+      prob.instruments.push_back(par_inst(*o, 0, 0, quote[0][i]->value()));
     }
     for (int c = 1; c < NC; ++c)
       for (std::size_t i = 0; i < pil.size(); ++i) {
         auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(pil[i], idx[c], 0.03).withDiscountingTermStructure(h[0]));
-        prob.bases.push_back({c, c - 1, 0, swaps::qlx::extract_ois_swap(*o, today, dc),
-                              quote[c - 1][i]->value() - quote[c][i]->value()});
+        prob.instruments.push_back(basis_inst(*o, c, c - 1, 0, quote[c - 1][i]->value() - quote[c][i]->value()));
       }
     x0 = Eigen::VectorXd::Constant(prob.n_knots(), 0.05);
   }
@@ -142,11 +161,7 @@ struct BundleWarmFixture {
   BundleWarmFixture() {
     dq = Eigen::VectorXd(prob.n_residuals());
     for (int i = 0; i < dq.size(); ++i) dq[i] = 1e-4 * std::sin(0.7 * i + 0.3);  // ~1bp, residual order
-    int i = 0;
-    for (auto& a : pert.avg_futs) a.market_rate += dq[i++];
-    for (auto& c : pert.comp_futs) c.market_rate += dq[i++];
-    for (auto& s : pert.swaps) s.market_rate += dq[i++];
-    for (auto& b : pert.bases) b.market_rate += dq[i++];
+    for (int i = 0; i < static_cast<int>(pert.instruments.size()); ++i) pert.instruments[i].market += dq[i];
   }
 };
 const BundleWarmFixture& warm4() { static const BundleWarmFixture f; return f; }
