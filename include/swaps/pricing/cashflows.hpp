@@ -58,6 +58,16 @@ struct RateObservation {
   // Third day-count moment Sum_d (day step)^3 / (b-a). Real calendars (weekend 3-day accruals) make
   // the 3rd moment significant; default 0 keeps the 2-moment form (enough for uniform daily).
   double fixing_step3 = 0.0;
+  // COMPOUNDED (product) mode. Default false => the arithmetic Σ form above (compounded OIS still
+  // telescopes into ONE sub-period, so the standard shape never sets this). Set true ONLY when daily
+  // compounding does NOT telescope -- RFR lookback WITHOUT observation shift, or lockout -- so the
+  // numerator must be the actual product realized_factor · ∏_k (1 + w_k (DF(s_k)/DF(e_k) − 1)) − 1
+  // (each term is 1 + r_k · dt_k). Obs-shift telescopes, so it stays a single arithmetic sub-period.
+  bool compounded = false;
+  // Multiplicative past product ∏_past (1 + r · dt) for a partially/fully realized COMPOUNDED coupon
+  // (the compounded analogue of the additive `realized`): total growth = realized_factor · ∏_future.
+  // 1.0 => no realized prefix. Only consulted when `compounded`.
+  double realized_factor = 1.0;
 };
 
 // One floating coupon: an observation, discounted at its own pay date on its own accrual basis.
@@ -104,6 +114,25 @@ Scalar obs_forward_sum(const RateObservation& o, const FCurve& fc) {
   return num;
 }
 
+// ∏_k (1 + w_k · (DF(s_k)/DF(e_k) − 1)) — the curve-dependent daily-compounding growth (each factor is
+// 1 + r_k·dt_k). Precondition: at least one sub-period, so the accumulator seeds from a curve-dependent
+// factor and carries derivatives (AAD SAFETY note at the top of this header). Used only in `compounded`
+// mode (RFR lookback-without-shift / lockout, where the product does NOT telescope to a single DF ratio).
+template <class Scalar, class FCurve>
+Scalar obs_compound_growth(const RateObservation& o, const FCurve& fc) {
+  assert(!o.sub_start.empty());
+  assert(o.sub_start.size() == o.sub_end.size());
+  assert(o.weight.empty() || o.weight.size() == o.sub_start.size());
+  const bool weighted = !o.weight.empty();
+  auto factor = [&](std::size_t k) {
+    Scalar t = fc.discount(o.sub_start[k]) / fc.discount(o.sub_end[k]) - 1.0;
+    return weighted ? Scalar(1.0 + o.weight[k] * t) : Scalar(1.0 + t);
+  };
+  Scalar prod = factor(0);
+  for (std::size_t k = 1; k < o.sub_start.size(); ++k) prod = prod * factor(k);
+  return prod;
+}
+
 // The curve-dependent numerator: the sub-period sum, OR (fixing_step > 0) the moment-integrated
 // arithmetic-average numerator over the single window [sub_start[0], sub_end[0]]:
 //   int_a^b f + 1/2 * fixing_step * int_a^b f^2   (Part B; matches the exact daily sum to the gate).
@@ -131,6 +160,11 @@ Scalar obs_numerator(const RateObservation& o, const FCurve& fc) {
 template <class Scalar, class FCurve>
 Scalar rate(const RateObservation& o, const FCurve& fc) {
   assert(o.tau_index > 0.0);
+  if (o.compounded) {
+    // rate = (realized_factor · ∏(1 + r_k dt_k) − 1) / tau_index; empty subs => a fully-realized product.
+    if (o.sub_start.empty()) return Scalar((o.realized_factor - 1.0) / o.tau_index);
+    return (o.realized_factor * obs_compound_growth<Scalar>(o, fc) - 1.0) / o.tau_index;
+  }
   if (o.sub_start.empty()) return Scalar(o.realized / o.tau_index);
   return (obs_numerator<Scalar>(o, fc) + o.realized) / o.tau_index;
 }
@@ -158,6 +192,15 @@ template <class Scalar, class FCurve, class DCurve>
 Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc) {
   assert(c.obs.tau_index > 0.0);
   const RateObservation& o = c.obs;
+  // COMPOUNDED (product) mode -- separate from the arithmetic k-form below so the hot OIS path is
+  // untouched. pv = DF(pay) · ((realized_factor·∏(1+r_k dt_k) − 1) + spread·tau_index) · (tau_pay/tau_index).
+  if (o.compounded) {
+    const double kf = c.tau_pay / o.tau_index;
+    const double konst = c.spread * o.tau_index - 1.0;  // the "−1" of the product folds in with the spread
+    if (o.sub_start.empty()) return dc.discount(c.pay) * ((o.realized_factor + konst) * kf);
+    Scalar a = o.realized_factor * obs_compound_growth<Scalar>(o, fc) + konst;
+    return dc.discount(c.pay) * a * kf;
+  }
   // Fast path -- a PLAIN single-sub-period coupon (the compounded-OIS shape): one sub-period, no
   // weights, no moment path, no realized, no spread, tau_pay == tau_index (=> k == 1). Then
   //   pv == DF(pay) * (DF(s)/DF(e) - 1)

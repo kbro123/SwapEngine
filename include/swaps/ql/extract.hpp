@@ -121,11 +121,61 @@ inline QuantLib::Size overnight_fixed_prefix(const QuantLib::OvernightIndexedCou
 // tau_index is `accrualPeriod()` because that is the denominator BOTH QuantLib pricers divide by. It
 // is the period year fraction on the coupon's own day counter, which for a standard overnight coupon
 // is the index's day counter (design §5).
+// RFR conventions -- lookback (WITHOUT observation shift), lockout, or observation shift -- break the
+// telescoping that lets a plain compounded coupon collapse to a single DF ratio: the observation period
+// of each daily fixing no longer lines up with the next day's, so the compound factor is a genuine
+// PRODUCT Π_i (1 + fixing(f_i)·dt_i). We reproduce it per-fixing in the engine's COMPOUNDED mode:
+// fixing(f_i) is the index forecast over its own overnight period [valueDate(f_i), maturityDate(f_i)],
+// i.e. (DF(vd_i)/DF(md_i) − 1)/τ_i, so the coupon's own dt_i enters as weight w_i = dt_i/τ_i and the
+// factor is 1 + fixing(f_i)·dt_i, matching QuantLib::OvernightIndexedCouponPricer exactly. Obs-shift
+// telescopes but the per-day product still evaluates it exactly, so all three route here uniformly.
+// Gearing on a compounded coupon multiplies the whole (growth − 1), which does NOT distribute into the
+// per-factor weights; RFR coupons are gearing 1 (SOFR/SONIA FRNs), so we require it rather than model it.
+inline pricing::RateObservation extract_overnight_rfr_obs(const QuantLib::OvernightIndexedCoupon& c,
+                                                          const QuantLib::Date& ref,
+                                                          const QuantLib::DayCounter& curveDc) {
+  using namespace QuantLib;
+  const detail::CurveTime t{ref, curveDc};
+  QL_REQUIRE(c.gearing() == 1.0,
+             "geared compounded RFR coupon (lookback/lockout/obs-shift) is out of scope: gearing "
+             "multiplies the whole compounded rate, not the per-day factors");
+  const auto on = ext::dynamic_pointer_cast<OvernightIndex>(c.index());
+  QL_REQUIRE(on, "RFR overnight coupon has a non-overnight index");
+  const DayCounter idc = on->dayCounter();
+  const auto& fixingDates = c.fixingDates();
+  const auto& dt = c.dt();
+  const Size n = dt.size();
+
+  Real compound = 1.0, average = 0.0;
+  const Size i0 = detail::overnight_fixed_prefix(c, compound, average);
+
+  pricing::RateObservation o;
+  o.compounded = true;
+  o.tau_index = c.accrualPeriod();
+  QL_REQUIRE(o.tau_index > 0.0, "overnight coupon has non-positive accrual period");
+  o.realized_factor = compound;  // Π_past (1 + f·dt): the multiplicative already-fixed growth
+  for (Size i = i0; i < n; ++i) {
+    const Date vd = on->valueDate(fixingDates[i]);  // the fixing's OWN overnight period [vd, md]
+    const Date md = on->maturityDate(vd);
+    const Real tau_i = idc.yearFraction(vd, md);
+    o.sub_start.push_back(t(vd));
+    o.sub_end.push_back(t(md));
+    o.weight.push_back(dt[i] / tau_i);  // == 1.0 for a plain day; carries lookback/lockout day-count skew
+  }
+  return o;
+}
+
 inline pricing::RateObservation extract_overnight_obs(const QuantLib::OvernightIndexedCoupon& c,
                                                       const QuantLib::Date& ref,
                                                       const QuantLib::DayCounter& curveDc) {
   using namespace QuantLib;
   const detail::CurveTime t{ref, curveDc};
+  // RFR conventions (lookback without shift / lockout / observation shift) don't telescope -> the
+  // dedicated compounded-product path. A standard compounded/averaged coupon (none of these) keeps the
+  // existing telescoped/per-day-arithmetic path below, bit-for-bit unchanged.
+  if (c.averagingMethod() == RateAveraging::Compound &&
+      (c.lockoutDays() > 0 || c.applyObservationShift() || c.fixingDays() != c.index()->fixingDays()))
+    return extract_overnight_rfr_obs(c, ref, curveDc);
   const auto& valueDates = c.valueDates();
   const Size n = c.dt().size();
   const Real g = c.gearing();

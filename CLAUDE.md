@@ -678,9 +678,26 @@ delete those, they enforce the rule. Two honest residues:
       is oracle-side (our engine math is unchanged); `tests/reference_curve.hpp` `avg_future_obs` was aligned to
       1.35's loop exactly (weighted forecast sub-periods; interior days weight 1.0 so fully-forecast futures stay
       bit-identical). The macOS-14.5-SDK libc++ workaround (std::format ADL) is **still needed** for 1.35 (built
-      clean WITH it; not tested without). **What remains (the actual Stage 5 feature):** build obs-shift/lookback
-      into the coupon model + validate against the 1.35 coupon. NB the changelog warns lookback is **incompatible
-      with the telescoping formula** unless the observation shift is also applied — matters when we USE it.
+      clean WITH it; not tested without).
+      **DONE: observation shift + lookback + lockout are now BUILT and gate-verified** (branch
+      `feat/rfr-lookback-lockout-obsshift`). These RFR conventions break the telescoping that collapses a
+      compounded coupon to one DF ratio, so `RateObservation` gained a **COMPOUNDED (product) mode**
+      (`compounded` + `realized_factor`, `pricing/cashflows.hpp`): the numerator is
+      `realized_factor·∏_k(1 + w_k(DF(s_k)/DF(e_k) − 1)) − 1`, each factor `1 + fixing(f_k)·dt_k`, with the
+      per-fixing observation over the index's own overnight period so `w_k = dt_k/τ_k` (== 1.0 for a plain
+      day, carrying the lookback/lockout day-count skew otherwise). `ql/extract.hpp`
+      `extract_overnight_rfr_obs` builds it from the QL 1.35 coupon's `fixingDates()`/`dt()` when
+      lookback/lockout/obs-shift are present; a **standard** compounded/averaged coupon keeps the telescoped
+      path bit-for-bit (calibration untouched). Validated against QuantLib 1.35 as a composite oracle (our
+      curve wired in as the term structure) to <1e-12 across lookback-no-shift, obs-shift, lockout, combined,
+      and a partially-realized straddle (`tests/rfr_coupon_oracle_test.cpp`). Gearing on a compounded coupon
+      multiplies the whole `(growth − 1)` (not per-factor), so geared RFR coupons are rejected (SOFR/SONIA
+      FRNs are gearing 1). **Scope boundary:** the compounded product lives in the TEMPLATED kernel
+      (`float_coupon_pv`/`rate`, AAD-safe) only — the arithmetic compiled W-cache batch (`push_obs`) throws on
+      a `compounded` observation, because RFR coupons are pricing coupons, never calibration instruments.
+      Obs-shift telescopes (the product still evaluates it exactly); lookback-no-shift/lockout genuinely need
+      the product. NB the changelog warns lookback is **incompatible with the telescoping formula** unless the
+      observation shift is also applied — we build coupons non-telescopic, sidestepping it.
       Also not done: a `scheme` selector on the problem structs so a real Bundle/CalibrationProblem *selects*
       B-spline or the new MonotoneCubic (the W-cache supports the linear ones; only the standalone
       `BSplineProblem`/`MonotoneCubicProblem` tests exercise a non-default scheme today).

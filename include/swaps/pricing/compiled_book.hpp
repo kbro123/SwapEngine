@@ -25,6 +25,7 @@
 
 #include <cassert>
 #include <map>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -336,6 +337,14 @@ struct BundleFloatBatch {
     sw_.push_back(w);
   }
   void push_obs(CompiledCurveSet& cs, int fc, const RateObservation& o) {
+    // GUARD: the compiled batch computes the ARITHMETIC sum Σ w_k(DF/DF−1); it cannot represent the
+    // COMPOUNDED product (RFR lookback/lockout). Those are pricing coupons, never calibration
+    // instruments, so they price through the templated float_coupon_pv instead -- reject them here
+    // rather than silently summing what should be multiplied.
+    if (o.compounded)
+      throw std::invalid_argument(
+          "CompiledBook: compounded (RFR lookback/lockout) observation cannot use the arithmetic "
+          "W-cache batch; price it through the templated kernel");
     const bool weighted = !o.weight.empty();
     for (std::size_t j = 0; j < o.sub_start.size(); ++j)
       push_sub(cs, fc, o.sub_start[j], o.sub_end[j], weighted ? o.weight[j] : 1.0);
