@@ -194,7 +194,12 @@ struct BundleFloatBatch {
   // --- pricing --------------------------------------------------------------------------------
   // Per-coupon numerator num = sum_k w_k (DF[s_k]/DF[e_k] - 1). Materialized (PERF RULE).
   Eigen::VectorXd num(const Eigen::VectorXd& DF) const {
-    const Eigen::VectorXd sub = (DF(subS).array() / DF(subE).array() - 1.0).matrix();
+    const int n = static_cast<int>(subS.size());
+    Eigen::VectorXd sub(n);
+    const double* __restrict df = DF.data();
+    const int* __restrict ss = subS.data();
+    const int* __restrict se = subE.data();
+    for (int i = 0; i < n; ++i) sub[i] = df[ss[i]] / df[se[i]] - 1.0;  // auto-vectorized gather
     if (sub_is_identity) return sub;  // R_sub == I: the reduction is a bitwise no-op
     return R_sub * sub;
   }
@@ -207,13 +212,28 @@ struct BundleFloatBatch {
     // exactly one materialized pass, as it did before this generalization.
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv() needs pay dates: this is a futures batch");
     Eigen::VectorXd coupon;
-    if (sub_is_identity && cpn_is_plain)  // standard shape: identical work to pre-generalization
-      coupon = (DF(pay).array() * (DF(subS).array() / DF(subE).array() - 1.0)).matrix();
-    else if (sub_is_identity)
-      coupon = (DF(pay).array() * (DF(subS).array() / DF(subE).array() - 1.0 + konst.array()) *
-                k.array())
-                   .matrix();
-    else
+    if (sub_is_identity && cpn_is_plain) {  // standard shape: identical work to pre-generalization
+      // Hand-written FUSED gather instead of Eigen's IndexedView: Eigen materializes DF(pay)/DF(subS)/
+      // DF(subE) element-by-element (scalar), whereas this single pointer loop is a pattern the compiler
+      // auto-vectorizes into hardware gathers at the target ISA's width (no intrinsics -- §5-clean).
+      coupon.resize(n_cpn_);
+      const double* __restrict df = DF.data();
+      const int* __restrict p = pay.data();
+      const int* __restrict ss = subS.data();
+      const int* __restrict se = subE.data();
+      for (int i = 0; i < n_cpn_; ++i) coupon[i] = df[p[i]] * (df[ss[i]] / df[se[i]] - 1.0);
+    }
+    else if (sub_is_identity) {
+      coupon.resize(n_cpn_);
+      const double* __restrict df = DF.data();
+      const int* __restrict p = pay.data();
+      const int* __restrict ss = subS.data();
+      const int* __restrict se = subE.data();
+      const double* __restrict kk = konst.data();
+      const double* __restrict kv = k.data();
+      for (int i = 0; i < n_cpn_; ++i)
+        coupon[i] = df[p[i]] * (df[ss[i]] / df[se[i]] - 1.0 + kk[i]) * kv[i];
+    } else
       coupon = (DF(pay).array() * (num(DF).array() + konst.array()) * k.array()).matrix();
     return R_cpn * coupon;
   }
@@ -235,10 +255,18 @@ struct BundleFloatBatch {
 
   // Per-instrument (per-future) rate = (num + realized)*inv_tau + convexity.
   Eigen::VectorXd rate(const Eigen::VectorXd& DF) const {
-    if (sub_is_identity)
-      return ((DF(subS).array() / DF(subE).array() - 1.0 + realized.array()) * inv_tau.array() +
-              convexity.array())
-          .matrix();
+    if (sub_is_identity) {
+      const int n = static_cast<int>(subS.size());
+      Eigen::VectorXd out(n);
+      const double* __restrict df = DF.data();
+      const int* __restrict ss = subS.data();
+      const int* __restrict se = subE.data();
+      const double* __restrict rz = realized.data();
+      const double* __restrict it = inv_tau.data();
+      const double* __restrict cv = convexity.data();
+      for (int i = 0; i < n; ++i) out[i] = (df[ss[i]] / df[se[i]] - 1.0 + rz[i]) * it[i] + cv[i];
+      return out;
+    }
     return ((num(DF).array() + realized.array()) * inv_tau.array() + convexity.array()).matrix();
   }
 
@@ -348,7 +376,12 @@ struct BundleFixedLegs {
     R.setFromTriplets(trip.begin(), trip.end());
   }
   Eigen::VectorXd annuity(const Eigen::VectorXd& DF) const {
-    const Eigen::VectorXd disc = tau.array() * DF(pay).array();  // materialize before sparse reduction
+    const int n = static_cast<int>(pay.size());
+    Eigen::VectorXd disc(n);  // materialize (auto-vectorized gather) before the sparse reduction
+    const double* __restrict df = DF.data();
+    const int* __restrict p = pay.data();
+    const double* __restrict t = tau.data();
+    for (int i = 0; i < n; ++i) disc[i] = t[i] * df[p[i]];
     return R * disc;
   }
   // d(annuity)/dDF[pay_i] = tau_i, accumulated into rows [row0, row0+n_inst).

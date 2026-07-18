@@ -185,4 +185,35 @@ static void BM_BundleScale_OneJacobian(benchmark::State& state) {
 }
 BENCHMARK(BM_BundleScale_OneJacobian);
 
+// Real per-tick probes: x CHANGES every tick, so DF = exp(-W x) actually recomputes (the memo misses).
+// DfVaryX isolates the matvec+exp; ResidualVaryX is the full per-tick reprice (df + gather/reduce); the
+// gather/reduce alone is ~ ResidualVaryX - DfVaryX (and ~ OneResidual, which reuses a cached DF).
+static void BM_BundleScale_DfVaryX(benchmark::State& state) {
+  const auto& f = fx();
+  const cal::CompiledBundleResidual eng(f.prob);
+  Eigen::VectorXd x = f.x_solved;
+  double d = 1e-9;
+  for (auto _ : state) {
+    x[0] += d;
+    d = -d;  // toggle so consecutive x differ -> the DF memo misses every iteration
+    const Eigen::VectorXd& DF = eng.discount_factors(x);
+    benchmark::DoNotOptimize(DF.data());
+  }
+}
+BENCHMARK(BM_BundleScale_DfVaryX);
+
+static void BM_BundleScale_ResidualVaryX(benchmark::State& state) {
+  const auto& f = fx();
+  const cal::CompiledBundleResidual eng(f.prob);
+  Eigen::VectorXd x = f.x_solved;
+  double d = 1e-9;
+  for (auto _ : state) {
+    x[0] += d;
+    d = -d;
+    Eigen::VectorXd r = eng.residuals(x);
+    benchmark::DoNotOptimize(r.data());
+  }
+}
+BENCHMARK(BM_BundleScale_ResidualVaryX);
+
 BENCHMARK_MAIN();

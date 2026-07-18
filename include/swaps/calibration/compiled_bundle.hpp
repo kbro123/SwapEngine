@@ -64,6 +64,8 @@ class CompiledBundleResidual {
 
   int n_residuals() const { return n_gen_; }
   int n_times() const { return cs_.n_times(); }
+  // DF = exp(-W_all x) (memoized on x). Exposed for profiling / downstream analytics.
+  const Eigen::VectorXd& discount_factors(const Eigen::VectorXd& x) const { return df_at(x); }
 
   // Model rates in BundleProblem's residual order: the generic instruments in insertion order, batched
   // by quote kind internally then scattered back to each instrument's own row.
