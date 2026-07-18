@@ -664,25 +664,23 @@ delete those, they enforce the rule. Two honest residues:
         far below market relevance), NOT a 1e-10 replacement; the exact sub-period path (`fixing_step==0`)
         stays available and bit-for-bit unchanged. `tests/bspline_oracle_test.cpp` isolates
         moment-vs-exact-daily (~5e-9) from exact-daily-vs-QuantLib (~1e-16).
-      **NOT done:** observation shift & lookback/lockout. The **vendored QuantLib is 1.34, whose
-      `OvernightIndexedCoupon` has NO observation-shift/lookback/lockout API** (verified: the ctor takes only
-      gearing/spread/dayCounter/telescopicValueDates/averagingMethod, and `averageRate` walks the schedule
-      value dates with no shift). So there is no oracle *at the pinned version* — but this is an
-      **oracle-behind-an-upgrade, not an unvalidatable feature**: **QuantLib 1.35 ADDED lookback days, lockout
-      days and observation shift** to `OvernightIndexedCoupon`/`OvernightIndexedSwap` + helpers (Marcin
-      Rybacki). The path to building it is therefore: bump `QL_VER` 1.34→1.35 (`tools/bootstrap_deps.sh`),
-      re-capture the perf baseline (the machine+toolchain fingerprint is UNCHANGED — QuantLib version is not
-      in it — but the committed *QuantLib comparison timings* must be refreshed), then build + validate the
-      shift/lookback against the new QuantLib coupon. The 1.34→1.35 bump is **low-risk for our code**: our QL
-      surface is narrow (base types + `OvernightIndexedCoupon`/`IborCoupon` inspectors we don't remove), we
-      build with **no `-Werror`**, and none of 1.35's *removed* symbols (dividend-option / swaption-cube
-      classes deprecated in 1.30) are used; the one deprecation we brush (`RelinkableHandle` raw-pointer ctor)
-      doesn't apply — we use the default ctor + `linkTo`. Watch items at bump time: (a) the `std::format` ADL
-      collision that forces the macOS-14.5-SDK libc++ on the Mac Pro (QL 1.35 may change `ql/errors` formatting
-      — could fix it or still need the workaround; test empirically), and (b) `migration_guard_test` + the full
-      oracle suite must stay green, proving default OIS pricing is byte-identical (the new params are additive,
-      default off). NB the changelog warns lookback is **incompatible with the telescoping formula** unless the
-      observation shift is also applied — relevant when we later USE it, not for the bump itself.
+      **NOT done: observation shift & lookback/lockout — but the QL upgrade that UNLOCKS them is DONE**
+      (branch `chore/quantlib-1.35-bump`). QL 1.34's `OvernightIndexedCoupon` had NO obs-shift/lookback/lockout
+      API; **QuantLib 1.35 ADDED lookback days, lockout days and observation shift** to
+      `OvernightIndexedCoupon`/`OvernightIndexedSwap` + helpers (Marcin Rybacki), so the oracle now EXISTS.
+      `tools/bootstrap_deps.sh` is `QL_VER=1.35`, the full oracle suite is **green (94/94)** against 1.35, and
+      perf is re-baselined (fingerprint `a8c9a844826e` UNCHANGED — QuantLib version is not in it — only the
+      committed comparison timings were refreshed; still PASS). The bump was low-risk as scoped (narrow QL
+      surface, no `-Werror`, none of 1.35's removed symbols used, `RelinkableHandle` default-ctor only). **The
+      ONE behavioral change 1.35 introduced:** `OvernightIndexFuture::averagedRate()` (1M arithmetic future) was
+      refined — the per-day fixing is now read at `calendar.adjust(d1, Preceding)` and the last day's accrual is
+      capped at `min(d2, maturity)` — which shifted the realized-fixing current-month contract by ~2.4bp. That
+      is oracle-side (our engine math is unchanged); `tests/reference_curve.hpp` `avg_future_obs` was aligned to
+      1.35's loop exactly (weighted forecast sub-periods; interior days weight 1.0 so fully-forecast futures stay
+      bit-identical). The macOS-14.5-SDK libc++ workaround (std::format ADL) is **still needed** for 1.35 (built
+      clean WITH it; not tested without). **What remains (the actual Stage 5 feature):** build obs-shift/lookback
+      into the coupon model + validate against the 1.35 coupon. NB the changelog warns lookback is **incompatible
+      with the telescoping formula** unless the observation shift is also applied — matters when we USE it.
       Also not done: a `scheme` selector on the problem structs so a real Bundle/CalibrationProblem *selects*
       B-spline or the new MonotoneCubic (the W-cache supports the linear ones; only the standalone
       `BSplineProblem`/`MonotoneCubicProblem` tests exercise a non-default scheme today).

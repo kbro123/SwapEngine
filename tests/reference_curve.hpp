@@ -139,20 +139,40 @@ inline px::RateObservation avg_future_obs(const Market& mk, const Future& f) {
   const Calendar fcal = mk.sofr->fixingCalendar();
   const DayCounter idc = mk.sofr->dayCounter();  // the index's own accrual day count
   const TimeSeries<Real>& history = IndexManager::instance().getHistory(mk.sofr->name());
+  // Mirror QuantLib 1.35 OvernightIndexFuture::averagedRate() EXACTLY (it was refined in 1.35 vs 1.34):
+  //   * the fixing for accrual day [d1,d2) is observed at fixingDate = adjust(d1, Preceding) -- i.e. the
+  //     rate is accrued from d1 even when its fixing date is earlier (matters when d1 is a holiday);
+  //   * the last day's accrual is capped at min(d2, maturity) (d2 can overshoot if maturity is a holiday);
+  //   * a forecast day contributes forward(fixingDate,d2,Simple)*accr = (DF(fixingDate)/DF(d2)-1) * accr/
+  //     yf(fixingDate,d2), which our engine reproduces as a [fixingDate,d2] sub-period with that weight
+  //     (weight == 1.0 for the common interior day, so the empty-weight fast path and the fully-forecast
+  //     futures stay bit-identical to before).
   std::vector<std::pair<Date, Date>> subs;
+  std::vector<double> weights;
   double realized = 0.0;
+  Date fixingDate = fcal.adjust(f.start, Preceding);
   for (Date d1 = f.start; d1 < f.end;) {
     const Date d2 = fcal.advance(d1, 1, Days);
-    if (d1 < mk.today) {
-      const Real fx = history[d1];
-      QL_REQUIRE(fx != Null<Real>(), "missing " << mk.sofr->name() << " fixing on " << d1);
-      realized += fx * idc.yearFraction(d1, d2);
+    const Date d2cap = std::min(d2, f.end);
+    const double accr = idc.yearFraction(d1, d2cap);
+    Real fx = history[fixingDate];
+    const bool past = fixingDate < mk.today || (fixingDate == mk.today && fx != Null<Real>());
+    if (past) {
+      QL_REQUIRE(fx != Null<Real>(), "missing " << mk.sofr->name() << " fixing on " << fixingDate);
+      realized += fx * accr;
     } else {
-      subs.emplace_back(d1, d2);
+      subs.emplace_back(fixingDate, d2);
+      weights.push_back(accr / idc.yearFraction(fixingDate, d2));
     }
-    d1 = d2;
+    fixingDate = d1 = d2;
   }
-  return swaps::qlx::make_observation(subs, realized, idc.yearFraction(f.start, f.end), mk.today, mk.dc);
+  // Drop an all-ones weight vector so standard (fully-forecast, business-day) futures keep the empty-weight
+  // fast path and remain bit-for-bit identical.
+  bool all_one = true;
+  for (double w : weights) if (w != 1.0) { all_one = false; break; }
+  if (all_one) weights.clear();
+  return swaps::qlx::make_observation(subs, realized, idc.yearFraction(f.start, f.end), mk.today, mk.dc,
+                                      weights);
 }
 
 // A future as a generic Rate instrument. Quarterly (3M compounding IMM) => ONE sub-period [start,end]

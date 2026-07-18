@@ -25,7 +25,7 @@ EIGEN_VER=3.4.0
 GTEST_VER=1.14.0
 BENCH_VER=1.8.4
 BOOST_VER=1.84.0
-QL_VER=1.34
+QL_VER=1.35
 
 # Optimization flags — MUST match what CMakeLists.txt/cmake/DetectISA.cmake give the engine,
 # or the perf comparison against QuantLib is invalid (CLAUDE.md §3).
