@@ -157,6 +157,17 @@ Scalar rate(const RateObservation& o, const FCurve& fc) {
 template <class Scalar, class FCurve, class DCurve>
 Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc) {
   assert(c.obs.tau_index > 0.0);
+  const RateObservation& o = c.obs;
+  // Fast path -- a PLAIN single-sub-period coupon (the compounded-OIS shape): one sub-period, no
+  // weights, no moment path, no realized, no spread, tau_pay == tau_index (=> k == 1). Then
+  //   pv == DF(pay) * (DF(s)/DF(e) - 1)
+  // with none of the general k-form's extra scalar work. It is BIT-IDENTICAL to the general branch
+  // (a * 1.0, konst == 0) but materially cheaper under AAD, so the risk ladder's per-coupon AAD pass
+  // stays fast. This is the templated analogue of the compiled BundleFloatBatch cpn_is_plain fast path.
+  if (o.sub_start.size() == 1 && o.weight.empty() && o.fixing_step == 0.0 && o.realized == 0.0 &&
+      c.spread == 0.0 && c.tau_pay == o.tau_index) {
+    return dc.discount(c.pay) * (fc.discount(o.sub_start[0]) / fc.discount(o.sub_end[0]) - 1.0);
+  }
   const double k = c.tau_pay / c.obs.tau_index;
   const double konst = c.obs.realized + c.spread * c.obs.tau_index;
   if (c.obs.sub_start.empty()) return dc.discount(c.pay) * (konst * k);
