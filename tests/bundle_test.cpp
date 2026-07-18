@@ -383,6 +383,53 @@ TEST(BundleSpread, JointAndStagedRecoverSpreadCurve) {
   EXPECT_LT((staged.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "staged solve recovers base then spread";
 }
 
+TEST(BundleParallel, StarTopologyParallelIsBitIdenticalToSerial) {
+  // Branch-parallel case (CLAUDE.md §7b): curve 0 is the outright base; curves 1..K are each a spread
+  // straight off 0 and mutually independent (a STAR). The dependency waves are [{0}, {1..K}], so wave 1
+  // is K independent block solves run concurrently. Because a spread block's residuals reference only its
+  // own curve + the (already-solved) base, thread order cannot change any block's inputs -> the parallel
+  // result must be BIT-IDENTICAL to the serial staged solve. That determinism IS the correctness gate.
+  const int K = 5;
+  cal::BundleProblem prob;
+  const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
+  prob.curves.resize(K + 1);
+  prob.curves[0] = {meeting, back, -1};  // outright base
+  for (int c = 1; c <= K; ++c) prob.curves[c] = {meeting, back, 0};  // spread straight off the base
+  const int nk = prob.curves[0].n_knots();
+  const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
+  for (double T : mats) prob.instruments.push_back(annual_par_rate(T, 0, 0));            // pin the base
+  for (int c = 1; c <= K; ++c)
+    for (double T : mats) prob.instruments.push_back(annual_basis(T, c, 0, 0));          // pin each spread
+
+  Eigen::VectorXd x_true((K + 1) * nk);
+  for (int i = 0; i < nk; ++i) x_true[i] = 0.040 + 0.001 * i;                            // base forwards
+  for (int c = 1; c <= K; ++c)
+    for (int i = 0; i < nk; ++i) x_true[c * nk + i] = 0.004 * c + 0.0003 * i;            // distinct spreads
+  const Eigen::VectorXd r0 = prob.residuals<double>(x_true);
+  for (int i = 0; i < static_cast<int>(prob.instruments.size()); ++i) prob.instruments[i].market += r0[i];
+  ASSERT_LT(prob.residuals<double>(x_true).cwiseAbs().maxCoeff(), 1e-13);
+
+  // Wave structure: a base wave of one SCC, then a fat wave of K independent SCCs.
+  const auto sccs = cal::bundle_dependency_order(prob);
+  const auto waves = cal::bundle_waves(prob, sccs);
+  ASSERT_EQ(waves.size(), 2u) << "star topology => exactly two dependency waves";
+  std::size_t fat = std::max(waves[0].size(), waves[1].size());
+  EXPECT_EQ(fat, static_cast<std::size_t>(K)) << "the parallel wave must hold all K independent spreads";
+
+  Eigen::VectorXd x0((K + 1) * nk);
+  x0.head(nk).setConstant(0.04);
+  for (int c = 1; c <= K; ++c) x0.segment(c * nk, nk).setConstant(0.004 * c);
+  const auto serial = cal::calibrate_staged(prob, x0);
+  const auto parallel = cal::calibrate_staged_parallel(prob, x0);
+  const double diff = (serial.x - parallel.x).cwiseAbs().maxCoeff();
+  std::cout << "  [bundle-parallel] K=" << K << " |x_parallel - x_serial|=" << diff
+            << " iters(serial=" << serial.iterations << ", parallel=" << parallel.iterations << ")"
+            << " ||x*-xtrue||=" << (parallel.x - x_true).cwiseAbs().maxCoeff() << "\n";
+  EXPECT_EQ(diff, 0.0) << "branch-parallel staged solve must be BIT-IDENTICAL to the serial staged solve";
+  EXPECT_EQ(serial.iterations, parallel.iterations) << "same blocks, same iterations";
+  EXPECT_LT((parallel.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "and it recovers the whole star";
+}
+
 TEST(BundleSpread, CompiledResidualHandlesSpreadCurves) {
   // The W-cache must handle a SPREAD curve too: DF_spread = exp(-(W_base x_base + W_spread x_spread)),
   // i.e. its W_all rows carry base-ancestry columns. Compiled residual + Jacobian must still match AAD.

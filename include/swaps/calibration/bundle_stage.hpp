@@ -15,7 +15,9 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <functional>
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -25,8 +27,9 @@
 
 namespace swaps::calibration {
 
-// SCCs of the curve dependency graph, in dependency-first (solve) order.
-inline std::vector<std::vector<int>> bundle_dependency_order(const BundleProblem& p) {
+// The curve dependency graph: adj[c] = the curves curve c depends on (its instruments' other role
+// curves + its spread base). Shared by the SCC decomposition and the topological-wave grouping.
+inline std::vector<std::vector<int>> bundle_adjacency(const BundleProblem& p) {
   const int N = p.n_curves();
   std::vector<std::vector<int>> adj(N);
   auto add = [&](int c, int d) { if (d != c) adj[c].push_back(d); };  // c depends on d
@@ -43,6 +46,13 @@ inline std::vector<std::vector<int>> bundle_dependency_order(const BundleProblem
     add(c, ins.fixed.discount);
     if (ins.quote == QuoteKind::ParSpread) { add(c, ins.bench.forecast); add(c, ins.bench.discount); }
   }
+  return adj;
+}
+
+// SCCs of the curve dependency graph, in dependency-first (solve) order.
+inline std::vector<std::vector<int>> bundle_dependency_order(const BundleProblem& p) {
+  const int N = p.n_curves();
+  const std::vector<std::vector<int>> adj = bundle_adjacency(p);
 
   std::vector<int> idx(N, -1), low(N, 0), stk;
   std::vector<char> onstk(N, 0);
@@ -125,36 +135,109 @@ class BundleBlockProblem {
   int nk_ = 0;
 };
 
+// Solve ONE SCC block: LM over the block's curves with `frozen` supplying every curve the block
+// references outside itself. The block's own initial guess is read from `frozen` too (its own segments
+// still hold x0 -- unsolved). Pure function of (p, block, frozen): no shared mutable state, so it is
+// safe to run many of these concurrently (each writes a DISJOINT slice of the result on merge).
+inline CalibrationResult solve_bundle_block(const BundleProblem& p, const std::vector<int>& block,
+                                            const Eigen::VectorXd& frozen, bool use_aad) {
+  BundleBlockProblem bp(p, block, frozen);
+  Eigen::VectorXd xb(bp.n_knots());
+  int o = 0;
+  for (int c : block) {
+    const int go = p.offset(c), nk = p.curves[c].n_knots();
+    xb.segment(o, nk) = frozen.segment(go, nk);
+    o += nk;
+  }
+  return calibrate(bp, xb, use_aad);
+}
+
+// Write an SCC block's solved segments back into the global x (disjoint columns), and return its iters.
+inline int scatter_block(const BundleProblem& p, const std::vector<int>& block,
+                         const CalibrationResult& res, Eigen::VectorXd& x) {
+  int o = 0;
+  for (int c : block) {
+    const int go = p.offset(c), nk = p.curves[c].n_knots();
+    x.segment(go, nk) = res.x.segment(o, nk);
+    o += nk;
+  }
+  return res.iterations;
+}
+
+// Group the SCCs into topological WAVES: an SCC can be solved once all the SCCs it depends on are
+// solved, so SCCs sharing a level are MUTUALLY INDEPENDENT and can be solved concurrently. `sccs` is
+// already in dependency-first order, so one forward pass assigns each SCC level = 1 + max(dep levels).
+// A triangular chain gives one SCC per wave (no parallelism); a star/forest (several curves each spread
+// straight off the base) gives a fat wave of independent SCCs -- the branch-parallel case.
+inline std::vector<std::vector<int>> bundle_waves(const BundleProblem& p,
+                                                  const std::vector<std::vector<int>>& sccs) {
+  const std::vector<std::vector<int>> adj = bundle_adjacency(p);
+  const int S = static_cast<int>(sccs.size());
+  std::vector<int> scc_of(p.n_curves(), -1);
+  for (int s = 0; s < S; ++s)
+    for (int c : sccs[s]) scc_of[c] = s;
+  std::vector<int> level(S, 0);
+  for (int s = 0; s < S; ++s)
+    for (int c : sccs[s])
+      for (int d : adj[c])
+        if (scc_of[d] != s) level[s] = std::max(level[s], level[scc_of[d]] + 1);
+  int maxlvl = 0;
+  for (int l : level) maxlvl = std::max(maxlvl, l);
+  std::vector<std::vector<int>> waves(maxlvl + 1);
+  for (int s = 0; s < S; ++s) waves[level[s]].push_back(s);
+  return waves;
+}
+
+// Assemble the staged result once the global x is fully solved (shared by serial and parallel).
+inline CalibrationResult staged_result(const BundleProblem& p, Eigen::VectorXd x, int iters) {
+  CalibrationResult out;
+  out.iterations = iters;
+  out.rms_residual = p.residuals<double>(x).norm() / std::sqrt(static_cast<double>(p.n_residuals()));
+  out.stationarity = -1.0;  // not computed in staged mode (would need the full joint Jacobian)
+  out.x = std::move(x);
+  return out;
+}
+
 // Staged solve: dependency-decompose, then LM each SCC block in order with earlier blocks frozen.
 inline CalibrationResult calibrate_staged(const BundleProblem& p, const Eigen::VectorXd& x0,
                                           bool use_aad = true) {
   const auto blocks = bundle_dependency_order(p);
   Eigen::VectorXd x = x0;
   int iters = 0;
-  for (const auto& block : blocks) {
-    BundleBlockProblem bp(p, block, x);
-    Eigen::VectorXd xb(bp.n_knots());
-    int o = 0;
-    for (int c : block) {
-      const int go = p.offset(c), nk = p.curves[c].n_knots();
-      xb.segment(o, nk) = x.segment(go, nk);
-      o += nk;
+  for (const auto& block : blocks) iters += scatter_block(p, block, solve_bundle_block(p, block, x, use_aad), x);
+  return staged_result(p, std::move(x), iters);
+}
+
+// BRANCH-PARALLEL staged solve (CLAUDE.md §7b): identical decomposition, but each topological wave's
+// mutually-independent SCC blocks are solved CONCURRENTLY. DETERMINISTIC and BIT-IDENTICAL to
+// calibrate_staged: same-wave SCCs never reference each other's curves, so each reads only frozen
+// prior-wave results from a snapshot taken before the wave -- thread order cannot change any block's
+// inputs, and blocks write disjoint x-segments. Wall-clock ~ Σ_waves (slowest block in the wave)
+// instead of Σ_all_blocks. On a chain it is exactly the serial solve (one block per wave).
+inline CalibrationResult calibrate_staged_parallel(const BundleProblem& p, const Eigen::VectorXd& x0,
+                                                   bool use_aad = true) {
+  const auto sccs = bundle_dependency_order(p);
+  const auto waves = bundle_waves(p, sccs);
+  Eigen::VectorXd x = x0;
+  int iters = 0;
+  for (const auto& wave : waves) {
+    if (wave.size() == 1) {  // no parallelism to be had -- solve inline (avoids a thread hop)
+      iters += scatter_block(p, sccs[wave[0]], solve_bundle_block(p, sccs[wave[0]], x, use_aad), x);
+      continue;
     }
-    const CalibrationResult res = calibrate(bp, xb, use_aad);
-    iters += res.iterations;
-    o = 0;
-    for (int c : block) {
-      const int go = p.offset(c), nk = p.curves[c].n_knots();
-      x.segment(go, nk) = res.x.segment(o, nk);
-      o += nk;
-    }
+    const Eigen::VectorXd frozen = x;  // snapshot: prior waves solved, this wave's blocks still x0
+    std::vector<std::future<CalibrationResult>> futs;
+    futs.reserve(wave.size());
+    for (int s : wave)
+      futs.push_back(std::async(std::launch::async, [&p, &sccs, s, &frozen, use_aad] {
+        return solve_bundle_block(p, sccs[s], frozen, use_aad);
+      }));
+    // Merge in a FIXED order (wave order), so the accumulated iters and the write order are
+    // deterministic regardless of which thread finished first.
+    for (std::size_t j = 0; j < wave.size(); ++j)
+      iters += scatter_block(p, sccs[wave[j]], futs[j].get(), x);
   }
-  CalibrationResult out;
-  out.x = x;
-  out.iterations = iters;
-  out.rms_residual = p.residuals<double>(x).norm() / std::sqrt(static_cast<double>(p.n_residuals()));
-  out.stationarity = -1.0;  // not computed in staged mode (would need the full joint Jacobian)
-  return out;
+  return staged_result(p, std::move(x), iters);
 }
 
 }  // namespace swaps::calibration
