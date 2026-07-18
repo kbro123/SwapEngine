@@ -1,14 +1,12 @@
-// Design §2 gate: the GENERIC cashflow model reduces to the legacy OIS/futures forms.
+// Design §2 gate: the GENERIC cashflow model's degrees of freedom.
 //
-// This is the acceptance criterion for the generalization. The legacy kernel (`OisSwap`,
-// `CompoundedFuture`, `AveragedFuture`) is validated against QuantLib to ~1e-16 by pricing_test;
-// here we prove the generic kernel is BIT-IDENTICAL to it on the same data, which transitively
-// inherits that oracle without re-running it. Anything weaker than bitwise equality would let a
-// silent 1-ulp drift into every existing number (design §2 backward-compat invariant).
+// The generic kernel is validated against QuantLib to ~1e-16 by extract_test / pricing_test (via the
+// reference market). This file pins what the generic model can express that a plain OIS coupon cannot:
+// per-sub-period weights, an additive spread, tau_pay != tau_index (the k-form), and a fully fixed
+// coupon summed with live siblings under AAD (the empty-derivative trap).
 //
-// We also cover what the legacy forms CANNOT express, so the new degrees of freedom are pinned
-// before the compiled engine consumes them: weights, spread, tau_pay != tau_index, and a fully
-// fixed coupon summed with live siblings under AAD (the empty-derivative trap).
+// (The legacy OisSwap/CompoundedFuture/AveragedFuture reduction tests that used to live here were
+// removed with those structs -- the generic kernel is now the ONLY kernel.)
 
 #include <gtest/gtest.h>
 #include <ql/quantlib.hpp>
@@ -29,51 +27,6 @@ namespace px = swaps::pricing;
 
 namespace {
 
-// ---- The legacy -> generic mapping (design §1). This lives in the TEST because it is a statement
-// about what the legacy index-flavoured shapes MEAN, not engine logic.
-
-// Compounded OIS coupon: ONE sub-period (daily compounding telescopes to the DF ratio), no
-// realized, no spread, tau_pay == tau_index. Note the legacy OisSwap carries no float accrual at
-// all -- the DF ratio IS the coupon amount -- which is exactly the k == 1 case: any tau works as
-// long as tau_pay and tau_index are the SAME double. We use 1.0 to make that explicit.
-std::vector<px::FloatCoupon> as_float_leg(const px::OisSwap& s) {
-  std::vector<px::FloatCoupon> leg;
-  for (std::size_t i = 0; i < s.float_acc_start.size(); ++i) {
-    px::FloatCoupon c;
-    c.obs.sub_start = {s.float_acc_start[i]};
-    c.obs.sub_end = {s.float_acc_end[i]};
-    c.obs.tau_index = 1.0;
-    c.pay = s.float_pay[i];
-    c.tau_pay = 1.0;
-    leg.push_back(std::move(c));
-  }
-  return leg;
-}
-
-std::vector<px::FixedCoupon> as_fixed_leg(const px::OisSwap& s) {
-  std::vector<px::FixedCoupon> leg;
-  for (std::size_t i = 0; i < s.fixed_pay.size(); ++i)
-    leg.push_back({s.fixed_pay[i], s.fixed_accrual[i]});
-  return leg;
-}
-
-px::RateObservation as_obs(const px::CompoundedFuture& f) {
-  px::RateObservation o;
-  o.sub_start = {f.start};
-  o.sub_end = {f.end};
-  o.tau_index = f.accrual;
-  return o;
-}
-
-px::RateObservation as_obs(const px::AveragedFuture& f) {
-  px::RateObservation o;
-  o.sub_start = f.sub_start;
-  o.sub_end = f.sub_end;
-  o.realized = f.realized_sum;
-  o.tau_index = f.period_yf;
-  return o;
-}
-
 struct Generic : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
@@ -82,58 +35,11 @@ struct Generic : ::testing::Test {
 
 }  // namespace
 
-// ---- Reduction: bitwise, not approximately ----------------------------------------------------
-
-TEST_F(Generic, OisParRateReducesBitExact) {
-  ASSERT_FALSE(mk.swaps.empty());
-  for (const auto& swap : mk.swaps) {
-    const auto sched = swaps::qlx::extract_ois_swap(*swap, mk.today, mk.dc);
-    const double legacy = px::ois_par_rate<double>(sched, curve);
-    const double generic =
-        px::par_rate<double>(as_float_leg(sched), as_fixed_leg(sched), curve, curve);
-    // Bitwise. EXPECT_DOUBLE_EQ would tolerate 4 ULP and hide exactly the drift we are excluding.
-    EXPECT_EQ(generic, legacy) << " swap maturity " << swap->maturityDate();
-  }
-}
-
-TEST_F(Generic, CompoundedFutureReducesBitExact) {
-  int n = 0;
-  for (const auto& f : mk.futures) {
-    if (!f.quarterly) continue;
-    const auto sched = swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc, mk.sofr->dayCounter());
-    const double conv = mk.convexity(f);
-    const double legacy = px::compounded_future_rate<double>(sched, curve) + conv;
-    const double generic = px::future_rate<double>(as_obs(sched), conv, curve);
-    EXPECT_EQ(generic, legacy) << " 3M future " << f.start << ".." << f.end;
-    ++n;
-  }
-  ASSERT_EQ(n, 8);
-}
-
-TEST_F(Generic, AveragedFutureReducesBitExact) {
-  int n = 0, with_realized = 0;
-  for (const auto& f : mk.futures) {
-    if (f.quarterly) continue;
-    const auto sched = swaps::qlx::extract_averaged_future(mk.sofr, f.start, f.end, mk.today, mk.dc);
-    const double conv = mk.convexity(f);
-    const double legacy = px::averaged_future_rate<double>(sched, curve) + conv;
-    const double generic = px::future_rate<double>(as_obs(sched), conv, curve);
-    EXPECT_EQ(generic, legacy) << " 1M future " << f.start << ".." << f.end;
-    if (sched.realized_sum != 0.0) ++with_realized;
-    ++n;
-  }
-  ASSERT_EQ(n, 12);
-  // The current-month contract straddles the evaluation date (CLAUDE.md §2), so the realized-days
-  // path is genuinely exercised above and not vacuously zero.
-  EXPECT_GT(with_realized, 0);
-}
-
 // ---- The new degrees of freedom ----------------------------------------------------------------
 
 TEST_F(Generic, ExplicitUnitWeightsMatchEmptyWeights) {
-  const auto sched = swaps::qlx::extract_averaged_future(mk.sofr, mk.futures[0].start,
-                                                         mk.futures[0].end, mk.today, mk.dc);
-  px::RateObservation implicit = as_obs(sched);
+  // A real averaging observation (per-business-day sub-periods, realized prefix) from the market.
+  px::RateObservation implicit = rb::avg_future_obs(mk, mk.futures[0]);
   ASSERT_FALSE(implicit.sub_start.empty());
   px::RateObservation explicit_ones = implicit;
   explicit_ones.weight.assign(implicit.sub_start.size(), 1.0);
@@ -249,30 +155,4 @@ TEST_F(Generic, FullyFixedCouponInsideALiveLegIsAadSafe) {
   ASSERT_EQ(only_fixed.derivatives().size(), m);
   const Dual df = dc.discount(0.50);
   EXPECT_TRUE(only_fixed.derivatives().isApprox(df.derivatives() * (0.05 * 0.25), 1e-14));
-}
-
-// The generic par rate must be bit-identical to the legacy one under AAD too -- value AND every
-// derivative -- so migrating the residual to the generic kernel cannot move the Jacobian.
-TEST_F(Generic, OisParRateReducesBitExactUnderAad) {
-  using swaps::ad::Dual;
-  const int m = static_cast<int>(mk.meeting_times.size() + mk.back_times.size());
-  Eigen::VectorXd x(m);
-  {
-    int i = 0;
-    for (double f : rm::reference_front_forwards) x[i++] = f;
-    for (double g : rm::reference_back_forwards) x[i++] = g;
-  }
-  auto dc = swaps::curve::make_calibration_curve<Dual>(mk.meeting_times, mk.back_times);
-  dc.set_forwards(swaps::ad::seed(x));
-
-  for (const auto& swap : mk.swaps) {
-    const auto sched = swaps::qlx::extract_ois_swap(*swap, mk.today, mk.dc);
-    const Dual legacy = px::ois_par_rate<Dual>(sched, dc);
-    const Dual generic = px::par_rate<Dual>(as_float_leg(sched), as_fixed_leg(sched), dc, dc);
-    ASSERT_EQ(generic.derivatives().size(), m);
-    EXPECT_EQ(generic.value(), legacy.value()) << " swap maturity " << swap->maturityDate();
-    for (int k = 0; k < m; ++k)
-      EXPECT_EQ(generic.derivatives()[k], legacy.derivatives()[k])
-          << " swap maturity " << swap->maturityDate() << " knot " << k;
-  }
 }

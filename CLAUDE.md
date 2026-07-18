@@ -456,17 +456,21 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
 
 ## 7c. Stage 4 — the generic instrument pipeline (design: `docs/generic-instrument-pipeline.md`)
 
-**Status: the generic pipeline is BUILT, GATE-VERIFIED, and ADDITIVE — but NOT YET ADOPTED.** Read
-that sentence literally. The generic model exists and works end-to-end, but every production call
-site (the reference market in `tests/reference_curve.hpp`, ALL four benchmarks, and therefore every
-number in `baselines/baselines.json`) still runs the LEGACY `OisSwap`/`CompoundedFuture`/
-`AveragedFuture` shapes. The generic path is exercised only by `tests/extract_test.cpp` and
-`tests/generic_instrument_test.cpp`. Design §2's "retire them as distinct pricing concepts" has NOT
-happened — they remain live structs with their own pricing functions in `cashflows.hpp`.
+**Status: the generic pipeline is BUILT, GATE-VERIFIED, and ADOPTED. The legacy shapes are DELETED.**
+Every call site — the reference market (`tests/reference_curve.hpp` `build_problem`/`build_square_problem`),
+ALL benchmarks (`baselines/baselines.json`), the `Portfolio`, the single-curve `CalibrationProblem` and
+the multi-curve `BundleProblem` — constructs generic `Instrument`s only. `OisSwap`/`CompoundedFuture`/
+`AveragedFuture`, their pricing functions (`ois_par_rate`/`compounded_future_rate`/`averaged_future_rate`/
+`basis_par_spread`/`ois_swap_npv`), their extractors (`extract_ois_swap`/`extract_compounded_future`/
+`extract_averaged_future`) and the compiled `BundleFloatBatch`/`BundleFixedLegs` legacy adapters are GONE.
+There is ONE cashflow model (`RateObservation`/`FloatCoupon`/`FixedCoupon`) and ONE residual/W-cache path.
 
-> This dual-path state is deliberate and is WHY existing numbers are unchanged: the generic block was
-> **appended**, never substituted. It is also debt — two ways to say the same thing. Do not describe
-> this stage as "done" or claim the engine is index-generic in practice until §7c's adoption step lands.
+> The byte-safety of the swap migration rests on a DATE fact pinned by `tests/migration_guard_test.cpp`:
+> on the reference market every overnight coupon has `valueDates().front()/back() ==
+> accrualStartDate()/accrualEndDate()` (no realized prefix), which is why the generic swap reprices the
+> old `OisSwap` form bit-for-bit. Futures map exactly (3M = one telescoped sub-period; 1M = per-business-day
+> observation via `rb::avg_future_obs`). The index/market knowledge (the SOFR calendar walk) lives in the
+> test builder, never in engine code — the engine names no index (CLAUDE.md §1).
 
 ### What the generic model IS (all of this is real and tested)
 - **ONE rate formula** (`pricing/cashflows.hpp`):
@@ -597,20 +601,18 @@ delete those, they enforce the rule. Two honest residues:
       (`CurveSpec.base`), so a curve quoted as `base + spread` calibrates jointly (or over a fixed base)
       with no solver change. *(Next: real FF-averaging-futures QuantLib helpers for a fully-faithful build
       benchmark; real-time cross-curve risk ladder.)*
-- [ ] **Stage 4 — generic instrument pipeline (see §7c) — PARTIAL, branch `feat/generic-instrument-pipeline`.**
-      Design `docs/generic-instrument-pipeline.md`. **Landed & gate-verified (74/74, perf PASS):** §2 the
-      generic `RateObservation`/`FloatCoupon` kernel; §4 `BundleFloatBatch`, ONE float primitive for legs +
-      compounded + averaged futures, ridden by BOTH `CompiledPortfolio` and `CompiledBundleResidual`;
-      §5 generic coupon-type-dispatch extractors; §3 the `Instrument`/leg/role/quote model on the analytic
-      W-cache; §6 all ten regression items.
-      **NOT done — the adoption step.** The generic model is ADDITIVE: `tests/reference_curve.hpp` and all
-      four benchmarks still build LEGACY `OisSwap`/`CompoundedFuture`/`AveragedFuture`, which remain live
-      pricing structs. Nothing outside the two new test files constructs an `Instrument`. Remaining:
-      migrate `build_problem` onto `extract_float_leg`/`extract_fixed_leg` + `Instrument`, re-run both
-      gates, then delete the legacy structs/extractors/batches. **Pin, do not assume, the one known
-      difference when those call sites move:** the generic OIS path uses `valueDates().front()/back()`
-      (QL's actual DF arguments) where the legacy path uses `accrualStartDate()/accrualEndDate()`; they
-      coincide on the reference market (both hit `fairRate` at ~6e-17) — assert that equivalence.
+- [x] **Stage 4 — generic instrument pipeline (see §7c) — COMPLETE (adopted + legacy deleted).**
+      Design `docs/generic-instrument-pipeline.md`. The generic kernel (§2), the ONE `BundleFloatBatch`/
+      `BundleFixedLegs` primitives (§4), the coupon-type-dispatch extractors (§5) and the `Instrument`/leg/
+      role/quote model on the analytic W-cache (§3) are now the ONLY path. Every call site — reference
+      market (`build_problem`/`build_square_problem`), `Portfolio`, single-curve `CalibrationProblem`,
+      multi-curve `BundleProblem`, and ALL benchmarks — constructs generic `Instrument`s. The legacy
+      `OisSwap`/`CompoundedFuture`/`AveragedFuture` structs, their pricing functions, their extractors and
+      the compiled legacy adapters are DELETED. Byte-safety of the swap migration is pinned by
+      `tests/migration_guard_test.cpp` (the `valueDates().front()/back() == accrual dates` date fact, which
+      made the generic swap reprice the old form bit-for-bit). Gate: correctness 85/85 (the 6 pure legacy-vs-
+      generic reduction tests were removed with the structs, their job done); perf re-baselined on the
+      generic path (curve-build now measures the adopted pipeline). CLAUDE.md §7c is the current reference.
 - [ ] **Stage 5 — B-spline curve type + moment integration — PARTIAL, branch `feat/bezier-and-moment-integration`.**
       Design `docs/bezier-and-moments.md`. **DONE & gate-verified (89/89, perf PASS):**
       - **B-spline curve type (Part A) — COMPLETE.** Control-point clamped cubic (`BSpline` region,

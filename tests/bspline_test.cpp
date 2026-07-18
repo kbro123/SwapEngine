@@ -165,16 +165,26 @@ struct BSplineProblem {
     return inst.price_residuals<Scalar>(c);
   }
 };
-px::OisSwap make_ois(double T) {  // annual coupons to T (single coupon if T < 1), self-discounting
-  px::OisSwap s;
+// An annual OIS as a generic ParRate instrument (single coupon if T < 1), self-discounting.
+cal::Instrument make_ois(double T) {
+  std::vector<double> ends;
+  for (double u = 1.0; u < T - 1e-9; u += 1.0) ends.push_back(u);
+  ends.push_back(T);
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::ParRate;
   double prev = 0.0;
-  for (double u = 1.0; u < T - 1e-9; u += 1.0) {
-    s.float_acc_start.push_back(prev); s.float_acc_end.push_back(u); s.float_pay.push_back(u);
-    s.fixed_pay.push_back(u); s.fixed_accrual.push_back(u - prev); prev = u;
+  for (double u : ends) {
+    px::FloatCoupon c;
+    c.obs.sub_start = {prev};
+    c.obs.sub_end = {u};
+    c.obs.tau_index = u - prev;
+    c.pay = u;
+    c.tau_pay = u - prev;
+    ins.fwd.coupons.push_back(c);
+    ins.fixed.coupons.push_back({u, u - prev});
+    prev = u;
   }
-  s.float_acc_start.push_back(prev); s.float_acc_end.push_back(T); s.float_pay.push_back(T);
-  s.fixed_pay.push_back(T); s.fixed_accrual.push_back(T - prev);
-  return s;
+  return ins;
 }
 }  // namespace
 
@@ -183,14 +193,15 @@ TEST(BSpline, CalibratesToMarketAndReprices) {
   prob.inst.meeting_times = {0.5};
   prob.inst.back_times = {1, 2, 3, 4, 5, 7, 10};  // 7 back control points + 1 front = 8 free vars
   const std::vector<double> mats{0.5, 1, 2, 3, 4, 5, 7, 10};  // 8 instruments (square, consistent)
-  for (double T : mats) prob.inst.swaps.push_back({make_ois(T), 0.0});
+  for (double T : mats) prob.inst.instruments.push_back(make_ois(T));
 
   // Self-consistent market generated from a KNOWN B-spline curve, so x_true is the exact solution.
   Eigen::VectorXd xt(8);
   xt << 0.030, 0.033, 0.036, 0.039, 0.041, 0.043, 0.044, 0.046;
   auto ct = cv::make_bspline_curve<double>(prob.inst.meeting_times, prob.inst.back_times);
   ct.set_forwards(xt);
-  for (auto& s : prob.inst.swaps) s.market_rate = px::ois_par_rate<double>(s.sched, ct);
+  for (auto& ins : prob.inst.instruments)
+    ins.market = px::par_rate<double>(ins.fwd.coupons, ins.fixed.coupons, ct, ct);
   ASSERT_LT(prob.residuals<double>(xt).cwiseAbs().maxCoeff(), 1e-13) << "x_true must zero the residual";
 
   const auto res = cal::calibrate(prob, Eigen::VectorXd::Constant(8, 0.035));

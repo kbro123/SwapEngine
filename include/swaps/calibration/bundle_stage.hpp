@@ -34,10 +34,8 @@ inline std::vector<std::vector<int>> bundle_dependency_order(const BundleProblem
   // free, mutually-referenced curve, an instrument edge closes the cycle -> they land in one SCC.
   for (int c = 0; c < N; ++c)
     if (p.curves[c].base >= 0) add(c, p.curves[c].base);
-  for (const auto& s : p.swaps) add(s.forecast, s.discount);
-  for (const auto& b : p.bases) { add(b.forecast, b.benchmark); add(b.forecast, b.discount); }
-  // A generic instrument pins its quoted leg's forecast curve, which therefore depends on every OTHER
-  // curve its legs reference. A `Rate` instrument references only its own forecast curve -> no edge.
+  // An instrument pins its quoted leg's forecast curve, which therefore depends on every OTHER curve
+  // its legs reference. A `Rate` instrument references only its own forecast curve -> no edge.
   for (const auto& ins : p.instruments) {
     if (ins.quote == QuoteKind::Rate) continue;
     const int c = ins.primary_curve();
@@ -83,23 +81,12 @@ class BundleBlockProblem {
   BundleBlockProblem(const BundleProblem& p, const std::vector<int>& block, const Eigen::VectorXd& solved)
       : p_(&p), block_(block), solved_(solved), free_(p.n_curves(), 0) {
     for (int c : block_) { free_[c] = 1; nk_ += p.curves[c].n_knots(); }
-    for (int i = 0; i < static_cast<int>(p.swaps.size()); ++i)
-      if (free_[p.swaps[i].forecast]) swaps_.push_back(i);
-    for (int i = 0; i < static_cast<int>(p.bases.size()); ++i)
-      if (free_[p.bases[i].forecast]) bases_.push_back(i);
-    for (int i = 0; i < static_cast<int>(p.avg_futs.size()); ++i)
-      if (free_[p.avg_futs[i].forecast]) avg_futs_.push_back(i);
-    for (int i = 0; i < static_cast<int>(p.comp_futs.size()); ++i)
-      if (free_[p.comp_futs[i].forecast]) comp_futs_.push_back(i);
     for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i)
       if (free_[p.instruments[i].primary_curve()]) gen_.push_back(i);
   }
 
   int n_knots() const { return nk_; }
-  int n_residuals() const {
-    return static_cast<int>(swaps_.size() + bases_.size() + avg_futs_.size() + comp_futs_.size() +
-                            gen_.size());
-  }
+  int n_residuals() const { return static_cast<int>(gen_.size()); }
 
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& xb) const {
@@ -115,23 +102,6 @@ class BundleBlockProblem {
     });
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
     int row = 0;
-    for (int i : avg_futs_) {
-      const auto& a = p_->avg_futs[i];
-      r[row++] = pricing::averaged_future_rate<Scalar>(a.sched, *C[a.forecast]) + (a.convexity - a.market_rate);
-    }
-    for (int i : comp_futs_) {
-      const auto& cf = p_->comp_futs[i];
-      r[row++] = pricing::compounded_future_rate<Scalar>(cf.sched, *C[cf.forecast]) + (cf.convexity - cf.market_rate);
-    }
-    for (int i : swaps_) {
-      const auto& s = p_->swaps[i];
-      r[row++] = pricing::ois_par_rate<Scalar>(s.sched, *C[s.forecast], *C[s.discount]) - Scalar(s.market_rate);
-    }
-    for (int i : bases_) {
-      const auto& b = p_->bases[i];
-      r[row++] = pricing::basis_par_spread<Scalar>(b.sched, *C[b.forecast], *C[b.benchmark], *C[b.discount]) -
-                 Scalar(b.market_rate);
-    }
     const auto curve_of = [&C](int i) -> const CurveHandle<Scalar>& { return *C[i]; };
     for (int i : gen_) r[row++] = instrument_residual<Scalar>(p_->instruments[i], curve_of);
     return r;
@@ -149,7 +119,7 @@ class BundleBlockProblem {
 
  private:
   const BundleProblem* p_;
-  std::vector<int> block_, swaps_, bases_, avg_futs_, comp_futs_, gen_;
+  std::vector<int> block_, gen_;
   Eigen::VectorXd solved_;
   std::vector<char> free_;
   int nk_ = 0;

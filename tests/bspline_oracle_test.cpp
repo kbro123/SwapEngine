@@ -45,8 +45,9 @@ TEST(BSplineOracle, PricesOisConsistentlyWithQuantLib) {
         MakeOIS(Period(T, Years), mk.sofr, 0.03).withDiscountingTermStructure(h));
     swap->deepUpdate();
     const double ql = swap->fairRate();
-    const auto sched = qlx::extract_ois_swap(*swap, mk.today, mk.dc);
-    const double ours = px::ois_par_rate<double>(sched, curve);
+    const auto fl = qlx::extract_float_leg(swap->overnightLeg(), mk.today, mk.dc);
+    const auto fx = qlx::extract_fixed_leg(swap->fixedLeg(), mk.today, mk.dc);
+    const double ours = px::par_rate<double>(fl, fx, curve, curve);
     worst = std::max(worst, std::abs(ours - ql) / std::max(1.0, std::abs(ql)));
   }
   std::cout << "  [bspline-oracle] max rel |ours - QuantLib fairRate| = " << worst << "\n";

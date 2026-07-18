@@ -93,41 +93,12 @@ std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves(
 class BundleProblem {
  public:
   using CurveSpec = BundleCurveSpec;
-  // OIS: float forecasts `forecast`, everything discounts `discount` (forecast == discount = single-curve).
-  struct Swap {
-    int forecast, discount;
-    pricing::OisSwap sched;
-    double market_rate;
-  };
-  // Basis swap over an arbitrary benchmark: spread leg forecasts `forecast`, benchmark leg forecasts
-  // `benchmark`, both legs discount `discount`.
-  struct Basis {
-    int forecast, benchmark, discount;
-    pricing::OisSwap sched;
-    double market_rate;  // par basis spread
-  };
-  // Futures forecast ONE curve (a rate, no discounting). Front-end instruments.
-  struct AvgFut {
-    int forecast;
-    pricing::AveragedFuture sched;
-    double convexity, market_rate;  // market_rate = 1 - price/100
-  };
-  struct CompFut {
-    int forecast;
-    pricing::CompoundedFuture sched;
-    double convexity, market_rate;
-  };
 
   std::vector<CurveSpec> curves;
-  std::vector<Swap> swaps;
-  std::vector<Basis> bases;
-  std::vector<AvgFut> avg_futs;
-  std::vector<CompFut> comp_futs;
-  // Generic instruments (design §3): legs carrying their OWN curve roles + a quote transform. The four
-  // vectors above are index-flavoured SHORTHAND for the commonest shapes and force both legs of a swap
-  // onto one schedule; an Instrument does not. Anything the shorthand cannot say — an IBOR leg, a
-  // spread, 30/360-fixed vs ACT/360-float, a semi-annual basis leg against an annual fixed leg,
-  // weighted averaging — is expressed here, and needs no new engine type.
+  // Every calibration instrument is a generic Instrument (design §3): legs carrying their OWN curve
+  // roles + a quote transform. OIS swaps, tenor bases, averaging/compounding futures, IBOR legs,
+  // spreads, mixed day counts are all THIS type with different DATA -- there is no index-flavoured
+  // shorthand and no per-shape engine type.
   std::vector<Instrument> instruments;
 
   int n_curves() const { return static_cast<int>(curves.size()); }
@@ -136,38 +107,23 @@ class BundleProblem {
     for (const auto& c : curves) n += c.n_knots();
     return n;
   }
-  int n_residuals() const {
-    return static_cast<int>(swaps.size() + bases.size() + avg_futs.size() + comp_futs.size() +
-                            instruments.size());
-  }
+  int n_residuals() const { return static_cast<int>(instruments.size()); }
   int offset(int k) const {
     int o = 0;
     for (int i = 0; i < k; ++i) o += curves[i].n_knots();
     return o;
   }
 
-  // THE RESIDUAL ORDER (deterministic and DOCUMENTED — the Jacobian rows, the W-cache batches in
-  // CompiledBundleResidual, market(), the risk ladder and the warm/streaming feeds all index off it;
-  // every one of them must fill these rows in exactly this order):
-  //   1. avg_futs     in vector order
-  //   2. comp_futs    in vector order
-  //   3. swaps        in vector order
-  //   4. bases        in vector order
-  //   5. instruments  in vector order   (generic; appended AFTER the legacy groups, so adding the
-  //                                      generic model cannot renumber an existing row)
-  // The generic block keeps INSERTION order even though it mixes quote kinds — the compiled engine
-  // batches by kind internally and scatters each batch back to its residual row.
+  // THE RESIDUAL ORDER is the instruments' INSERTION order (deterministic and DOCUMENTED — the
+  // Jacobian rows, the W-cache batches in CompiledBundleResidual, market(), the risk ladder and the
+  // warm/streaming feeds all index off it). The compiled engine batches by quote kind internally and
+  // scatters each batch back to its instrument's insertion-order row.
 
   // Target quotes in residual order — lets the generic AadResidualEngine recover
   // model_rates = residuals + market.
   Eigen::VectorXd market() const {
     Eigen::VectorXd m(n_residuals());
-    int i = 0;
-    for (const auto& a : avg_futs) m[i++] = a.market_rate;
-    for (const auto& c : comp_futs) m[i++] = c.market_rate;
-    for (const auto& s : swaps) m[i++] = s.market_rate;
-    for (const auto& b : bases) m[i++] = b.market_rate;
-    for (const auto& ins : instruments) m[i++] = ins.market;
+    for (int i = 0; i < static_cast<int>(instruments.size()); ++i) m[i] = instruments[i].market;
     return m;
   }
 
@@ -177,20 +133,10 @@ class BundleProblem {
         curves, [&](int c, int i) { return x[offset(c) + i]; });
 
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
-    int row = 0;
-    for (const auto& a : avg_futs)
-      r[row++] = pricing::averaged_future_rate<Scalar>(a.sched, *C[a.forecast]) + (a.convexity - a.market_rate);
-    for (const auto& cf : comp_futs)
-      r[row++] = pricing::compounded_future_rate<Scalar>(cf.sched, *C[cf.forecast]) + (cf.convexity - cf.market_rate);
-    for (const auto& s : swaps)
-      r[row++] = pricing::ois_par_rate<Scalar>(s.sched, *C[s.forecast], *C[s.discount]) - Scalar(s.market_rate);
-    for (const auto& b : bases)
-      r[row++] =
-          pricing::basis_par_spread<Scalar>(b.sched, *C[b.forecast], *C[b.benchmark], *C[b.discount]) -
-          Scalar(b.market_rate);
     // Each generic leg resolves its OWN role, so forecast != discount and cross-curve legs need no
     // special case here — the role indices are just lookups into the built curve handles.
     const auto curve_of = [&C](int i) -> const CurveHandle<Scalar>& { return *C[i]; };
+    int row = 0;
     for (const auto& ins : instruments) r[row++] = instrument_residual<Scalar>(ins, curve_of);
     return r;
   }

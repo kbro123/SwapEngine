@@ -130,21 +130,6 @@ cal::Instrument rate_inst(double s, double e, double tau, int fc, double conv) {
   return ins;
 }
 
-// The legacy OisSwap of exactly the same shape as float_leg(T, n, ...) + fixed_leg(T, n, ...).
-px::OisSwap legacy_ois(double T, double n_per_year) {
-  px::OisSwap s;
-  double prev = 0.0;
-  for (double u : period_ends(T, n_per_year)) {
-    s.float_acc_start.push_back(prev);
-    s.float_acc_end.push_back(u);
-    s.float_pay.push_back(u);
-    s.fixed_pay.push_back(u);
-    s.fixed_accrual.push_back(u - prev);
-    prev = u;
-  }
-  return s;
-}
-
 }  // namespace
 
 // ---- Quote transforms ------------------------------------------------------------------------
@@ -179,54 +164,12 @@ TEST(GenericInstrument, QuoteTransformsMatchTheirDefinitions) {
             1e-16);
 }
 
-// ---- The generic model reproduces the legacy instruments ---------------------------------------
-// The design's backward-compatibility invariant at the INSTRUMENT level: the same market, expressed
-// as legacy groups and as generic Instruments, must give the same residuals.
-TEST(GenericInstrument, ReproducesTheLegacyInstrumentsExactly) {
-  cal::BundleProblem p;
-  p.curves = two_outright();
-  const std::vector<double> mats{1.0, 2.0, 3.0, 5.0, 10.0};
-
-  // Legacy rows: an OIS swap (fc=1, dc=0), a basis (fwd=1, bench=0, disc=0) and a compounded future.
-  for (double T : mats) p.swaps.push_back({1, 0, legacy_ois(T, 1.0), 0.0});
-  for (double T : mats) p.bases.push_back({1, 0, 0, legacy_ois(T, 1.0), 0.0});
-  p.comp_futs.push_back({1, px::CompoundedFuture{1.0, 1.25, 0.2528}, 3.4e-4, 0.0});
-
-  // The SAME instruments in generic form, appended after them.
-  for (double T : mats) p.instruments.push_back(par_rate_inst(T, 1.0, 1, 0));
-  for (double T : mats) p.instruments.push_back(par_spread_inst(T, 1.0, 1.0, 1, 0, 0));
-  p.instruments.push_back(rate_inst(1.0, 1.25, 0.2528, 1, 3.4e-4));
-
-  const Eigen::VectorXd x = stacked(0.040, 0.045);
-  const Eigen::VectorXd r = p.residuals<double>(x);
-  ASSERT_EQ(r.size(), 22);  // 5 swaps + 5 bases + 1 comp fut + 11 generic
-
-  // Row layout per BundleProblem's documented order, with avg_futs empty:
-  //   [0] comp_fut | [1..5] swaps | [6..10] bases | [11..15] generic ParRate | [16..20] generic
-  //   ParSpread | [21] generic Rate.
-  const double d_fut = std::abs(r[0] - r[21]);
-  double d_swap = 0.0, d_basis = 0.0;
-  for (int j = 0; j < 5; ++j) {
-    d_swap = std::max(d_swap, std::abs(r[1 + j] - r[11 + j]));
-    d_basis = std::max(d_basis, std::abs(r[6 + j] - r[16 + j]));
-  }
-  std::cout << "  [generic-inst] legacy vs generic |d|: swap=" << d_swap << " basis=" << d_basis
-            << " future=" << d_fut << "\n";
-  EXPECT_EQ(d_fut, 0.0) << "a generic Rate instrument must reprice a legacy future BIT-exactly";
-  EXPECT_EQ(d_swap, 0.0) << "a generic ParRate instrument must reprice a legacy OIS swap BIT-exactly";
-  EXPECT_EQ(d_basis, 0.0) << "a generic ParSpread instrument must reprice a legacy basis BIT-exactly";
-}
-
 // ---- Residual order --------------------------------------------------------------------------
 // The order is a published contract (Jacobian rows, W-cache batches, market(), warm/streaming index
-// off it). Mixed quote kinds must keep INSERTION order within the generic block.
-TEST(GenericInstrument, ResidualOrderIsLegacyGroupsThenInsertionOrder) {
+// off it): the instruments' INSERTION order, even with mixed quote kinds.
+TEST(GenericInstrument, ResidualOrderIsInsertionOrder) {
   cal::BundleProblem p;
   p.curves = two_outright();
-  p.avg_futs.push_back({1, px::AveragedFuture{0.0, {0.1, 0.2}, {0.2, 0.3}, 0.2}, 0.0, 0.0});
-  p.comp_futs.push_back({1, px::CompoundedFuture{1.0, 1.25, 0.2528}, 0.0, 0.0});
-  p.swaps.push_back({1, 0, legacy_ois(5.0, 1.0), 0.0});
-  p.bases.push_back({1, 0, 0, legacy_ois(5.0, 1.0), 0.0});
   // Deliberately interleaved kinds: Rate, ParRate, ParSpread, ParRate.
   p.instruments.push_back(rate_inst(2.0, 2.25, 0.2528, 1, 1e-4));
   p.instruments.push_back(par_rate_inst(3.0, 1.0, 1, 0));
@@ -238,17 +181,17 @@ TEST(GenericInstrument, ResidualOrderIsLegacyGroupsThenInsertionOrder) {
   const auto C = cal::build_bundle_curves<double>(p.curves, [&](int c, int i) { return x[c * kNk + i]; });
   const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
   const Eigen::VectorXd r = p.residuals<double>(x);
-  ASSERT_EQ(r.size(), 8);  // 1 avg + 1 comp + 1 swap + 1 basis + 4 generic
+  ASSERT_EQ(r.size(), 4);
 
-  // Rows 4..7 must be the four instruments, in the order they were pushed.
+  // Rows 0..3 must be the four instruments, in the order they were pushed.
   for (int i = 0; i < 4; ++i)
-    EXPECT_LT(std::abs(r[4 + i] - cal::instrument_residual<double>(p.instruments[i], curve_of)), 1e-16)
-        << "generic residual row " << 4 + i << " must be instruments[" << i << "]";
+    EXPECT_LT(std::abs(r[i] - cal::instrument_residual<double>(p.instruments[i], curve_of)), 1e-16)
+        << "generic residual row " << i << " must be instruments[" << i << "]";
 
   // market() must agree with the SAME order (it is what recovers model_rates = residuals + market).
   const Eigen::VectorXd m = p.market();
   ASSERT_EQ(m.size(), r.size());
-  for (int i = 0; i < 4; ++i) EXPECT_EQ(m[4 + i], p.instruments[i].market);
+  for (int i = 0; i < 4; ++i) EXPECT_EQ(m[i], p.instruments[i].market);
   const double dm = (cal::CompiledBundleResidual(p).model_rates(x) - (r + m)).cwiseAbs().maxCoeff();
   std::cout << "  [generic-inst] |compiled model_rates - (r + market)| = " << dm << "\n";
   EXPECT_LT(dm, 1e-14) << "compiled model_rates must fill the same rows as residuals() + market()";
@@ -260,7 +203,7 @@ namespace {
 cal::BundleProblem rich_bundle() {
   cal::BundleProblem p;
   p.curves = two_outright();
-  p.swaps.push_back({1, 0, legacy_ois(7.0, 1.0), 0.002});  // a legacy row must keep working alongside
+  p.instruments.push_back(par_rate_inst(7.0, 1.0, /*fc=*/1, /*dc=*/0));   // a plain annual OIS swap
   p.instruments.push_back(par_rate_inst(2.0, 4.0, /*fc=*/1, /*dc=*/0));   // quarterly, multi-curve
   p.instruments.push_back(rate_inst(0.75, 1.0, 0.2528, /*fc=*/1, 2.1e-4));
   p.instruments.push_back(par_spread_inst(5.0, 2.0, 1.0, /*fc=*/1, /*bc=*/0, /*dc=*/0));  // 2/y vs 1/y
@@ -293,11 +236,11 @@ TEST(GenericInstrument, CompiledResidualAndJacobianMatchTheKernelAndAad) {
   EXPECT_LT(dr, 1e-14) << "the W-cache path must agree with the templated kernel on generic instruments";
   EXPECT_LT(dj, 1e-9) << "the analytic block Jacobian must match AAD on every generic quote transform";
 
-  // Block structure: instruments[3] is a self-discounting ParRate on curve 0 -- residual row 4 (one
-  // legacy swap precedes the generic block) -- so it must have an identically-zero derivative w.r.t.
-  // curve 1's knots. This is the property the staged/bundle solvers rely on.
+  // Block structure: instruments[4] is a self-discounting ParRate on curve 0 (residual row 4), so it
+  // must have an identically-zero derivative w.r.t. curve 1's knots. This is the property the
+  // staged/bundle solvers rely on.
   const Eigen::MatrixXd J = cr.jacobian(x);
-  ASSERT_EQ(p.instruments[3].primary_curve(), 0);
+  ASSERT_EQ(p.instruments[4].primary_curve(), 0);
   EXPECT_EQ(J.row(4).tail(kNk).cwiseAbs().maxCoeff(), 0.0)
       << "an instrument touching only curve 0 must not move curve 1's block";
 }
@@ -353,10 +296,10 @@ TEST(GenericInstrument, SingleCurveProblemPricesGenericInstruments) {
   cal::CalibrationProblem p;
   p.meeting_times = kMeeting;
   p.back_times = kBack;
-  p.swaps.push_back({legacy_ois(5.0, 1.0), 0.002});
+  p.instruments.push_back(par_rate_inst(5.0, 1.0, 0, 0));  // a plain annual OIS swap (single curve)
   for (double T : {2.0, 7.0}) p.instruments.push_back(par_rate_inst(T, 2.0, 0, 0));
   p.instruments.push_back(rate_inst(1.0, 1.25, 0.2528, 0, 3.4e-4));
-  p.instruments[0].market = 0.001;
+  p.instruments[0].market = 0.002;
 
   Eigen::VectorXd x(kNk);
   for (int i = 0; i < kNk; ++i) x[i] = 0.040 + 0.0009 * i;

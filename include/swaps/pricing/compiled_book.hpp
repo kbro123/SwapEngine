@@ -169,31 +169,6 @@ struct BundleFloatBatch {
     ++n_inst;
   }
 
-  // --- legacy adapters ------------------------------------------------------------------------
-  // Call sites still hold OisSwap / CompoundedFuture / AveragedFuture (design §3 migrates them to
-  // legs+quote-transforms in a later pass). Each maps onto the generic form above; the mapping is
-  // chosen so the legacy shape lands on the identity/unit-weight path and reprices bit-exactly.
-  void add(CompiledCurveSet& cs, int fc, int dc, const OisSwap& s) {
-    for (std::size_t i = 0; i < s.float_pay.size(); ++i) {
-      // The legacy OIS coupon amount IS the DF ratio minus one (the accrual is already inside the
-      // compounded growth factor), so tau_index == tau_pay == 1 => k == 1.0 exactly, konst == 0.
-      push_sub(cs, fc, s.float_acc_start[i], s.float_acc_end[i], 1.0);
-      push_coupon(cs.reg(dc, s.float_pay[i]), 0.0, 1.0, 0.0, 1.0, 0.0);
-    }
-    ++n_inst;
-  }
-  void add_future(CompiledCurveSet& cs, int fc, const CompoundedFuture& f, double conv) {
-    push_sub(cs, fc, f.start, f.end, 1.0);            // one sub-period: the compounding telescopes
-    push_coupon(-1, 0.0, 0.0, 0.0, 1.0 / f.accrual, conv);
-    ++n_inst;
-  }
-  void add_future(CompiledCurveSet& cs, int fc, const AveragedFuture& f, double conv) {
-    for (std::size_t i = 0; i < f.sub_start.size(); ++i)  // one sub-period per forward business day
-      push_sub(cs, fc, f.sub_start[i], f.sub_end[i], 1.0);
-    push_coupon(-1, 0.0, 0.0, f.realized_sum, 1.0 / f.period_yf, conv);
-    ++n_inst;
-  }
-
   void finalize() {
     subS = detail::to_vec(ss_);
     subE = detail::to_vec(se_);
@@ -339,15 +314,6 @@ struct BundleFixedLegs {
     for (const auto& c : leg) {
       p_.push_back(cs.reg(dc, c.pay));
       t_.push_back(c.tau);
-      row_.push_back(n_inst);
-    }
-    ++n_inst;
-  }
-  // Legacy adapter: an OisSwap's fixed leg IS a list of (pay, accrual) coupons.
-  void add(CompiledCurveSet& cs, int dc, const OisSwap& s) {
-    for (std::size_t i = 0; i < s.fixed_pay.size(); ++i) {
-      p_.push_back(cs.reg(dc, s.fixed_pay[i]));
-      t_.push_back(s.fixed_accrual[i]);
       row_.push_back(n_inst);
     }
     ++n_inst;

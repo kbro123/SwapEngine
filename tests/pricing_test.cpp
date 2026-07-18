@@ -50,8 +50,9 @@ TEST_F(Pricing, OisParRateMatchesQuantLib) {
   double worst = 0.0;
   for (const auto& swap : mk.swaps) {
     const double ql = swap->fairRate();
-    const auto sched = swaps::qlx::extract_ois_swap(*swap, mk.today, mk.dc);
-    const double ours = swaps::pricing::ois_par_rate<double>(sched, curve);
+    const auto fl = swaps::qlx::extract_float_leg(swap->overnightLeg(), mk.today, mk.dc);
+    const auto fx = swaps::qlx::extract_fixed_leg(swap->fixedLeg(), mk.today, mk.dc);
+    const double ours = swaps::pricing::par_rate<double>(fl, fx, curve, curve);
     EXPECT_TRUE(close(ours, ql, swaps::tol::curve_rel))
         << " swap maturity " << swap->maturityDate();
     worst = std::max(worst, std::abs(ours - ql));
@@ -68,8 +69,10 @@ TEST_F(Pricing, CompoundedFutureRateMatchesQuantLib) {
     OvernightIndexFuture qlf(mk.sofr, f.start, f.end, Handle<Quote>(), RateAveraging::Compound);
     const double ql_rate = 1.0 - qlf.NPV() / 100.0;
 
-    const auto sched = swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc, mk.sofr->dayCounter());
-    const double ours = swaps::pricing::compounded_future_rate<double>(sched, curve);
+    // 3M compounding future == ONE telescoped sub-period [start, end], denominator on the index dc.
+    const auto obs = swaps::qlx::make_observation(
+        {{f.start, f.end}}, 0.0, mk.sofr->dayCounter().yearFraction(f.start, f.end), mk.today, mk.dc);
+    const double ours = swaps::pricing::rate<double>(obs, curve);
     EXPECT_TRUE(close(ours, ql_rate, swaps::tol::curve_rel))
         << " 3M future " << f.start << ".." << f.end;
     worst = std::max(worst, std::abs(ours - ql_rate));
@@ -87,11 +90,11 @@ TEST_F(Pricing, AveragedFutureRateMatchesQuantLib) {
     OvernightIndexFuture qlf(mk.sofr, f.start, f.end, Handle<Quote>(), RateAveraging::Simple);
     const double ql_rate = 1.0 - qlf.NPV() / 100.0;
 
-    const auto sched = swaps::qlx::extract_averaged_future(mk.sofr, f.start, f.end, mk.today, mk.dc);
-    const double ours = swaps::pricing::averaged_future_rate<double>(sched, curve);
+    // 1M arithmetic-average future == one sub-period per business day (past days folded into realized).
+    const auto obs = rb::avg_future_obs(mk, f);
+    const double ours = swaps::pricing::rate<double>(obs, curve);
     EXPECT_TRUE(close(ours, ql_rate, swaps::tol::curve_rel))
-        << " 1M future " << f.start << ".." << f.end
-        << " (realized_days sum=" << sched.realized_sum << ")";
+        << " 1M future " << f.start << ".." << f.end << " (realized=" << obs.realized << ")";
     worst = std::max(worst, std::abs(ours - ql_rate));
     ++n;
   }

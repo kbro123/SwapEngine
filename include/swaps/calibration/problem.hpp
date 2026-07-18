@@ -119,56 +119,22 @@ struct CalibrationProblem {
   std::vector<double> meeting_times;
   std::vector<double> back_times;
 
-  struct SwapInst {
-    pricing::OisSwap sched;
-    double market_rate;  // par quote
-  };
-  struct CompFutInst {
-    pricing::CompoundedFuture sched;
-    double convexity;
-    double market_rate;  // 1 - price/100
-  };
-  struct AvgFutInst {
-    pricing::AveragedFuture sched;
-    double convexity;
-    double market_rate;  // 1 - price/100
-  };
-  std::vector<SwapInst> swaps;
-  std::vector<CompFutInst> comp_futs;
-  std::vector<AvgFutInst> avg_futs;
-  // Generic instruments (design §3). The three vectors above are index-flavoured SHORTHAND for the
-  // three commonest shapes; anything else (IBOR legs, spreads, mixed day counts, weighted averaging)
-  // goes here. This problem has exactly ONE curve, so every leg role resolves to it and the legs'
-  // curve indices are ignored (single_curve_bundle() likewise forces them all to curve 0, so the
-  // templated and compiled paths cannot diverge).
+  // Every calibration instrument is a generic Instrument (design §3). This problem has exactly ONE
+  // curve, so every leg role resolves to it and the legs' curve indices are ignored (single_curve_bundle()
+  // likewise forces them all to curve 0, so the templated and compiled paths cannot diverge).
   std::vector<Instrument> instruments;
 
   int n_knots() const { return static_cast<int>(meeting_times.size() + back_times.size()); }
-  int n_residuals() const {
-    return static_cast<int>(swaps.size() + comp_futs.size() + avg_futs.size() + instruments.size());
-  }
+  int n_residuals() const { return static_cast<int>(instruments.size()); }
 
-  // r in rate units for an ARBITRARY curve (anything with `Scalar discount(double)`).
-  //
-  // RESIDUAL ORDER (deterministic and DOCUMENTED — the Jacobian rows, the W-cache batches and the
-  // warm/streaming feeds all index off it; CompiledResidual must fill the same rows):
-  //   1. avg_futs      in vector order
-  //   2. comp_futs     in vector order
-  //   3. swaps         in vector order
-  //   4. instruments   in vector order   (generic; appended AFTER the legacy groups)
-  //
-  // Constants are added as raw double so AutoDiffScalar preserves the model term's derivatives.
+  // r in rate units for an ARBITRARY curve (anything with `Scalar discount(double)`). RESIDUAL ORDER
+  // is the instruments' INSERTION order (the Jacobian rows, the W-cache batches and the warm/streaming
+  // feeds all index off it; CompiledResidual fills the same rows).
   template <class Scalar, class Curve>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> price_residuals(const Curve& c) const {
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
-    int i = 0;
-    for (const auto& a : avg_futs)
-      r[i++] = pricing::averaged_future_rate<Scalar>(a.sched, c) + (a.convexity - a.market_rate);
-    for (const auto& cf : comp_futs)
-      r[i++] = pricing::compounded_future_rate<Scalar>(cf.sched, c) + (cf.convexity - cf.market_rate);
-    for (const auto& s : swaps)
-      r[i++] = pricing::ois_par_rate<Scalar>(s.sched, c) - s.market_rate;
     const auto one_curve = [&c](int) -> const Curve& { return c; };  // every role IS this curve
+    int i = 0;
     for (const auto& ins : instruments) r[i++] = instrument_residual<Scalar>(ins, one_curve);
     return r;
   }

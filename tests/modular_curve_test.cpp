@@ -88,8 +88,9 @@ TEST_F(HermiteOracle, QuantLibPricesSwapsOffOurHermiteCurve) {
   double worst = 0.0;
   for (const auto& swap : mk.swaps) {
     const double ql = swap->fairRate();  // QuantLib, off our Hermite YieldTermStructure
-    const auto sched = swaps::qlx::extract_ois_swap(*swap, mk.today, mk.dc);
-    const double ours = swaps::pricing::ois_par_rate<double>(sched, curve);  // our kernel, same curve
+    const auto fl = swaps::qlx::extract_float_leg(swap->overnightLeg(), mk.today, mk.dc);
+    const auto fx = swaps::qlx::extract_fixed_leg(swap->fixedLeg(), mk.today, mk.dc);
+    const double ours = swaps::pricing::par_rate<double>(fl, fx, curve, curve);  // our kernel, same curve
     EXPECT_TRUE(close(ours, ql, swaps::tol::curve_rel)) << " swap maturity " << swap->maturityDate();
     worst = std::max(worst, std::abs(ours - ql));
   }
@@ -103,16 +104,17 @@ TEST_F(HermiteOracle, QuantLibPricesFuturesOffOurHermiteCurve) {
     if (f.quarterly) {
       OvernightIndexFuture qlf(mk.sofr, f.start, f.end, Handle<Quote>(), RateAveraging::Compound);
       const double ql = 1.0 - qlf.NPV() / 100.0;
-      const auto sched = swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc, mk.sofr->dayCounter());
-      const double ours = swaps::pricing::compounded_future_rate<double>(sched, curve);
+      const auto obs = swaps::qlx::make_observation(
+          {{f.start, f.end}}, 0.0, mk.sofr->dayCounter().yearFraction(f.start, f.end), mk.today, mk.dc);
+      const double ours = swaps::pricing::rate<double>(obs, curve);
       EXPECT_TRUE(close(ours, ql, swaps::tol::curve_rel)) << " 3M future " << f.start << ".." << f.end;
       worst = std::max(worst, std::abs(ours - ql));
       ++nc;
     } else {
       OvernightIndexFuture qlf(mk.sofr, f.start, f.end, Handle<Quote>(), RateAveraging::Simple);
       const double ql = 1.0 - qlf.NPV() / 100.0;
-      const auto sched = swaps::qlx::extract_averaged_future(mk.sofr, f.start, f.end, mk.today, mk.dc);
-      const double ours = swaps::pricing::averaged_future_rate<double>(sched, curve);
+      const auto obs = rb::avg_future_obs(mk, f);
+      const double ours = swaps::pricing::rate<double>(obs, curve);
       EXPECT_TRUE(close(ours, ql, swaps::tol::curve_rel)) << " 1M future " << f.start << ".." << f.end;
       worst = std::max(worst, std::abs(ours - ql));
       ++na;

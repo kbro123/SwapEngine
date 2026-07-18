@@ -72,11 +72,8 @@ BENCHMARK(BM_WarmRecal_QuantLib);
 
 static void BM_WarmRecal_OursFullLM(benchmark::State& state) {
   const auto& f = fx();
-  cal::CalibrationProblem p = f.prob;  // apply dq to targets once
-  int i = 0;
-  for (auto& a : p.avg_futs) a.market_rate += f.dq[i++];
-  for (auto& c : p.comp_futs) c.market_rate += f.dq[i++];
-  for (auto& s : p.swaps) s.market_rate += f.dq[i++];
+  cal::CalibrationProblem p = f.prob;  // apply dq to targets once (instrument order == residual order)
+  for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) p.instruments[i].market += f.dq[i];
   for (auto _ : state) {
     auto r = cal::calibrate(p, f.x0, true);  // warm-started full LM
     benchmark::DoNotOptimize(r.x.data());
