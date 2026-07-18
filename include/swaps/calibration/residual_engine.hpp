@@ -7,12 +7,15 @@
 //   jacobian(x)    = dr/dx (n_residuals x n_knots)
 //   model_rates(x) = the model-implied market quotes at x (= residuals(x) + market)
 //
-// Two implementations, selected at compile time by residual_engine_t<Problem>:
+// Three implementations, selected at compile time by residual_engine_t<Problem>:
 //   * CalibrationProblem -> CompiledResidual: the vectorized DF = exp(-Wx) path with the ANALYTIC
-//     Jacobian (no AAD in the hot loop). This is the microsecond warm/streaming fast path; keep it.
-//   * any other Problem (e.g. BundleProblem) -> AadResidualEngine: the templated residuals<double>(x)
-//     plus the AAD Jacobian. Correct and generic; the Jacobian refresh costs one AAD sweep instead of
-//     the analytic scatter, but refreshes are rare (that is the whole point of the warm envelope).
+//     Jacobian (no AAD in the hot loop). The microsecond single-curve warm/streaming fast path.
+//   * BundleProblem -> CompiledBundleResidual: the SAME analytic W_all fast path, multi-curve. Its
+//     Jacobian refresh is analytic too (that is what took bundle warm re-cal from ~7x to ~71x).
+//   * anything ELSE (BundleBlockProblem for the staged solve, SpreadCalibrationProblem) -> the generic
+//     AadResidualEngine: templated residuals<double>(x) + the AAD Jacobian. Correct and generic, but a
+//     refresh here costs one AAD sweep -- these are the only problem types that still AAD on refresh
+//     (they have no compiled engine yet). Refreshes are rare, so it is acceptable until they get one.
 //
 // The engine is the ONLY thing that knew the concrete problem type, so templating it here is what lets
 // WarmCalibrator / StreamingCalibrator become problem-generic without duplicating their control flow.

@@ -7,8 +7,8 @@
 // Same factorization as the single-curve CompiledResidual: DF_all = exp(-W_all x) once, then the cheap
 // per-type transform (futures DF-ratios, swap par rate = float_pv/annuity, basis = (pv_bench-pv_fwd)/
 // annuity), and J = -(dr/dDF diag(DF)) W_all with dr/dDF the analytic per-instrument sensitivity
-// scattered into the global DF columns. Residual order matches BundleProblem::residuals:
-// avg futures, comp futures, swaps, bases.
+// scattered into the global DF columns. Residual order matches BundleProblem::residuals: the generic
+// instruments in insertion order (batched internally by quote kind, then scattered to each row).
 
 #include <Eigen/Core>
 

@@ -32,10 +32,11 @@ struct WarmResult {
   double final_step = 0.0;     // last ||dx||_inf
 };
 
-// Templated on the problem type via residual_engine_t: for CalibrationProblem the engine is the
-// vectorized CompiledResidual (DF = exp(-Wx), analytic Jacobian) -- the microsecond fast path; for a
-// BundleProblem it is the AAD engine. Either way the inner loop is frozen-J Gauss-Newton and only the
-// (rare) refresh recomputes J. Default Problem = CalibrationProblem keeps existing call sites (CTAD).
+// Templated on the problem type via residual_engine_t: CalibrationProblem and BundleProblem both use a
+// compiled engine (CompiledResidual / CompiledBundleResidual: DF = exp(-Wx), ANALYTIC Jacobian) -- the
+// microsecond fast path, and the (rare) refresh recomputes J analytically too, NOT via AAD. Only
+// un-compiled problem types (staged BundleBlockProblem, SpreadCalibrationProblem) fall to the AAD engine.
+// Either way the inner loop is frozen-J Gauss-Newton. Default Problem = CalibrationProblem (CTAD).
 template <class Problem = CalibrationProblem>
 class WarmCalibrator {
  public:
@@ -47,9 +48,9 @@ class WarmCalibrator {
 
   WarmCalibrator(const Problem& prob, const Eigen::VectorXd& x_base)
       : n_res_(prob.n_residuals()), x0_(x_base), engine_(prob), qr0_(engine_.jacobian(x_base)) {
-    // J0 via the engine's Jacobian (analytic for the single curve, AAD for the bundle). First-order
-    // curve sensitivity M = (J^T J)^{-1} J^T (= J^{-1} when square) -- the SAME operator as the
-    // analytic risk ladder dx/dq. Precomputed once.
+    // J0 via the engine's Jacobian (ANALYTIC for CalibrationProblem AND BundleProblem; AAD only for the
+    // un-compiled staged/spread problem types). First-order curve sensitivity M = (J^T J)^{-1} J^T
+    // (= J^{-1} when square) -- the SAME operator as the analytic risk ladder dx/dq. Precomputed once.
     M_ = qr0_.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
   }
 
@@ -64,8 +65,9 @@ class WarmCalibrator {
 
   WarmResult recalibrate(const Eigen::VectorXd& dq) const { return recalibrate(dq, Options{}); }
 
-  // Adaptive re-calibration with automatic envelope detection (the safe default). The residual comes
-  // from the engine (analytic for the single curve, AAD for the bundle); only a refresh recomputes J.
+  // Adaptive re-calibration with automatic envelope detection (the safe default). The residual + a
+  // refresh both come from the engine (ANALYTIC for CalibrationProblem/BundleProblem; AAD only for the
+  // un-compiled staged/spread problems); only a refresh recomputes J.
   WarmResult recalibrate(const Eigen::VectorXd& dq, const Options& opt) const {
     WarmResult res;
     Eigen::VectorXd x = x0_;
