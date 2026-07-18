@@ -23,15 +23,10 @@ namespace rm = swaps::refmkt;
 
 namespace {
 
-// Perturb the market quote of instrument j (residual ordering: avg futures, comp futures, swaps).
+// Perturb the market quote of instrument j. Instrument insertion order IS the residual order
+// (avg futures, comp futures, swaps), so residual row j is instrument j.
 cal::CalibrationProblem bump_quote(cal::CalibrationProblem p, int j, double eps) {
-  const int na = static_cast<int>(p.avg_futs.size()), nc = static_cast<int>(p.comp_futs.size());
-  if (j < na)
-    p.avg_futs[j].market_rate += eps;
-  else if (j < na + nc)
-    p.comp_futs[j - na].market_rate += eps;
-  else
-    p.swaps[j - na - nc].market_rate += eps;
+  p.instruments[j].market += eps;
   return p;
 }
 

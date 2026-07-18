@@ -19,12 +19,10 @@ namespace cal = swaps::calibration;
 
 namespace {
 
-// Apply a market perturbation dq (residual order: avg futures, comp futures, swaps) to a problem.
+// Apply a market perturbation dq to a problem. Instrument insertion order IS the residual order
+// (avg futures, comp futures, swaps).
 cal::CalibrationProblem bumped_market(cal::CalibrationProblem p, const Eigen::VectorXd& dq) {
-  int i = 0;
-  for (auto& a : p.avg_futs) a.market_rate += dq[i++];
-  for (auto& c : p.comp_futs) c.market_rate += dq[i++];
-  for (auto& s : p.swaps) s.market_rate += dq[i++];
+  for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) p.instruments[i].market += dq[i];
   return p;
 }
 

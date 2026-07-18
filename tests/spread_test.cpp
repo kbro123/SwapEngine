@@ -61,10 +61,9 @@ struct SpreadCal : ::testing::Test {
     s_true.resize(sp.n_knots());
     for (int i = 0; i < s_true.size(); ++i) s_true[i] = 0.0022 + 0.0012 * std::cos(0.3 * i);
     const Eigen::VectorXd r0 = sp.residuals<double>(s_true);
-    int i = 0;
-    for (auto& a : sp.inst.avg_futs) a.market_rate += r0[i++];
-    for (auto& c : sp.inst.comp_futs) c.market_rate += r0[i++];
-    for (auto& s : sp.inst.swaps) s.market_rate += r0[i++];
+    // Instrument insertion order IS the residual order (avg | comp | swaps).
+    for (int i = 0; i < static_cast<int>(sp.inst.instruments.size()); ++i)
+      sp.inst.instruments[i].market += r0[i];
   }
 };
 

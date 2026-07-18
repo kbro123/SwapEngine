@@ -81,10 +81,21 @@ struct BundleRealistic : ::testing::Test {
       for (int i = 0; i < nk; ++i) x_true[off[c] + i] = base[c] + 0.0003 * i;
     }
 
-    // ---- SOFR instruments (curve 0): reuse the reference futures + swaps ----
-    for (const auto& a : sofr.avg_futs) prob.avg_futs.push_back({SOFR, a.sched, 0.0, 0.0});
-    for (const auto& cf : sofr.comp_futs) prob.comp_futs.push_back({SOFR, cf.sched, 0.0, 0.0});
-    for (const auto& s : sofr.swaps) prob.swaps.push_back({SOFR, SOFR, s.sched, 0.0});
+    // ---- SOFR instruments (curve 0): the reference futures + swaps, extracted directly from the
+    // market. (build_problem now yields generic Instruments; this bundle still consumes the legacy
+    // shorthand internally until the Stage-4 bundle migration, so re-extract the legacy schedules
+    // here. Order preserved: 1M averaging, then 3M compounding, then swaps.) ----
+    for (const auto& f : mk.futures)
+      if (!f.quarterly)
+        prob.avg_futs.push_back(
+            {SOFR, swaps::qlx::extract_averaged_future(mk.sofr, f.start, f.end, today, dc), 0.0, 0.0});
+    for (const auto& f : mk.futures)
+      if (f.quarterly)
+        prob.comp_futs.push_back(
+            {SOFR, swaps::qlx::extract_compounded_future(f.start, f.end, today, dc, mk.sofr->dayCounter()),
+             0.0, 0.0});
+    for (std::size_t i = 0; i < mk.swaps.size(); ++i)
+      prob.swaps.push_back({SOFR, SOFR, swaps::qlx::extract_ois_swap(*mk.swaps[i], today, dc), 0.0});
 
     // ---- FF/PRIME/PRIME2 indices ----
     const char* names[] = {"", "FFx", "PRIMEx", "PRIME2x"};

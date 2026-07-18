@@ -7,6 +7,7 @@
 #include <ql/quantlib.hpp>
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #include "reference_market.hpp"
@@ -17,6 +18,8 @@
 namespace swaps::refbuild {
 
 namespace rm = swaps::refmkt;
+namespace cal = swaps::calibration;
+namespace px = swaps::pricing;
 using Curve = swaps::curve::CalibrationCurve<double>;
 
 inline QuantLib::Date to_ql(const rm::Ymd& d) {
@@ -109,29 +112,80 @@ inline Market build_market(QuantLib::RelinkableHandle<QuantLib::YieldTermStructu
   return mk;
 }
 
-// Build the calibration problem: extract every instrument's schedule from QuantLib, attach its
-// market quote (rate units: futures target = 1 - price/100) and Hull-White convexity.
+// ---- Generic-instrument construction (design §3 adoption) --------------------------------------
+// The reference market is built as generic `Instrument`s -- ONE pipeline for swaps and both futures
+// flavours (design §3/§5). No engine call site names an index; the index/market knowledge (the SOFR
+// calendar walk for the 1M averaging future) lives HERE in the test builder (CLAUDE.md §1).
+
+// A reference OIS swap as a generic ParRate instrument: both QuantLib legs -> the generic coupon
+// model via the coupon-type-dispatch extractors. Replaces extract_ois_swap. On this market the
+// overnight coupons' valueDates() endpoints coincide with their accrual dates (asserted in the
+// migration guard test), so this reprices the legacy OisSwap form bit-for-bit.
+inline cal::Instrument swap_instrument(const Market& mk, std::size_t i) {
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::ParRate;
+  ins.fwd.coupons = swaps::qlx::extract_float_leg(mk.swaps[i]->overnightLeg(), mk.today, mk.dc);
+  ins.fixed.coupons = swaps::qlx::extract_fixed_leg(mk.swaps[i]->fixedLeg(), mk.today, mk.dc);
+  ins.market = rm::swaps[i].par_rate;
+  return ins;
+}
+
+// The 1M arithmetic-average future's observation. The per-business-day walk (past days fold into
+// `realized`, future days become sub-periods) is MARKET construction -- the calendar and history come
+// from the index object, not hard-coded -- so it belongs in this test builder, not the engine. It
+// mirrors the retired extract_averaged_future exactly; make_observation does the curve-time mapping.
+inline px::RateObservation avg_future_obs(const Market& mk, const Future& f) {
+  using namespace QuantLib;
+  const Calendar fcal = mk.sofr->fixingCalendar();
+  const DayCounter idc = mk.sofr->dayCounter();  // the index's own accrual day count
+  const TimeSeries<Real>& history = IndexManager::instance().getHistory(mk.sofr->name());
+  std::vector<std::pair<Date, Date>> subs;
+  double realized = 0.0;
+  for (Date d1 = f.start; d1 < f.end;) {
+    const Date d2 = fcal.advance(d1, 1, Days);
+    if (d1 < mk.today) {
+      const Real fx = history[d1];
+      QL_REQUIRE(fx != Null<Real>(), "missing " << mk.sofr->name() << " fixing on " << d1);
+      realized += fx * idc.yearFraction(d1, d2);
+    } else {
+      subs.emplace_back(d1, d2);
+    }
+    d1 = d2;
+  }
+  return swaps::qlx::make_observation(subs, realized, idc.yearFraction(f.start, f.end), mk.today, mk.dc);
+}
+
+// A future as a generic Rate instrument. Quarterly (3M compounding IMM) => ONE sub-period [start,end]
+// (daily compounding telescopes); monthly (1M averaging) => one sub-period per business day. Convexity
+// is the caller's Hull-White NUMBER (design §3) -- the square setup passes 0.
+inline cal::Instrument future_instrument(const Market& mk, const Future& f, double convexity) {
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::Rate;
+  ins.forecast = 0;
+  ins.convexity = convexity;
+  ins.market = 1.0 - f.market_price / 100.0;
+  if (f.quarterly)
+    ins.obs = swaps::qlx::make_observation({{f.start, f.end}}, 0.0,
+                                           mk.sofr->dayCounter().yearFraction(f.start, f.end),
+                                           mk.today, mk.dc);
+  else
+    ins.obs = avg_future_obs(mk, f);
+  return ins;
+}
+
+// Build the calibration problem as generic Instruments. Residual order is preserved as
+// avg | comp | swaps (CLAUDE.md §2): the 1M averaging futures first, then the 3M compounding futures,
+// then the swaps, all in the ONE instrument list (the legacy avg_futs/comp_futs/swaps groups stay
+// empty, so the overall residual sequence is byte-identical to the legacy build).
 inline swaps::calibration::CalibrationProblem build_problem(const Market& mk) {
   swaps::calibration::CalibrationProblem p;
   p.meeting_times = mk.meeting_times;
   p.back_times = mk.back_times;
-
-  for (std::size_t i = 0; i < mk.swaps.size(); ++i)
-    p.swaps.push_back({swaps::qlx::extract_ois_swap(*mk.swaps[i], mk.today, mk.dc),
-                       rm::swaps[i].par_rate});
-
-  for (const auto& f : mk.futures) {
-    const double conv = mk.convexity(f);
-    const double market_rate = 1.0 - f.market_price / 100.0;
-    if (f.quarterly)
-      p.comp_futs.push_back(
-          {swaps::qlx::extract_compounded_future(f.start, f.end, mk.today, mk.dc, mk.sofr->dayCounter()), conv,
-           market_rate});
-    else
-      p.avg_futs.push_back(
-          {swaps::qlx::extract_averaged_future(mk.sofr, f.start, f.end, mk.today, mk.dc), conv,
-           market_rate});
-  }
+  for (const auto& f : mk.futures)
+    if (!f.quarterly) p.instruments.push_back(future_instrument(mk, f, mk.convexity(f)));
+  for (const auto& f : mk.futures)
+    if (f.quarterly) p.instruments.push_back(future_instrument(mk, f, mk.convexity(f)));
+  for (std::size_t i = 0; i < mk.swaps.size(); ++i) p.instruments.push_back(swap_instrument(mk, i));
   return p;
 }
 
@@ -153,24 +207,24 @@ inline swaps::calibration::CalibrationProblem build_square_problem(const Market&
   swaps::calibration::CalibrationProblem p;
   auto t = [&](const Date& d) { return mk.dc.yearFraction(mk.today, d); };
   std::vector<double> front, back;
+  // Residual order avg | comp | swaps, all as generic Rate/ParRate instruments, zero convexity to
+  // match QuantLib's SofrFutureRateHelper (GlobalBootstrap square problem).
   for (int i = 0; i < 6; ++i) {
     const auto& q = rm::futures_1m[i];
     const Date s = sofr_start(Month(q.ref_month), q.ref_year, Monthly),
                e = sofr_end(Month(q.ref_month), q.ref_year, Monthly);
-    p.avg_futs.push_back(
-        {swaps::qlx::extract_averaged_future(mk.sofr, s, e, mk.today, mk.dc), 0.0, 1.0 - q.price / 100.0});
+    p.instruments.push_back(future_instrument(mk, Future{s, e, false, q.price}, 0.0));
     front.push_back(t(e));
   }
   for (int i = 0; i < 8; ++i) {
     const auto& q = rm::futures_3m[i];
     const Date s = sofr_start(Month(q.ref_month), q.ref_year, Quarterly),
                e = sofr_end(Month(q.ref_month), q.ref_year, Quarterly);
-    p.comp_futs.push_back(
-        {swaps::qlx::extract_compounded_future(s, e, mk.today, mk.dc, mk.sofr->dayCounter()), 0.0, 1.0 - q.price / 100.0});
+    p.instruments.push_back(future_instrument(mk, Future{s, e, true, q.price}, 0.0));
     back.push_back(t(e));
   }
   for (std::size_t i = 0; i < rm::swaps.size(); ++i) {
-    p.swaps.push_back({swaps::qlx::extract_ois_swap(*mk.swaps[i], mk.today, mk.dc), rm::swaps[i].par_rate});
+    p.instruments.push_back(swap_instrument(mk, i));
     back.push_back(t(mk.swaps[i]->maturityDate()));
   }
   std::sort(front.begin(), front.end());

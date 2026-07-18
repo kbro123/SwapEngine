@@ -38,10 +38,9 @@ Eigen::VectorXd reference_x() {
 cal::CalibrationProblem self_consistent_problem(const rb::Market& mk) {
   cal::CalibrationProblem p = rb::build_problem(mk);
   const Eigen::VectorXd r0 = p.residuals<double>(reference_x());
-  int i = 0;
-  for (auto& a : p.avg_futs) a.market_rate += r0[i++];
-  for (auto& c : p.comp_futs) c.market_rate += r0[i++];
-  for (auto& s : p.swaps) s.market_rate += r0[i++];
+  // Instrument insertion order IS the residual order (avg | comp | swaps), so bump row i onto
+  // instrument i directly.
+  for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) p.instruments[i].market += r0[i];
   return p;
 }
 
