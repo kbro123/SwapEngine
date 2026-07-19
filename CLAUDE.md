@@ -434,6 +434,15 @@ readers (pricer threads) take a consistent `snapshot(out)` LOCK-FREE and price o
   deterministic AND coherent. The two compose: `feed.snapshot(x)` ONCE (pin a version) → `book.reprice(x)`
   fans that one curve across workers. Measured: **~4× wall-clock** on a 20k-swap book, 8 slices
   (`bench/portfolio_parallel_bench.cpp`, 2.25ms→0.57ms).
+- **Persistent thread pool (`parallel/thread_pool.hpp`, `ThreadPool`).** `std::async` spawns a thread per
+  task; a pool created ONCE and reused amortizes that. `parallel_for(count, fn)` fans fn(i) across workers
+  and blocks. Both `calibrate_staged_parallel(..., pool)` and `ParallelPortfolio(..., pool)` take an
+  optional `ThreadPool*` (nullptr → the `std::async` fallback). Determinism is untouched (the pool changes
+  WHEN a task runs, never WHAT — gated: pool path == serial to 0.0). **Measured, and honest about where it
+  matters:** the portfolio reprice — a FREQUENT fan-out over FAST slices — goes **3.5×→4.3×** (spawn cost
+  per reprice removed; main-thread CPU 167µs→25µs). The bundle COLD staged solve is a **wash** (24.5ms
+  async ≈ 25.1ms pool): each block solve is ~ms-heavy, so a one-time thread spawn is negligible. So the
+  pool is for the repeated real-time fan-outs (per-tick reprice), not one-shot heavy calibration.
 
 ## 7b. Stage 3 — the curve bundle (N curves calibrated together)
 

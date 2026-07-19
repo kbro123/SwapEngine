@@ -19,6 +19,7 @@
 #include <memory>
 #include <vector>
 
+#include "swaps/parallel/thread_pool.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 
@@ -27,9 +28,11 @@ namespace swaps::portfolio {
 class ParallelPortfolio {
  public:
   // Partition `pf` into `n_slices` contiguous CompiledPortfolio blocks (capped at one position per slice).
+  // Optional `pool`: a persistent thread pool to reprice on (reused across calls, no per-reprice thread
+  // creation). nullptr => a std::async fan-out per reprice.
   ParallelPortfolio(const std::vector<double>& meeting_times, const std::vector<double>& back_times,
-                    const Portfolio& pf, int n_slices)
-      : n_swaps_(static_cast<int>(pf.positions.size())) {
+                    const Portfolio& pf, int n_slices, swaps::parallel::ThreadPool* pool = nullptr)
+      : n_swaps_(static_cast<int>(pf.positions.size())), pool_(pool) {
     const int P = n_swaps_;
     n_slices = std::max(1, std::min(n_slices, P));
     const int per = (P + n_slices - 1) / n_slices;  // ceil, so slices are as even as possible
@@ -54,14 +57,19 @@ class ParallelPortfolio {
       out_ = slices_[0]->npv(x);
       return out_;
     }
-    std::vector<std::future<void>> futs;
-    futs.reserve(slices_.size());
-    for (std::size_t s = 0; s < slices_.size(); ++s)
-      futs.push_back(std::async(std::launch::async, [this, &x, s] {
-        const Eigen::VectorXd& npv = slices_[s]->npv(x);       // this slice's scratch (thread-private)
-        out_.segment(offset_[s], npv.size()) = npv;            // disjoint segment -> race-free
-      }));
-    for (auto& f : futs) f.get();
+    auto price_slice = [this, &x](int s) {
+      const Eigen::VectorXd& npv = slices_[s]->npv(x);  // this slice's scratch (thread-private)
+      out_.segment(offset_[s], npv.size()) = npv;       // disjoint segment -> race-free
+    };
+    if (pool_) {  // persistent pool: reuse workers across reprices
+      pool_->parallel_for(static_cast<int>(slices_.size()), price_slice);
+    } else {  // fallback: one std::async per slice
+      std::vector<std::future<void>> futs;
+      futs.reserve(slices_.size());
+      for (std::size_t s = 0; s < slices_.size(); ++s)
+        futs.push_back(std::async(std::launch::async, [&price_slice, s] { price_slice(static_cast<int>(s)); }));
+      for (auto& f : futs) f.get();
+    }
     return out_;
   }
 
@@ -71,6 +79,7 @@ class ParallelPortfolio {
   std::vector<std::unique_ptr<CompiledPortfolio>> slices_;
   std::vector<int> offset_;  // first book index of each slice
   int n_swaps_;
+  swaps::parallel::ThreadPool* pool_;  // optional persistent pool (nullptr => std::async fan-out)
   mutable Eigen::VectorXd out_;  // reusable per-reprice result (disjoint segments written by workers)
 };
 

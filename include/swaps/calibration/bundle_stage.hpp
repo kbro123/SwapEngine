@@ -24,6 +24,7 @@
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/curve/calibration_curve.hpp"
+#include "swaps/parallel/thread_pool.hpp"
 
 namespace swaps::calibration {
 
@@ -215,7 +216,8 @@ inline CalibrationResult calibrate_staged(const BundleProblem& p, const Eigen::V
 // inputs, and blocks write disjoint x-segments. Wall-clock ~ Σ_waves (slowest block in the wave)
 // instead of Σ_all_blocks. On a chain it is exactly the serial solve (one block per wave).
 inline CalibrationResult calibrate_staged_parallel(const BundleProblem& p, const Eigen::VectorXd& x0,
-                                                   bool use_aad = true) {
+                                                   bool use_aad = true,
+                                                   swaps::parallel::ThreadPool* pool = nullptr) {
   const auto sccs = bundle_dependency_order(p);
   const auto waves = bundle_waves(p, sccs);
   Eigen::VectorXd x = x0;
@@ -226,16 +228,20 @@ inline CalibrationResult calibrate_staged_parallel(const BundleProblem& p, const
       continue;
     }
     const Eigen::VectorXd frozen = x;  // snapshot: prior waves solved, this wave's blocks still x0
-    std::vector<std::future<CalibrationResult>> futs;
-    futs.reserve(wave.size());
-    for (int s : wave)
-      futs.push_back(std::async(std::launch::async, [&p, &sccs, s, &frozen, use_aad] {
-        return solve_bundle_block(p, sccs[s], frozen, use_aad);
-      }));
-    // Merge in a FIXED order (wave order), so the accumulated iters and the write order are
-    // deterministic regardless of which thread finished first.
-    for (std::size_t j = 0; j < wave.size(); ++j)
-      iters += scatter_block(p, sccs[wave[j]], futs[j].get(), x);
+    const int W = static_cast<int>(wave.size());
+    std::vector<CalibrationResult> results(W);  // per-block result, written from its own thread
+    auto solve_j = [&](int j) { results[j] = solve_bundle_block(p, sccs[wave[j]], frozen, use_aad); };
+    if (pool) {  // persistent pool: reuse workers, no per-wave thread creation
+      pool->parallel_for(W, solve_j);
+    } else {  // fallback: one std::async per SCC (spawns a thread each)
+      std::vector<std::future<void>> futs;
+      futs.reserve(W);
+      for (int j = 0; j < W; ++j) futs.push_back(std::async(std::launch::async, [&, j] { solve_j(j); }));
+      for (auto& f : futs) f.get();
+    }
+    // Merge in a FIXED order (wave order), so accumulated iters and the write order are deterministic
+    // regardless of which thread finished first.
+    for (int j = 0; j < W; ++j) iters += scatter_block(p, sccs[wave[j]], results[j], x);
   }
   return staged_result(p, std::move(x), iters);
 }

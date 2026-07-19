@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "swaps/parallel/thread_pool.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/parallel.hpp"
 #include "swaps/portfolio/portfolio.hpp"
@@ -55,11 +56,19 @@ static void BM_PortfolioReprice_Serial(benchmark::State& s) {
 }
 BENCHMARK(BM_PortfolioReprice_Serial)->Unit(benchmark::kMicrosecond);
 
-static void BM_PortfolioReprice_Parallel8(benchmark::State& s) {
-  const pf::ParallelPortfolio book(kMeeting, kBack, make_book(kBookSize), 8);
+static void BM_PortfolioReprice_Async8(benchmark::State& s) {
+  const pf::ParallelPortfolio book(kMeeting, kBack, make_book(kBookSize), 8);  // std::async per reprice
   const Eigen::VectorXd x = forwards();
   for (auto _ : s) benchmark::DoNotOptimize(book.reprice(x).data());
 }
-BENCHMARK(BM_PortfolioReprice_Parallel8)->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_PortfolioReprice_Async8)->Unit(benchmark::kMicrosecond);
+
+static void BM_PortfolioReprice_Pool8(benchmark::State& s) {
+  swaps::parallel::ThreadPool pool(8);  // persistent: workers created ONCE, reused every reprice
+  const pf::ParallelPortfolio book(kMeeting, kBack, make_book(kBookSize), 8, &pool);
+  const Eigen::VectorXd x = forwards();
+  for (auto _ : s) benchmark::DoNotOptimize(book.reprice(x).data());
+}
+BENCHMARK(BM_PortfolioReprice_Pool8)->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_MAIN();

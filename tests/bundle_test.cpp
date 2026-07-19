@@ -19,6 +19,7 @@
 #include "reference_curve.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
+#include "swaps/parallel/thread_pool.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/calibration/warm.hpp"
@@ -422,6 +423,9 @@ TEST(BundleParallel, StarTopologyParallelIsBitIdenticalToSerial) {
   for (int c = 1; c <= K; ++c) x0.segment(c * nk, nk).setConstant(0.004 * c);
   const auto serial = cal::calibrate_staged(prob, x0);
   const auto parallel = cal::calibrate_staged_parallel(prob, x0);
+  swaps::parallel::ThreadPool pool(4);
+  const auto pooled = cal::calibrate_staged_parallel(prob, x0, true, &pool);  // pool path == serial too
+  EXPECT_EQ((pooled.x - serial.x).cwiseAbs().maxCoeff(), 0.0) << "thread-pool staged solve == serial";
   const double diff = (serial.x - parallel.x).cwiseAbs().maxCoeff();
   std::cout << "  [bundle-parallel] K=" << K << " |x_parallel - x_serial|=" << diff
             << " iters(serial=" << serial.iterations << ", parallel=" << parallel.iterations << ")"

@@ -12,6 +12,7 @@
 #include "reference_bundle.hpp"
 #include "reference_curve.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
+#include "swaps/parallel/thread_pool.hpp"
 
 namespace cal = swaps::calibration;
 namespace rb = swaps::refbuild;
@@ -35,14 +36,23 @@ struct StarFixture {
     }                                                                                          \
   }                                                                                            \
   BENCHMARK(BM_BundleStar##K##_StagedSerial)->Unit(benchmark::kMicrosecond);                   \
-  static void BM_BundleStar##K##_StagedParallel(benchmark::State& s) {                         \
+  static void BM_BundleStar##K##_StagedParallelAsync(benchmark::State& s) {                    \
     StarFixture f(K);                                                                          \
     for (auto _ : s) {                                                                         \
       auto r = cal::calibrate_staged_parallel(f.bundle.prob, f.bundle.x0, true);               \
       benchmark::DoNotOptimize(r.x.data());                                                    \
     }                                                                                          \
   }                                                                                            \
-  BENCHMARK(BM_BundleStar##K##_StagedParallel)->Unit(benchmark::kMicrosecond);
+  BENCHMARK(BM_BundleStar##K##_StagedParallelAsync)->Unit(benchmark::kMicrosecond);            \
+  static void BM_BundleStar##K##_StagedParallelPool(benchmark::State& s) {                     \
+    StarFixture f(K);                                                                          \
+    swaps::parallel::ThreadPool pool(K);                                                       \
+    for (auto _ : s) {                                                                         \
+      auto r = cal::calibrate_staged_parallel(f.bundle.prob, f.bundle.x0, true, &pool);        \
+      benchmark::DoNotOptimize(r.x.data());                                                    \
+    }                                                                                          \
+  }                                                                                            \
+  BENCHMARK(BM_BundleStar##K##_StagedParallelPool)->Unit(benchmark::kMicrosecond);
 
 STAR_BENCH(8)   // 8 basis curves off SOFR -> wave 1 is 8 concurrent realistic solves
 

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "swaps/calibration/live_curve.hpp"
+#include "swaps/parallel/thread_pool.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/parallel.hpp"
 #include "swaps/portfolio/portfolio.hpp"
@@ -65,6 +66,27 @@ TEST(ParallelPortfolio, CoherentSplitIsBitIdenticalToSerial) {
             << " total=" << parallel.total_npv(x) << "\n";
   EXPECT_EQ(diff, 0.0) << "the coherent parallel split must equal the serial full-book reprice, bit-for-bit";
   EXPECT_EQ(parallel.total_npv(x), serial.total_npv(x));
+
+  // Same book on a PERSISTENT THREAD POOL must also be bit-identical (the pool changes WHEN tasks run,
+  // never WHAT they compute) -- and reprices repeatedly without spawning a thread per call.
+  swaps::parallel::ThreadPool poolobj(8);
+  const pf::ParallelPortfolio pooled(kMeeting, kBack, book, 8, &poolobj);
+  for (int rep = 0; rep < 3; ++rep)
+    EXPECT_EQ((pooled.reprice(x) - s).cwiseAbs().maxCoeff(), 0.0) << "pool reprice == serial, every call";
+}
+
+TEST(ThreadPool, ParallelForRunsEveryIndexOnceConcurrently) {
+  swaps::parallel::ThreadPool pool(4);
+  EXPECT_GE(pool.size(), 1);
+  const int N = 10000;
+  std::vector<int> hit(N, 0);
+  std::atomic<long> sum{0};
+  pool.parallel_for(N, [&](int i) { hit[i] += 1; sum.fetch_add(i, std::memory_order_relaxed); });
+  long missing = 0, dup = 0;
+  for (int v : hit) { missing += (v == 0); dup += (v > 1); }
+  EXPECT_EQ(missing, 0) << "every index must run";
+  EXPECT_EQ(dup, 0) << "no index may run twice";
+  EXPECT_EQ(sum.load(), static_cast<long>(N) * (N - 1) / 2);
 }
 
 TEST(ParallelPortfolio, PricesOffOnePinnedSnapshotFromTheFeed) {
