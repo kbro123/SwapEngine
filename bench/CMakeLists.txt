@@ -55,6 +55,11 @@ if(TARGET quantlib_oracle)
   add_executable(bundle_parallel_bench bundle_parallel_bench.cpp)
   target_link_libraries(bundle_parallel_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(bundle_parallel_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
+  # Jacobian-recompute vs tick cost -- profiling probe for the speculative background-Jacobian research.
+  add_executable(jacobian_cost_bench jacobian_cost_bench.cpp)
+  target_link_libraries(jacobian_cost_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(jacobian_cost_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 endif()
 
 # Convenience target: run the perf gate.

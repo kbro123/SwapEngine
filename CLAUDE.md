@@ -443,6 +443,19 @@ readers (pricer threads) take a consistent `snapshot(out)` LOCK-FREE and price o
   per reprice removed; main-thread CPU 167µs→25µs). The bundle COLD staged solve is a **wash** (24.5ms
   async ≈ 25.1ms pool): each block solve is ~ms-heavy, so a one-time thread spawn is negligible. So the
   pool is for the repeated real-time fan-outs (per-tick reprice), not one-shot heavy calibration.
+- **PLANNED — speculative background Jacobian (tail-latency, not throughput).** The streaming refresh
+  (recompute J + factorize M) is SYNCHRONOUS today: the tick that hits the staleness envelope pays the
+  whole cost. Measured (`bench/jacobian_cost_bench.cpp`): a fast tick is **8 µs**, but a refresh tick is
+  **47 µs** (single-curve analytic), **~530 µs** (single-curve AAD — a non-linear curve), or **20 ms**
+  (8-curve bundle AAD). So on a refresh tick a live bundle pricer FREEZES for ~20 ms. The idea: a
+  dedicated background thread computes the next J+M as drift APPROACHES the envelope (predict from
+  drift/ρ, not the reactive stall), publishing M via the same atomic-pointer-swap as `LiveCurveFeed`;
+  the refresh tick then just swaps in the ready M (~µs). This is a TAIL-LATENCY win (p100 tick), NOT
+  throughput — refreshes are rare (~30 bp move) so the mean barely moves, and the compute lands on a
+  spare core. Value scales with refresh cost: negligible for the 47 µs analytic single-curve refresh,
+  transformative for the 0.5–20 ms AAD/bundle refreshes. Needs enough lead time (refresh interval
+  ~200 ticks ≫ the 20 ms/~20-tick compute) and a validity guard (M computed at a nearby x is still a
+  valid preconditioner). Not built yet — the measured costs above are the research that justifies it.
 
 ## 7b. Stage 3 — the curve bundle (N curves calibrated together)
 
