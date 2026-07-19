@@ -424,6 +424,16 @@ readers (pricer threads) take a consistent `snapshot(out)` LOCK-FREE and price o
   engine's per-instance memo buffers are NOT shared) → every snapshot equals EXACTLY the curve published
   at that version. NB each pricer needs its own `CompiledResidual` (mutable DF/scratch memo); the
   `LiveCurveFeed` is the only shared state and it is all atomics.
+- **Coherent data-parallel reprice (`portfolio/parallel.hpp`, `ParallelPortfolio`).** The OTHER pricing
+  mode: split ONE large book across N threads that all price the SAME pinned curve, for a consistent
+  point-in-time cut (vs the feed's latest-wins, per-reader independence). It partitions the book into N
+  `CompiledPortfolio` slices (each its OWN scratch), and a `reprice(x)` fans them across threads — every
+  slice reads the same `x`, writes a DISJOINT output segment. Because a position's NPV depends only on `x`
+  and its own cashflows (never on the rest of the book), the sliced result is **bit-identical to a
+  single-thread full-book reprice** (`tests/parallel_portfolio_test.cpp`, `== 0.0`), so the cut is
+  deterministic AND coherent. The two compose: `feed.snapshot(x)` ONCE (pin a version) → `book.reprice(x)`
+  fans that one curve across workers. Measured: **~4× wall-clock** on a 20k-swap book, 8 slices
+  (`bench/portfolio_parallel_bench.cpp`, 2.25ms→0.57ms).
 
 ## 7b. Stage 3 — the curve bundle (N curves calibrated together)
 

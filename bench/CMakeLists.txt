@@ -15,6 +15,10 @@ target_link_libraries(swaps_bench PRIVATE swaps benchmark::benchmark_main)
 add_executable(bundle_scale_bench bundle_scale_bench.cpp)
 target_link_libraries(bundle_scale_bench PRIVATE swaps benchmark::benchmark_main)
 
+# Coherent parallel portfolio reprice: serial full-book vs N-slice split off one curve (ours-only).
+add_executable(portfolio_parallel_bench portfolio_parallel_bench.cpp)
+target_link_libraries(portfolio_parallel_bench PRIVATE swaps benchmark::benchmark_main)
+
 
 # AAD vs bump / calibration benchmarks (link the QuantLib oracle for problem setup).
 if(TARGET quantlib_oracle)
