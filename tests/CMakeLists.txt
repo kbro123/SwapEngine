@@ -49,6 +49,7 @@ if(TARGET quantlib_oracle)
     bspline_oracle_test.cpp
     monotone_cubic_oracle_test.cpp
     rfr_coupon_oracle_test.cpp
+    ois_weekend_test.cpp
     migration_guard_test.cpp
   )
   target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
