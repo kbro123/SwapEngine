@@ -124,6 +124,33 @@ TEST_F(Streaming, AsyncPricerThreadPricesLatestCurveLockFree) {
   EXPECT_EQ((sc.current() - published[M]).cwiseAbs().maxCoeff(), 0.0);
 }
 
+TEST_F(Streaming, PrefetchIsExactMatchesSyncAndFires) {
+  // The speculative background Jacobian must (a) keep every tick EXACT (round-trip to the quotes),
+  // (b) converge to the SAME solution as the synchronous path (frozen-Newton's fixed point is r=0 for
+  // any invertible M), and (c) actually SERVE refreshes from the worker on a feed that drifts enough.
+  cal::StreamingCalibrator<>::Options popt;
+  popt.prefetch = true;
+  popt.prefetch_drift = 3e-4;
+  cal::StreamingCalibrator scp(prob, x0, q0, popt);
+  cal::StreamingCalibrator scs(prob, x0, q0, cal::StreamingCalibrator<>::Options{});  // sync baseline
+
+  double worst_rt = 0, worst_diff = 0;
+  for (int t = 1; t <= 500; ++t) {  // a trending feed with large swings -> crosses the staleness envelope
+    Eigen::VectorXd q = q0;
+    for (int i = 0; i < q.size(); ++i)
+      q[i] += 60e-4 * std::sin(0.04 * t) + 20e-4 * std::sin(0.11 * t + 0.5 * i);
+    scp.update(q);
+    scs.update(q);
+    worst_rt = std::max(worst_rt, (cr.model_rates(scp.current()) - q).cwiseAbs().maxCoeff());
+    worst_diff = std::max(worst_diff, (scp.current() - scs.current()).cwiseAbs().maxCoeff());
+  }
+  std::cout << "  [streaming prefetch] worst round-trip=" << worst_rt << " worst |pref - sync|=" << worst_diff
+            << " prefetch_hits=" << scp.prefetch_hits() << " refreshes=" << scp.refresh_count() - 1 << "\n";
+  EXPECT_LT(worst_rt, 1e-8) << "prefetch path must still reprice the instruments exactly every tick";
+  EXPECT_LT(worst_diff, 1e-7) << "prefetch and synchronous paths converge to the same exact solution";
+  EXPECT_GT(scp.prefetch_hits(), 0) << "the background Jacobian must have served at least one refresh";
+}
+
 TEST_F(Streaming, SubBpMovesReuseTheCachedJacobian) {
   cal::StreamingCalibrator<>::Options opt;
   cal::StreamingCalibrator sc(prob, x0, q0, opt);

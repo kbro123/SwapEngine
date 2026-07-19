@@ -443,19 +443,26 @@ readers (pricer threads) take a consistent `snapshot(out)` LOCK-FREE and price o
   per reprice removed; main-thread CPU 167µs→25µs). The bundle COLD staged solve is a **wash** (24.5ms
   async ≈ 25.1ms pool): each block solve is ~ms-heavy, so a one-time thread spawn is negligible. So the
   pool is for the repeated real-time fan-outs (per-tick reprice), not one-shot heavy calibration.
-- **PLANNED — speculative background Jacobian (tail-latency, not throughput).** The streaming refresh
-  (recompute J + factorize M) is SYNCHRONOUS today: the tick that hits the staleness envelope pays the
-  whole cost. Measured (`bench/jacobian_cost_bench.cpp`): a fast tick is **8 µs**, but a refresh tick is
-  **47 µs** (single-curve analytic), **~530 µs** (single-curve AAD — a non-linear curve), or **20 ms**
-  (8-curve bundle AAD). So on a refresh tick a live bundle pricer FREEZES for ~20 ms. The idea: a
-  dedicated background thread computes the next J+M as drift APPROACHES the envelope (predict from
-  drift/ρ, not the reactive stall), publishing M via the same atomic-pointer-swap as `LiveCurveFeed`;
-  the refresh tick then just swaps in the ready M (~µs). This is a TAIL-LATENCY win (p100 tick), NOT
-  throughput — refreshes are rare (~30 bp move) so the mean barely moves, and the compute lands on a
-  spare core. Value scales with refresh cost: negligible for the 47 µs analytic single-curve refresh,
-  transformative for the 0.5–20 ms AAD/bundle refreshes. Needs enough lead time (refresh interval
-  ~200 ticks ≫ the 20 ms/~20-tick compute) and a validity guard (M computed at a nearby x is still a
-  valid preconditioner). Not built yet — the measured costs above are the research that justifies it.
+- **DONE — speculative background Jacobian (`calibration/background_jacobian.hpp`, tail-latency win).**
+  The streaming refresh (recompute J + factorize M) was SYNCHRONOUS: the tick that hits the staleness
+  envelope paid the whole cost. Measured (`bench/jacobian_cost_bench.cpp`): a fast tick is **8 µs**, a
+  refresh tick is **47 µs** (single-curve analytic), **~530 µs** (single-curve AAD / non-linear curve),
+  or **20 ms** (8-curve bundle AAD) — a live bundle pricer FROZE for milliseconds on a refresh tick.
+  Now `StreamingCalibrator` (exact mode, `Options::prefetch`) runs a dedicated `BackgroundJacobian<Problem>`
+  worker: as drift passes `prefetch_drift` it `request`s an M at the current x; the worker computes J+M off
+  the critical path (its OWN engine — compiled engines have per-instance scratch, not shareable); when a
+  refresh fires the tick `try_take`s the ready M and swaps it in (~µs) instead of computing inline.
+  **Correctness is FREE:** frozen-Newton's fixed point is `r=0` for ANY invertible M, so a slightly-stale
+  background M is exact — it only sets the convergence rate; a too-stale one merely triggers another
+  refresh (bounded by `max_refresh`). No accuracy is traded. Gates: `tests/streaming_test.cpp`
+  `PrefetchIsExactMatchesSyncAndFires` (round-trip 2e-12, matches the sync path to 2e-11, 263/384 refreshes
+  served off-thread on a stress feed); `tests/bundle_test.cpp` `StreamingPrefetchHidesTheRefreshSpike` on
+  the realistic 4-curve bundle at a live cadence → **2/2 refreshes prefetch-served, worst tick 949 µs → 110 µs**
+  (~8.6×; an 8-curve/AAD case hides a bigger ms spike). It is a TAIL-LATENCY win (p100), NOT throughput —
+  refreshes are rare and the compute lands on a spare core; value scales with refresh cost (skip it for the
+  cheap 47 µs analytic single-curve; it is transformative for the 0.5–20 ms AAD/bundle refreshes). Hit rate
+  scales with feed cadence vs refresh cost: ~100% on a realistic desk cadence, lower on an aggressive feed
+  that outruns the worker (which then just falls back to the inline compute — never wrong, only slower).
 
 ## 7b. Stage 3 — the curve bundle (N curves calibrated together)
 

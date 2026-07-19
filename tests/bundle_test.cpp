@@ -15,6 +15,9 @@
 #include <cmath>
 #include <vector>
 
+#include <chrono>
+#include <thread>
+
 #include "reference_bundle.hpp"
 #include "reference_curve.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
@@ -268,6 +271,53 @@ TEST_F(BundleRealistic, WarmRecalMatchesColdResolveOnMinorPerturbation) {
   EXPECT_TRUE(wr.converged);
   EXPECT_LT(warm_err, 1e-7) << "warm frozen-Newton must match an independent cold LM re-solve";
   EXPECT_LT(lin_err, 1e-5) << "one-matvec linear update is first-order accurate at ~1bp";
+}
+
+TEST_F(BundleRealistic, StreamingPrefetchHidesTheRefreshSpike) {
+  // The speculative background Jacobian on the multi-curve bundle, where a refresh recomputes the
+  // (analytic) block Jacobian -- ~ms, vs a ~µs fast tick. With a live-cadence feed (ticks paced so the
+  // worker has wall-clock time between refreshes, as on a real desk), the prefetch serves refreshes off
+  // the background thread, so the WORST prefetch tick is a µs matrix-swap while the WORST sync tick pays
+  // the full inline Jacobian. Exactness is identical (frozen-Newton is exact for any invertible M).
+  Eigen::VectorXd x0(prob.n_knots());
+  const double start[] = {0.043, -0.0006, 0.0306, 0.0050};
+  for (int c = 0; c < NC; ++c) x0.segment(off[c], prob.curves[c].n_knots()).setConstant(start[c]);
+  const Eigen::VectorXd x_solved = cal::calibrate(prob, x0).x;
+  const Eigen::VectorXd mkt = prob.market();
+  auto model_rates = [&](const Eigen::VectorXd& x) { return (prob.residuals<double>(x) + mkt).eval(); };
+
+  cal::StreamingCalibrator<cal::BundleProblem> sync(prob, x_solved, model_rates(x_solved),
+                                                    cal::StreamingCalibrator<cal::BundleProblem>::Options{});
+  cal::StreamingCalibrator<cal::BundleProblem>::Options popt;
+  popt.prefetch = true;
+  popt.prefetch_drift = 3e-4;
+  cal::StreamingCalibrator<cal::BundleProblem> pref(prob, x_solved, model_rates(x_solved), popt);
+
+  double max_sync = 0, max_pref = 0, worst_rt = 0;
+  int hits = 0, refreshes_pref = 0;
+  for (int t = 1; t <= 200; ++t) {
+    Eigen::VectorXd xp = x_solved;  // a realistic SLOW trend (~0.3bp/tick) that crosses the envelope a
+    for (int i = 0; i < xp.size(); ++i)   // few times -- the worker has ample lead between refreshes.
+      xp[i] += 60e-4 * (t / 200.0) * (0.7 + 0.3 * std::sin(0.5 * i));
+    const Eigen::VectorXd q = model_rates(xp);
+    auto a = std::chrono::steady_clock::now();
+    sync.update(q);
+    auto b = std::chrono::steady_clock::now();
+    const auto tick = pref.update(q);
+    auto c = std::chrono::steady_clock::now();
+    max_sync = std::max(max_sync, std::chrono::duration<double, std::micro>(b - a).count());
+    max_pref = std::max(max_pref, std::chrono::duration<double, std::micro>(c - b).count());
+    hits += tick.prefetched;
+    refreshes_pref += tick.refreshes;
+    worst_rt = std::max(worst_rt, (model_rates(pref.current()) - q).cwiseAbs().maxCoeff());
+    std::this_thread::sleep_for(std::chrono::microseconds(600));  // live-cadence pacing: give the worker time
+  }
+  std::cout << "  [bundle-prefetch] refreshes=" << refreshes_pref << " of which prefetch-served=" << hits << "\n";
+  std::cout << "  [bundle-prefetch] worst tick: sync=" << max_sync << "us prefetch=" << max_pref
+            << "us  prefetch_hits=" << hits << " round-trip=" << worst_rt << "\n";
+  EXPECT_LT(worst_rt, 1e-8) << "prefetch bundle stream must still reprice exactly every tick";
+  EXPECT_GT(hits, 0) << "the background Jacobian must have served refreshes";
+  EXPECT_LT(max_pref, max_sync) << "the worst prefetch tick must beat the worst sync tick (spike hidden)";
 }
 
 TEST_F(BundleRealistic, StreamingExactPathRoundTripsTheBundle) {
