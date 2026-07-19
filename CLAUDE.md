@@ -483,12 +483,15 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   `calibrate_staged`** — same-wave SCCs never reference each other's curves, so thread order cannot change
   any block's inputs and blocks write disjoint x-segments (no shared FP reduction, §5 holds). On a
   triangular chain every wave is one SCC (== serial); on a **star/forest** (K curves each spread straight
-  off the base) wave 1 is K concurrent solves. Measured: **~3.5× wall-clock** on a K=8 star
-  (`bench/bundle_parallel_bench.cpp`, 27.7ms→8.0ms, under load; higher quiesced), bounded by Amdahl (the
-  serial base-curve wave + thread-spawn) — gated by `tests/bundle_test.cpp` `BundleParallel` (parallel ==
-  serial to 0.0, recovers the star). Threads over independent SCCs, NOT processes (a solve is 1–22 ms, far
+  off the base) wave 1 is K concurrent solves. Measured on the **canonical realistic star**
+  (`tests/reference_bundle.hpp`: full-structure SOFR base + K FF-style basis curves off it, each 6 meetings
+  + 12×1M futures + basis swaps): **~3.8× wall-clock** on a K=8 star (`bench/bundle_parallel_bench.cpp`,
+  84ms→22ms, quiesced), bounded by Amdahl (the serial base-curve wave + thread-spawn) — gated by
+  `tests/bundle_test.cpp` `BundleParallel.*` (parallel == serial to 0.0, recovers x_true, on BOTH a
+  synthetic and the realistic star). Threads over independent SCCs, NOT processes (a solve is 1–22 ms, far
   below IPC overhead). (Across-problem parallelism — a scenario grid / multi-currency book — remains
-  trivially available given the allocation-light engine; needs no new code.)
+  trivially available given the allocation-light engine; needs no new code.) **`reference_bundle.hpp`
+  (`build_realistic_bundle`, chain OR star) is the canonical realistic multi-curve model for benchmarks.**
 - **Outright vs spread is in the curve DEFINITION, not the solver.** `CurveSpec` carries `base`:
   `base < 0` = OUTRIGHT (free vars are its own forwards); `base >= 0` = SPREAD, i.e. the curve IS
   `curves[base] + spread` and its free vars are the forward SPREADs. `build_bundle_curves<Scalar>`

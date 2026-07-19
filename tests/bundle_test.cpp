@@ -15,6 +15,7 @@
 #include <cmath>
 #include <vector>
 
+#include "reference_bundle.hpp"
 #include "reference_curve.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
@@ -428,6 +429,32 @@ TEST(BundleParallel, StarTopologyParallelIsBitIdenticalToSerial) {
   EXPECT_EQ(diff, 0.0) << "branch-parallel staged solve must be BIT-IDENTICAL to the serial staged solve";
   EXPECT_EQ(serial.iterations, parallel.iterations) << "same blocks, same iterations";
   EXPECT_LT((parallel.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "and it recovers the whole star";
+}
+
+TEST(BundleParallel, RealisticStarIsBitIdenticalToSerialAndRecovers) {
+  // The canonical realistic model (reference_bundle.hpp) as a STAR: a full-structure SOFR base
+  // (6 meetings + 12x1M/8x3M futures + swaps) with K basis curves each spread straight off SOFR
+  // (12x1M futures + basis swaps). Waves = [{SOFR}, {K basis}], so the parallel solve runs K
+  // realistically-sized block solves concurrently. It must be BIT-IDENTICAL to serial and recover x_true.
+  using namespace QuantLib;
+  RelinkableHandle<YieldTermStructure> hh;
+  rb::Market m = rb::build_market(hh);
+  rb::RealisticBundle b = rb::build_realistic_bundle(m, hh, /*n_basis=*/6, rb::BundleTopology::Star);
+  ASSERT_LT(b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff(), 1e-10) << "x_true zeroes the residual";
+
+  const auto sccs = cal::bundle_dependency_order(b.prob);
+  const auto waves = cal::bundle_waves(b.prob, sccs);
+  ASSERT_EQ(waves.size(), 2u) << "star => a SOFR wave then a fat basis wave";
+  EXPECT_EQ(std::max(waves[0].size(), waves[1].size()), 6u) << "6 independent basis SCCs in the parallel wave";
+
+  const auto serial = cal::calibrate_staged(b.prob, b.x0);
+  const auto parallel = cal::calibrate_staged_parallel(b.prob, b.x0);
+  const double diff = (serial.x - parallel.x).cwiseAbs().maxCoeff();
+  std::cout << "  [bundle-parallel-realistic] |x_par - x_ser|=" << diff
+            << " ||x*-xtrue||=" << (parallel.x - b.x_true).cwiseAbs().maxCoeff()
+            << " iters(ser=" << serial.iterations << ",par=" << parallel.iterations << ")\n";
+  EXPECT_EQ(diff, 0.0) << "realistic branch-parallel solve must be BIT-IDENTICAL to serial";
+  EXPECT_LT((parallel.x - b.x_true).cwiseAbs().maxCoeff(), 1e-6) << "and recover the realistic star";
 }
 
 TEST(BundleSpread, CompiledResidualHandlesSpreadCurves) {

@@ -15,9 +15,6 @@ target_link_libraries(swaps_bench PRIVATE swaps benchmark::benchmark_main)
 add_executable(bundle_scale_bench bundle_scale_bench.cpp)
 target_link_libraries(bundle_scale_bench PRIVATE swaps benchmark::benchmark_main)
 
-# Branch-parallel staged bundle calibrate: serial vs thread-per-SCC on a star topology (ours-only).
-add_executable(bundle_parallel_bench bundle_parallel_bench.cpp)
-target_link_libraries(bundle_parallel_bench PRIVATE swaps benchmark::benchmark_main)
 
 # AAD vs bump / calibration benchmarks (link the QuantLib oracle for problem setup).
 if(TARGET quantlib_oracle)
@@ -49,6 +46,11 @@ if(TARGET quantlib_oracle)
   add_executable(bundle_build_bench bundle_build_bench.cpp)
   target_link_libraries(bundle_build_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(bundle_build_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
+  # Branch-parallel staged bundle calibrate on the REALISTIC star (serial vs thread-per-SCC; ours-only).
+  add_executable(bundle_parallel_bench bundle_parallel_bench.cpp)
+  target_link_libraries(bundle_parallel_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(bundle_parallel_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 endif()
 
 # Convenience target: run the perf gate.
