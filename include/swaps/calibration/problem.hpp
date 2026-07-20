@@ -12,6 +12,7 @@
 
 #include <Eigen/Core>
 
+#include <cmath>
 #include <vector>
 
 #include "swaps/curve/calibration_curve.hpp"
@@ -55,6 +56,10 @@ enum class QuoteKind {
   ParRate,    // float_leg_pv(fwd) / annuity(fixed)
   ParSpread,  // (float_leg_pv(bench) - float_leg_pv(fwd)) / annuity(fixed)
   Rate,       // rate(obs) + convexity
+  // Cross-currency (multi-currency). NEITHER is W-cacheable (a DF ratio / a curve-dependent notional is
+  // not a single exp(-Wx)); CompiledBundleResidual rejects them, so they ride the AAD/templated path.
+  FxForward,      // FX-forward point: fx_spot · DF[fx_num](fx_time)/DF[fx_den](fx_time) (pins fx_num vs fx_den)
+  XccyMtmBasis,   // MtM (FX-resettable-notional) xccy basis: par basis incl. the resetting funding leg
 };
 
 // One calibration instrument.
@@ -83,9 +88,24 @@ struct Instrument {
   // currency quote ignores it. Default 0 keeps existing instruments byte-identical.
   int pv_currency = 0;
 
-  // The curve this instrument primarily PINS (its quoted leg's forecast curve). Used by the staged
-  // solver to assign the instrument to a dependency block.
-  int primary_curve() const { return quote == QuoteKind::Rate ? forecast : fwd.forecast; }
+  // FxForward only: F = fx_spot · DF[fx_num](fx_time) / DF[fx_den](fx_time). fx_num is the FOREIGN
+  // (collateral) curve this pins (e.g. EUR-in-USD), fx_den the DOMESTIC (e.g. SOFR). `market` is the
+  // outright forward. The residual is in rate/implied-basis units: (ln F_model − ln F_market)/fx_time.
+  int fx_num = -1, fx_den = -1;
+  double fx_spot = 1.0;
+  double fx_time = 0.0;
+  // XccyMtmBasis only: the resetting-notional funding leg (its reset_num/reset_den/fx_spot on the leg
+  // define the FX-forward notional). fwd = the pinned curve's self-forecast leg, bench = the other-
+  // currency forecast leg, fixed = the annuity — all discounted on the pinned (collateral) curve.
+  FloatLeg mtm;
+
+  // The curve this instrument primarily PINS. Used by the staged solver to assign it to a dependency
+  // block; FxForward pins its FOREIGN (fx_num) curve, every leg-based quote its fwd leg's forecast.
+  int primary_curve() const {
+    if (quote == QuoteKind::Rate) return forecast;
+    if (quote == QuoteKind::FxForward) return fx_num;
+    return fwd.forecast;
+  }
 };
 
 // Model quote of an instrument, per the design §3 table. `C(role)` maps a curve role index to the
@@ -101,6 +121,27 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
                                             C(ins.bench.discount)) -
               pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount))) /
              pricing::annuity<Scalar>(ins.fixed.coupons, C(ins.fixed.discount));
+    case QuoteKind::FxForward:
+      // FX-forward outright = fx_spot · DF_foreign(fx_time) / DF_domestic(fx_time). This is exactly the
+      // machinery that converts a forward foreign cashflow back to the domestic currency at any date.
+      return ins.fx_spot * (C(ins.fx_num).discount(ins.fx_time) / C(ins.fx_den).discount(ins.fx_time));
+    case QuoteKind::XccyMtmBasis: {
+      // Par basis of a MtM (FX-resettable-notional) xccy swap. fwd = the collateral curve's self-forecast
+      // leg (pv telescopes to the par-float value), bench = the foreign-index forecast leg, fixed = the
+      // annuity, all discounted on the collateral (pinned) curve; mtm = the resetting funding leg.
+      //   b = (pv_self − pv_foreign)/annuity + mtm_leg_pv / (fx_spot · annuity)
+      // The funding leg is par (SOFR-flat) so the mtm term ~0, but computing it exercises the resettable-
+      // notional coupon and couples the residual to the funding (SOFR) curve.
+      const Scalar ann = pricing::annuity<Scalar>(ins.fixed.coupons, C(ins.fixed.discount));
+      const Scalar pv_self =
+          pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount));
+      const Scalar pv_fx =
+          pricing::float_leg_pv<Scalar>(ins.bench.coupons, C(ins.bench.forecast), C(ins.bench.discount));
+      const Scalar mtm = pricing::xccy_mtm_leg_pv<Scalar>(
+          ins.mtm.coupons, ins.mtm.fx_spot, C(ins.mtm.forecast), C(ins.mtm.discount),
+          C(ins.mtm.reset_num), C(ins.mtm.reset_den));
+      return (pv_self - pv_fx) / ann + mtm / (ins.mtm.fx_spot * ann);
+    }
     case QuoteKind::ParRate:
     default:
       return pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount)) /
@@ -122,6 +163,12 @@ template <class Scalar, class CurveOf>
 Scalar instrument_residual(const Instrument& ins, const CurveOf& C) {
   if (ins.quote == QuoteKind::Rate)
     return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + (ins.convexity - ins.market);
+  if (ins.quote == QuoteKind::FxForward) {
+    // Residual in RATE units (CLAUDE.md §2): the implied-basis discrepancy (ln F_model − ln F_market)/T.
+    // A 1bp basis error maps to ~1bp REGARDLESS of tenor, so short-dated forwards are not swamped by 1y.
+    using std::log;
+    return (log(instrument_model_quote<Scalar>(ins, C)) - std::log(ins.market)) / ins.fx_time;
+  }
   return instrument_model_quote<Scalar>(ins, C) - ins.market;
 }
 

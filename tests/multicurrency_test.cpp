@@ -13,6 +13,7 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -521,4 +522,109 @@ TEST(MultiCcyMtm, MtmBasisEqualsConstantNotionalBasis) {
             << " (USD MtM leg=" << usd_pv << ", EUR leg=" << eur_pv << ")\n";
   EXPECT_LT(std::abs(npv), 1e-10)
       << "the MtM xccy swap prices to par at the constant-notional basis (MtM == const-notional here)";
+}
+
+// ===============================================================================================
+// The DESK xccy build (Phase 5): EUR-in-USD from FX FORWARD POINTS (short) + MtM xccy swaps (long) --
+// pure rates, no FX-vol model. FX forwards are a first-class calibration instrument (a DF ratio).
+// ===============================================================================================
+
+// The compiled W-cache engine must REJECT the cross-currency quotes (a DF ratio / a curve-dependent
+// notional is not exp(-Wx)); they ride the AAD/templated path.
+TEST(XccyFx, CompiledEngineRejectsCrossCurrencyQuotes) {
+  const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
+  EXPECT_THROW(cal::CompiledBundleResidual cr(b.prob), std::invalid_argument)
+      << "FX-forward / MtM-xccy quotes must not silently reach the W-cache";
+}
+
+// Build the curve from FX forwards + MtM swaps, and confirm (a) the curve recovers on the AAD path, and
+// (b) every FX forward point reprices off the CALIBRATED curve to 1e-10.
+TEST(XccyFx, RecoversAndFxForwardsReprice) {
+  const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
+  ASSERT_LT(b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff(), 1e-12) << "self-consistent market";
+  const auto sol = cal::calibrate(b.prob, b.x0, /*use_aad=*/false);  // AAD/numeric path (not W-cache)
+  const double err = (sol.x - b.x_true).cwiseAbs().maxCoeff();
+
+  // Reprice every FX forward off the calibrated curve: F_model(x*) vs the market outright forward.
+  auto ch = cal::build_bundle_curves<double>(b.prob.curves, [&](int c, int i) { return sol.x[b.off[c] + i]; });
+  double worst_fx = 0;
+  int n_fx = 0;
+  for (const auto& ins : b.prob.instruments)
+    if (ins.quote == cal::QuoteKind::FxForward) {
+      const double F = ins.fx_spot * ch[ins.fx_num]->discount(ins.fx_time) / ch[ins.fx_den]->discount(ins.fx_time);
+      worst_fx = std::max(worst_fx, std::abs(F - ins.market));
+      ++n_fx;
+    }
+  std::cout << "  [mc-fx] ||x*-xtrue||=" << err << " iters=" << sol.iterations << "  FX points=" << n_fx
+            << " max|F_model - F_market|=" << worst_fx << "\n";
+  EXPECT_LT(err, 1e-6) << "curve recovers from FX forwards + MtM swaps";
+  EXPECT_LT(worst_fx, 1e-10) << "every FX forward point reprices off the calibrated curve";
+}
+
+// EUR-in-USD genuinely depends on BOTH ESTR (spread base) and SOFR (FX-forward denominator / funding leg).
+TEST(XccyFx, DependsOnBothSofrAndEstr) {
+  const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
+  const auto adj = cal::bundle_adjacency(b.prob);
+  const bool on_sofr = std::count(adj[b.EURUSD].begin(), adj[b.EURUSD].end(), b.SOFR) > 0;
+  const bool on_estr = std::count(adj[b.EURUSD].begin(), adj[b.EURUSD].end(), b.ESTR) > 0;
+  const auto sccs = cal::bundle_dependency_order(b.prob);
+  int p_sofr = -1, p_estr = -1, p_eurusd = -1;
+  for (int i = 0; i < static_cast<int>(sccs.size()); ++i)
+    for (int c : sccs[i]) {
+      if (c == b.SOFR) p_sofr = i;
+      if (c == b.ESTR) p_estr = i;
+      if (c == b.EURUSD) p_eurusd = i;
+    }
+  std::cout << "  [mc-fx] EUR-in-USD deps: SOFR=" << on_sofr << " ESTR=" << on_estr
+            << "  SCC order S=" << p_sofr << " E=" << p_estr << " C=" << p_eurusd << "\n";
+  EXPECT_TRUE(on_sofr) << "EUR-in-USD depends on SOFR (FX-forward denominator)";
+  EXPECT_TRUE(on_estr) << "EUR-in-USD depends on ESTR (spread base)";
+  EXPECT_GT(p_eurusd, p_sofr) << "EUR-in-USD is solved after SOFR";
+  EXPECT_GT(p_eurusd, p_estr) << "EUR-in-USD is solved after ESTR";
+}
+
+// The curve converts a forward EUR cashflow back to USD at ANY date: F(t) = S·DF_c(t)/DF_SOFR(t), the USD
+// value of 1 EUR at t equals S·DF_c(t) == F(t)·DF_SOFR(t), F(0) == spot, and the basis moves F off the
+// naive ESTR-implied forward.
+TEST(XccyFx, ConvertsForwardEurToUsdAnyDate) {
+  const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
+  const auto sol = cal::calibrate(b.prob, b.x0, /*use_aad=*/false);
+  auto ch = cal::build_bundle_curves<double>(b.prob.curves, [&](int c, int i) { return sol.x[b.off[c] + i]; });
+  const auto& SOFR = *ch[b.SOFR];
+  const auto& ESTR = *ch[b.ESTR];
+  const auto& C = *ch[b.EURUSD];
+  const double S = b.fx_spot;
+  auto F = [&](double t) { return S * C.discount(t) / SOFR.discount(t); };
+
+  EXPECT_NEAR(F(0.0), S, 1e-12) << "F(0) = spot";
+  double worst_id = 0, max_shift = 0;
+  for (double t : {0.37, 0.9, 1.6, 4.2, 8.5}) {  // arbitrary NON-pillar dates
+    // USD value of 1 EUR at t, two ways: discount on the EUR-in-USD curve x spot, vs convert at the
+    // forward and discount at SOFR. They must agree exactly (no-arbitrage).
+    worst_id = std::max(worst_id, std::abs(S * C.discount(t) - F(t) * SOFR.discount(t)));
+    max_shift = std::max(max_shift, std::abs(F(t) - S * ESTR.discount(t) / SOFR.discount(t)));
+  }
+  std::cout << "  [mc-fx] any-date convert: worst |S·DFc - F·DFsofr|=" << worst_id
+            << "  max FX-fwd basis shift vs naive ESTR=" << max_shift << "\n";
+  EXPECT_LT(worst_id, 1e-14) << "forward-EUR->USD conversion is self-consistent at any date";
+  EXPECT_GT(max_shift, 1e-4) << "the xccy basis moves the FX forward off the naive ESTR-discounted one";
+}
+
+// AAD differentiates the FX-forward and MtM-basis residuals correctly: the forward-mode Jacobian matches
+// a central finite difference (this is what lets the cross-currency bundle calibrate on the AAD path).
+TEST(XccyFx, AadJacobianMatchesFiniteDifference) {
+  const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
+  const Eigen::MatrixXd J = cal::aad_jacobian(b.prob, b.x_true);
+  const int N = b.prob.n_knots(), M = b.prob.n_residuals();
+  const double h = 1e-6;
+  double worst = 0;
+  for (int k = 0; k < N; ++k) {
+    Eigen::VectorXd xp = b.x_true, xm = b.x_true;
+    xp[k] += h;
+    xm[k] -= h;
+    const Eigen::VectorXd fd = (b.prob.residuals<double>(xp) - b.prob.residuals<double>(xm)) / (2 * h);
+    for (int i = 0; i < M; ++i) worst = std::max(worst, std::abs(fd[i] - J(i, k)));
+  }
+  std::cout << "  [mc-fx] AAD Jacobian vs central FD: worst |diff| = " << worst << "\n";
+  EXPECT_LT(worst, 1e-6) << "AAD differentiates the FX-forward + MtM-basis residuals (FD-limited)";
 }

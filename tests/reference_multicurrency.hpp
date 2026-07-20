@@ -492,4 +492,135 @@ inline MultiCcyBundle build_xccy_bundle(QuantLib::Date eval = QuantLib::Date(15,
   return b;
 }
 
+// ===============================================================================================
+// The DESK cross-currency build (Phase 5): the EUR-collateralized-in-USD discount curve from FX FORWARD
+// POINTS (T/N, S/N, 1w..1y -- the short end) then MtM xccy basis swaps (the long end). Pure rates, no
+// FX-vol model. The curve + SOFR give F(t) = S·DF_c(t)/DF_SOFR(t) for ANY date -- i.e. convert a forward
+// EUR cashflow back to USD at any date. Here EUR-in-USD genuinely depends on BOTH ESTR (its spread base)
+// and SOFR (the FX-forward denominator / the funding leg), so the dependency graph solves it last.
+inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(15, QuantLib::July, 2026)) {
+  using namespace QuantLib;
+  MultiCcyBundle b;
+  b.today = eval;
+  Settings::instance().evaluationDate() = eval;
+  const DayCounter dc = b.dc;
+  const double S = 1.10;  // EURUSD spot, USD per EUR
+  b.fx_spot = S;
+  auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
+
+  b.SOFR = 0;
+  b.ESTR = 1;
+  b.EURUSD = 2;
+  b.prob.curves.resize(3);
+  const std::vector<double> meet{0.5}, ois_back{1, 2, 3, 5, 7, 10};
+  const std::vector<double> xccy_meet{0.25, 0.5}, xccy_back{1, 2, 3, 5, 7, 10};
+  b.prob.curves[b.SOFR] = {meet, ois_back, -1, CCY_USD};
+  b.prob.curves[b.ESTR] = {meet, ois_back, -1, CCY_EUR};
+  b.prob.curves[b.EURUSD] = {xccy_meet, xccy_back, b.ESTR, CCY_EUR};  // ESTR + xccy basis
+  b.off = {0, b.prob.curves[b.SOFR].n_knots(),
+           b.prob.curves[b.SOFR].n_knots() + b.prob.curves[b.ESTR].n_knots()};
+  const int N = b.off[b.EURUSD] + b.prob.curves[b.EURUSD].n_knots();
+  b.default_discount = {{b.SOFR, b.SOFR}, {b.ESTR, b.ESTR}, {b.EURUSD, b.EURUSD}};
+
+  b.x_true.resize(N);
+  auto fill = [&](int c, double level, double slope) {
+    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+  };
+  fill(b.SOFR, 0.0430, 0.0004);
+  fill(b.ESTR, 0.0300, 0.0004);
+  fill(b.EURUSD, -0.0015, 0.00002);
+
+  b.h.resize(3);
+  for (auto& hh : b.h) hh.linkTo(ext::make_shared<FlatForward>(eval, 0.03, dc, Continuous));
+  b.sofr = ext::make_shared<Sofr>(b.h[b.SOFR]);
+  b.estr = ext::make_shared<Estr>(b.h[b.ESTR]);
+
+  std::vector<ext::shared_ptr<OvernightIndexedSwap>> keep;
+  auto ois_par = [&](const ext::shared_ptr<OvernightIndex>& idx, const Period& tenor, int role) {
+    auto o = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, idx, 0.03).withDiscountingTermStructure(b.h[role]));
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParRate;
+    ins.fwd = {swaps::qlx::extract_float_leg(o->overnightLeg(), eval, dc), role, role};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(o->fixedLeg(), eval, dc), role};
+    keep.push_back(o);
+    return ins;
+  };
+  // FX FORWARD POINT: pins EUR-in-USD (fx_num) against SOFR (fx_den) at its delivery time.
+  auto fx_fwd = [&](double fx_time) {
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::FxForward;
+    ins.fx_num = b.EURUSD;
+    ins.fx_den = b.SOFR;
+    ins.fx_spot = S;
+    ins.fx_time = fx_time;
+    ins.pv_currency = CCY_USD;
+    return ins;
+  };
+  // MtM xccy basis swap: EUR self leg (fwd, primary), EUR ESTR leg (bench), annuity, + USD SOFR funding
+  // leg with an FX-resetting notional (mtm). All EUR legs discount on EUR-in-USD; the funding leg on SOFR.
+  auto mtm_basis = [&](const Period& tenor) {
+    auto oe = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, b.estr, 0.03).withDiscountingTermStructure(b.h[b.EURUSD]));
+    auto os = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, b.sofr, 0.03).withDiscountingTermStructure(b.h[b.SOFR]));
+    const auto eleg = swaps::qlx::extract_float_leg(oe->overnightLeg(), eval, dc);
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::XccyMtmBasis;
+    ins.fwd = {eleg, b.EURUSD, b.EURUSD};  // self-forecast (primary = EUR-in-USD)
+    ins.bench = {eleg, b.ESTR, b.EURUSD};  // ESTR forecast
+    ins.fixed = {swaps::qlx::extract_fixed_leg(oe->fixedLeg(), eval, dc), b.EURUSD};
+    ins.mtm = {swaps::qlx::extract_float_leg(os->overnightLeg(), eval, dc), b.SOFR, b.SOFR};
+    ins.mtm.reset_num = b.EURUSD;  // FX-forward notional numerator = EUR-in-USD
+    ins.mtm.reset_den = b.SOFR;    // denominator = SOFR
+    ins.mtm.fx_spot = S;
+    ins.pv_currency = CCY_USD;
+    keep.push_back(oe);
+    keep.push_back(os);
+    return ins;
+  };
+
+  // SOFR + ESTR base pillars.
+  for (double T : {0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0}) {
+    const Period p = (T < 1.0) ? Period(6, Months) : Period(static_cast<int>(T), Years);
+    b.prob.instruments.push_back(ois_par(b.sofr, p, b.SOFR));
+    b.prob.instruments.push_back(ois_par(b.estr, p, b.ESTR));
+  }
+  // FX forward points (short end): T/N, S/N, 1w, 2w, 3w, 1m, 2m, 3m, 6m, 1y -- the standard strip.
+  const Calendar fxcal = JointCalendar(TARGET(), UnitedStates(UnitedStates::Settlement));
+  const Date spot = fxcal.advance(eval, 2, Days);
+  std::vector<double> fx_times{t(fxcal.advance(eval, 1, Days)),    // T/N (tom-next)
+                               t(fxcal.advance(spot, 1, Days))};   // S/N (spot-next)
+  for (const Period& p : {Period(1, Weeks), Period(2, Weeks), Period(3, Weeks), Period(1, Months),
+                          Period(2, Months), Period(3, Months), Period(6, Months), Period(1, Years)})
+    fx_times.push_back(t(fxcal.advance(spot, p)));
+  for (double ft : fx_times) b.prob.instruments.push_back(fx_fwd(ft));
+  // MtM xccy basis swaps (long end).
+  for (double T : {2.0, 3.0, 5.0, 7.0, 10.0})
+    b.prob.instruments.push_back(mtm_basis(Period(static_cast<int>(T), Years)));
+
+  // Real curves in, and self-consistent market = the model quote at x_true (works for the FX-forward log
+  // residual too, where `market += r0` would take log(0)).
+  b.curve_handles = cal::build_bundle_curves<double>(
+      b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i]; });
+  b.ts.resize(3);
+  for (int c = 0; c < 3; ++c) {
+    auto tsc = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
+        eval, dc, b.curve_handles[c].get());
+    tsc->enableExtrapolation();
+    b.ts[c] = tsc;
+    b.h[c].linkTo(tsc);
+  }
+  for (auto& s : keep) s->deepUpdate();
+  const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
+  for (auto& ins : b.prob.instruments)
+    ins.market = cal::instrument_model_quote<double>(ins, curve_of);
+
+  b.x0.resize(N);
+  b.x0.segment(b.off[b.SOFR], b.prob.curves[b.SOFR].n_knots()).setConstant(0.043);
+  b.x0.segment(b.off[b.ESTR], b.prob.curves[b.ESTR].n_knots()).setConstant(0.030);
+  b.x0.segment(b.off[b.EURUSD], b.prob.curves[b.EURUSD].n_knots()).setConstant(-0.0015);
+  return b;
+}
+
 }  // namespace swaps::refbuild

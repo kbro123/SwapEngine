@@ -12,6 +12,7 @@
 
 #include <Eigen/Core>
 
+#include <stdexcept>
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
@@ -159,6 +160,10 @@ class CompiledBundleResidual {
     int row = 0;
     const std::vector<pricing::FloatCoupon> no_leg;
     for (const auto& ins : p.instruments) {
+      if (ins.quote == QuoteKind::FxForward || ins.quote == QuoteKind::XccyMtmBasis)
+        throw std::invalid_argument(
+            "CompiledBundleResidual: FX-forward / MtM-xccy quotes are not W-cacheable (a DF ratio / a "
+            "curve-dependent notional is not a single exp(-Wx)); calibrate on the AAD engine");
       if (ins.quote == QuoteKind::Rate) {
         gen_rate_.add_future(cs_, ins.forecast, ins.obs, ins.convexity);
         r_rows_.push_back(row++);
