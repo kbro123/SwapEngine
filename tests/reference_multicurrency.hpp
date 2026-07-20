@@ -25,6 +25,7 @@
 #include <memory>
 #include <vector>
 
+#include "reference_curve.hpp"  // build_market / build_problem (SOFR base), Market, Future, sofr_start/end
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
@@ -43,8 +44,9 @@ struct MultiCcyBundle {
   QuantLib::Date today;
   QuantLib::DayCounter dc = QuantLib::Actual365Fixed();
 
-  // Curve role indices (into prob.curves / the stacked x).
+  // Curve role indices (into prob.curves / the stacked x). -1 = not present in this bundle.
   int ESTR = -1, EUR3M = -1, EUR6M = -1;
+  int SOFR = -1, FF = -1;
 
   // Per-index DEFAULT discount curve, resolved at build time; a per-trade override just passes a
   // different discount role into the leg builder (see make_ois_inst / make_ibor_inst).
@@ -58,6 +60,8 @@ struct MultiCcyBundle {
   QuantLib::ext::shared_ptr<QuantLib::Estr> estr;
   QuantLib::ext::shared_ptr<QuantLib::Euribor3M> eur3m;
   QuantLib::ext::shared_ptr<QuantLib::Euribor6M> eur6m;
+  QuantLib::ext::shared_ptr<QuantLib::Sofr> sofr;
+  QuantLib::ext::shared_ptr<QuantLib::FedFunds> fedfunds;
 
   int n_curves() const { return static_cast<int>(prob.curves.size()); }
   int offset(int c) const { return off[c]; }
@@ -232,6 +236,138 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
   b.x0.segment(b.off[b.ESTR], b.prob.curves[b.ESTR].n_knots()).setConstant(0.030);
   b.x0.segment(b.off[b.EUR3M], b.prob.curves[b.EUR3M].n_knots()).setConstant(0.0012);
   b.x0.segment(b.off[b.EUR6M], b.prob.curves[b.EUR6M].n_knots()).setConstant(0.0006);
+  return b;
+}
+
+// ===============================================================================================
+// USD block (Phase 2): SOFR (outright) + Fed Funds (spread over SOFR) + PRIME (default fixed spread).
+// ===============================================================================================
+// FED FUNDS conventions (user-confirmed): there is ONE EFFR fixing per day. FF-OIS swaps COMPOUND it
+// (identical mechanism to SOFR OIS); FF 1M futures ARITHMETIC-AVERAGE the same daily fixing (identical
+// shape to our 1M SOFR averaging future). So the FF curve is a spread over SOFR pinned by FF/SOFR
+// compounded basis swaps; the FF averaging future is validated separately vs QuantLib's
+// OvernightIndexFuture (RateAveraging::Simple). All on QuantLib's real FedFunds index
+// (UnitedStates(FederalReserve) calendar, ACT/360).
+
+// A fully-FORECAST arithmetic-average overnight future on ANY overnight index (generalizes
+// reference_curve.hpp avg_future_obs, which is hard-wired to SOFR): one sub-period per business day
+// [fixingDate, d2] with weight accr/yf(fixingDate,d2), mirroring QuantLib 1.35
+// OvernightIndexFuture::averagedRate() EXACTLY. Requires start > today (no realized prefix) so no
+// fixing history is needed.
+inline px::RateObservation avg_future_obs_idx(const QuantLib::ext::shared_ptr<QuantLib::OvernightIndex>& idx,
+                                              const QuantLib::Date& today, const QuantLib::DayCounter& curveDc,
+                                              const QuantLib::Date& start, const QuantLib::Date& end) {
+  using namespace QuantLib;
+  const Calendar fcal = idx->fixingCalendar();
+  const DayCounter idc = idx->dayCounter();
+  std::vector<std::pair<Date, Date>> subs;
+  std::vector<double> weights;
+  Date fixingDate = fcal.adjust(start, Preceding);
+  for (Date d1 = start; d1 < end;) {
+    const Date d2 = fcal.advance(d1, 1, Days);
+    const Date d2cap = std::min(d2, end);
+    const double accr = idc.yearFraction(d1, d2cap);
+    QL_REQUIRE(fixingDate >= today, "avg_future_obs_idx expects a fully-forecast future (start > today)");
+    subs.emplace_back(fixingDate, d2);
+    weights.push_back(accr / idc.yearFraction(fixingDate, d2));
+    fixingDate = d1 = d2;
+  }
+  bool all_one = true;
+  for (double w : weights) if (w != 1.0) { all_one = false; break; }
+  if (all_one) weights.clear();
+  return swaps::qlx::make_observation(subs, 0.0, idc.yearFraction(start, end), today, curveDc, weights);
+}
+
+// Build the USD block: SOFR reference market (reused, curve 0) + Fed Funds spread (curve 1). PRIME is
+// demonstrated as a fixed default spread over FF in the test (like EONIA), so it is not a calibrated
+// curve here. `n_basis`-style extension is not needed; this is the canonical two-curve USD bundle.
+inline MultiCcyBundle build_usd_bundle() {
+  using namespace QuantLib;
+  MultiCcyBundle b;
+
+  // SOFR base: the full reference market (6 FOMC meetings + 12x1M/8x3M futures + par swaps). build_market
+  // sets the evaluation date (rm::evaluation_date) and seeds SOFR fixings.
+  b.h.resize(2);
+  Market mk = build_market(b.h[0]);  // h[0] = SOFR handle (relinked below)
+  b.today = mk.today;
+  b.dc = mk.dc;
+  b.sofr = mk.sofr;
+  const DayCounter dc = mk.dc;
+  const cal::CalibrationProblem sofr_prob = build_problem(mk);
+
+  b.SOFR = 0;
+  b.FF = 1;
+  b.prob.curves.resize(2);
+  b.prob.curves[b.SOFR] = {mk.meeting_times, mk.back_times, -1, CCY_USD};  // outright
+
+  // FF: spread over SOFR, a flat front + Hermite back at the basis-swap pillars.
+  const std::vector<double> ff_meet{0.5};
+  const std::vector<double> ff_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
+  b.prob.curves[b.FF] = {ff_meet, ff_back, b.SOFR, CCY_USD};
+
+  b.off = {0, b.prob.curves[b.SOFR].n_knots()};
+  const int N = b.off[b.FF] + b.prob.curves[b.FF].n_knots();
+
+  // Fed Funds discounts on SOFR (CSA default), overridable per trade.
+  b.default_discount = {{b.SOFR, b.SOFR}, {b.FF, b.SOFR}};
+  const int disc_sofr = b.default_discount.at(b.SOFR);
+
+  // x_true: SOFR forwards from the reference curve; a small FF-SOFR forward spread (~3bp).
+  b.x_true.resize(N);
+  {
+    std::vector<double> sx(rm::reference_front_forwards.begin(), rm::reference_front_forwards.end());
+    sx.insert(sx.end(), rm::reference_back_forwards.begin(), rm::reference_back_forwards.end());
+    QL_REQUIRE(static_cast<int>(sx.size()) == b.prob.curves[b.SOFR].n_knots(), "SOFR knot/forward mismatch");
+    for (int i = 0; i < static_cast<int>(sx.size()); ++i) b.x_true[i] = sx[i];
+  }
+  for (int i = 0; i < b.prob.curves[b.FF].n_knots(); ++i) b.x_true[b.off[b.FF] + i] = 0.0003 + 0.00002 * i;
+
+  // Fed Funds index on its own handle.
+  b.fedfunds = ext::make_shared<FedFunds>(b.h[b.FF]);
+
+  // SOFR instruments (curve 0): the reference market's generic Instruments (roles already curve 0).
+  for (const auto& ins : sofr_prob.instruments) b.prob.instruments.push_back(ins);
+
+  // FF/SOFR compounded basis (ParSpread): fwd = FF-OIS overnight leg (forecast FF), bench = SOFR-OIS
+  // overnight leg (forecast SOFR), SOFR-discounted. The quoted spread is on the FF leg.
+  std::vector<ext::shared_ptr<OvernightIndexedSwap>> keep;
+  auto basis_inst = [&](const Period& tenor) {
+    auto ffo = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, b.fedfunds, 0.03).withDiscountingTermStructure(b.h[disc_sofr]));
+    auto so = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, b.sofr, 0.03).withDiscountingTermStructure(b.h[disc_sofr]));
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParSpread;
+    ins.fwd = {swaps::qlx::extract_float_leg(ffo->overnightLeg(), b.today, dc), b.FF, disc_sofr};
+    ins.bench = {swaps::qlx::extract_float_leg(so->overnightLeg(), b.today, dc), b.SOFR, disc_sofr};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(so->fixedLeg(), b.today, dc), disc_sofr};
+    keep.push_back(ffo);
+    keep.push_back(so);
+    return ins;
+  };
+  b.prob.instruments.push_back(basis_inst(6 * Months));
+  for (double T : ff_back) b.prob.instruments.push_back(basis_inst(Period(static_cast<int>(T), Years)));
+
+  // Wire the real curves in and self-consistent market.
+  b.curve_handles = cal::build_bundle_curves<double>(
+      b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i]; });
+  b.ts.resize(2);
+  for (int c = 0; c < 2; ++c) {
+    auto tsc = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
+        b.today, dc, b.curve_handles[c].get());
+    tsc->enableExtrapolation();
+    b.ts[c] = tsc;
+    b.h[c].linkTo(tsc);
+  }
+  for (auto& s : mk.swaps) s->deepUpdate();
+  for (auto& s : keep) s->deepUpdate();
+
+  const Eigen::VectorXd r0 = b.prob.residuals<double>(b.x_true);
+  for (int i = 0; i < static_cast<int>(b.prob.instruments.size()); ++i) b.prob.instruments[i].market += r0[i];
+
+  b.x0.resize(N);
+  b.x0.head(b.prob.curves[b.SOFR].n_knots()).setConstant(0.043);
+  b.x0.segment(b.off[b.FF], b.prob.curves[b.FF].n_knots()).setConstant(0.0003);
   return b;
 }
 
