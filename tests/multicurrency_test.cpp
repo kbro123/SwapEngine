@@ -290,3 +290,100 @@ TEST(MultiCcy, UsdAndEurBooksCalibrateIndependently) {
   EXPECT_LT(du, 1e-6) << "the USD book recovers independently";
   EXPECT_LT(de, 1e-6) << "the EUR book recovers independently";
 }
+
+// ===============================================================================================
+// Cross-currency block (Phase 3): the EUR-collateralized-in-USD discount curve from constant-notional
+// EURUSD OIS xccy basis swaps, in ONE bundle with SOFR + ESTR. Validated first-principles (FX no-arb).
+// ===============================================================================================
+
+TEST(MultiCcyXccy, MarketSelfConsistentAndRecovers) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
+  const auto joint = cal::calibrate(b.prob, b.x0);
+  const auto staged = cal::calibrate_staged(b.prob, b.x0);
+  const double dj = (joint.x - b.x_true).cwiseAbs().maxCoeff();
+  const double ds = (staged.x - b.x_true).cwiseAbs().maxCoeff();
+  std::cout << "  [mc-xccy] curves=" << b.n_curves() << " knots=" << b.prob.n_knots()
+            << " instruments=" << b.prob.n_residuals() << " ||r(x_true)||inf=" << r
+            << "  joint ||x*-xtrue||=" << dj << " staged=" << ds << "\n";
+  EXPECT_LT(r, 1e-12) << "self-consistent xccy market zeroes the residual";
+  EXPECT_LT(dj, 1e-6) << "joint solve recovers SOFR + ESTR + EUR-in-USD";
+  EXPECT_LT(ds, 1e-6) << "staged solve recovers them (EUR-in-USD staged after ESTR)";
+}
+
+TEST(MultiCcyXccy, CompiledBundleResidualMatchesAad) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  cal::CompiledBundleResidual cr(b.prob);
+  const double dr = (cr.residuals(b.x_true) - b.prob.residuals<double>(b.x_true)).cwiseAbs().maxCoeff();
+  const double dj = (cr.jacobian(b.x_true) - cal::aad_jacobian(b.prob, b.x_true)).cwiseAbs().maxCoeff();
+  std::cout << "  [mc-xccy] compiled |residual - templated|=" << dr << " |Jacobian - AAD|=" << dj << "\n";
+  EXPECT_LT(dr, 1e-13) << "compiled xccy residual matches the templated kernel";
+  EXPECT_LT(dj, 1e-9) << "analytic block Jacobian matches AAD (the spread-over-ESTR block)";
+}
+
+// The dependency graph must order the EUR-in-USD spread AFTER its ESTR base; SOFR is an independent SCC.
+TEST(MultiCcyXccy, DependencyGraphOrdersEurInUsdAfterEstr) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  const auto sccs = cal::bundle_dependency_order(b.prob);  // dependency order: base before spread
+  int pos_estr = -1, pos_eurusd = -1;
+  for (int i = 0; i < static_cast<int>(sccs.size()); ++i)
+    for (int c : sccs[i]) {
+      if (c == b.ESTR) pos_estr = i;
+      if (c == b.EURUSD) pos_eurusd = i;
+    }
+  std::cout << "  [mc-xccy] SCC order: ESTR at " << pos_estr << ", EUR-in-USD at " << pos_eurusd
+            << " (of " << sccs.size() << " SCCs)\n";
+  ASSERT_GE(pos_estr, 0);
+  ASSERT_GE(pos_eurusd, 0);
+  EXPECT_LT(pos_estr, pos_eurusd) << "EUR-in-USD (spread over ESTR) must be solved after ESTR";
+}
+
+// FX no-arbitrage oracle (hand-built; QuantLib's xccy helpers are experimental so are not the oracle).
+// The EUR-collateralized-in-USD forward is F(t) = S · DF_c(t) / DF_SOFR(t). We check: F(0) == spot; the
+// xccy basis genuinely shifts the FX forward (DF_c != DF_ESTR); and, reconstructing a par const-notional
+// xccy basis swap's EUR leg through the FX forwards F(t) (an independent path), the swap prices to par.
+TEST(MultiCcyXccy, FxForwardNoArbitrage) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  const auto& SOFR = *b.curve_handles[b.SOFR];
+  const auto& ESTR = *b.curve_handles[b.ESTR];
+  const auto& C = *b.curve_handles[b.EURUSD];  // EUR-in-USD collateral curve
+  const double S = b.fx_spot;
+  auto F = [&](double t) { return S * C.discount(t) / SOFR.discount(t); };
+
+  // F(0) == spot exactly (DF ratios are 1); and the basis shifts the forward vs the naive ESTR forward.
+  EXPECT_NEAR(F(0.0), S, 1e-12) << "the FX forward equals spot at t = 0";
+  double max_basis_shift = 0;
+  for (double t : {1.0, 5.0, 10.0}) {
+    const double f_naive = S * ESTR.discount(t) / SOFR.discount(t);  // if we ignored the xccy basis
+    max_basis_shift = std::max(max_basis_shift, std::abs(F(t) - f_naive));
+  }
+  EXPECT_GT(max_basis_shift, 1e-4) << "the -15bp xccy basis must move the FX forward measurably";
+
+  // Reconstruct a 10Y const-notional xccy basis swap's EUR leg through F(t), at the calibrated basis, and
+  // confirm the swap is par (its net USD value is ~0). The USD SOFR-flat leg is par by construction.
+  Settings::instance().evaluationDate() = b.today;
+  auto o = ext::shared_ptr<OvernightIndexedSwap>(
+      MakeOIS(10 * Years, b.estr, 0.03).withDiscountingTermStructure(b.h[b.EURUSD]));
+  o->deepUpdate();
+  const auto leg = qlx::extract_float_leg(o->overnightLeg(), b.today, b.dc);
+  const auto fx = qlx::extract_fixed_leg(o->fixedLeg(), b.today, b.dc);
+  // Calibrated par basis = par_spread(fwd = ESTR-forecast leg on DF_c, bench = DF_c-self leg on DF_c).
+  const double bcal = px::par_spread<double>(leg, leg, fx, ESTR, C, C);
+
+  // EUR leg (per unit EUR notional): principal exchange -1 at the SPOT start, +1 at maturity, plus
+  // (ESTR_i + b·tau_i) coupons. Value each EUR amount in USD via A·F(t)·DF_SOFR(t)/S and confirm the net
+  // is ~0 at par. (The swap starts at the spot/settlement date, so the first principal is at t_spot, not 0.)
+  const double t_spot = leg.front().obs.sub_start[0];
+  double eur_leg_usd = -1.0 * F(t_spot) * SOFR.discount(t_spot) / S;  // -1 EUR principal at spot
+  for (const auto& c : leg) {
+    const double c_estr = ESTR.discount(c.obs.sub_start[0]) / ESTR.discount(c.obs.sub_end[0]) - 1.0;
+    const double amount = c_estr + bcal * c.tau_pay;  // ESTR compounded growth + basis on the accrual
+    eur_leg_usd += amount * F(c.pay) * SOFR.discount(c.pay) / S;
+  }
+  const double Tlast = leg.back().pay;
+  eur_leg_usd += 1.0 * F(Tlast) * SOFR.discount(Tlast) / S;  // +1 EUR principal at maturity
+  std::cout << "  [mc-xccy] basis(10Y)=" << bcal << "  FX-fwd basis shift(max)=" << max_basis_shift
+            << "  reconstructed EUR-leg USD PV (par => ~0)=" << eur_leg_usd << "\n";
+  EXPECT_LT(std::abs(eur_leg_usd), 1e-10)
+      << "the const-notional xccy basis swap must price to par through the FX forwards";
+}

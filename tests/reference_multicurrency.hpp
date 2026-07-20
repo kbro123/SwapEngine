@@ -47,6 +47,8 @@ struct MultiCcyBundle {
   // Curve role indices (into prob.curves / the stacked x). -1 = not present in this bundle.
   int ESTR = -1, EUR3M = -1, EUR6M = -1;
   int SOFR = -1, FF = -1;
+  int EURUSD = -1;      // EUR collateralized in USD = ESTR + EURUSD xccy basis (a spread curve)
+  double fx_spot = 0.0;  // EURUSD spot (USD per EUR), for the FX-forward no-arbitrage oracle
 
   // Per-index DEFAULT discount curve, resolved at build time; a per-trade override just passes a
   // different discount role into the leg builder (see make_ois_inst / make_ibor_inst).
@@ -368,6 +370,125 @@ inline MultiCcyBundle build_usd_bundle() {
   b.x0.resize(N);
   b.x0.head(b.prob.curves[b.SOFR].n_knots()).setConstant(0.043);
   b.x0.segment(b.off[b.FF], b.prob.curves[b.FF].n_knots()).setConstant(0.0003);
+  return b;
+}
+
+// ===============================================================================================
+// Cross-currency block (Phase 3): the EUR-collateralized-in-USD discount curve, from CONSTANT-notional
+// EURUSD OIS xccy basis swaps. This is where SOFR and EUR curves share ONE BundleProblem.
+// ===============================================================================================
+// Market: post-LIBOR EURUSD xccy is SOFR (USD) vs ESTR (EUR) + basis. The EUR-collateralized-in-USD
+// discount curve is DF_c(t) = DF_ESTR(t)·exp(-∫ basis), i.e. exactly a SpreadHandle(base = ESTR) whose
+// spread knots are the xccy basis. Its no-arbitrage FX forward is F(t) = S · DF_c(t) / DF_SOFR(t).
+//
+// KEY (derived first-principles): for a constant-notional OIS xccy basis with matched principals at
+// spot, the USD SOFR-flat leg discounted on SOFR is PAR (contributes 0) and the FX spot CANCELS, so the
+// par basis spread reduces to a EUR-only multi-curve identity:
+//   b = [ (1 − DF_c(T)) − Σ ESTR_fwd·τ·DF_c(t) ] / Σ τ·DF_c(t)
+//     = par_spread(fwd = ESTR-forecast leg on DF_c, bench = DF_c-self-forecast leg on DF_c, annuity DF_c)
+// So the xccy basis rides the EXISTING ParSpread machinery with NO engine change and NO FX scale (SOFR
+// couples into the calibration only under MtM resets -- Phase 4). SOFR is present for the FX oracle.
+inline MultiCcyBundle build_xccy_bundle(QuantLib::Date eval = QuantLib::Date(15, QuantLib::July, 2026)) {
+  using namespace QuantLib;
+  MultiCcyBundle b;
+  b.today = eval;
+  Settings::instance().evaluationDate() = eval;
+  const DayCounter dc = b.dc;
+  b.fx_spot = 1.10;  // EURUSD spot, USD per EUR
+
+  b.SOFR = 0;
+  b.ESTR = 1;
+  b.EURUSD = 2;  // EUR-in-USD = ESTR + xccy basis
+  b.prob.curves.resize(3);
+  const std::vector<double> meet{0.5};
+  const std::vector<double> ois_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
+  const std::vector<double> xccy_back{1, 2, 3, 5, 7, 10};
+  b.prob.curves[b.SOFR] = {meet, ois_back, -1, CCY_USD};        // outright
+  b.prob.curves[b.ESTR] = {meet, ois_back, -1, CCY_EUR};        // outright
+  b.prob.curves[b.EURUSD] = {meet, xccy_back, b.ESTR, CCY_EUR}; // spread over ESTR (the xccy basis)
+
+  b.off = {0, b.prob.curves[b.SOFR].n_knots(),
+           b.prob.curves[b.SOFR].n_knots() + b.prob.curves[b.ESTR].n_knots()};
+  const int N = b.off[b.EURUSD] + b.prob.curves[b.EURUSD].n_knots();
+
+  // Discount defaults: USD-collateralized USD on SOFR, EUR on ESTR, EUR-collateralized-in-USD on itself.
+  b.default_discount = {{b.SOFR, b.SOFR}, {b.ESTR, b.ESTR}, {b.EURUSD, b.EURUSD}};
+
+  b.x_true.resize(N);
+  auto fill = [&](int c, double level, double slope) {
+    const int nk = b.prob.curves[c].n_knots();
+    for (int i = 0; i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;
+  };
+  fill(b.SOFR, 0.0430, 0.0004);
+  fill(b.ESTR, 0.0300, 0.0004);
+  fill(b.EURUSD, -0.0015, 0.00002);  // xccy basis ~ -15bp (EUR-in-USD forwards below ESTR)
+
+  b.h.resize(3);
+  for (auto& hh : b.h) hh.linkTo(ext::make_shared<FlatForward>(eval, 0.03, dc, Continuous));
+  b.sofr = ext::make_shared<Sofr>(b.h[b.SOFR]);
+  b.estr = ext::make_shared<Estr>(b.h[b.ESTR]);
+
+  std::vector<ext::shared_ptr<OvernightIndexedSwap>> keep;
+  // A plain OIS par-rate instrument pinning `fc` (== discount), for the SOFR and ESTR base curves.
+  auto ois_par = [&](const ext::shared_ptr<OvernightIndex>& idx, const Period& tenor, int role) {
+    auto o = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, idx, 0.03).withDiscountingTermStructure(b.h[role]));
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParRate;
+    ins.fwd = {swaps::qlx::extract_float_leg(o->overnightLeg(), eval, dc), role, role};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(o->fixedLeg(), eval, dc), role};
+    keep.push_back(o);
+    return ins;
+  };
+  // Constant-notional EURUSD OIS xccy basis as a ParSpread: fwd = ESTR-forecast leg on EUR-in-USD,
+  // bench = EUR-in-USD-self-forecast leg on EUR-in-USD, annuity on EUR-in-USD. Model quote == the
+  // closed-form par basis spread b above.
+  auto xccy_basis = [&](const Period& tenor) {
+    auto o = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, b.estr, 0.03).withDiscountingTermStructure(b.h[b.EURUSD]));
+    const auto leg = swaps::qlx::extract_float_leg(o->overnightLeg(), eval, dc);
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParSpread;
+    // fwd forecasts the PINNED curve (EUR-in-USD, self) so primary_curve() assigns this instrument to the
+    // EUR-in-USD block (not ESTR); bench forecasts ESTR. par_spread = (pv_bench - pv_fwd)/annuity = -b.
+    ins.fwd = {leg, b.EURUSD, b.EURUSD};  // forecast EUR-in-USD (self) -- the pinned curve
+    ins.bench = {leg, b.ESTR, b.EURUSD};  // forecast ESTR, discount EUR-in-USD
+    ins.fixed = {swaps::qlx::extract_fixed_leg(o->fixedLeg(), eval, dc), b.EURUSD};
+    ins.pv_currency = CCY_USD;  // a EURUSD xccy quote (the numeraire is USD); ignored by the ParSpread math
+    keep.push_back(o);
+    return ins;
+  };
+
+  // SOFR + ESTR base pillars (each pinned by its own OIS), then the EUR-in-USD spread by xccy basis.
+  for (double T : {0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0}) {
+    const Period p = (T < 1.0) ? Period(6, Months) : Period(static_cast<int>(T), Years);
+    b.prob.instruments.push_back(ois_par(b.sofr, p, b.SOFR));
+    b.prob.instruments.push_back(ois_par(b.estr, p, b.ESTR));
+  }
+  for (double T : {0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0}) {
+    const Period p = (T < 1.0) ? Period(6, Months) : Period(static_cast<int>(T), Years);
+    b.prob.instruments.push_back(xccy_basis(p));
+  }
+
+  b.curve_handles = cal::build_bundle_curves<double>(
+      b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i]; });
+  b.ts.resize(3);
+  for (int c = 0; c < 3; ++c) {
+    auto tsc = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
+        eval, dc, b.curve_handles[c].get());
+    tsc->enableExtrapolation();
+    b.ts[c] = tsc;
+    b.h[c].linkTo(tsc);
+  }
+  for (auto& s : keep) s->deepUpdate();
+
+  const Eigen::VectorXd r0 = b.prob.residuals<double>(b.x_true);
+  for (int i = 0; i < static_cast<int>(b.prob.instruments.size()); ++i) b.prob.instruments[i].market += r0[i];
+
+  b.x0.resize(N);
+  b.x0.segment(b.off[b.SOFR], b.prob.curves[b.SOFR].n_knots()).setConstant(0.043);
+  b.x0.segment(b.off[b.ESTR], b.prob.curves[b.ESTR].n_knots()).setConstant(0.030);
+  b.x0.segment(b.off[b.EURUSD], b.prob.curves[b.EURUSD].n_knots()).setConstant(-0.0015);
   return b;
 }
 
