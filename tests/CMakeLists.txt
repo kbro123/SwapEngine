@@ -51,6 +51,7 @@ if(TARGET quantlib_oracle)
     rfr_coupon_oracle_test.cpp
     ois_weekend_test.cpp
     migration_guard_test.cpp
+    multicurrency_test.cpp
   )
   target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
   target_include_directories(swaps_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
