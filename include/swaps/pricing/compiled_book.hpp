@@ -38,7 +38,8 @@ namespace swaps::pricing {
 // calibration dependency (so this header stays in the pricing layer).
 struct CurveStructure {
   std::vector<double> meeting, back;
-  int base = -1;  // -1 = outright; else this curve = curves[base] + spread (spread knots)
+  int base = -1;      // -1 = outright; else this curve = curves[base] + spread (spread knots)
+  int currency = 0;   // engine-blind tag, mirrors BundleCurveSpec::currency; the W-cache never reads it
   int n_knots() const { return static_cast<int>(meeting.size() + back.size()); }
 };
 
@@ -162,8 +163,12 @@ struct BundleFloatBatch {
   void add(CompiledCurveSet& cs, int fc, int dc, const std::vector<FloatCoupon>& leg) {
     for (const auto& c : leg) {
       push_obs(cs, fc, c.obs);
+      // FX `scale` (default 1) folds into the per-coupon k (× 1.0 is exact). A scale != 1 makes k != 1,
+      // so the coupon drops off the cpn_is_plain fused fast path automatically -- exactly right: only a
+      // foreign (converted) leg pays that cost, and the analytic Jacobian formula (pv = DF·A·k) is
+      // unchanged because scale rides inside k as a constant.
       push_coupon(cs.reg(dc, c.pay), c.obs.realized + c.spread * c.obs.tau_index,
-                  c.tau_pay / c.obs.tau_index, c.obs.realized, 1.0 / c.obs.tau_index, 0.0);
+                  c.tau_pay / c.obs.tau_index * c.scale, c.obs.realized, 1.0 / c.obs.tau_index, 0.0);
     }
     ++n_inst;
   }
@@ -385,11 +390,13 @@ struct BundleFixedLegs {
   Eigen::SparseMatrix<double> R;
   int n_inst = 0;
 
-  // One instrument = one fixed leg of generic coupons, discounting `dc`.
+  // One instrument = one fixed leg of generic coupons, discounting `dc`. FX `scale` (default 1) folds
+  // into tau (× 1.0 exact), so a foreign annuity is converted with no separate field and d_annuity's
+  // tau_i partial stays correct.
   void add(CompiledCurveSet& cs, int dc, const std::vector<FixedCoupon>& leg) {
     for (const auto& c : leg) {
       p_.push_back(cs.reg(dc, c.pay));
-      t_.push_back(c.tau);
+      t_.push_back(c.tau * c.scale);
       row_.push_back(n_inst);
     }
     ++n_inst;

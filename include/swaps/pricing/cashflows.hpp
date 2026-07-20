@@ -78,6 +78,11 @@ struct FloatCoupon {
   double pay = 0.0;      // payment (discount-curve) time
   double tau_pay = 0.0;  // payment accrual, coupon day count
   double spread = 0.0;   // additive contractual spread (outside the index), may be 0
+  // CONSTANT PV multiplier (multi-currency). For a foreign leg converted into the PV currency this is
+  // the FX spot; being a build-time constant it scales the coupon PV WITHOUT touching the exp(-Wx)
+  // linear map (it rides inside the W-cache's per-coupon `k`). Default 1.0 => byte-identical to before,
+  // and the plain fast path below stays on x*1.0 (exact) only when scale == 1.0.
+  double scale = 1.0;
 };
 
 // One fixed coupon. The RATE is supplied by the instrument/quote, not stored here, so this type
@@ -85,6 +90,7 @@ struct FloatCoupon {
 struct FixedCoupon {
   double pay = 0.0;
   double tau = 0.0;
+  double scale = 1.0;  // constant PV multiplier (FX spot for a foreign annuity); default 1.0 unchanged
 };
 
 // Composite ∫f² over the curve for the moment path (defined at the end of this header).
@@ -195,7 +201,7 @@ Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc)
   // COMPOUNDED (product) mode -- separate from the arithmetic k-form below so the hot OIS path is
   // untouched. pv = DF(pay) · ((realized_factor·∏(1+r_k dt_k) − 1) + spread·tau_index) · (tau_pay/tau_index).
   if (o.compounded) {
-    const double kf = c.tau_pay / o.tau_index;
+    const double kf = c.tau_pay / o.tau_index * c.scale;  // FX scale folds into the constant k (× 1.0 exact)
     const double konst = c.spread * o.tau_index - 1.0;  // the "−1" of the product folds in with the spread
     if (o.sub_start.empty()) return dc.discount(c.pay) * ((o.realized_factor + konst) * kf);
     Scalar a = o.realized_factor * obs_compound_growth<Scalar>(o, fc) + konst;
@@ -208,10 +214,10 @@ Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc)
   // (a * 1.0, konst == 0) but materially cheaper under AAD, so the risk ladder's per-coupon AAD pass
   // stays fast. This is the templated analogue of the compiled BundleFloatBatch cpn_is_plain fast path.
   if (o.sub_start.size() == 1 && o.weight.empty() && o.fixing_step == 0.0 && o.realized == 0.0 &&
-      c.spread == 0.0 && c.tau_pay == o.tau_index) {
+      c.spread == 0.0 && c.tau_pay == o.tau_index && c.scale == 1.0) {
     return dc.discount(c.pay) * (fc.discount(o.sub_start[0]) / fc.discount(o.sub_end[0]) - 1.0);
   }
-  const double k = c.tau_pay / c.obs.tau_index;
+  const double k = c.tau_pay / c.obs.tau_index * c.scale;  // FX scale folds into the constant k (× 1.0 exact)
   const double konst = c.obs.realized + c.spread * c.obs.tau_index;
   if (c.obs.sub_start.empty()) return dc.discount(c.pay) * (konst * k);
   Scalar a = obs_numerator<Scalar>(c.obs, fc) + konst;
@@ -227,12 +233,12 @@ Scalar float_leg_pv(const std::vector<FloatCoupon>& leg, const FCurve& fc, const
   return pv;
 }
 
-// Annuity per unit rate and unit notional: Σ DF_dc(pay_i) · tau_i.
+// Annuity per unit rate and unit notional: Σ DF_dc(pay_i) · tau_i · scale_i (scale = FX spot, default 1).
 template <class Scalar, class DCurve>
 Scalar annuity(const std::vector<FixedCoupon>& leg, const DCurve& dc) {
   assert(!leg.empty());
-  Scalar a = dc.discount(leg[0].pay) * leg[0].tau;
-  for (std::size_t i = 1; i < leg.size(); ++i) a += dc.discount(leg[i].pay) * leg[i].tau;
+  Scalar a = dc.discount(leg[0].pay) * (leg[0].tau * leg[0].scale);
+  for (std::size_t i = 1; i < leg.size(); ++i) a += dc.discount(leg[i].pay) * (leg[i].tau * leg[i].scale);
   return a;
 }
 

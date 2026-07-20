@@ -14,10 +14,18 @@
 
 #include <ql/quantlib.hpp>
 
+#include <Eigen/Core>
+
+#include <vector>
+
 #include "reference_curve.hpp"
+#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/pricing/cashflows.hpp"
 
 using namespace QuantLib;
 namespace rb = swaps::refbuild;
+namespace cv = swaps::curve;
+namespace px = swaps::pricing;
 
 TEST(MigrationGuard, OvernightValueDatesCoincideWithAccrualDatesOnEveryCoupon) {
   RelinkableHandle<YieldTermStructure> h;
@@ -38,4 +46,37 @@ TEST(MigrationGuard, OvernightValueDatesCoincideWithAccrualDatesOnEveryCoupon) {
     }
   }
   EXPECT_GT(coupons, 0) << "expected at least one overnight coupon to check";
+}
+
+// Phase 0 multi-currency plumbing: the constant FX `scale` on a coupon/fixed-coupon must multiply its
+// PV EXACTLY by scale, and (the regression-safety invariant) scale == 1.0 must be byte-identical to a
+// coupon with no scale set. A power-of-2 scale keeps the linear-scaling assertion bit-exact
+// (round(2x) == 2 round(x) in binary FP, including across the summed annuity), so EXPECT_EQ is honest.
+TEST(FxScale, CouponAndAnnuityScaleExactlyAndDefaultIsIdentity) {
+  auto curve = cv::make_calibration_curve<double>({0.25, 0.5}, {1, 2, 5, 10});
+  Eigen::VectorXd x(6);
+  x << 0.043, 0.044, 0.045, 0.046, 0.047, 0.05;
+  curve.set_forwards(x);
+
+  // A plain OIS-shape float coupon (one sub-period, tau_pay == tau_index, no spread/realized) -- the
+  // shape that takes the fused fast path at scale == 1 and the general path at scale != 1.
+  px::FloatCoupon fc;
+  fc.obs.sub_start = {1.0};
+  fc.obs.sub_end = {2.0};
+  fc.obs.tau_index = 1.0;
+  fc.pay = 2.0;
+  fc.tau_pay = 1.0;
+  const double pv1 = px::float_coupon_pv<double>(fc, curve, curve);  // scale defaults to 1.0
+  fc.scale = 2.0;
+  const double pv2 = px::float_coupon_pv<double>(fc, curve, curve);
+  EXPECT_EQ(pv2, 2.0 * pv1) << "FX scale must multiply the coupon PV exactly by scale";
+  EXPECT_NE(pv1, 0.0) << "the test coupon must have a non-trivial PV";
+
+  // Annuity: a summed leg, so a power-of-2 scale is required for the sum to scale bit-exactly.
+  std::vector<px::FixedCoupon> leg{{1.0, 1.0}, {2.0, 1.0}};
+  const double a1 = px::annuity<double>(leg, curve);
+  for (auto& c : leg) c.scale = 2.0;
+  const double a2 = px::annuity<double>(leg, curve);
+  EXPECT_EQ(a2, 2.0 * a1) << "FX scale must multiply the annuity exactly by scale";
+  EXPECT_NE(a1, 0.0) << "the test annuity must be non-trivial";
 }

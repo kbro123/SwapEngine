@@ -65,6 +65,11 @@ struct BundleCurveSpec {
   std::vector<double> meeting;  // front (flat) knot times
   std::vector<double> back;     // back (Hermite) knot times
   int base = -1;                // -1 = outright; else this curve = curves[base] + spread (spread knots)
+  // Engine-BLIND currency tag (multi-currency support). The kernel — build_bundle_curves, residuals,
+  // the W-cache — NEVER reads it; it exists only so a BUILDER can resolve a per-index default discount
+  // curve and FX conversion at construction time (CLAUDE.md §1: the engine names no currency). Default
+  // 0 keeps every existing single-currency bundle byte-identical.
+  int currency = 0;
   int n_knots() const { return static_cast<int>(meeting.size() + back.size()); }
 };
 

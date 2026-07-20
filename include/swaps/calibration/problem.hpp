@@ -71,6 +71,10 @@ struct Instrument {
   // Rate only. An INPUT NUMBER (design §3): the convexity MODEL (Hull-White etc.) lives in tests.
   double convexity = 0.0;
   double market = 0.0;  // the market quote, in the units of `quote` (always rate units)
+  // The currency the quote/residual is expressed in (multi-currency). Consulted ONLY by a cross-
+  // currency quote that mixes legs of different currencies (to name the PV numeraire); every single-
+  // currency quote ignores it. Default 0 keeps existing instruments byte-identical.
+  int pv_currency = 0;
 
   // The curve this instrument primarily PINS (its quoted leg's forecast curve). Used by the staged
   // solver to assign the instrument to a dependency block.
