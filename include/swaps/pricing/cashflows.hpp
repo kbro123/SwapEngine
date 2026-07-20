@@ -83,6 +83,11 @@ struct FloatCoupon {
   // linear map (it rides inside the W-cache's per-coupon `k`). Default 1.0 => byte-identical to before,
   // and the plain fast path below stays on x*1.0 (exact) only when scale == 1.0.
   double scale = 1.0;
+  // MtM (mark-to-market cross-currency) FX-RESET observation time for this coupon's notional. < 0 => use
+  // the period start (obs.sub_start.front()). Only consulted by xccy_mtm_leg_pv, whose notional
+  // N = fx_spot · DF_num(reset_time)/DF_den(reset_time) is CURVE-DEPENDENT (a DF ratio of two curves), so
+  // an MtM leg is NOT a single exp(-Wx) and rides the AAD/templated path, not the W-cache (§2 guard).
+  double reset_time = -1.0;
 };
 
 // One fixed coupon. The RATE is supplied by the instrument/quote, not stored here, so this type
@@ -230,6 +235,36 @@ Scalar float_leg_pv(const std::vector<FloatCoupon>& leg, const FCurve& fc, const
   assert(!leg.empty());
   Scalar pv = float_coupon_pv<Scalar>(leg[0], fc, dc);
   for (std::size_t i = 1; i < leg.size(); ++i) pv += float_coupon_pv<Scalar>(leg[i], fc, dc);
+  return pv;
+}
+
+// PV of a MARK-TO-MARKET (FX-resettable-notional) cross-currency leg (design: Phase 4). The notional of
+// coupon i resets to the FX forward
+//     N_i = fx_spot · DF_num(reset_i) / DF_den(reset_i)          (num = foreign, den = domestic discount)
+// so, modelling each period as a self-financing one-period loan of N_i at the funding index (borrow N_i at
+// the period start s_i, repay + interest at the end e_i), the leg value is
+//     PV = Σ_i N_i · [ float_coupon_pv(c_i, fc, dc) + DF_dc(e_i) − DF_dc(s_i) ].
+// The bracket is the per-period (interest + notional-exchange) value; for a funding-index-FLAT leg
+// (dc == fc, spread == 0) each bracket is exactly 0, so the MtM funding leg is PAR — which is why an MtM
+// xccy basis equals the constant-notional basis in DETERMINISTIC curves (their difference is an FX-vol
+// convexity term, out of scope for a curve engine). The genuinely-new part is that N_i is CURVE-DEPENDENT
+// (a DF ratio), so the coupon PV is a product of TWO curves' discount factors — NOT a single exp(-Wx).
+// It therefore lives ONLY in this templated kernel (AAD-safe) and never on the W-cache (§2 linear-map
+// guard). AAD flows through: N_i, float_coupon_pv and the DF differences all carry derivatives; the
+// accumulator seeds from the first (curve-dependent) contribution.
+template <class Scalar, class FCurve, class DCurve, class NumCurve, class DenCurve>
+Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, const FCurve& fc,
+                       const DCurve& dc, const NumCurve& numc, const DenCurve& denc) {
+  assert(!leg.empty());
+  auto contrib = [&](const FloatCoupon& c) -> Scalar {
+    assert(!c.obs.sub_start.empty());
+    const double s = c.obs.sub_start.front(), e = c.obs.sub_end.back();
+    const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;  // notional fixes at the period start
+    const Scalar N = fx_spot * (numc.discount(reset) / denc.discount(reset));  // FX-forward notional
+    return N * (float_coupon_pv<Scalar>(c, fc, dc) + (dc.discount(e) - dc.discount(s)));
+  };
+  Scalar pv = contrib(leg[0]);
+  for (std::size_t i = 1; i < leg.size(); ++i) pv += contrib(leg[i]);
   return pv;
 }
 

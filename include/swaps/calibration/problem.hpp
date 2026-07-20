@@ -36,6 +36,13 @@ struct FloatLeg {
   std::vector<pricing::FloatCoupon> coupons;
   int forecast = 0;  // curve that FORECASTS this leg's index fixings
   int discount = 0;  // curve that DISCOUNTS this leg's payments
+  // MtM (mark-to-market cross-currency) notional-reset roles. -1/-1 => a plain constant-notional leg
+  // (the default). When set, this is an FX-resettable leg whose coupon notional is
+  // fx_spot · DF[reset_num](reset)/DF[reset_den](reset) -- priced by pricing::xccy_mtm_leg_pv on the
+  // AAD/templated path (a curve-dependent notional is not a single exp(-Wx), so it is never W-cached).
+  int reset_num = -1;   // FX-forward NUMERATOR (foreign) discount curve role
+  int reset_den = -1;   // FX-forward DENOMINATOR (domestic) discount curve role
+  double fx_spot = 1.0;  // FX spot for the notional reset
 };
 
 struct FixedLeg {

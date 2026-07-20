@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "reference_multicurrency.hpp"
+#include "swaps/ad/dual.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/jacobian.hpp"
@@ -386,4 +387,138 @@ TEST(MultiCcyXccy, FxForwardNoArbitrage) {
             << "  reconstructed EUR-leg USD PV (par => ~0)=" << eur_leg_usd << "\n";
   EXPECT_LT(std::abs(eur_leg_usd), 1e-10)
       << "the const-notional xccy basis swap must price to par through the FX forwards";
+}
+
+// ===============================================================================================
+// MtM (mark-to-market, FX-resettable-notional) xccy leg (Phase 4) -- the one genuinely-new coupon
+// shape. Its notional N_i = S·DF_c(reset)/DF_SOFR(reset) is CURVE-DEPENDENT, so the coupon PV is a
+// product of two curves' DFs (not a single exp(-Wx)); it lives on the templated/AAD path only.
+// ===============================================================================================
+
+namespace {
+// A USD SOFR OIS overnight leg (the MtM funding leg's coupons), from a fresh QuantLib swap.
+std::vector<px::FloatCoupon> usd_sofr_leg(const rb::MultiCcyBundle& b, int years) {
+  auto o = ext::shared_ptr<OvernightIndexedSwap>(
+      MakeOIS(years * Years, b.sofr, 0.03).withDiscountingTermStructure(b.h[b.SOFR]));
+  o->deepUpdate();
+  return qlx::extract_float_leg(o->overnightLeg(), b.today, b.dc);
+}
+}  // namespace
+
+// The reset mechanism is correct: an MtM leg paying its funding index (SOFR) FLAT is PAR (each period is
+// a self-financing one-period loan). This is why the MtM xccy basis equals the constant-notional basis
+// in deterministic curves (their difference is an FX-vol convexity term, out of scope for a curve engine).
+TEST(MultiCcyMtm, FundingIndexFlatLegIsPar) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  const auto& SOFR = *b.curve_handles[b.SOFR];
+  const auto& C = *b.curve_handles[b.EURUSD];
+  const auto leg = usd_sofr_leg(b, 10);  // SOFR-flat (spread == 0)
+  const double pv = px::xccy_mtm_leg_pv<double>(leg, b.fx_spot, SOFR, SOFR, C, SOFR);
+  std::cout << "  [mc-mtm] SOFR-flat MtM leg PV (par => ~0) = " << pv << "\n";
+  EXPECT_LT(std::abs(pv), 1e-12) << "an MtM leg paying its funding index flat is par";
+}
+
+// An MtM leg WITH a spread has a non-zero PV that (a) matches an independent first-principles
+// reconstruction, and (b) is genuinely CURVE-NONLINEAR -- it moves when EITHER SOFR or the EUR-in-USD
+// notional curve moves, proving the notional is a real DF ratio of two curves.
+TEST(MultiCcyMtm, SpreadLegMatchesReconstructionAndIsTwoCurve) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  const auto& SOFR = *b.curve_handles[b.SOFR];
+  const auto& C = *b.curve_handles[b.EURUSD];
+  auto leg = usd_sofr_leg(b, 10);
+  for (auto& c : leg) c.spread = 0.0025;  // 25bp funding spread => not par
+  const double S = b.fx_spot;
+
+  const double pv = px::xccy_mtm_leg_pv<double>(leg, S, SOFR, SOFR, C, SOFR);
+  // Independent reconstruction: N_i·(interest_i + notional_i), interest recomputed from raw DFs.
+  double recon = 0;
+  for (const auto& c : leg) {
+    const double s = c.obs.sub_start.front(), e = c.obs.sub_end.back();
+    const double N = S * C.discount(s) / SOFR.discount(s);
+    const double rate = (SOFR.discount(c.obs.sub_start[0]) / SOFR.discount(c.obs.sub_end[0]) - 1.0) /
+                        c.obs.tau_index;
+    const double interest = SOFR.discount(c.pay) * (rate + c.spread) * c.tau_pay;
+    recon += N * (interest + (SOFR.discount(e) - SOFR.discount(s)));
+  }
+  // Curve-nonlinearity: rebuild with a bumped EUR-in-USD block and a bumped SOFR block.
+  auto bump = [&](int role, double dv) {
+    auto ch = cal::build_bundle_curves<double>(
+        b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i] + (c == role ? dv : 0.0); });
+    return px::xccy_mtm_leg_pv<double>(leg, S, *ch[b.SOFR], *ch[b.SOFR], *ch[b.EURUSD], *ch[b.SOFR]);
+  };
+  const double d_eurusd = bump(b.EURUSD, 1e-4) - pv;  // sensitivity to the notional (num) curve
+  const double d_sofr = bump(b.SOFR, 1e-4) - pv;      // sensitivity to the funding/notional-den curve
+  std::cout << "  [mc-mtm] spread-leg PV=" << pv << " |PV-recon|=" << std::abs(pv - recon)
+            << "  dPV/d(EUR-in-USD)=" << d_eurusd << " dPV/d(SOFR)=" << d_sofr << "\n";
+  EXPECT_LT(std::abs(pv - recon), 1e-13) << "MtM spread leg matches the first-principles reconstruction";
+  EXPECT_GT(std::abs(pv), 1e-4) << "a 25bp funding spread makes the MtM leg materially non-par";
+  EXPECT_GT(std::abs(d_eurusd), 1e-9) << "the leg depends on the EUR-in-USD notional curve";
+  EXPECT_GT(std::abs(d_sofr), 1e-9) << "the leg depends on the SOFR curve too (a genuine two-curve product)";
+}
+
+// AAD differentiates the curve-dependent-notional MtM coupon correctly: the forward-mode gradient of the
+// MtM leg PV w.r.t. every knot matches a central finite-difference bump. This is what lets an MtM
+// instrument ride the AAD calibration path (aad_jacobian) with zero hand-derived partials.
+TEST(MultiCcyMtm, AadGradientMatchesFiniteDifference) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  auto leg = usd_sofr_leg(b, 10);
+  for (auto& c : leg) c.spread = 0.0025;
+  const double S = b.fx_spot;
+  const int N = b.prob.n_knots();
+
+  // AAD: build the curves as Dual-typed off a seeded x, evaluate once.
+  const auto xd = swaps::ad::seed(b.x_true);
+  const auto Cd = cal::build_bundle_curves<swaps::ad::Dual>(
+      b.prob.curves, [&](int c, int i) { return xd[b.off[c] + i]; });
+  const swaps::ad::Dual pvd =
+      px::xccy_mtm_leg_pv<swaps::ad::Dual>(leg, S, *Cd[b.SOFR], *Cd[b.SOFR], *Cd[b.EURUSD], *Cd[b.SOFR]);
+  const Eigen::VectorXd grad = pvd.derivatives();
+
+  // Central finite difference on each knot.
+  const double h = 1e-6;
+  double worst = 0;
+  for (int k = 0; k < N; ++k) {
+    auto price = [&](double dv) {
+      auto ch = cal::build_bundle_curves<double>(
+          b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i] + (b.off[c] + i == k ? dv : 0.0); });
+      return px::xccy_mtm_leg_pv<double>(leg, S, *ch[b.SOFR], *ch[b.SOFR], *ch[b.EURUSD], *ch[b.SOFR]);
+    };
+    const double fd = (price(h) - price(-h)) / (2 * h);
+    worst = std::max(worst, std::abs(fd - grad[k]));
+  }
+  std::cout << "  [mc-mtm] AAD gradient vs central FD: worst |diff| = " << worst << " over " << N << " knots\n";
+  EXPECT_LT(worst, 1e-6) << "AAD differentiates the FX-reset-notional coupon correctly (FD-limited)";
+}
+
+// The MtM xccy basis EQUALS the constant-notional basis in deterministic curves: a full MtM swap
+// (USD MtM SOFR-flat leg vs EUR ESTR+basis leg) prices to par at the Phase-3 constant-notional basis.
+TEST(MultiCcyMtm, MtmBasisEqualsConstantNotionalBasis) {
+  const rb::MultiCcyBundle b = rb::build_xccy_bundle();
+  const auto& SOFR = *b.curve_handles[b.SOFR];
+  const auto& ESTR = *b.curve_handles[b.ESTR];
+  const auto& C = *b.curve_handles[b.EURUSD];
+  const double S = b.fx_spot;
+
+  // EUR ESTR leg + the constant-notional par basis (Phase 3).
+  auto oe = ext::shared_ptr<OvernightIndexedSwap>(
+      MakeOIS(10 * Years, b.estr, 0.03).withDiscountingTermStructure(b.h[b.EURUSD]));
+  oe->deepUpdate();
+  const auto eleg = qlx::extract_float_leg(oe->overnightLeg(), b.today, b.dc);
+  const auto efix = qlx::extract_fixed_leg(oe->fixedLeg(), b.today, b.dc);
+  const double b_const = px::par_spread<double>(eleg, eleg, efix, ESTR, C, C);
+
+  // EUR leg value (per 1 EUR, in EUR) at b_const, discounted DF_c: principal at spot/T + (ESTR + b)·tau.
+  const double spot = eleg.front().obs.sub_start.front(), T = eleg.back().pay;
+  double eur_pv = -C.discount(spot) + C.discount(T);
+  for (const auto& c : eleg) {
+    const double c_estr = ESTR.discount(c.obs.sub_start[0]) / ESTR.discount(c.obs.sub_end[0]) - 1.0;
+    eur_pv += (c_estr + b_const * c.tau_pay) * C.discount(c.pay);
+  }
+  // USD MtM funding leg (SOFR-flat) value in USD.
+  const double usd_pv = px::xccy_mtm_leg_pv<double>(usd_sofr_leg(b, 10), S, SOFR, SOFR, C, SOFR);
+  const double npv = usd_pv - S * eur_pv;  // receive USD MtM, pay EUR
+  std::cout << "  [mc-mtm] b_const(10Y)=" << b_const << "  MtM swap NPV at b_const=" << npv
+            << " (USD MtM leg=" << usd_pv << ", EUR leg=" << eur_pv << ")\n";
+  EXPECT_LT(std::abs(npv), 1e-10)
+      << "the MtM xccy swap prices to par at the constant-notional basis (MtM == const-notional here)";
 }
