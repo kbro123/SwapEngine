@@ -23,6 +23,7 @@
 
 #include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "reference_curve.hpp"  // build_market / build_problem (SOFR base), Market, Future, sofr_start/end
@@ -620,6 +621,234 @@ inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(
   b.x0.segment(b.off[b.SOFR], b.prob.curves[b.SOFR].n_knots()).setConstant(0.043);
   b.x0.segment(b.off[b.ESTR], b.prob.curves[b.ESTR].n_knots()).setConstant(0.030);
   b.x0.segment(b.off[b.EURUSD], b.prob.curves[b.EURUSD].n_knots()).setConstant(-0.0015);
+  return b;
+}
+
+// ===============================================================================================
+// The PROPER EUR rate-curve build: three COUPLED curves (ESTR / EURIBOR-3M / EURIBOR-6M) that form a
+// dependency CYCLE and calibrate JOINTLY as one SCC (plan: composed-tickling-snowglobe). Desk build:
+//   ESTR : 1M+3M €STR futures front, ESTR/3M-EURIBOR basis beyond 3y (no direct long ESTR OIS)
+//   EUR3M: 3M EURIBOR futures front, 3s6s (3M-vs-6M) basis beyond 3y  (spread over ESTR)
+//   EUR6M: single-period 3s6s front, outright 6M EURIBOR swaps beyond 3y  (spread over EUR3M)
+// Each basis pins its fwd.forecast curve, so the edges close a full cycle ESTR<->EUR3M<->EUR6M.
+// Futures carry ZERO convexity here (the convexity MODEL is orthogonal and already validated for SOFR;
+// hull_white_convexity can be wired in exactly as reference_curve.hpp does).
+// ===============================================================================================
+inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, QuantLib::July, 2026)) {
+  using namespace QuantLib;
+  MultiCcyBundle b;
+  b.today = eval;
+  Settings::instance().evaluationDate() = eval;
+  const DayCounter dc = b.dc;
+  const Calendar cal = TARGET();
+  auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
+  auto nextm = [](int m, int y) { return (m == 12) ? std::make_pair(1, y + 1) : std::make_pair(m + 1, y); };
+
+  b.ESTR = 0;
+  b.EUR3M = 1;
+  b.EUR6M = 2;
+  b.prob.curves.resize(3);
+
+  // ECB Governing Council policy (effective) dates -> flat-forward front knots (the €STR analog of the
+  // SOFR/FOMC front). Absolute dates (data), so they are valid for any eval before the first.
+  const std::vector<Date> ecb{Date(30, July, 2026),   Date(17, September, 2026), Date(29, October, 2026),
+                              Date(17, December, 2026), Date(28, January, 2027),  Date(18, March, 2027)};
+  std::vector<double> estr_meet;
+  for (const Date& d : ecb) estr_meet.push_back(t(d));
+  const double last_mtg_t = estr_meet.back();
+
+  b.h.resize(3);
+  for (auto& hh : b.h) hh.linkTo(ext::make_shared<FlatForward>(eval, 0.02, dc, Continuous));
+  b.estr = ext::make_shared<Estr>(b.h[b.ESTR]);
+  b.eur3m = ext::make_shared<Euribor3M>(b.h[b.EUR3M]);
+  b.eur6m = ext::make_shared<Euribor6M>(b.h[b.EUR6M]);
+  const DayCounter estr_dc = b.estr->dayCounter();
+
+  const std::vector<int> swap_tenors{4, 5, 7, 10, 15, 20, 30};  // basis / outright back pillars
+  auto tenor_t = [&](int y) { return t(cal.advance(eval, Period(y, Years))); };
+
+  std::vector<ext::shared_ptr<OvernightIndexedSwap>> keep_ois;
+  std::vector<ext::shared_ptr<VanillaSwap>> keep_vs;
+
+  // ---------------- ESTR curve (0): €STR futures front + ESTR/3M basis back ----------------
+  std::vector<double> estr_back;
+  // 12 monthly 1M €STR averaging futures (Aug-2026 .. Jul-2027), fully forecast.
+  {
+    int m = 8, y = 2026;
+    for (int i = 0; i < 12; ++i) {
+      const Date s = cal.adjust(Date(1, Month(m), y));
+      const auto [nm, ny] = nextm(m, y);
+      const Date e = cal.adjust(Date(1, Month(nm), ny));
+      cal::Instrument ins;
+      ins.quote = cal::QuoteKind::Rate;
+      ins.forecast = b.ESTR;
+      ins.obs = avg_future_obs_idx(b.estr, eval, dc, s, e);
+      b.prob.instruments.push_back(ins);
+      m = nm;
+      y = ny;
+    }
+  }
+  // 8 IMM 3M compounded €STR futures (Sep-2027 .. Jun-2029); their end dates > last meeting are back knots.
+  for (const auto& [im, iy] : std::vector<std::pair<int, int>>{
+           {9, 2027}, {12, 2027}, {3, 2028}, {6, 2028}, {9, 2028}, {12, 2028}, {3, 2029}, {6, 2029}}) {
+    const Date s = Date::nthWeekday(3, Wednesday, Month(im), iy);
+    const Date e0 = s + Period(3, Months);
+    const Date e = Date::nthWeekday(3, Wednesday, e0.month(), e0.year());
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::Rate;
+    ins.forecast = b.ESTR;
+    ins.obs = swaps::qlx::make_observation({{s, e}}, 0.0, estr_dc.yearFraction(s, e), eval, dc);
+    b.prob.instruments.push_back(ins);
+    if (t(e) > last_mtg_t) estr_back.push_back(t(e));
+  }
+  for (int y : swap_tenors) estr_back.push_back(tenor_t(y));
+
+  // ESTR/3M-EURIBOR basis (>3y), pinning ESTR: fwd = ESTR OIS overnight leg (forecast ESTR = PRIMARY),
+  // bench = 3M EURIBOR float leg (forecast EUR3M), both ESTR-discounted.
+  auto estr3m_basis = [&](int y) {
+    const Period tenor(y, Years);
+    auto oe = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(tenor, b.estr, 0.03).withDiscountingTermStructure(b.h[b.ESTR]));
+    auto s3 = ext::shared_ptr<VanillaSwap>(MakeVanillaSwap(tenor, b.eur3m, 0.03)
+                                               .withDiscountingTermStructure(b.h[b.ESTR])
+                                               .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
+                                               .withFixedLegTenor(1 * Years)
+                                               .withFixedLegCalendar(TARGET())
+                                               .withFloatingLegCalendar(TARGET()));
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParSpread;
+    ins.fwd = {swaps::qlx::extract_float_leg(oe->overnightLeg(), eval, dc), b.ESTR, b.ESTR};  // PRIMARY = ESTR
+    ins.bench = {swaps::qlx::extract_float_leg(s3->floatingLeg(), eval, dc), b.EUR3M, b.ESTR};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(oe->fixedLeg(), eval, dc), b.ESTR};
+    keep_ois.push_back(oe);
+    keep_vs.push_back(s3);
+    return ins;
+  };
+  for (int y : swap_tenors) b.prob.instruments.push_back(estr3m_basis(y));
+
+  // ---------------- EURIBOR-3M curve (1): 3M EURIBOR futures front + 3s6s basis back ----------------
+  std::vector<double> eur3m_back;
+  // 12 quarterly 3M EURIBOR futures (IMM Sep-2026 .. Jun-2029). A future settles on the ACTUAL fixing,
+  // so its dates come from the INDEX (valueDate/maturityDate), NOT the par-coupon approximation.
+  for (const auto& [im, iy] : std::vector<std::pair<int, int>>{
+           {9, 2026}, {12, 2026}, {3, 2027}, {6, 2027}, {9, 2027}, {12, 2027},
+           {3, 2028}, {6, 2028}, {9, 2028}, {12, 2028}, {3, 2029}, {6, 2029}}) {
+    const Date fixing = Date::nthWeekday(3, Wednesday, Month(im), iy);
+    const Date d1 = b.eur3m->valueDate(fixing);
+    const Date d2 = b.eur3m->maturityDate(d1);
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::Rate;
+    ins.forecast = b.EUR3M;
+    ins.obs = swaps::qlx::make_observation({{d1, d2}}, 0.0, b.eur3m->dayCounter().yearFraction(d1, d2), eval, dc);
+    b.prob.instruments.push_back(ins);
+    if (t(d2) < 3.4) eur3m_back.push_back(t(d2));  // futures pillars to ~3y
+  }
+  for (int y : swap_tenors) eur3m_back.push_back(tenor_t(y));
+
+  // 3s6s basis (>3y), pinning EUR3M: fwd = 3M leg (EUR3M = PRIMARY), bench = 6M leg (EUR6M).
+  auto s3s6_basis = [&](int y, int pin_curve) {
+    const Period tenor(y, Years);
+    auto s3 = ext::shared_ptr<VanillaSwap>(
+        MakeVanillaSwap(tenor, b.eur3m, 0.03).withDiscountingTermStructure(b.h[b.ESTR]));
+    auto s6 = ext::shared_ptr<VanillaSwap>(
+        MakeVanillaSwap(tenor, b.eur6m, 0.03).withDiscountingTermStructure(b.h[b.ESTR]));
+    const auto l3 = swaps::qlx::extract_float_leg(s3->floatingLeg(), eval, dc);
+    const auto l6 = swaps::qlx::extract_float_leg(s6->floatingLeg(), eval, dc);
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParSpread;
+    // fwd = the PINNED curve's leg; bench = the other. EUR3M-pin: fwd=3M,bench=6M. EUR6M-pin: fwd=6M,bench=3M.
+    if (pin_curve == b.EUR3M) {
+      ins.fwd = {l3, b.EUR3M, b.ESTR};
+      ins.bench = {l6, b.EUR6M, b.ESTR};
+    } else {
+      ins.fwd = {l6, b.EUR6M, b.ESTR};
+      ins.bench = {l3, b.EUR3M, b.ESTR};
+    }
+    ins.fixed = {swaps::qlx::extract_fixed_leg(s3->fixedLeg(), eval, dc), b.ESTR};
+    keep_vs.push_back(s3);
+    keep_vs.push_back(s6);
+    return ins;
+  };
+  for (int y : swap_tenors) b.prob.instruments.push_back(s3s6_basis(y, b.EUR3M));
+
+  // ---------------- EURIBOR-6M curve (2): single-period 3s6s front + outright 6M swaps back ----------
+  std::vector<double> eur6m_back{tenor_t(1), tenor_t(2), tenor_t(3)};
+  for (int y : swap_tenors) eur6m_back.push_back(tenor_t(y));
+  // Front: 3s6s basis at {6M,1,2,3} pinning EUR6M (fwd=6M leg).
+  {
+    auto p6 = [&](const Period& tenor) {
+      auto s3 = ext::shared_ptr<VanillaSwap>(
+          MakeVanillaSwap(tenor, b.eur3m, 0.03).withDiscountingTermStructure(b.h[b.ESTR]));
+      auto s6 = ext::shared_ptr<VanillaSwap>(
+          MakeVanillaSwap(tenor, b.eur6m, 0.03).withDiscountingTermStructure(b.h[b.ESTR]));
+      cal::Instrument ins;
+      ins.quote = cal::QuoteKind::ParSpread;
+      ins.fwd = {swaps::qlx::extract_float_leg(s6->floatingLeg(), eval, dc), b.EUR6M, b.ESTR};  // PRIMARY=EUR6M
+      ins.bench = {swaps::qlx::extract_float_leg(s3->floatingLeg(), eval, dc), b.EUR3M, b.ESTR};
+      ins.fixed = {swaps::qlx::extract_fixed_leg(s6->fixedLeg(), eval, dc), b.ESTR};
+      keep_vs.push_back(s3);
+      keep_vs.push_back(s6);
+      return ins;
+    };
+    b.prob.instruments.push_back(p6(Period(6, Months)));
+    for (int y : {1, 2, 3}) b.prob.instruments.push_back(p6(Period(y, Years)));
+  }
+  // Back: outright 6M EURIBOR swaps (fixed 30/360 annual vs 6M float), pinning EUR6M.
+  auto eur6m_outright = [&](int y) {
+    auto s = ext::shared_ptr<VanillaSwap>(MakeVanillaSwap(Period(y, Years), b.eur6m, 0.03)
+                                              .withDiscountingTermStructure(b.h[b.ESTR])
+                                              .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
+                                              .withFixedLegTenor(1 * Years)
+                                              .withFixedLegCalendar(TARGET())
+                                              .withFloatingLegCalendar(TARGET()));
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParRate;
+    ins.fwd = {swaps::qlx::extract_float_leg(s->floatingLeg(), eval, dc), b.EUR6M, b.ESTR};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(s->fixedLeg(), eval, dc), b.ESTR};
+    keep_vs.push_back(s);
+    return ins;
+  };
+  for (int y : swap_tenors) b.prob.instruments.push_back(eur6m_outright(y));
+
+  // ---- Curve specs + parameterization (ESTR outright; EUR3M spread/ESTR; EUR6M spread/EUR3M) ----
+  b.prob.curves[b.ESTR] = {estr_meet, estr_back, -1, CCY_EUR};
+  // EUR3M's first futures pillar is ~0.44y, so its single flat-front knot must sit below that (the
+  // Flat/Hermite join requires back.front() > meeting.back()). EUR6M's first pillar is 1y, so 0.5 is fine.
+  b.prob.curves[b.EUR3M] = {{0.1}, eur3m_back, b.ESTR, CCY_EUR};
+  b.prob.curves[b.EUR6M] = {{0.5}, eur6m_back, b.EUR3M, CCY_EUR};
+  b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
+  const int N = b.off[2] + b.prob.curves[2].n_knots();
+  b.default_discount = {{b.ESTR, b.ESTR}, {b.EUR3M, b.ESTR}, {b.EUR6M, b.ESTR}};
+
+  // x_true: ESTR ~2% forwards; small forward spreads for the tenor-basis curves.
+  b.x_true.resize(N);
+  auto fill = [&](int c, double level, double slope) {
+    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+  };
+  fill(b.ESTR, 0.0200, 0.0003);
+  fill(b.EUR3M, 0.0012, 0.00002);  // 3M-EURIBOR / ESTR basis ~12bp
+  fill(b.EUR6M, 0.0008, 0.00002);  // 3s6s ~8bp on top
+
+  // Real spread-aware curves in, self-consistent market = model quote at x_true.
+  b.curve_handles = cal::build_bundle_curves<double>(
+      b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i]; });
+  b.ts.resize(3);
+  for (int c = 0; c < 3; ++c) {
+    auto tsc = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
+        eval, dc, b.curve_handles[c].get());
+    tsc->enableExtrapolation();
+    b.ts[c] = tsc;
+    b.h[c].linkTo(tsc);
+  }
+  for (auto& s : keep_ois) s->deepUpdate();
+  for (auto& s : keep_vs) s->deepUpdate();
+  const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
+  for (auto& ins : b.prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
+
+  b.x0.resize(N);
+  b.x0.segment(b.off[b.ESTR], b.prob.curves[b.ESTR].n_knots()).setConstant(0.020);
+  b.x0.segment(b.off[b.EUR3M], b.prob.curves[b.EUR3M].n_knots()).setConstant(0.0012);
+  b.x0.segment(b.off[b.EUR6M], b.prob.curves[b.EUR6M].n_knots()).setConstant(0.0008);
   return b;
 }
 

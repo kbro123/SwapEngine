@@ -628,3 +628,111 @@ TEST(XccyFx, AadJacobianMatchesFiniteDifference) {
   std::cout << "  [mc-fx] AAD Jacobian vs central FD: worst |diff| = " << worst << "\n";
   EXPECT_LT(worst, 1e-6) << "AAD differentiates the FX-forward + MtM-basis residuals (FD-limited)";
 }
+
+// ===============================================================================================
+// The PROPER 3-curve EUR build (ESTR / EURIBOR-3M / EURIBOR-6M) — one cyclic SCC, calibrated jointly.
+// ===============================================================================================
+
+// The three EUR curves form ONE strongly-connected component (the basis ladders + spread bases close a
+// full cycle), so the dependency decomposition must put all three in a single SCC solved by one joint LM.
+TEST(EurCurves, ThreeCurvesAreOneCyclicSCC) {
+  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
+  const auto sccs = cal::bundle_dependency_order(b.prob);
+  std::size_t biggest = 0;
+  for (const auto& s : sccs) biggest = std::max(biggest, s.size());
+  std::cout << "  [eur3] curves=" << b.n_curves() << " knots=" << b.prob.n_knots()
+            << " instruments=" << b.prob.n_residuals() << " ||r(x_true)||inf=" << r << "  SCCs=" << sccs.size()
+            << " biggest=" << biggest << "\n";
+  EXPECT_LT(r, 1e-12) << "self-consistent EUR market zeroes the residual at x_true";
+  EXPECT_EQ(sccs.size(), 1u) << "ESTR/EUR3M/EUR6M must condense into ONE strongly-connected component";
+  EXPECT_EQ(biggest, 3u) << "that SCC must contain all three curves (a joint solve)";
+}
+
+// The joint solve reaches FIRST-ORDER OPTIMALITY (‖Jᵀr‖∞ ≈ 0 — the correct calibration criterion,
+// CLAUDE.md §3b), and the curve is recovered to sub-bp. It does NOT recover to 1e-10, and that is a
+// REAL, expected property of the user's basis-only build, not a defect: with no direct long ESTR OIS,
+// the ESTR/EUR3M long-end absolute level is only WEAKLY identified — par rates are first-order
+// insensitive to a parallel DISCOUNT shift, and the basis swaps pin only DIFFERENCES — so a ~0.5bp
+// near-null direction remains (it lands on the EUR3M 30y knot; ESTR/EUR6M are pinned tighter). Adding a
+// direct ESTR OIS at the back would collapse it, but the user chose basis-only.
+TEST(EurCurves, JointSolveIsFirstOrderOptimalAndRecoversSubBp) {
+  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  const auto joint = cal::calibrate(b.prob, b.x0);
+  const auto staged = cal::calibrate_staged(b.prob, b.x0);
+  const double dj = (joint.x - b.x_true).cwiseAbs().maxCoeff();
+  const double ds = (staged.x - b.x_true).cwiseAbs().maxCoeff();
+  const char* nm[] = {"ESTR", "EUR3M", "EUR6M"};
+  for (int c = 0; c < 3; ++c) {
+    const int nk = b.prob.curves[c].n_knots();
+    const Eigen::VectorXd e = (joint.x - b.x_true).segment(b.off[c], nk);
+    int wi = 0;
+    const double me = e.cwiseAbs().maxCoeff(&wi);
+    std::cout << "  [eur3-diag] " << nm[c] << " maxerr=" << me << " at knot " << wi << "/" << nk << "\n";
+  }
+  std::cout << "  [eur3] joint ||x*-xtrue||=" << dj << " iters=" << joint.iterations
+            << " stat=" << joint.stationarity << " rms_resid=" << joint.rms_residual
+            << "  staged ||x*-xtrue||=" << ds << "\n";
+  // The decisive criterion: first-order optimality + a machine-zero achieved objective.
+  EXPECT_LT(joint.stationarity, 1e-9) << "the joint solve is first-order optimal (‖Jᵀr‖∞ ≈ 0)";
+  EXPECT_LT(joint.rms_residual, 1e-10) << "and the achieved objective is machine-zero (self-consistent market)";
+  // Curve recovered to sub-bp; the basis-only long end is the ~0.5bp weakly-identified direction.
+  EXPECT_LT(dj, 1e-4) << "joint solve recovers the coupled EUR curves to sub-bp";
+  EXPECT_LT(ds, 1e-4) << "staged solve (the one SCC block) recovers them too";
+}
+
+// The genuinely-new instruments reprice off the curves to QuantLib core to 1e-10: 1M/3M €STR futures
+// (OvernightIndexFuture), the 3M EURIBOR future (IborIndex::forecastFixing), and the outright 6M swap.
+TEST(EurCurves, InstrumentsMatchQuantLibCore) {
+  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  Settings::instance().evaluationDate() = b.today;
+  const auto& ESTR = *b.curve_handles[b.ESTR];
+  const auto& EUR3M = *b.curve_handles[b.EUR3M];
+
+  // 1M €STR averaging future vs OvernightIndexFuture(Simple).
+  const Date s1 = TARGET().adjust(Date(1, October, 2026)), e1 = TARGET().adjust(Date(1, November, 2026));
+  OvernightIndexFuture f1(b.estr, s1, e1, Handle<Quote>(), RateAveraging::Simple);
+  const double d_estr1m = std::abs(px::rate<double>(rb::avg_future_obs_idx(b.estr, b.today, b.dc, s1, e1), ESTR) -
+                                   (1.0 - f1.NPV() / 100.0));
+  // 3M €STR compounded future vs OvernightIndexFuture(Compound).
+  const Date s3 = Date::nthWeekday(3, Wednesday, December, 2027);
+  const Date e3 = Date::nthWeekday(3, Wednesday, (s3 + Period(3, Months)).month(), (s3 + Period(3, Months)).year());
+  OvernightIndexFuture f3(b.estr, s3, e3, Handle<Quote>(), RateAveraging::Compound);
+  const auto o3 = qlx::make_observation({{s3, e3}}, 0.0, b.estr->dayCounter().yearFraction(s3, e3), b.today, b.dc);
+  const double d_estr3m = std::abs(px::rate<double>(o3, ESTR) - (1.0 - f3.NPV() / 100.0));
+  // 3M EURIBOR future vs IborIndex::forecastFixing (settles on the actual fixing).
+  const Date fx = Date::nthWeekday(3, Wednesday, March, 2028);
+  const Date d1 = b.eur3m->valueDate(fx), d2 = b.eur3m->maturityDate(d1);
+  const auto oe = qlx::make_observation({{d1, d2}}, 0.0, b.eur3m->dayCounter().yearFraction(d1, d2), b.today, b.dc);
+  const double d_eurfut = std::abs(px::rate<double>(oe, EUR3M) - b.eur3m->forecastFixing(fx));
+  // Outright 6M EURIBOR swap vs VanillaSwap::fairRate.
+  double d_6m = 0;
+  for (int y : {5, 10, 30}) {
+    auto sw = ext::shared_ptr<VanillaSwap>(MakeVanillaSwap(y * Years, b.eur6m, 0.03)
+                                               .withDiscountingTermStructure(b.h[b.ESTR])
+                                               .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
+                                               .withFixedLegTenor(1 * Years)
+                                               .withFixedLegCalendar(TARGET())
+                                               .withFloatingLegCalendar(TARGET()));
+    sw->deepUpdate();
+    d_6m = std::max(d_6m, std::abs(our_par_rate(b, sw->floatingLeg(), sw->fixedLeg(), b.EUR6M, b.ESTR) - sw->fairRate()));
+  }
+  std::cout << "  [eur3] oracle: €STR-1M-fut=" << d_estr1m << " €STR-3M-fut=" << d_estr3m
+            << " EURIBOR-fut=" << d_eurfut << " 6M-outright=" << d_6m << "\n";
+  EXPECT_LT(d_estr1m, swaps::tol::curve_rel) << "1M €STR averaging future vs QuantLib";
+  EXPECT_LT(d_estr3m, swaps::tol::curve_rel) << "3M €STR compounded future vs QuantLib";
+  EXPECT_LT(d_eurfut, swaps::tol::curve_rel) << "3M EURIBOR future vs QuantLib forecastFixing";
+  EXPECT_LT(d_6m, swaps::tol::curve_rel) << "outright 6M EURIBOR swap vs QuantLib fairRate";
+}
+
+// The whole EUR bundle is Rate/ParRate/ParSpread (W-cacheable), so the compiled multi-curve residual +
+// analytic block Jacobian must match the templated / AAD paths.
+TEST(EurCurves, CompiledBundleResidualMatchesAad) {
+  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  cal::CompiledBundleResidual cr(b.prob);
+  const double dr = (cr.residuals(b.x_true) - b.prob.residuals<double>(b.x_true)).cwiseAbs().maxCoeff();
+  const double dj = (cr.jacobian(b.x_true) - cal::aad_jacobian(b.prob, b.x_true)).cwiseAbs().maxCoeff();
+  std::cout << "  [eur3] compiled |residual - templated|=" << dr << " |Jacobian - AAD|=" << dj << "\n";
+  EXPECT_LT(dr, 1e-12) << "compiled EUR residual matches the templated kernel";
+  EXPECT_LT(dj, 1e-8) << "analytic block Jacobian matches AAD across the coupled EUR curves";
+}
