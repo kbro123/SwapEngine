@@ -736,3 +736,50 @@ TEST(EurCurves, CompiledBundleResidualMatchesAad) {
   EXPECT_LT(dr, 1e-12) << "compiled EUR residual matches the templated kernel";
   EXPECT_LT(dj, 1e-8) << "analytic block Jacobian matches AAD across the coupled EUR curves";
 }
+
+// ---- Part B: the EUR trio inside the multi-currency bundle (SOFR + trio + EUR-in-USD) ----
+
+// The EUR trio is one SCC (cross-tenor cycle); EUR-in-USD depends on ESTR AND SOFR (cross-currency),
+// so it is solved in a LATER wave than both the EUR trio and SOFR.
+TEST(EurMultiCcy, EurTrioIsOneSccAndXccyDependsOnEstrAndSofr) {
+  const rb::MultiCcyBundle b = rb::build_eur_multicurrency();
+  const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
+  const auto adj = cal::bundle_adjacency(b.prob);
+  const auto sccs = cal::bundle_dependency_order(b.prob);
+  std::size_t trio = 0;
+  int pos_trio = -1, pos_eurusd = -1, pos_sofr = -1;
+  for (int i = 0; i < static_cast<int>(sccs.size()); ++i) {
+    if (sccs[i].size() == 3) { trio = 3; pos_trio = i; }
+    for (int c : sccs[i]) {
+      if (c == b.EURUSD) pos_eurusd = i;
+      if (c == b.SOFR) pos_sofr = i;
+    }
+  }
+  const bool on_estr = std::count(adj[b.EURUSD].begin(), adj[b.EURUSD].end(), b.ESTR) > 0;
+  const bool on_sofr = std::count(adj[b.EURUSD].begin(), adj[b.EURUSD].end(), b.SOFR) > 0;
+  std::cout << "  [eur-mc] curves=" << b.n_curves() << " knots=" << b.prob.n_knots() << " instruments="
+            << b.prob.n_residuals() << " ||r(x_true)||=" << r << "  SCCs=" << sccs.size()
+            << " trioSCC=" << trio << "  EUR-in-USD deps: ESTR=" << on_estr << " SOFR=" << on_sofr << "\n";
+  EXPECT_LT(r, 1e-10) << "self-consistent combined market";
+  EXPECT_EQ(trio, 3u) << "ESTR/EUR3M/EUR6M form ONE cross-tenor SCC inside the multi-currency bundle";
+  EXPECT_TRUE(on_estr && on_sofr) << "EUR-in-USD depends on ESTR (spread base) and SOFR (FX-fwd/funding)";
+  EXPECT_GT(pos_eurusd, pos_trio) << "EUR-in-USD is solved after the EUR trio";
+  EXPECT_GT(pos_eurusd, pos_sofr) << "EUR-in-USD is solved after SOFR";
+}
+
+// The full staged solve recovers the combined bundle (to sub-bp — the same basis-only weak long-end
+// direction the standalone EUR build has; SOFR and EUR-in-USD are pinned tighter).
+TEST(EurMultiCcy, StagedRecovers) {
+  const rb::MultiCcyBundle b = rb::build_eur_multicurrency();
+  const auto sol = cal::calibrate_staged(b.prob, b.x0);
+  const char* nm[] = {"SOFR", "ESTR", "EUR3M", "EUR6M", "EUR-in-USD"};
+  double worst = 0;
+  for (int c = 0; c < 5; ++c) {
+    const int nk = b.prob.curves[c].n_knots();
+    const double e = (sol.x - b.x_true).segment(b.off[c], nk).cwiseAbs().maxCoeff();
+    worst = std::max(worst, e);
+    std::cout << "  [eur-mc] " << nm[c] << " maxerr=" << e << "\n";
+  }
+  std::cout << "  [eur-mc] staged ||x*-xtrue||=" << worst << " iters=" << sol.iterations << "\n";
+  EXPECT_LT(worst, 1e-3) << "the combined SOFR + EUR-trio + EUR-in-USD bundle recovers to sub-bp";
+}
