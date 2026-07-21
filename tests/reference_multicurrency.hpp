@@ -1004,4 +1004,173 @@ inline MultiCcyBundle build_eur_multicurrency() {
   return b;
 }
 
+// ===============================================================================================
+// The WHOLE multi-currency bundle: SOFR + FF + PRIME + ESTR + EUR3M + EUR6M + EONIA + EUR-in-USD — 8
+// curves in one BundleProblem. USD block (SOFR/FF/PRIME), the coupled EUR trio (ESTR/EUR3M/EUR6M cyclic
+// SCC), EONIA (ESTR + fixed spread), and the EUR-collateralized-in-USD xccy curve. Calibrated staged.
+// ===============================================================================================
+inline MultiCcyBundle build_full_multicurrency() {
+  using namespace QuantLib;
+  const Date eval(8, July, 2026);
+  MultiCcyBundle b;
+  b.today = eval;
+  b.fx_spot = 1.10;
+  const DayCounter dc = b.dc;
+  const double S = b.fx_spot;
+  auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
+
+  MultiCcyBundle eur = build_eur_curves(eval);       // ESTR/EUR3M/EUR6M local 0,1,2 -> global 3,4,5
+  RelinkableHandle<YieldTermStructure> hS;
+  Market mk = build_market(hS);
+  const cal::CalibrationProblem sofr = build_problem(mk);
+
+  b.SOFR = 0;
+  b.FF = 1;
+  const int PRIME = 2;
+  b.ESTR = 3;
+  b.EUR3M = 4;
+  b.EUR6M = 5;
+  const int EONIA = 6;
+  b.EURUSD = 7;
+  b.sofr = mk.sofr;
+  b.estr = eur.estr;
+  b.eur3m = eur.eur3m;
+  b.eur6m = eur.eur6m;
+  b.fedfunds = ext::make_shared<FedFunds>(RelinkableHandle<YieldTermStructure>{});
+
+  const Calendar usc = mk.sofr->fixingCalendar();
+  const std::vector<double> spr_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
+  const std::vector<int> spr_tenors{1, 2, 3, 5, 7, 10, 15, 20, 30};
+
+  b.prob.curves.resize(8);
+  b.prob.curves[b.SOFR] = {mk.meeting_times, mk.back_times, -1, CCY_USD};
+  b.prob.curves[b.FF] = {{0.5}, spr_back, b.SOFR, CCY_USD};
+  b.prob.curves[PRIME] = {{0.5}, spr_back, b.FF, CCY_USD};
+  for (int c = 0; c < 3; ++c) {  // EUR trio, bases shifted +3
+    auto spec = eur.prob.curves[c];
+    if (spec.base >= 0) spec.base += 3;
+    b.prob.curves[b.ESTR + c] = spec;
+  }
+  b.prob.curves[EONIA] = {{0.5}, spr_back, b.ESTR, CCY_EUR};
+  b.prob.curves[b.EURUSD] = {{0.25, 0.5}, {1, 2, 3, 5, 7, 10}, b.ESTR, CCY_EUR};
+
+  b.off.assign(8, 0);
+  for (int c = 1; c < 8; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();
+  const int N = b.off[7] + b.prob.curves[7].n_knots();
+
+  // Handles: SOFR=hS; FF/PRIME/EONIA/EUR-in-USD fresh; EUR trio reuses eur.h.
+  b.h.assign(8, RelinkableHandle<YieldTermStructure>{});
+  b.h[b.SOFR] = hS;
+  b.h[b.ESTR] = eur.h[0];
+  b.h[b.EUR3M] = eur.h[1];
+  b.h[b.EUR6M] = eur.h[2];
+  for (int c : {b.FF, PRIME, EONIA, b.EURUSD})
+    b.h[c].linkTo(ext::make_shared<FlatForward>(eval, 0.03, dc, Continuous));
+  b.fedfunds = ext::make_shared<FedFunds>(b.h[b.FF]);
+  auto prime_idx = ext::make_shared<OvernightIndex>("PRIME", 0, USDCurrency(), usc, Actual360(), b.h[PRIME]);
+  auto eonia_idx =
+      ext::make_shared<OvernightIndex>("EONIA", 0, EURCurrency(), TARGET(), Actual360(), b.h[EONIA]);
+
+  // Instruments: SOFR (roles 0) + EUR trio (roles +3).
+  for (auto ins : sofr.instruments) b.prob.instruments.push_back(ins);
+  for (auto ins : eur.prob.instruments) {
+    remap_instrument_roles(ins, 3);
+    b.prob.instruments.push_back(ins);
+  }
+  std::vector<ext::shared_ptr<OvernightIndexedSwap>> keep;
+  // A compounded-OIS basis pinning `fc` vs `bench`, discounted on `disc`.
+  auto ois_basis = [&](const ext::shared_ptr<OvernightIndex>& fi, int fc, const ext::shared_ptr<OvernightIndex>& bi,
+                       int bench, int disc, const Period& tenor) {
+    auto of = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(tenor, fi, 0.03).withDiscountingTermStructure(b.h[disc]));
+    auto ob = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(tenor, bi, 0.03).withDiscountingTermStructure(b.h[disc]));
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParSpread;
+    ins.fwd = {swaps::qlx::extract_float_leg(of->overnightLeg(), eval, dc), fc, disc};       // PRIMARY = fc
+    ins.bench = {swaps::qlx::extract_float_leg(ob->overnightLeg(), eval, dc), bench, disc};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(ob->fixedLeg(), eval, dc), disc};
+    keep.push_back(of);
+    keep.push_back(ob);
+    return ins;
+  };
+  for (int y : spr_tenors) {
+    b.prob.instruments.push_back(ois_basis(b.fedfunds, b.FF, mk.sofr, b.SOFR, b.SOFR, Period(y, Years)));  // FF/SOFR
+    b.prob.instruments.push_back(ois_basis(prime_idx, PRIME, b.fedfunds, b.FF, b.SOFR, Period(y, Years)));  // PRIME/FF
+    b.prob.instruments.push_back(ois_basis(eonia_idx, EONIA, b.estr, b.ESTR, b.ESTR, Period(y, Years)));    // EONIA/ESTR
+  }
+  // EUR-in-USD: FX forward points + MtM xccy basis.
+  const Calendar fxcal = JointCalendar(TARGET(), UnitedStates(UnitedStates::Settlement));
+  const Date spot = fxcal.advance(eval, 2, Days);
+  std::vector<double> fx_times{t(fxcal.advance(eval, 1, Days)), t(fxcal.advance(spot, 1, Days))};
+  for (const Period& p : {Period(1, Weeks), Period(2, Weeks), Period(3, Weeks), Period(1, Months),
+                          Period(2, Months), Period(3, Months), Period(6, Months), Period(1, Years)})
+    fx_times.push_back(t(fxcal.advance(spot, p)));
+  for (double ft : fx_times) {
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::FxForward;
+    ins.fx_num = b.EURUSD;
+    ins.fx_den = b.SOFR;
+    ins.fx_spot = S;
+    ins.fx_time = ft;
+    ins.pv_currency = CCY_USD;
+    b.prob.instruments.push_back(ins);
+  }
+  for (int y : {2, 3, 5, 7, 10}) {
+    auto oe = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(Period(y, Years), b.estr, 0.03).withDiscountingTermStructure(b.h[b.EURUSD]));
+    auto os = ext::shared_ptr<OvernightIndexedSwap>(
+        MakeOIS(Period(y, Years), b.sofr, 0.03).withDiscountingTermStructure(b.h[b.SOFR]));
+    const auto eleg = swaps::qlx::extract_float_leg(oe->overnightLeg(), eval, dc);
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::XccyMtmBasis;
+    ins.fwd = {eleg, b.EURUSD, b.EURUSD};
+    ins.bench = {eleg, b.ESTR, b.EURUSD};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(oe->fixedLeg(), eval, dc), b.EURUSD};
+    ins.mtm = {swaps::qlx::extract_float_leg(os->overnightLeg(), eval, dc), b.SOFR, b.SOFR};
+    ins.mtm.reset_num = b.EURUSD;
+    ins.mtm.reset_den = b.SOFR;
+    ins.mtm.fx_spot = S;
+    ins.pv_currency = CCY_USD;
+    keep.push_back(oe);
+    keep.push_back(os);
+    b.prob.instruments.push_back(ins);
+  }
+
+  // x_true.
+  b.x_true.resize(N);
+  auto fill = [&](int c, double level, double slope) {
+    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+  };
+  {
+    std::vector<double> sx(rm::reference_front_forwards.begin(), rm::reference_front_forwards.end());
+    sx.insert(sx.end(), rm::reference_back_forwards.begin(), rm::reference_back_forwards.end());
+    for (int i = 0; i < static_cast<int>(sx.size()); ++i) b.x_true[b.off[b.SOFR] + i] = sx[i];
+  }
+  fill(b.FF, 0.0003, 0.00002);      // FF/SOFR ~3bp
+  fill(PRIME, 0.0300, 0.0);         // PRIME = FF + 300bp
+  b.x_true.segment(b.off[b.ESTR], eur.x_true.size()) = eur.x_true;  // ESTR/EUR3M/EUR6M
+  fill(EONIA, 0.00085, 0.0);        // EONIA = ESTR + 8.5bp
+  fill(b.EURUSD, -0.0015, 0.00002);
+
+  b.curve_handles = cal::build_bundle_curves<double>(
+      b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i]; });
+  b.ts.resize(8);
+  for (int c = 0; c < 8; ++c) {
+    auto tsc = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
+        eval, dc, b.curve_handles[c].get());
+    tsc->enableExtrapolation();
+    b.ts[c] = tsc;
+    b.h[c].linkTo(tsc);
+  }
+  for (auto& s : mk.swaps) s->deepUpdate();
+  for (auto& s : keep) s->deepUpdate();
+  const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
+  for (auto& ins : b.prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
+
+  b.x0.resize(N);
+  for (int c = 0; c < 8; ++c)
+    b.x0.segment(b.off[c], b.prob.curves[c].n_knots()).setConstant(b.x_true[b.off[c]]);  // flat start at each block level
+  b.x0.segment(b.off[b.ESTR], eur.x0.size()) = eur.x0;  // the EUR trio wants its structured start
+  return b;
+}
+
 }  // namespace swaps::refbuild

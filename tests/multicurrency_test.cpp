@@ -737,6 +737,48 @@ TEST(EurCurves, CompiledBundleResidualMatchesAad) {
   EXPECT_LT(dj, 1e-8) << "analytic block Jacobian matches AAD across the coupled EUR curves";
 }
 
+// DIAGNOSTIC (temporary): what exactly is unconstrained at the EUR3M 30y knot? Compute the Jacobian at
+// x_true, its SVD, and the near-null right-singular vector — the linear combination of knots the
+// instruments cannot distinguish.
+TEST(EurCurves, DiagnoseNullDirection) {
+  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  const Eigen::MatrixXd J = cal::aad_jacobian(b.prob, b.x_true);  // (n_res x n_knots)
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(J, Eigen::ComputeThinU | Eigen::ComputeThinV);
+  const Eigen::VectorXd& sv = svd.singularValues();
+  const int n = static_cast<int>(sv.size());
+  std::cout << "  [null] J is " << J.rows() << "x" << J.cols() << "  sv_max=" << sv(0) << " sv_min=" << sv(n - 1)
+            << " cond=" << sv(0) / sv(n - 1) << "\n";
+  std::cout << "  [null] smallest 4 singular values:";
+  for (int i = std::max(0, n - 4); i < n; ++i) std::cout << " " << sv(i);
+  std::cout << "\n";
+  const char* nm[] = {"ESTR", "EUR3M", "EUR6M"};
+  auto label = [&](int g) {
+    for (int c = 2; c >= 0; --c)
+      if (g >= b.off[c]) {
+        const int k = g - b.off[c];
+        const int nk = b.prob.curves[c].n_knots();
+        double tt = (k < static_cast<int>(b.prob.curves[c].meeting.size()))
+                        ? b.prob.curves[c].meeting[k]
+                        : b.prob.curves[c].back[k - b.prob.curves[c].meeting.size()];
+        return std::string(nm[c]) + " knot " + std::to_string(k) + "/" + std::to_string(nk) + " (t=" +
+               std::to_string(tt) + ")";
+      }
+    return std::string("?");
+  };
+  const Eigen::VectorXd v = svd.matrixV().col(n - 1);  // right-singular vector of the smallest sv (near-null)
+  std::vector<int> idx(v.size());
+  for (int i = 0; i < v.size(); ++i) idx[i] = i;
+  std::sort(idx.begin(), idx.end(), [&](int a, int c) { return std::abs(v[a]) > std::abs(v[c]); });
+  std::cout << "  [null] near-null direction top components:\n";
+  for (int r = 0; r < 6; ++r)
+    std::cout << "         v=" << v[idx[r]] << "  " << label(idx[r]) << "\n";
+  // Also: the column norm for the EUR3M 30y knot (last EUR3M knot) — how strongly any instrument sees it.
+  const int e3_last = b.off[b.EUR3M] + b.prob.curves[b.EUR3M].n_knots() - 1;
+  std::cout << "  [null] EUR3M-30y column ||J_col|| = " << J.col(e3_last).norm()
+            << " ; max |entry| = " << J.col(e3_last).cwiseAbs().maxCoeff() << "\n";
+  SUCCEED();
+}
+
 // ---- Part B: the EUR trio inside the multi-currency bundle (SOFR + trio + EUR-in-USD) ----
 
 // The EUR trio is one SCC (cross-tenor cycle); EUR-in-USD depends on ESTR AND SOFR (cross-currency),
@@ -782,4 +824,18 @@ TEST(EurMultiCcy, StagedRecovers) {
   }
   std::cout << "  [eur-mc] staged ||x*-xtrue||=" << worst << " iters=" << sol.iterations << "\n";
   EXPECT_LT(worst, 1e-3) << "the combined SOFR + EUR-trio + EUR-in-USD bundle recovers to sub-bp";
+}
+
+// The WHOLE 8-curve bundle (SOFR + FF + PRIME + ESTR + EUR3M + EUR6M + EONIA + EUR-in-USD) calibrates.
+TEST(FullMultiCcy, EightCurvesCalibrate) {
+  const rb::MultiCcyBundle b = rb::build_full_multicurrency();
+  const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
+  const auto sol = cal::calibrate_staged(b.prob, b.x0);
+  const double err = (sol.x - b.x_true).cwiseAbs().maxCoeff();
+  std::cout << "  [full] curves=" << b.n_curves() << " knots=" << b.prob.n_knots()
+            << " instruments=" << b.prob.n_residuals() << " ||r(x_true)||=" << r << " recovery=" << err
+            << " iters=" << sol.iterations << "\n";
+  EXPECT_EQ(b.n_curves(), 8);
+  EXPECT_LT(r, 1e-10) << "self-consistent 8-curve market";
+  EXPECT_LT(err, 2e-3) << "the whole bundle recovers (to sub-bp, modulo the EUR3M basis-only long end)";
 }
