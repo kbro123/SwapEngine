@@ -1009,9 +1009,16 @@ inline MultiCcyBundle build_eur_multicurrency() {
 // curves in one BundleProblem. USD block (SOFR/FF/PRIME), the coupled EUR trio (ESTR/EUR3M/EUR6M cyclic
 // SCC), EONIA (ESTR + fixed spread), and the EUR-collateralized-in-USD xccy curve. Calibrated staged.
 // ===============================================================================================
-inline MultiCcyBundle build_full_multicurrency() {
+// `include_xccy = false` drops the EUR-in-USD curve (and its FX-forward/MtM instruments), leaving a
+// 7-curve bundle that is entirely W-cacheable -> streamable on the COMPILED fast path.
+// `coupled_eur = true` uses the proper basis-only cyclic EUR trio (build_eur_curves), which is
+// rank-deficient by 2 (EurCurves.DiagnoseNullDirection) so its frozen-Newton operator is singular and
+// it CANNOT stream; `coupled_eur = false` uses the full-rank Phase-1 EUR block (ESTR OIS + outright
+// EURIBOR IRS + 3s6s) that streams on the fast path.
+inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool coupled_eur = true) {
   using namespace QuantLib;
   const Date eval(8, July, 2026);
+  const int NC = include_xccy ? 8 : 7;
   MultiCcyBundle b;
   b.today = eval;
   b.fx_spot = 1.10;
@@ -1019,7 +1026,8 @@ inline MultiCcyBundle build_full_multicurrency() {
   const double S = b.fx_spot;
   auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
 
-  MultiCcyBundle eur = build_eur_curves(eval);       // ESTR/EUR3M/EUR6M local 0,1,2 -> global 3,4,5
+  MultiCcyBundle eur = coupled_eur ? build_eur_curves(eval)   // basis-only cyclic trio (rank-deficient)
+                                   : build_eur_bundle(eval);  // full-rank (outright-pinned) -> streamable
   RelinkableHandle<YieldTermStructure> hS;
   Market mk = build_market(hS);
   const cal::CalibrationProblem sofr = build_problem(mk);
@@ -1042,7 +1050,7 @@ inline MultiCcyBundle build_full_multicurrency() {
   const std::vector<double> spr_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
   const std::vector<int> spr_tenors{1, 2, 3, 5, 7, 10, 15, 20, 30};
 
-  b.prob.curves.resize(8);
+  b.prob.curves.resize(NC);
   b.prob.curves[b.SOFR] = {mk.meeting_times, mk.back_times, -1, CCY_USD};
   b.prob.curves[b.FF] = {{0.5}, spr_back, b.SOFR, CCY_USD};
   b.prob.curves[PRIME] = {{0.5}, spr_back, b.FF, CCY_USD};
@@ -1052,20 +1060,21 @@ inline MultiCcyBundle build_full_multicurrency() {
     b.prob.curves[b.ESTR + c] = spec;
   }
   b.prob.curves[EONIA] = {{0.5}, spr_back, b.ESTR, CCY_EUR};
-  b.prob.curves[b.EURUSD] = {{0.25, 0.5}, {1, 2, 3, 5, 7, 10}, b.ESTR, CCY_EUR};
+  if (include_xccy) b.prob.curves[b.EURUSD] = {{0.25, 0.5}, {1, 2, 3, 5, 7, 10}, b.ESTR, CCY_EUR};
 
-  b.off.assign(8, 0);
-  for (int c = 1; c < 8; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();
-  const int N = b.off[7] + b.prob.curves[7].n_knots();
+  b.off.assign(NC, 0);
+  for (int c = 1; c < NC; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();
+  const int N = b.off[NC - 1] + b.prob.curves[NC - 1].n_knots();
 
   // Handles: SOFR=hS; FF/PRIME/EONIA/EUR-in-USD fresh; EUR trio reuses eur.h.
-  b.h.assign(8, RelinkableHandle<YieldTermStructure>{});
+  b.h.assign(NC, RelinkableHandle<YieldTermStructure>{});
   b.h[b.SOFR] = hS;
   b.h[b.ESTR] = eur.h[0];
   b.h[b.EUR3M] = eur.h[1];
   b.h[b.EUR6M] = eur.h[2];
-  for (int c : {b.FF, PRIME, EONIA, b.EURUSD})
-    b.h[c].linkTo(ext::make_shared<FlatForward>(eval, 0.03, dc, Continuous));
+  std::vector<int> fresh_h{b.FF, PRIME, EONIA};
+  if (include_xccy) fresh_h.push_back(b.EURUSD);
+  for (int c : fresh_h) b.h[c].linkTo(ext::make_shared<FlatForward>(eval, 0.03, dc, Continuous));
   b.fedfunds = ext::make_shared<FedFunds>(b.h[b.FF]);
   auto prime_idx = ext::make_shared<OvernightIndex>("PRIME", 0, USDCurrency(), usc, Actual360(), b.h[PRIME]);
   auto eonia_idx =
@@ -1104,7 +1113,7 @@ inline MultiCcyBundle build_full_multicurrency() {
   for (const Period& p : {Period(1, Weeks), Period(2, Weeks), Period(3, Weeks), Period(1, Months),
                           Period(2, Months), Period(3, Months), Period(6, Months), Period(1, Years)})
     fx_times.push_back(t(fxcal.advance(spot, p)));
-  for (double ft : fx_times) {
+  if (include_xccy) for (double ft : fx_times) {
     cal::Instrument ins;
     ins.quote = cal::QuoteKind::FxForward;
     ins.fx_num = b.EURUSD;
@@ -1114,7 +1123,7 @@ inline MultiCcyBundle build_full_multicurrency() {
     ins.pv_currency = CCY_USD;
     b.prob.instruments.push_back(ins);
   }
-  for (int y : {2, 3, 5, 7, 10}) {
+  if (include_xccy) for (int y : {2, 3, 5, 7, 10}) {
     auto oe = ext::shared_ptr<OvernightIndexedSwap>(
         MakeOIS(Period(y, Years), b.estr, 0.03).withDiscountingTermStructure(b.h[b.EURUSD]));
     auto os = ext::shared_ptr<OvernightIndexedSwap>(
@@ -1149,12 +1158,12 @@ inline MultiCcyBundle build_full_multicurrency() {
   fill(PRIME, 0.0300, 0.0);         // PRIME = FF + 300bp
   b.x_true.segment(b.off[b.ESTR], eur.x_true.size()) = eur.x_true;  // ESTR/EUR3M/EUR6M
   fill(EONIA, 0.00085, 0.0);        // EONIA = ESTR + 8.5bp
-  fill(b.EURUSD, -0.0015, 0.00002);
+  if (include_xccy) fill(b.EURUSD, -0.0015, 0.00002);
 
   b.curve_handles = cal::build_bundle_curves<double>(
       b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i]; });
-  b.ts.resize(8);
-  for (int c = 0; c < 8; ++c) {
+  b.ts.resize(NC);
+  for (int c = 0; c < NC; ++c) {
     auto tsc = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(
         eval, dc, b.curve_handles[c].get());
     tsc->enableExtrapolation();
@@ -1167,9 +1176,10 @@ inline MultiCcyBundle build_full_multicurrency() {
   for (auto& ins : b.prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
 
   b.x0.resize(N);
-  for (int c = 0; c < 8; ++c)
+  for (int c = 0; c < NC; ++c)
     b.x0.segment(b.off[c], b.prob.curves[c].n_knots()).setConstant(b.x_true[b.off[c]]);  // flat start at each block level
   b.x0.segment(b.off[b.ESTR], eur.x0.size()) = eur.x0;  // the EUR trio wants its structured start
+  if (!include_xccy) b.EURUSD = -1;
   return b;
 }
 
