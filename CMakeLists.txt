@@ -93,6 +93,15 @@ option(SWAPS_BUILD_TESTS "Build correctness gate" ON)
 option(SWAPS_BUILD_BENCH "Build performance gate" ON)
 
 include(CTest)
+
+# Public API facade (JSON contract + BundleSession). QuantLib-free; guarded on the vendored Boost.
+if(GTest_FOUND)
+  include(GoogleTest)
+endif()
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/api/CMakeLists.txt AND EXISTS ${SWAPS_THIRD_PARTY}/boost)
+  add_subdirectory(api)
+endif()
+
 if(SWAPS_BUILD_TESTS AND GTest_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt)
   add_subdirectory(tests)
 endif()
