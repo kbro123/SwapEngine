@@ -1004,6 +1004,107 @@ inline MultiCcyBundle build_eur_multicurrency() {
   return b;
 }
 
+// A STREAMABLE EUR block that KEEPS the proper ESTR shape: ECB-meeting flat-forward front pinned by 12
+// monthly 1M €STR averaging futures (so ESTR shows the policy jumps), but the ESTR BACK is pinned by
+// SELF-DISCOUNTING ESTR OIS outright swaps (not the multi-curve basis), which is FULL RANK. EUR3M/EUR6M
+// are smooth spreads pinned by outright EURIBOR IRS. Unlike the proper basis-only trio (build_eur_curves,
+// rank-deficient by 2 -> cannot stream), this whole block streams on the compiled fast path with the
+// correct overnight-curve front. Term (EURIBOR) forecast curves have no policy steps, so their smoothness
+// is correct.
+inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(8, QuantLib::July, 2026)) {
+  using namespace QuantLib;
+  MultiCcyBundle b;
+  b.today = eval;
+  Settings::instance().evaluationDate() = eval;
+  const DayCounter dc = b.dc;
+  const Calendar cal = TARGET();
+  auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
+  auto nextm = [](int m, int y) { return (m == 12) ? std::make_pair(1, y + 1) : std::make_pair(m + 1, y); };
+  b.ESTR = 0; b.EUR3M = 1; b.EUR6M = 2;
+  b.prob.curves.resize(3);
+  const std::vector<Date> ecb{Date(30, July, 2026),    Date(17, September, 2026), Date(29, October, 2026),
+                              Date(17, December, 2026), Date(28, January, 2027),   Date(18, March, 2027)};
+  std::vector<double> estr_meet;
+  for (const Date& d : ecb) estr_meet.push_back(t(d));
+  b.h.resize(3);
+  for (auto& hh : b.h) hh.linkTo(ext::make_shared<FlatForward>(eval, 0.02, dc, Continuous));
+  b.estr = ext::make_shared<Estr>(b.h[0]);
+  b.eur3m = ext::make_shared<Euribor3M>(b.h[1]);
+  b.eur6m = ext::make_shared<Euribor6M>(b.h[2]);
+  const std::vector<int> pillars{1, 2, 3, 5, 7, 10, 15, 20, 30};
+  auto ten = [&](int y) { return t(cal.advance(eval, Period(y, Years))); };
+  std::vector<ext::shared_ptr<OvernightIndexedSwap>> koi;
+  std::vector<ext::shared_ptr<VanillaSwap>> kvs;
+
+  // ESTR front: 12 monthly 1M €STR averaging futures (Aug-2026 .. Jul-2027) -> the policy-step front.
+  { int m = 8, y = 2026;
+    for (int i = 0; i < 12; ++i) {
+      const Date s = cal.adjust(Date(1, Month(m), y));
+      const auto [nm, ny] = nextm(m, y);
+      const Date e = cal.adjust(Date(1, Month(nm), ny));
+      cal::Instrument ins; ins.quote = cal::QuoteKind::Rate; ins.forecast = 0;
+      ins.obs = avg_future_obs_idx(b.estr, eval, dc, s, e);
+      b.prob.instruments.push_back(ins); m = nm; y = ny;
+    } }
+  std::vector<double> estr_back, eur_back;
+  for (int y : pillars) { estr_back.push_back(ten(y)); eur_back.push_back(ten(y)); }
+  // ESTR back: self-discounting OIS outright (full rank). A short 6M pins the flat-forward level too.
+  auto ois_par = [&](const Period& p) {
+    auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(p, b.estr, 0.03).withDiscountingTermStructure(b.h[0]));
+    cal::Instrument ins; ins.quote = cal::QuoteKind::ParRate;
+    ins.fwd = {swaps::qlx::extract_float_leg(o->overnightLeg(), eval, dc), 0, 0};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(o->fixedLeg(), eval, dc), 0};
+    koi.push_back(o); return ins;
+  };
+  for (int y : pillars) b.prob.instruments.push_back(ois_par(Period(y, Years)));
+  // EUR3M / EUR6M: outright EURIBOR IRS (ParRate, forecast EURIBOR, discount ESTR) + a 6M for the front.
+  auto irs_par = [&](const ext::shared_ptr<IborIndex>& idx, int fc, const Period& p) {
+    auto s = ext::shared_ptr<VanillaSwap>(MakeVanillaSwap(p, idx, 0.03)
+                                              .withDiscountingTermStructure(b.h[0])
+                                              .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
+                                              .withFixedLegTenor(1 * Years)
+                                              .withFixedLegCalendar(TARGET())
+                                              .withFloatingLegCalendar(TARGET()));
+    cal::Instrument ins; ins.quote = cal::QuoteKind::ParRate;
+    ins.fwd = {swaps::qlx::extract_float_leg(s->floatingLeg(), eval, dc), fc, 0};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(s->fixedLeg(), eval, dc), 0};
+    kvs.push_back(s); return ins;
+  };
+  b.prob.instruments.push_back(irs_par(b.eur3m, 1, 6 * Months));
+  for (int y : pillars) b.prob.instruments.push_back(irs_par(b.eur3m, 1, Period(y, Years)));
+  b.prob.instruments.push_back(irs_par(b.eur6m, 2, 6 * Months));
+  for (int y : pillars) b.prob.instruments.push_back(irs_par(b.eur6m, 2, Period(y, Years)));
+
+  b.prob.curves[0] = {estr_meet, estr_back, -1, CCY_EUR};
+  b.prob.curves[1] = {{0.5}, eur_back, 0, CCY_EUR};  // EUR3M = ESTR + spread
+  b.prob.curves[2] = {{0.5}, eur_back, 1, CCY_EUR};  // EUR6M = EUR3M + spread
+  b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
+  const int N = b.off[2] + b.prob.curves[2].n_knots();
+  b.default_discount = {{0, 0}, {1, 0}, {2, 0}};
+
+  b.x_true.resize(N);
+  auto fill = [&](int c, double level, double slope) {
+    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+  };
+  fill(0, 0.0200, 0.0003);
+  fill(1, 0.0012, 0.00002);
+  fill(2, 0.0008, 0.00002);
+  b.curve_handles = cal::build_bundle_curves<double>(
+      b.prob.curves, [&](int c, int i) { return b.x_true[b.off[c] + i]; });
+  b.ts.resize(3);
+  for (int c = 0; c < 3; ++c) {
+    auto tsc = ext::make_shared<swaps::qlx::CurveTermStructure<cal::CurveHandle<double>>>(eval, dc, b.curve_handles[c].get());
+    tsc->enableExtrapolation(); b.ts[c] = tsc; b.h[c].linkTo(tsc);
+  }
+  for (auto& s : koi) s->deepUpdate();
+  for (auto& s : kvs) s->deepUpdate();
+  const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
+  for (auto& ins : b.prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
+  b.x0.resize(N);
+  for (int c = 0; c < 3; ++c) b.x0.segment(b.off[c], b.prob.curves[c].n_knots()).setConstant(b.x_true[b.off[c]]);
+  return b;
+}
+
 // ===============================================================================================
 // The WHOLE multi-currency bundle: SOFR + FF + PRIME + ESTR + EUR3M + EUR6M + EONIA + EUR-in-USD — 8
 // curves in one BundleProblem. USD block (SOFR/FF/PRIME), the coupled EUR trio (ESTR/EUR3M/EUR6M cyclic
@@ -1026,8 +1127,8 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   const double S = b.fx_spot;
   auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
 
-  MultiCcyBundle eur = coupled_eur ? build_eur_curves(eval)   // basis-only cyclic trio (rank-deficient)
-                                   : build_eur_bundle(eval);  // full-rank (outright-pinned) -> streamable
+  MultiCcyBundle eur = coupled_eur ? build_eur_curves(eval)      // basis-only cyclic trio (rank-deficient)
+                                   : build_eur_streamable(eval);  // full-rank + €STR-futures front (jumps) -> streamable
   RelinkableHandle<YieldTermStructure> hS;
   Market mk = build_market(hS);
   const cal::CalibrationProblem sofr = build_problem(mk);

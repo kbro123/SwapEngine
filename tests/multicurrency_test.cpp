@@ -826,6 +826,19 @@ TEST(EurMultiCcy, StagedRecovers) {
   EXPECT_LT(worst, 1e-3) << "the combined SOFR + EUR-trio + EUR-in-USD bundle recovers to sub-bp";
 }
 
+// How does calibrate_staged DECOMPOSE the 8-curve bundle? Print the SCCs (dependency-first) + waves.
+TEST(FullMultiCcy, DecompositionStructure) {
+  const rb::MultiCcyBundle b = rb::build_full_multicurrency();
+  const char* nm[] = {"SOFR","FF","PRIME","ESTR","EUR3M","EUR6M","EONIA","EURxUSD"};
+  const auto sccs = cal::bundle_dependency_order(b.prob);
+  const auto waves = cal::bundle_waves(b.prob, sccs);
+  std::cout << "  [decomp] " << sccs.size() << " SCCs (solve order):\n";
+  for (const auto& s : sccs) { std::cout << "           {"; for (int c : s) std::cout << nm[c] << " "; std::cout << "}\n"; }
+  std::cout << "  [decomp] " << waves.size() << " parallel waves:\n";
+  for (const auto& w : waves) { std::cout << "           wave: {"; for (int c : w) std::cout << nm[c] << " "; std::cout << "}\n"; }
+  SUCCEED();
+}
+
 // The WHOLE 8-curve bundle (SOFR + FF + PRIME + ESTR + EUR3M + EUR6M + EONIA + EUR-in-USD) calibrates.
 TEST(FullMultiCcy, EightCurvesCalibrate) {
   const rb::MultiCcyBundle b = rb::build_full_multicurrency();
