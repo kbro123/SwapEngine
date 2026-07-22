@@ -812,10 +812,12 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
 
   // ---- Curve specs + parameterization (ESTR outright; EUR3M spread/ESTR; EUR6M spread/EUR3M) ----
   b.prob.curves[b.ESTR] = {estr_meet, estr_back, -1, CCY_EUR};
-  // EUR3M's first futures pillar is ~0.44y, so its single flat-front knot must sit below that (the
-  // Flat/Hermite join requires back.front() > meeting.back()). EUR6M's first pillar is 1y, so 0.5 is fine.
+  // STAR (not chain): ESTR is the ONE outright curve; EUR3M AND EUR6M are each a spread over ESTR
+  // directly. A spread chain (EUR6M over EUR3M over ESTR) accumulates and is less stable; a single
+  // outright + spreads-over-it is the desk-standard parameterization. EUR3M's first futures pillar is
+  // ~0.44y so its flat-front knot sits below that (Flat/Hermite join needs back.front() > meeting.back()).
   b.prob.curves[b.EUR3M] = {{0.1}, eur3m_back, b.ESTR, CCY_EUR};
-  b.prob.curves[b.EUR6M] = {{0.5}, eur6m_back, b.EUR3M, CCY_EUR};
+  b.prob.curves[b.EUR6M] = {{0.5}, eur6m_back, b.ESTR, CCY_EUR};
   b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
   const int N = b.off[2] + b.prob.curves[2].n_knots();
   b.default_discount = {{b.ESTR, b.ESTR}, {b.EUR3M, b.ESTR}, {b.EUR6M, b.ESTR}};
@@ -826,8 +828,8 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
     for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
   };
   fill(b.ESTR, 0.0200, 0.0003);
-  fill(b.EUR3M, 0.0012, 0.00002);  // 3M-EURIBOR / ESTR basis ~12bp
-  fill(b.EUR6M, 0.0008, 0.00002);  // 3s6s ~8bp on top
+  fill(b.EUR3M, 0.0012, 0.00002);  // 3M-EURIBOR / ESTR basis ~12bp (spread over ESTR)
+  fill(b.EUR6M, 0.0020, 0.00004);  // 6M-EURIBOR / ESTR basis ~20bp (spread over ESTR, = 3M basis + 3s6s)
 
   // Real spread-aware curves in, self-consistent market = model quote at x_true.
   b.curve_handles = cal::build_bundle_curves<double>(
@@ -1119,7 +1121,7 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
 inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool coupled_eur = true) {
   using namespace QuantLib;
   const Date eval(8, July, 2026);
-  const int NC = include_xccy ? 8 : 7;
+  const int NC = include_xccy ? 7 : 6;  // SOFR FF PRIME ESTR EUR3M EUR6M (+ EUR-in-USD)
   MultiCcyBundle b;
   b.today = eval;
   b.fx_spot = 1.10;
@@ -1139,8 +1141,7 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   b.ESTR = 3;
   b.EUR3M = 4;
   b.EUR6M = 5;
-  const int EONIA = 6;
-  b.EURUSD = 7;
+  b.EURUSD = 6;  // EONIA dropped: ESTR is the sole EUR discounting curve now (EONIA ceased 2022)
   b.sofr = mk.sofr;
   b.estr = eur.estr;
   b.eur3m = eur.eur3m;
@@ -1160,26 +1161,23 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
     if (spec.base >= 0) spec.base += 3;
     b.prob.curves[b.ESTR + c] = spec;
   }
-  b.prob.curves[EONIA] = {{0.5}, spr_back, b.ESTR, CCY_EUR};
   if (include_xccy) b.prob.curves[b.EURUSD] = {{0.25, 0.5}, {1, 2, 3, 5, 7, 10}, b.ESTR, CCY_EUR};
 
   b.off.assign(NC, 0);
   for (int c = 1; c < NC; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();
   const int N = b.off[NC - 1] + b.prob.curves[NC - 1].n_knots();
 
-  // Handles: SOFR=hS; FF/PRIME/EONIA/EUR-in-USD fresh; EUR trio reuses eur.h.
+  // Handles: SOFR=hS; FF/PRIME/EUR-in-USD fresh; EUR trio reuses eur.h.
   b.h.assign(NC, RelinkableHandle<YieldTermStructure>{});
   b.h[b.SOFR] = hS;
   b.h[b.ESTR] = eur.h[0];
   b.h[b.EUR3M] = eur.h[1];
   b.h[b.EUR6M] = eur.h[2];
-  std::vector<int> fresh_h{b.FF, PRIME, EONIA};
+  std::vector<int> fresh_h{b.FF, PRIME};
   if (include_xccy) fresh_h.push_back(b.EURUSD);
   for (int c : fresh_h) b.h[c].linkTo(ext::make_shared<FlatForward>(eval, 0.03, dc, Continuous));
   b.fedfunds = ext::make_shared<FedFunds>(b.h[b.FF]);
   auto prime_idx = ext::make_shared<OvernightIndex>("PRIME", 0, USDCurrency(), usc, Actual360(), b.h[PRIME]);
-  auto eonia_idx =
-      ext::make_shared<OvernightIndex>("EONIA", 0, EURCurrency(), TARGET(), Actual360(), b.h[EONIA]);
 
   // Instruments: SOFR (roles 0) + EUR trio (roles +3).
   for (auto ins : sofr.instruments) b.prob.instruments.push_back(ins);
@@ -1205,7 +1203,6 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   for (int y : spr_tenors) {
     b.prob.instruments.push_back(ois_basis(b.fedfunds, b.FF, mk.sofr, b.SOFR, b.SOFR, Period(y, Years)));  // FF/SOFR
     b.prob.instruments.push_back(ois_basis(prime_idx, PRIME, b.fedfunds, b.FF, b.SOFR, Period(y, Years)));  // PRIME/FF
-    b.prob.instruments.push_back(ois_basis(eonia_idx, EONIA, b.estr, b.ESTR, b.ESTR, Period(y, Years)));    // EONIA/ESTR
   }
   // EUR-in-USD: FX forward points + MtM xccy basis.
   const Calendar fxcal = JointCalendar(TARGET(), UnitedStates(UnitedStates::Settlement));
@@ -1258,7 +1255,6 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   fill(b.FF, 0.0003, 0.00002);      // FF/SOFR ~3bp
   fill(PRIME, 0.0300, 0.0);         // PRIME = FF + 300bp
   b.x_true.segment(b.off[b.ESTR], eur.x_true.size()) = eur.x_true;  // ESTR/EUR3M/EUR6M
-  fill(EONIA, 0.00085, 0.0);        // EONIA = ESTR + 8.5bp
   if (include_xccy) fill(b.EURUSD, -0.0015, 0.00002);
 
   b.curve_handles = cal::build_bundle_curves<double>(

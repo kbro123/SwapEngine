@@ -23,6 +23,7 @@
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/regularize.hpp"
 #include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/pricing/cashflows.hpp"
@@ -656,29 +657,29 @@ TEST(EurCurves, ThreeCurvesAreOneCyclicSCC) {
 // insensitive to a parallel DISCOUNT shift, and the basis swaps pin only DIFFERENCES — so a ~0.5bp
 // near-null direction remains (it lands on the EUR3M 30y knot; ESTR/EUR6M are pinned tighter). Adding a
 // direct ESTR OIS at the back would collapse it, but the user chose basis-only.
-TEST(EurCurves, JointSolveIsFirstOrderOptimalAndRecoversSubBp) {
+TEST(EurCurves, JointSolveIsFirstOrderOptimal) {
   const rb::MultiCcyBundle b = rb::build_eur_curves();
   const auto joint = cal::calibrate(b.prob, b.x0);
-  const auto staged = cal::calibrate_staged(b.prob, b.x0);
-  const double dj = (joint.x - b.x_true).cwiseAbs().maxCoeff();
-  const double ds = (staged.x - b.x_true).cwiseAbs().maxCoeff();
-  const char* nm[] = {"ESTR", "EUR3M", "EUR6M"};
-  for (int c = 0; c < 3; ++c) {
-    const int nk = b.prob.curves[c].n_knots();
-    const Eigen::VectorXd e = (joint.x - b.x_true).segment(b.off[c], nk);
-    int wi = 0;
-    const double me = e.cwiseAbs().maxCoeff(&wi);
-    std::cout << "  [eur3-diag] " << nm[c] << " maxerr=" << me << " at knot " << wi << "/" << nk << "\n";
-  }
-  std::cout << "  [eur3] joint ||x*-xtrue||=" << dj << " iters=" << joint.iterations
-            << " stat=" << joint.stationarity << " rms_resid=" << joint.rms_residual
-            << "  staged ||x*-xtrue||=" << ds << "\n";
-  // The decisive criterion: first-order optimality + a machine-zero achieved objective.
-  EXPECT_LT(joint.stationarity, 1e-9) << "the joint solve is first-order optimal (‖Jᵀr‖∞ ≈ 0)";
-  EXPECT_LT(joint.rms_residual, 1e-10) << "and the achieved objective is machine-zero (self-consistent market)";
-  // Curve recovered to sub-bp; the basis-only long end is the ~0.5bp weakly-identified direction.
-  EXPECT_LT(dj, 1e-4) << "joint solve recovers the coupled EUR curves to sub-bp";
-  EXPECT_LT(ds, 1e-4) << "staged solve (the one SCC block) recovers them too";
+  // The market is self-consistent, so the solve is first-order optimal and prices every instrument
+  // exactly -- but because the basis-only EUR3M/EUR6M forecast curves are rank-deficient (see
+  // DiagnoseNullDirection), the raw solve WANDERS in the null space and does NOT recover x_true.
+  std::cout << "  [eur3] UNREGULARISED joint ||x*-xtrue||=" << (joint.x - b.x_true).cwiseAbs().maxCoeff()
+            << " stat=" << joint.stationarity << " rms_resid=" << joint.rms_residual << "\n";
+  EXPECT_LT(joint.stationarity, 1e-9) << "first-order optimal (‖Jᵀr‖∞ ≈ 0)";
+  EXPECT_LT(joint.rms_residual, 1e-10) << "achieved objective is machine-zero (prices the market exactly)";
+}
+
+// The SMOOTHNESS regulariser resolves the null: penalising curvature of the EUR3M/EUR6M forwards
+// (NOT ESTR -- its €STR-futures front has real policy steps) selects the smoothest market-consistent
+// curve, so the coupled basis-only trio now recovers x_true tightly.
+TEST(EurCurves, SmoothnessRegulariserRecoversTheCoupledTrio) {
+  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  const double raw = (cal::calibrate(b.prob, b.x0).x - b.x_true).cwiseAbs().maxCoeff();
+  const auto reg = cal::calibrate(cal::smoothed(b.prob, 1.0, {b.EUR3M, b.EUR6M}), b.x0, /*use_aad=*/false);
+  const double err = (reg.x - b.x_true).cwiseAbs().maxCoeff();
+  std::cout << "  [eur3-reg] raw ||x*-xtrue||=" << raw << "  regularised=" << err << "\n";
+  EXPECT_GT(raw, 1e-3) << "the unregularised basis-only trio wanders in the null space";
+  EXPECT_LT(err, 1e-6) << "the smoothness regulariser recovers the coupled trio tightly";
 }
 
 // The genuinely-new instruments reprice off the curves to QuantLib core to 1e-10: 1M/3M €STR futures
@@ -811,9 +812,10 @@ TEST(EurMultiCcy, EurTrioIsOneSccAndXccyDependsOnEstrAndSofr) {
 
 // The full staged solve recovers the combined bundle (to sub-bp — the same basis-only weak long-end
 // direction the standalone EUR build has; SOFR and EUR-in-USD are pinned tighter).
-TEST(EurMultiCcy, StagedRecovers) {
-  const rb::MultiCcyBundle b = rb::build_eur_multicurrency();
-  const auto sol = cal::calibrate_staged(b.prob, b.x0);
+TEST(EurMultiCcy, RegularisedRecovers) {
+  const rb::MultiCcyBundle b = rb::build_eur_multicurrency();  // SOFR ESTR EUR3M EUR6M EUR-in-USD
+  // Regularise the basis-only EURIBOR forecast curves (EUR3M=2, EUR6M=3); SOFR/ESTR/EUR-in-USD untouched.
+  const auto sol = cal::calibrate(cal::smoothed(b.prob, 1.0, {2, 3}), b.x0, /*use_aad=*/false);
   const char* nm[] = {"SOFR", "ESTR", "EUR3M", "EUR6M", "EUR-in-USD"};
   double worst = 0;
   for (int c = 0; c < 5; ++c) {
@@ -822,14 +824,14 @@ TEST(EurMultiCcy, StagedRecovers) {
     worst = std::max(worst, e);
     std::cout << "  [eur-mc] " << nm[c] << " maxerr=" << e << "\n";
   }
-  std::cout << "  [eur-mc] staged ||x*-xtrue||=" << worst << " iters=" << sol.iterations << "\n";
+  std::cout << "  [eur-mc] regularised ||x*-xtrue||=" << worst << " iters=" << sol.iterations << "\n";
   EXPECT_LT(worst, 1e-3) << "the combined SOFR + EUR-trio + EUR-in-USD bundle recovers to sub-bp";
 }
 
 // How does calibrate_staged DECOMPOSE the 8-curve bundle? Print the SCCs (dependency-first) + waves.
 TEST(FullMultiCcy, DecompositionStructure) {
   const rb::MultiCcyBundle b = rb::build_full_multicurrency();
-  const char* nm[] = {"SOFR","FF","PRIME","ESTR","EUR3M","EUR6M","EONIA","EURxUSD"};
+  const char* nm[] = {"SOFR","FF","PRIME","ESTR","EUR3M","EUR6M","EURxUSD"};
   const auto sccs = cal::bundle_dependency_order(b.prob);
   const auto waves = cal::bundle_waves(b.prob, sccs);
   std::cout << "  [decomp] " << sccs.size() << " SCCs (solve order):\n";
@@ -839,16 +841,22 @@ TEST(FullMultiCcy, DecompositionStructure) {
   SUCCEED();
 }
 
-// The WHOLE 8-curve bundle (SOFR + FF + PRIME + ESTR + EUR3M + EUR6M + EONIA + EUR-in-USD) calibrates.
-TEST(FullMultiCcy, EightCurvesCalibrate) {
+// The WHOLE bundle (SOFR + FF + PRIME + ESTR + EUR3M + EUR6M + EUR-in-USD) calibrates. EONIA dropped:
+// ESTR is the sole EUR discounting curve post-2022, so a separate EONIA curve adds nothing.
+TEST(FullMultiCcy, WholeBundleCalibrates) {
   const rb::MultiCcyBundle b = rb::build_full_multicurrency();
   const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
-  const auto sol = cal::calibrate_staged(b.prob, b.x0);
+  // Regularise only the coupled basis-only EURIBOR forecast curves (their forward shape is the null);
+  // SOFR/ESTR/EUR-in-USD are shaped/policy-step or self-discounting and are left untouched.
+  const auto sol = cal::calibrate(cal::smoothed(b.prob, 1.0, {b.EUR3M, b.EUR6M}), b.x0, /*use_aad=*/false);
   const double err = (sol.x - b.x_true).cwiseAbs().maxCoeff();
   std::cout << "  [full] curves=" << b.n_curves() << " knots=" << b.prob.n_knots()
             << " instruments=" << b.prob.n_residuals() << " ||r(x_true)||=" << r << " recovery=" << err
             << " iters=" << sol.iterations << "\n";
-  EXPECT_EQ(b.n_curves(), 8);
-  EXPECT_LT(r, 1e-10) << "self-consistent 8-curve market";
-  EXPECT_LT(err, 2e-3) << "the whole bundle recovers (to sub-bp, modulo the EUR3M basis-only long end)";
+  EXPECT_EQ(b.n_curves(), 7);
+  EXPECT_LT(r, 1e-10) << "self-consistent 7-curve market";
+  // Regularised recovery is sub-bp (~0.02bp); the standalone EUR trio reaches 5e-11, so this residual
+  // is the numerical-diff Jacobian floor over 103 knots + FX/MtM, not the regulariser. Without it the
+  // star-parameterised bundle wanders to ~1.7 (169bp) in the null space.
+  EXPECT_LT(err, 1e-3) << "the whole regularised bundle recovers x_true to sub-bp";
 }
