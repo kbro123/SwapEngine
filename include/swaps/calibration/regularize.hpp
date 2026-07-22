@@ -79,4 +79,30 @@ SmoothedProblem<Problem> smoothed(const Problem& p, double lambda, const std::ve
   return SmoothedProblem<Problem>(p, lambda, std::move(segs));
 }
 
+// The explicit second-difference (curvature) operator R = λ·D as a DENSE matrix (n_reg × n_knots), one
+// row λ·(e_{i-1} − 2e_i + e_{i+1}) per interior knot of each listed curve. This is the same penalty
+// SmoothedProblem appends as residual rows, materialised so the STREAMING calibrator can fold RᵀR into
+// its frozen-Newton operator M = (JᵀJ + RᵀR)⁻¹Jᵀ and stream a rank-deficient (basis-only) build directly.
+template <class Problem>
+Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, const std::vector<int>& curves) {
+  const int nk = p.n_knots();
+  std::vector<int> off(p.curves.size(), 0);
+  for (std::size_t c = 1; c < p.curves.size(); ++c) off[c] = off[c - 1] + p.curves[c - 1].n_knots();
+  int rows = 0;
+  for (int c : curves)
+    if (p.curves[c].n_knots() > 2) rows += p.curves[c].n_knots() - 2;
+  Eigen::MatrixXd R = Eigen::MatrixXd::Zero(rows, nk);
+  int r = 0;
+  for (int c : curves) {
+    const int o = off[c], n = p.curves[c].n_knots();
+    for (int i = 1; i < n - 1; ++i) {
+      R(r, o + i - 1) = lambda;
+      R(r, o + i) = -2.0 * lambda;
+      R(r, o + i + 1) = lambda;
+      ++r;
+    }
+  }
+  return R;
+}
+
 }  // namespace swaps::calibration

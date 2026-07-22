@@ -24,6 +24,9 @@
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/regularize.hpp"
+#include "swaps/calibration/streaming.hpp"
+#include "swaps/calibration/compiled_bundle.hpp"
+#include <random>
 #include "swaps/curve/calibration_curve.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/pricing/cashflows.hpp"
@@ -680,6 +683,41 @@ TEST(EurCurves, SmoothnessRegulariserRecoversTheCoupledTrio) {
   std::cout << "  [eur3-reg] raw ||x*-xtrue||=" << raw << "  regularised=" << err << "\n";
   EXPECT_GT(raw, 1e-3) << "the unregularised basis-only trio wanders in the null space";
   EXPECT_LT(err, 1e-6) << "the smoothness regulariser recovers the coupled trio tightly";
+}
+
+// The regulariser folded into the STREAMING operator (M = (JᵀJ + RᵀR)⁻¹Jᵀ) lets the rank-deficient
+// coupled trio stream DIRECTLY: without it M is singular and streaming diverges; with it every tick
+// reprices the market exactly and tracks the smooth true curve, staying on the fast path.
+TEST(EurCurves, RegularisedStreamingTracksTheCoupledTrio) {
+  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  cal::CompiledBundleResidual engine(b.prob);
+  using SC = cal::StreamingCalibrator<cal::BundleProblem>;
+  SC::Options opt;
+  opt.regularizer = cal::second_difference_operator(b.prob, 1.0, {b.EUR3M, b.EUR6M});
+  const Eigen::VectorXd q0 = engine.model_rates(b.x_true);
+  SC sc(b.prob, b.x_true, q0, opt);
+
+  // Drive the market with SMOOTH moves (level + slope) so the true curve stays smooth; the regularised
+  // stream should then reprice every tick AND stay on the smooth true curve (no null-space wander).
+  std::mt19937 rng(7u);
+  std::normal_distribution<double> lvl(0.0, 0.4e-4), slp(0.0, 0.1e-4);
+  Eigen::VectorXd x = b.x_true;
+  double worst_rt = 0, worst_dev = 0;
+  for (int tk = 0; tk < 250; ++tk) {
+    const double dL = lvl(rng), dS = slp(rng);
+    for (int c = 0; c < 3; ++c) {
+      const int nk = b.prob.curves[c].n_knots();
+      for (int i = 0; i < nk; ++i) x[b.off[c] + i] += dL + dS * i;  // level + linear slope => stays smooth
+    }
+    const Eigen::VectorXd q = engine.model_rates(x);
+    sc.update(q);
+    worst_rt = std::max(worst_rt, (engine.model_rates(sc.current()) - q).cwiseAbs().maxCoeff());
+    worst_dev = std::max(worst_dev, (sc.current() - x).cwiseAbs().maxCoeff());
+  }
+  std::cout << "  [eur3-stream] refreshes=" << sc.refresh_count() << " worst round-trip=" << worst_rt
+            << " worst |x_stream - x_true|=" << worst_dev << "\n";
+  EXPECT_LT(worst_rt, 1e-7) << "regularised streaming reprices the market exactly every tick";
+  EXPECT_LT(worst_dev, 1e-6) << "and tracks the smooth true curve (the rank-deficient trio now streams)";
 }
 
 // The genuinely-new instruments reprice off the curves to QuantLib core to 1e-10: 1M/3M €STR futures

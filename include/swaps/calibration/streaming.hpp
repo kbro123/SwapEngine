@@ -50,12 +50,19 @@ class StreamingCalibrator {
     // tail-latency win; correctness is identical (frozen-Newton is exact for any invertible M).
     bool prefetch = false;
     double prefetch_drift = 5e-4;  // request a background M once drift from the anchor exceeds this (5bp)
+    // SMOOTHNESS REGULARISER (empty = off). R = λ·D, the second-difference operator over the chosen
+    // curves' knots (swaps::calibration::second_difference_operator). When set, the frozen-Newton
+    // operator becomes M = (JᵀJ + RᵀR)⁻¹Jᵀ and each step gains a B·x curvature-pull term, so a
+    // RANK-DEFICIENT (basis-only) build streams directly -- selecting the smoothest curve consistent
+    // with the market every tick, instead of a singular M. Empty keeps the exact previous behaviour.
+    Eigen::MatrixXd regularizer;
   };
 
   StreamingCalibrator(const Problem& prob, const Eigen::VectorXd& x0,
                       const Eigen::VectorXd& q0, const Options& opt)
       : n_res_(prob.n_residuals()), engine_(prob), opt_(opt) {
     if (opt_.prefetch && opt_.exact) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
+    if (opt_.regularizer.size()) RtR_.noalias() = opt_.regularizer.transpose() * opt_.regularizer;
     set_anchor(x0, q0);
     x_cur_ = x0;
   }
@@ -81,6 +88,7 @@ class StreamingCalibrator {
     for (;;) {
       r_.noalias() = engine_.model_rates(x) - q_new;  // engine reprice writes into its own scratch
       dx_.noalias() = M_ * r_;
+      if (RtR_.size()) dx_.noalias() += B_ * x;  // curvature pull toward the smoothest market-consistent curve
       x.noalias() -= dx_;
       ++t.newton_steps;
       if (dx_.cwiseAbs().maxCoeff() < opt_.step_tol) break;  // EXACT reprice reached
@@ -144,13 +152,22 @@ class StreamingCalibrator {
     return t;
   }
 
-  // M = (J^T J)^{-1} J^T (= J^{-1} when square). One engine Jacobian + a factor-solve.
+  // M = (J^T J)^{-1} J^T (= J^{-1} when square). One engine Jacobian + a factor-solve. With a smoothness
+  // regulariser R, M = (J^T J + R^T R)^{-1} J^T and B = (J^T J + R^T R)^{-1} R^T R (the per-step curvature
+  // pull) -- the augmented normal matrix is SPD even when J alone is rank-deficient, so M exists.
   void set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     x_anchor_ = x;
     q_anchor_ = q;
     const Eigen::MatrixXd J = engine_.jacobian(x);
-    M_ = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
-        Eigen::MatrixXd::Identity(n_res_, n_res_));
+    if (RtR_.size()) {
+      const Eigen::MatrixXd A = J.transpose() * J + RtR_;  // SPD (full rank) thanks to the regulariser
+      const Eigen::MatrixXd Ainv = A.ldlt().solve(Eigen::MatrixXd::Identity(A.rows(), A.rows()));
+      M_.noalias() = Ainv * J.transpose();
+      B_.noalias() = Ainv * RtR_;
+    } else {
+      M_ = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
+          Eigen::MatrixXd::Identity(n_res_, n_res_));
+    }
     ++refresh_count_;
   }
 
@@ -159,6 +176,7 @@ class StreamingCalibrator {
   Options opt_;
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
   Eigen::MatrixXd M_;
+  Eigen::MatrixXd RtR_, B_;  // smoothness regulariser: RᵀR and the per-step curvature pull B=(JᵀJ+RᵀR)⁻¹RᵀR
   int refresh_count_ = 0;
   int prefetch_hits_ = 0;
   // Speculative background Jacobian (null unless opt_.prefetch): a dedicated thread computes the next M.
