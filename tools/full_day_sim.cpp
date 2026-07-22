@@ -162,11 +162,14 @@ int main() {
   // mispricing (~0.4bp) so the streamed curve can NEVER reprice them all -- the least-squares fit keeps a
   // non-zero residual, exactly as a real futures/swap strip does. A self-consistent feed (offset = 0)
   // would hide this. We record the fit residual every snapshot so the tension is visible.
-  std::normal_distribution<double> qnoise(0.0, 0.4e-4);
-  Eigen::VectorXd qoffset(prob.n_residuals());
-  for (int i = 0; i < prob.n_residuals(); ++i) qoffset[i] = qnoise(rng);
-  std::normal_distribution<double> qjit(0.0, 0.15e-4);  // per-tick independent quote jitter (~0.15bp)
-  Eigen::VectorXd qtick(prob.n_residuals());
+  // Each instrument's quote carries a MISPRICING that does a slow mean-reverting walk (~1.2bp). We start
+  // self-consistent (every mispricing 0) then let it build: the over-determined 1M/3M futures never agree,
+  // so the least-squares front is a COMPROMISE that visibly RESHAPES through the day -- the tension.
+  // Different futures pin different flat segments, so their independent mispricings pull the staircase into
+  // a shape no single future is repriced by (that is exactly the €STR tension test, just walking + dynamic).
+  Eigen::VectorXd qoff = Eigen::VectorXd::Zero(prob.n_residuals());
+  std::normal_distribution<double> owalk(0.0, 0.06e-4);  // per-tick mispricing increment (slow walk)
+  const double odecay = 0.0025;                          // OU reversion -> stationary sd ~0.85bp
   // EURUSD xccy basis over ESTR: a modestly-moving term structure (~ -18bp front, widening to ~ -24bp at
   // 30y). XCCY basis moves are SMALL intraday, so the level mean-reverts tightly (a few bp of daily range).
   double xccy_lvl = 0.0;  // deviation of the basis level (bp) from its base; tight OU
@@ -186,6 +189,15 @@ int main() {
   std::vector<Snap> snaps;
   std::vector<double> ser_hour, ser_npv, ser_cal, ser_level, ser_resid;
 
+  // Independent per-MEETING-knot repricing for the policy-step fronts (SOFR/FOMC, ESTR/ECB). Each meeting's
+  // expected rate does its OWN mean-reverting walk (~2bp stationary) as near-dated data arrives, so the flat
+  // forwards visibly RESHAPE relative to each other -- not a rigid level slide. This is where the front-end
+  // futures tension lives: the over-determined 1M/3M strip fights these independent moves every tick.
+  std::normal_distribution<double> step_move(0.0, 0.45);  // bp/tick per meeting knot
+  const double step_kappa = 0.02;
+  std::vector<std::vector<double>> fwig(NC);
+  for (int c = 0; c < NC; ++c) fwig[c].assign(prob.curves[c].meeting.size(), 0.0);
+
   for (int tk = 0; tk < TICKS; ++tk) {
     // Drive SOFR with a mean-reverting level + gentle slope; each spread curve a small reverting move.
     const double dL = (sign(rng) ? 1.0 : -1.0) * level_move(rng) - kappa * level, dS = slope_move(rng);
@@ -200,12 +212,19 @@ int main() {
         const double tn = kt[i] / maxT;
         x_drive[off[c] + i] += (ds + dslope * (tn - 0.5) * 2.0) * bp;
       }
+      // Policy-step fronts also reprice each meeting INDEPENDENTLY (OU increment added on top of level+slope).
+      if (base)
+        for (std::size_t i = 0; i < fwig[c].size(); ++i) {
+          const double dw = step_move(rng) - step_kappa * fwig[c][i];
+          fwig[c][i] += dw;
+          x_drive[off[c] + i] += dw * bp;
+        }
     }
     // The streamed feed = arbitrage-free quote + a PERSISTENT per-instrument mispricing. The strip is
     // over-determined, so the streamed curve can't reprice all of them at once: the LS fit lands with a
     // non-zero residual -- the real tension between the futures and swaps every tick.
-    for (int i = 0; i < prob.n_residuals(); ++i) qtick[i] = qjit(rng);
-    const Eigen::VectorXd q = engine.model_rates(x_drive) + qoffset + qtick;
+    for (int i = 0; i < prob.n_residuals(); ++i) qoff[i] += owalk(rng) - odecay * qoff[i];
+    const Eigen::VectorXd q = engine.model_rates(x_drive) + qoff;
     xccy_lvl += xccy_move(rng) - xccy_kappa * xccy_lvl;  // modest OU walk of the basis level (~±2bp/day)
     const auto t0 = std::chrono::steady_clock::now();
     sc.update(q);
