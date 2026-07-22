@@ -158,12 +158,33 @@ int main() {
   double maxT = 0;
   for (int c = 0; c < NC; ++c) for (double t : knots_of(c)) maxT = std::max(maxT, t);
 
-  std::vector<double> cal_us;
+  // TENSION: a realistic feed is over-determined AND inconsistent. Give each instrument a small PERSISTENT
+  // mispricing (~0.4bp) so the streamed curve can NEVER reprice them all -- the least-squares fit keeps a
+  // non-zero residual, exactly as a real futures/swap strip does. A self-consistent feed (offset = 0)
+  // would hide this. We record the fit residual every snapshot so the tension is visible.
+  std::normal_distribution<double> qnoise(0.0, 0.4e-4);
+  Eigen::VectorXd qoffset(prob.n_residuals());
+  for (int i = 0; i < prob.n_residuals(); ++i) qoffset[i] = qnoise(rng);
+  std::normal_distribution<double> qjit(0.0, 0.15e-4);  // per-tick independent quote jitter (~0.15bp)
+  Eigen::VectorXd qtick(prob.n_residuals());
+  // EURUSD xccy basis over ESTR: a modestly-moving term structure (~ -18bp front, widening to ~ -24bp at
+  // 30y). XCCY basis moves are SMALL intraday, so the level mean-reverts tightly (a few bp of daily range).
+  double xccy_lvl = 0.0;  // deviation of the basis level (bp) from its base; tight OU
+  std::normal_distribution<double> xccy_move(0.0, 0.03);  // bp/tick, strong reversion below => ~±2bp/day
+  const double xccy_kappa = 0.0012;
+  auto xccy_curve_bp = [&](double lvl) {  // the basis term structure in bp on the display grid
+    std::vector<double> out(grid.size());
+    for (std::size_t g = 0; g < grid.size(); ++g) out[g] = -18.0 - 6.0 * (grid[g] / 30.0) + lvl;  // -18 -> -24bp
+    return out;
+  };
+
+  std::vector<double> cal_us, resid_bp;
   cal_us.reserve(TICKS);
-  double sum_us = 0, min_us = 1e18, max_us = 0, sum_rep = 0, min_rep = 1e18, max_rep = 0;
-  struct Snap { double hour, npv, cal_us, rep_us, npv_usd, npv_eur, npv_fx; std::vector<double> sofr_fwd, estr_fwd; };
+  double sum_us = 0, min_us = 1e18, max_us = 0, sum_rep = 0, min_rep = 1e18, max_rep = 0, max_resid = 0;
+  struct Snap { double hour, npv, cal_us, rep_us, resid_bp, npv_usd, npv_eur, npv_fx;
+                std::vector<double> sofr_fwd, estr_fwd, xccy_bp; };
   std::vector<Snap> snaps;
-  std::vector<double> ser_hour, ser_npv, ser_cal, ser_level;
+  std::vector<double> ser_hour, ser_npv, ser_cal, ser_level, ser_resid;
 
   for (int tk = 0; tk < TICKS; ++tk) {
     // Drive SOFR with a mean-reverting level + gentle slope; each spread curve a small reverting move.
@@ -180,7 +201,12 @@ int main() {
         x_drive[off[c] + i] += (ds + dslope * (tn - 0.5) * 2.0) * bp;
       }
     }
-    const Eigen::VectorXd q = engine.model_rates(x_drive);
+    // The streamed feed = arbitrage-free quote + a PERSISTENT per-instrument mispricing. The strip is
+    // over-determined, so the streamed curve can't reprice all of them at once: the LS fit lands with a
+    // non-zero residual -- the real tension between the futures and swaps every tick.
+    for (int i = 0; i < prob.n_residuals(); ++i) qtick[i] = qjit(rng);
+    const Eigen::VectorXd q = engine.model_rates(x_drive) + qoffset + qtick;
+    xccy_lvl += xccy_move(rng) - xccy_kappa * xccy_lvl;  // modest OU walk of the basis level (~±2bp/day)
     const auto t0 = std::chrono::steady_clock::now();
     sc.update(q);
     const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
@@ -189,14 +215,20 @@ int main() {
 
     if (tk % snap_every == 0 && static_cast<int>(snaps.size()) < 138) {
       const Eigen::VectorXd x = sc.current();
+      // Realized tension: the LS fit residual (rms, bp) the streamed curve cannot iron out.
+      const Eigen::VectorXd fit = engine.model_rates(x) - q;
+      const double resid = 1e4 * fit.norm() / std::sqrt((double)fit.size());
+      max_resid = std::max(max_resid, resid);
       double u, e, f;
       const auto r0 = std::chrono::steady_clock::now();
       reprice(x, u, e, f);
       const double rep = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - r0).count();
       sum_rep += rep; min_rep = std::min(min_rep, rep); max_rep = std::max(max_rep, rep);
       const double hour = 23.0 * tk / TICKS, npv = u + e + f;
-      snaps.push_back({hour, npv, us, rep, u, e, f, fwd_on_grid(x, SOFR), fwd_on_grid(x, ESTR)});
-      ser_hour.push_back(hour); ser_npv.push_back(npv); ser_cal.push_back(us); ser_level.push_back(level);
+      snaps.push_back({hour, npv, us, rep, resid, u, e, f,
+                       fwd_on_grid(x, SOFR), fwd_on_grid(x, ESTR), xccy_curve_bp(xccy_lvl)});
+      ser_hour.push_back(hour); ser_npv.push_back(npv); ser_cal.push_back(us);
+      ser_level.push_back(level); ser_resid.push_back(resid);
     }
   }
 
@@ -216,6 +248,9 @@ int main() {
   fjs << "  \"cal_us\":{\"min\":" << min_us << ",\"avg\":" << sum_us / TICKS << ",\"median\":" << pct(0.5)
       << ",\"p99\":" << pct(0.99) << ",\"max\":" << max_us << ",\"refreshes\":" << sc.refresh_count() - 1 << "},\n";
   fjs << "  \"reprice_us\":{\"min\":" << min_rep << ",\"avg\":" << sum_rep / snaps.size() << ",\"max\":" << max_rep << "},\n";
+  fjs.precision(4);
+  fjs << "  \"tension_bp\":{\"max\":" << max_resid << "},\n";
+  fjs.precision(3);
   auto arr = [&](const std::vector<double>& v) {
     fjs << "[";
     for (std::size_t i = 0; i < v.size(); ++i) fjs << (i ? "," : "") << v[i];
@@ -231,13 +266,15 @@ int main() {
     const auto& sn = snaps[s];
     fjs << "    {\"hour\":" << sn.hour << ",\"npv\":" << sn.npv / 1e6 << ",\"npv_usd\":" << sn.npv_usd / 1e6
         << ",\"npv_eur\":" << sn.npv_eur / 1e6 << ",\"npv_fx\":" << sn.npv_fx / 1e6 << ",\"cal_us\":" << sn.cal_us
-        << ",\"rep_us\":" << sn.rep_us << ",\"sofr\":"; arr(sn.sofr_fwd); fjs << ",\"estr\":"; arr(sn.estr_fwd);
+        << ",\"rep_us\":" << sn.rep_us << ",\"tension_bp\":" << sn.resid_bp
+        << ",\"sofr\":"; arr(sn.sofr_fwd); fjs << ",\"estr\":"; arr(sn.estr_fwd);
+    fjs << ",\"xccy\":"; arr(sn.xccy_bp);
     fjs << "}" << (s + 1 < snaps.size() ? "," : "") << "\n";
   }
   fjs << "  ],\n";
   fjs << "  \"series\":{\"hour\":"; arr(ser_hour); fjs << ",\"npv\":";
   { std::vector<double> v; for (double x : ser_npv) v.push_back(x / 1e6); arr(v); }
-  fjs << ",\"cal_us\":"; arr(ser_cal); fjs << "}\n}\n";
+  fjs << ",\"cal_us\":"; arr(ser_cal); fjs << ",\"tension_bp\":"; arr(ser_resid); fjs << "}\n}\n";
   fjs.close();
 
   std::printf("ticks=%d  cal_us min=%.2f avg=%.2f median=%.2f p99=%.2f max=%.2f  refreshes=%d\n",

@@ -933,3 +933,32 @@ TEST(FullMultiCcy, WholeBundleCalibrates) {
   // star-parameterised bundle wanders to ~1.7 (169bp) in the null space.
   EXPECT_LT(err, 1e-3) << "the whole regularised bundle recovers x_true to sub-bp";
 }
+
+// Both FEED TYPES on the FULL-RANK streamable bundle (the one the day-sim streams and tools/cal_times
+// benchmarks): a SELF-CONSISTENT feed reaches the zero-residual optimum, while a REALISTIC over-determined
+// feed (self-consistent + independent 0.4bp per-instrument noise) keeps a non-zero least-squares residual
+// -- the tension between the futures and swaps -- yet is still first-order optimal. This pins the property
+// the "compare calibration times" tool relies on (self-consistent vs noisy, single curve vs bundle).
+TEST(FullMultiCcy, RealisticNoisyFeedCarriesTensionButIsOptimal) {
+  rb::MultiCcyBundle b = rb::build_full_multicurrency(/*include_xccy=*/false, /*coupled_eur=*/false);
+  EXPECT_EQ(b.n_curves(), 6) << "the full-rank streamable bundle (SOFR+FF+PRIME+ESTR+3M+6M)";
+
+  // Self-consistent: b.prob is built from x_true, so the optimum sits at r=0. The cold solve drives the
+  // RESIDUAL to machine-zero; it may land a hair off x_true along the documented forecast-curve null (see
+  // WholeBundleCalibrates), which is orthogonal to the feed-type point here -- so we assert on the residual.
+  const auto sc = cal::calibrate(b.prob, b.x0);
+  EXPECT_LT(sc.rms_residual, 1e-9) << "self-consistent feed reaches the zero-residual optimum";
+  EXPECT_LT(sc.stationarity, 1e-6) << "and is first-order optimal there";
+
+  // Realistic: add independent ~0.4bp mispricing to every quote -> the strip no longer agrees.
+  cal::BundleProblem ns = b.prob;
+  std::mt19937 rng(7);
+  std::normal_distribution<double> noise(0.0, 0.4e-4);
+  for (auto& ins : ns.instruments) ins.market += noise(rng);
+  const auto nr = cal::calibrate(ns, b.x0);
+  std::cout << "  [noisy-bundle] self-consistent rms=" << sc.rms_residual << "  noisy rms(bp)="
+            << nr.rms_residual * 1e4 << "  ||Jᵀr||inf=" << nr.stationarity << "  iters=" << nr.iterations << "\n";
+  EXPECT_GT(nr.rms_residual, 1e-6) << "the over-determined noisy strip cannot reprice to zero (real tension)";
+  EXPECT_LT(nr.rms_residual, 5e-3) << "but the fit is a sensible least-squares compromise, not blown up";
+  EXPECT_LT(nr.stationarity, 1e-6) << "and it is first-order optimal (||Jᵀr||inf ≈ 0)";
+}
