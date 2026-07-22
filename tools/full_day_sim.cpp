@@ -44,7 +44,7 @@ int main() {
   const int NC = b.n_curves();
   const int N = prob.n_knots();
   const int SOFR = 0, ESTR = 3, EUR3M = 4, EUR6M = 5;
-  const char* names[] = {"SOFR", "FF", "PRIME", "ESTR", "EUR3M", "EUR6M", "EONIA"};
+  const char* names[] = {"SOFR", "FF", "PRIME", "ESTR", "EUR3M", "EUR6M"};
   const double S = b.fx_spot, kEurUsdBasis = -0.0015;  // EUR-in-USD ~= ESTR - 15bp (fixed for the fx sleeve)
   const DayCounter dc = b.dc;
 
@@ -208,7 +208,7 @@ int main() {
   std::ofstream fjs("full_day.json");
   fjs.setf(std::ios::fixed);
   fjs << "{\n  \"ticks\":" << TICKS << ",\"hours\":23,\"snap_every_min\":10,\n";
-  fjs << "  \"curves\":[\"SOFR\",\"FF\",\"PRIME\",\"ESTR\",\"EUR3M\",\"EUR6M\",\"EONIA\"],\"n_knots\":" << N
+  fjs << "  \"curves\":[\"SOFR\",\"FF\",\"PRIME\",\"ESTR\",\"EUR3M\",\"EUR6M\"],\"n_knots\":" << N
       << ",\"n_instruments\":" << prob.n_residuals() << ",\n";
   fjs << "  \"portfolio\":{\"n\":" << (N_USD + N_EUR + N_FX) << ",\"usd\":" << N_USD << ",\"eur\":" << N_EUR
       << ",\"fx\":" << N_FX << "},\n";
