@@ -672,6 +672,41 @@ TEST(EurCurves, JointSolveIsFirstOrderOptimal) {
   EXPECT_LT(joint.rms_residual, 1e-10) << "achieved objective is machine-zero (prices the market exactly)";
 }
 
+// HONEST NOTE: build_eur_curves (like every MC builder) sets each quote to model_quote(x_true), i.e. a
+// SELF-CONSISTENT market, so the over-determined €STR futures all reprice to ZERO by construction -- there
+// is no futures tension in the recovery tests. A REAL futures strip is over-determined AND inconsistent:
+// several 1M/3M futures constrain the same piecewise-flat forward segments (and a future straddling an ECB
+// meeting averages two segments), so they cannot all reprice to zero and the least-squares fit keeps a
+// NON-ZERO residual (CLAUDE.md §2/§3; the SOFR reference's calibration_test '[market]' asserts exactly this).
+// Here we inject that tension into the €STR front and confirm the fit is a first-order-optimal compromise.
+TEST(EurCurves, OverDeterminedFuturesCarryRealTension) {
+  rb::MultiCcyBundle b = rb::build_eur_curves();
+  std::mt19937 rng(11);
+  std::normal_distribution<double> noise(0.0, 1e-4);  // ~1bp of independent quote noise on the €STR futures
+  int nfut = 0;
+  std::vector<int> fut;
+  for (int i = 0; i < static_cast<int>(b.prob.instruments.size()); ++i)
+    if (b.prob.instruments[i].quote == cal::QuoteKind::Rate && b.prob.instruments[i].forecast == b.ESTR) {
+      b.prob.instruments[i].market += noise(rng);  // break self-consistency -> the futures now disagree
+      fut.push_back(i);
+      ++nfut;
+    }
+  const auto sm = cal::smoothed(b.prob, 1.0, {b.EUR3M, b.EUR6M});
+  const auto sol = cal::calibrate(sm, b.x0, /*use_aad=*/false);
+  const Eigen::VectorXd r = b.prob.residuals<double>(sol.x);  // DATA residuals (no reg rows)
+  double fut_resid = 0, all_resid = r.cwiseAbs().maxCoeff();
+  for (int i : fut) fut_resid = std::max(fut_resid, std::abs(r[i]));
+  // First-order optimality of the (regularised) objective actually solved: ‖Jᵀr‖∞ over data + reg rows.
+  const Eigen::MatrixXd Jr = cal::aad_jacobian(sm, sol.x);
+  const Eigen::VectorXd rr = sm.residuals<double>(sol.x);
+  const double stat = (Jr.transpose() * rr).cwiseAbs().maxCoeff();
+  std::cout << "  [tension] €STR futures perturbed=" << nfut << "  max futures residual=" << fut_resid
+            << "  ||r_data||inf=" << all_resid << "  ||Jᵀr||inf(regularised)=" << stat << "\n";
+  EXPECT_GT(fut_resid, 1e-6) << "inconsistent over-determined €STR futures cannot all reprice to zero";
+  EXPECT_LT(fut_resid, 5e-3) << "but the fit is a sensible least-squares compromise, not blown up";
+  EXPECT_LT(stat, 1e-5) << "and it is first-order optimal on the objective solved (‖Jᵀr‖∞ ≈ 0)";
+}
+
 // The SMOOTHNESS regulariser resolves the null: penalising curvature of the EUR3M/EUR6M forwards
 // (NOT ESTR -- its €STR-futures front has real policy steps) selects the smoothest market-consistent
 // curve, so the coupled basis-only trio now recovers x_true tightly.
