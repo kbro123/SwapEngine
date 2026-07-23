@@ -18,6 +18,7 @@ namespace swaps::api {
 
 namespace json = boost::json;
 namespace px = swaps::pricing;
+namespace curve = swaps::curve;
 
 // =================================================================================================
 // JSON accessors -- tolerant: a missing key returns the supplied default (so a minimal document is
@@ -132,12 +133,39 @@ cal::FixedLeg xleg_from(const json::object& o) {
   L.discount = get_i(o, "discount", 0);
   return L;
 }
+curve::Scheme scheme_from_str(const std::string& s) {
+  if (s == "Flat") return curve::Scheme::Flat;
+  if (s == "Linear") return curve::Scheme::Linear;
+  if (s == "NaturalCubic") return curve::Scheme::NaturalCubic;
+  if (s == "Hermite") return curve::Scheme::Hermite;
+  if (s == "MonotoneCubic") return curve::Scheme::MonotoneCubic;
+  throw std::invalid_argument("unknown interpolation scheme: " + s);
+}
+const char* scheme_to_str(curve::Scheme s) {
+  switch (s) {
+    case curve::Scheme::Flat: return "Flat";
+    case curve::Scheme::Linear: return "Linear";
+    case curve::Scheme::NaturalCubic: return "NaturalCubic";
+    case curve::Scheme::Hermite: return "Hermite";
+    case curve::Scheme::MonotoneCubic: return "MonotoneCubic";
+  }
+  return "Hermite";
+}
+
 cal::BundleCurveSpec spec_from(const json::object& o) {
   cal::BundleCurveSpec s;
   s.meeting = get_da(o, "meeting");
   s.back = get_da(o, "back");
   s.base = get_i(o, "base", -1);
   s.currency = get_i(o, "currency", 0);
+  if (o.contains("regions") && o.at("regions").is_array())
+    for (const auto& e : o.at("regions").as_array()) {
+      const auto& ro = e.as_object();
+      curve::CurveModule m;
+      m.scheme = scheme_from_str(get_s(ro, "scheme", "Hermite"));
+      m.knots = get_da(ro, "knots");
+      s.regions.push_back(std::move(m));
+    }
   return s;
 }
 
@@ -198,6 +226,16 @@ json::object spec_to(const cal::BundleCurveSpec& s) {
   o["back"] = da(s.back);
   o["base"] = s.base;
   o["currency"] = s.currency;
+  if (!s.regions.empty()) {
+    json::array rs;
+    for (const auto& m : s.regions) {
+      json::object mo;
+      mo["scheme"] = scheme_to_str(m.scheme);
+      mo["knots"] = da(m.knots);
+      rs.push_back(mo);
+    }
+    o["regions"] = rs;
+  }
   return o;
 }
 
@@ -289,20 +327,33 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   for (const auto& ins : prob_.instruments)
     if (ins.quote == cal::QuoteKind::FxForward || ins.quote == cal::QuoteKind::XccyMtmBasis)
       has_fx_ = true;
+  for (const auto& c : prob_.curves) {
+    if (c.modular()) has_modular_ = true;  // custom interpolation regions
+    for (const auto& r : c.regions)        // only a NON-LINEAR scheme forces off the W-cache
+      if (r.scheme == curve::Scheme::MonotoneCubic) has_nonlinear_ = true;
+  }
   x_ = Eigen::VectorXd::Zero(prob_.n_knots());
 }
 
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
   if (reg.on())
     result_ = cal::calibrate(cal::smoothed(prob_, reg.lambda, reg.curves), x0, /*use_aad=*/true);
-  else if (!has_fx_)
-    result_ = cal::calibrate(prob_, x0, /*use_aad=*/true);  // compiled W-cache analytic path
+  else if (!has_fx_ && !has_nonlinear_)
+    result_ = cal::calibrate(prob_, x0, /*use_aad=*/true);  // compiled W-cache (any LINEAR region layout)
   else
-    // FX/MtM present -> the compiled engine rejects those; a zero-reg smoothed wrapper routes the solve
-    // through the generic AAD ANALYTIC engine (faster + more accurate than numerical diff).
+    // FX/MtM or a non-linear region scheme (MonotoneCubic) -> not W-cacheable; a zero-reg smoothed
+    // wrapper routes the solve through the generic AAD ANALYTIC engine (exact Jacobian, no bumping).
     result_ = cal::calibrate(cal::smoothed(prob_, 0.0, {}), x0, /*use_aad=*/true);
   x_ = result_.x;
   return result_;
+}
+
+const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& new_market,
+                                                         const RegSpec& reg) {
+  if (new_market.size() != prob_.n_residuals())
+    throw std::runtime_error("recalibrate: market length does not match the instrument count");
+  for (int i = 0; i < prob_.n_residuals(); ++i) prob_.instruments[i].market = new_market[i];
+  return calibrate(x_, reg);  // warm from the current solution
 }
 
 std::vector<CurveSample> BundleSession::sample(const std::vector<double>& times) const {
@@ -350,8 +401,10 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
 }
 
 void BundleSession::start_streaming(const RegSpec& reg) {
-  if (has_fx_)
-    throw std::runtime_error("streaming requires an all-linear bundle (no FX/MtM instruments)");
+  if (has_fx_ || has_nonlinear_)
+    throw std::runtime_error(
+        "microsecond streaming requires a W-cacheable bundle (no FX/MtM, no non-linear region schemes "
+        "like MonotoneCubic); use recalibrate() per tick for those");
   cal::CompiledBundleResidual engine(prob_);
   const Eigen::VectorXd q0 = engine.model_rates(x_);  // anchor market = what the current curve reprices
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;

@@ -40,7 +40,18 @@ struct CurveStructure {
   std::vector<double> meeting, back;
   int base = -1;      // -1 = outright; else this curve = curves[base] + spread (spread knots)
   int currency = 0;   // engine-blind tag, mirrors BundleCurveSpec::currency; the W-cache never reads it
-  int n_knots() const { return static_cast<int>(meeting.size() + back.size()); }
+  // Optional custom interpolation regions (mirrors BundleCurveSpec::regions). When non-empty the W-cache
+  // builds this curve's weights from a runtime ModularCurve; meeting/back are ignored. Kept LAST so the
+  // existing positional {meeting, back, base} aggregate initializers stay valid.
+  std::vector<curve::CurveModule> regions;
+  int n_knots() const {
+    if (!regions.empty()) {
+      int n = 0;
+      for (const auto& r : regions) n += static_cast<int>(r.knots.size());
+      return n;
+    }
+    return static_cast<int>(meeting.size() + back.size());
+  }
 };
 
 // DF_all = exp(-W_all x) over every (curve, time) registered, concatenated into one global vector.
@@ -103,7 +114,9 @@ class CompiledCurveSet {
   Eigen::MatrixXd logdf_weight(int c, const std::vector<double>& times) const {
     Eigen::MatrixXd W = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
     W.middleCols(knot_offset_[c], specs_[c].n_knots()) =
-        integral_weight_matrix(specs_[c].meeting, specs_[c].back, times);
+        specs_[c].regions.empty()
+            ? integral_weight_matrix(specs_[c].meeting, specs_[c].back, times)
+            : integral_weight_matrix(specs_[c].regions, times);  // generic any-region W-cache
     if (specs_[c].base >= 0) W += logdf_weight(specs_[c].base, times);
     return W;
   }

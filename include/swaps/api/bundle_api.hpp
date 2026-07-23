@@ -73,10 +73,20 @@ class BundleSession {
   // instrument is present (the compiled engine rejects those) or when a regulariser is requested.
   const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0, const RegSpec& reg = {});
 
+  // Re-solve to a NEW market vector by overwriting the instruments' targets and warm-calibrating from
+  // the current x. This is the streaming fallback for bundles the W-cache can't represent (custom
+  // interpolation regions / non-linear schemes): still a full analytic AAD solve, sub-millisecond.
+  const cal::CalibrationResult& recalibrate(const Eigen::VectorXd& new_market, const RegSpec& reg = {});
+
   const cal::CalibrationResult& result() const { return result_; }
   const Eigen::VectorXd& x() const { return x_; }
   const cal::BundleProblem& problem() const { return prob_; }
   bool has_fx() const { return has_fx_; }
+  bool has_modular() const { return has_modular_; }
+  // A non-linear region scheme (MonotoneCubic's value-dependent filter) has no constant W, so its bundle
+  // can't ride the W-cache — calibration/streaming route through the AAD engine. LINEAR custom regions
+  // (Flat/Linear/NaturalCubic/Hermite) are W-cacheable and stream at microseconds like the shipped curve.
+  bool has_nonlinear() const { return has_nonlinear_; }
 
   // Query the built curves at the current x on a shared time grid.
   std::vector<CurveSample> sample(const std::vector<double>& times) const;
@@ -103,6 +113,8 @@ class BundleSession {
   Eigen::VectorXd x_;
   cal::CalibrationResult result_;
   bool has_fx_ = false;
+  bool has_modular_ = false;
+  bool has_nonlinear_ = false;
   std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;
 };
 

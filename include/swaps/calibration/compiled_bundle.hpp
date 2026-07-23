@@ -43,7 +43,7 @@ class CompiledBundleResidual {
       : n_gen_(static_cast<int>(p.instruments.size())), market_(p.market()) {
     std::vector<pricing::CurveStructure> specs;
     specs.reserve(p.curves.size());
-    for (const auto& c : p.curves) specs.push_back({c.meeting, c.back, c.base});
+    for (const auto& c : p.curves) specs.push_back({c.meeting, c.back, c.base, c.currency, c.regions});
     cs_.init(specs);
 
     register_generic(p);

@@ -14,6 +14,7 @@
 
 #include "swaps/ad/dual.hpp"
 #include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"  // runtime ModularCurve -> generic (any-region) W-cache
 
 namespace swaps::pricing {
 
@@ -55,6 +56,33 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<double>& meeting
   } else {
     auto c = curve::make_calibration_curve<ad::Dual>(meeting, back);
     fill(c);
+  }
+  return W;
+}
+
+// Generic W-cache: build the same weight rows for ANY runtime region layout (a ModularCurve of
+// Flat/Linear/NaturalCubic/Hermite pieces). Mechanism is identical to the fixed-curve overload -- one
+// AAD pass, W(i,:) = grad_x integral(times[i]) -- because a linear-in-values curve has a constant
+// weight matrix regardless of how its regions are composed. The Flat front was never a requirement of
+// the cache, only of the two shipped curve factories. Linearity IS required: ModularCurve reports it at
+// runtime (MonotoneCubic's value-dependent filter is non-linear), so we check here and route a
+// non-linear composition to the AAD engine instead of silently caching a wrong W.
+inline Eigen::MatrixXd integral_weight_matrix(const std::vector<curve::CurveModule>& regions,
+                                              const std::vector<double>& times) {
+  auto c = curve::make_modular_curve<ad::Dual>(regions);
+  if (!c.is_linear_map())
+    throw std::invalid_argument(
+        "integral_weight_matrix: the W-cache requires linear interpolation regions; a value-dependent "
+        "scheme (MonotoneCubic) must calibrate through the AAD engine, not the W-cache.");
+  const int m = c.n_knots();
+  Eigen::MatrixXd W(static_cast<int>(times.size()), m);
+  c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const ad::Dual I = c.integral(times[i]);
+    if (I.derivatives().size() == m)
+      W.row(static_cast<int>(i)) = I.derivatives().transpose();
+    else
+      W.row(static_cast<int>(i)).setZero();
   }
   return W;
 }
