@@ -17,7 +17,7 @@ satisfying the same contract (`n_values`, `t_end`, `build`, `forward`, `integral
 - **Clamped C⁰ join to the front:** the FIRST control point is PINNED to `boundary.value`
   (`P_0 = in.value`), exactly mirroring how `Hermite`/`NaturalCubic` pin their leading value. The
   remaining `n` control points are the free vars `x[off .. off+n)`. So `n_values() == n` back knots,
-  same DOF as today — a drop-in swap for `Hermite` in `make_calibration_curve`.
+  same DOF as today — a drop-in swap for `Hermite` (`flat_bspline` vs `flat_hermite`).
 - **C² internally** (cubic B-spline is automatically C² across its interior knots) — smoother than
   Hermite's C¹.
 - **Convex-hull property:** `f` stays within the hull of its control points, so forwards do not

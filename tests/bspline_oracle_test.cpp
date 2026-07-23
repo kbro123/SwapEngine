@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "reference_curve.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 #include "swaps/pricing/cashflows.hpp"
@@ -29,13 +29,13 @@ TEST(BSplineOracle, PricesOisConsistentlyWithQuantLib) {
   rb::Market mk = rb::build_market(h);  // today, day count, SOFR index, calendar (all test-side)
 
   const std::vector<double> meeting{0.25, 0.5}, back{1, 2, 3, 5, 7, 10, 15, 20, 30};
-  cv::BSplineCurve<double> curve = cv::make_bspline_curve<double>(meeting, back);
+  cv::ModularCurve<double> curve = cv::make_modular_curve<double>(cv::flat_bspline(meeting, back));
   Eigen::VectorXd cp(meeting.size() + back.size());
   cp << 0.030, 0.032,                                              // front forwards
       0.035, 0.037, 0.039, 0.041, 0.042, 0.043, 0.044, 0.045, 0.046;  // back control points
   curve.set_forwards(cp);
 
-  auto ts = ext::make_shared<qlx::CurveTermStructure<cv::BSplineCurve<double>>>(mk.today, mk.dc, &curve);
+  auto ts = ext::make_shared<qlx::CurveTermStructure<cv::ModularCurve<double>>>(mk.today, mk.dc, &curve);
   ts->enableExtrapolation();
   h.linkTo(ts);  // SOFR forecasts and discounts off the B-spline curve
 
@@ -63,11 +63,11 @@ TEST(BSplineOracle, MomentAveragingMatchesQuantLibRealCalendar) {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
   const std::vector<double> meeting{0.25, 0.5}, back{1, 2, 3, 5, 7, 10, 15, 20, 30};
-  cv::BSplineCurve<double> curve = cv::make_bspline_curve<double>(meeting, back);
+  cv::ModularCurve<double> curve = cv::make_modular_curve<double>(cv::flat_bspline(meeting, back));
   Eigen::VectorXd cp(meeting.size() + back.size());
   cp << 0.030, 0.032, 0.035, 0.037, 0.039, 0.041, 0.042, 0.043, 0.044, 0.045, 0.046;
   curve.set_forwards(cp);
-  auto ts = ext::make_shared<qlx::CurveTermStructure<cv::BSplineCurve<double>>>(mk.today, mk.dc, &curve);
+  auto ts = ext::make_shared<qlx::CurveTermStructure<cv::ModularCurve<double>>>(mk.today, mk.dc, &curve);
   ts->enableExtrapolation();
   h.linkTo(ts);
 

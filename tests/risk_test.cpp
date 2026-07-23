@@ -32,7 +32,7 @@ cal::CalibrationProblem bump_quote(cal::CalibrationProblem p, int j, double eps)
 
 double portfolio_npv_at(const cal::CalibrationProblem& prob, const Eigen::VectorXd& x,
                         const swaps::portfolio::Portfolio& pf) {
-  auto c = swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
+  auto c = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times));
   c.set_forwards(x);
   return pf.npv<double>(c);
 }

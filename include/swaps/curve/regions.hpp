@@ -1,5 +1,5 @@
 #pragma once
-// Region interpolation policies for MultiRegionCurve (compile-time, linear in the knot values).
+// Region interpolation policies -- the math of each region, composed by ModularCurve (curve_module.hpp).
 //
 // A region maps its slice of the knot forwards to the instantaneous forward f(t) LINEARLY, and knows
 // how to integrate it. Regions are stitched left-to-right by a Boundary handoff: C0 (level) by

@@ -9,7 +9,7 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 
@@ -35,7 +35,7 @@ struct PortfolioVec : ::testing::Test {
   }
 
   double scalar_total(const Eigen::VectorXd& x) const {
-    auto c = swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
+    auto c = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times));
     c.set_forwards(x);
     return pf.npv<double>(c);
   }
@@ -58,7 +58,7 @@ TEST_F(PortfolioVec, MatchesScalarKernelAtManyCurves) {
   for (const auto& x : curves) {
     // per-swap agreement
     const Eigen::VectorXd vec = cp.npv(x);
-    auto c = swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
+    auto c = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times));
     c.set_forwards(x);
     for (int p = 0; p < cp.n_swaps(); ++p) {
       const double scal =

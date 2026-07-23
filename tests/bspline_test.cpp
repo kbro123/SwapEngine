@@ -13,8 +13,7 @@
 
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
-#include "swaps/curve/calibration_curve.hpp"
-#include "swaps/curve/multi_region_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/regions.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "swaps/pricing/compiled.hpp"
@@ -104,12 +103,12 @@ TEST(BSpline, IntegralIsLinearInControlPoints) {
 }
 
 TEST(BSpline, ComposesIntoAValidCurve) {
-  // MultiRegionCurve<Flat, BSpline>: flat meeting-date front + control-point B-spline back. Must be a
-  // valid discount curve -- DF(0)=1, positive & strictly decreasing (positive forwards), C0 across the
-  // Flat->BSpline join -- and stay on the linear-map fast path.
-  static_assert(swaps::curve::BSplineCurve<double>::is_linear_map, "B-spline curve must be a linear map");
+  // flat_bspline: flat meeting-date front + control-point B-spline back. Must be a valid discount
+  // curve -- DF(0)=1, positive & strictly decreasing (positive forwards), C0 across the Flat->BSpline
+  // join -- and stay on the linear-map fast path.
   const std::vector<double> meeting{0.25, 0.5}, back{1, 2, 3, 5, 7, 10};
-  auto c = swaps::curve::make_bspline_curve<double>(meeting, back);
+  auto c = swaps::curve::make_modular_curve<double>(swaps::curve::flat_bspline(meeting, back));
+  EXPECT_TRUE(c.is_linear_map()) << "B-spline curve must be a linear map";
   Eigen::VectorXd x(8);  // 2 front forwards + 6 back control points
   x << 0.030, 0.033, 0.036, 0.040, 0.038, 0.042, 0.041, 0.045;
   c.set_forwards(x);
@@ -160,7 +159,7 @@ struct BSplineProblem {
   int n_residuals() const { return inst.n_residuals(); }
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    auto c = cv::make_bspline_curve<Scalar>(inst.meeting_times, inst.back_times);
+    auto c = cv::make_modular_curve<Scalar>(cv::flat_bspline(inst.meeting_times, inst.back_times));
     c.set_forwards(x);
     return inst.price_residuals<Scalar>(c);
   }
@@ -198,7 +197,7 @@ TEST(BSpline, CalibratesToMarketAndReprices) {
   // Self-consistent market generated from a KNOWN B-spline curve, so x_true is the exact solution.
   Eigen::VectorXd xt(8);
   xt << 0.030, 0.033, 0.036, 0.039, 0.041, 0.043, 0.044, 0.046;
-  auto ct = cv::make_bspline_curve<double>(prob.inst.meeting_times, prob.inst.back_times);
+  auto ct = cv::make_modular_curve<double>(cv::flat_bspline(prob.inst.meeting_times, prob.inst.back_times));
   ct.set_forwards(xt);
   for (auto& ins : prob.inst.instruments)
     ins.market = px::par_rate<double>(ins.fwd.coupons, ins.fixed.coupons, ct, ct);
@@ -218,7 +217,7 @@ TEST(BSpline, MomentAverageRateMatchesExactDailySum) {
   // is exact (fixing_step = window/ndays); a real calendar's weekend day-count moment is an additive
   // refinement (see the header). Validated on a B-spline curve.
   const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 7, 10};
-  auto c = cv::make_bspline_curve<double>(meeting, back);
+  auto c = cv::make_modular_curve<double>(cv::flat_bspline(meeting, back));
   Eigen::VectorXd cpv(7);
   cpv << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
   c.set_forwards(cpv);
@@ -246,7 +245,7 @@ TEST(BSpline, MomentCouponPricesThroughFloatCouponPv) {
   // float_coupon_pv) equal to an exact daily-averaged coupon -- proving obs_numerator routing works
   // end-to-end, not just the standalone primitive. tau_pay == tau_index, no spread => pv = DF(pay)*num.
   const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 7, 10};
-  auto c = cv::make_bspline_curve<double>(meeting, back);
+  auto c = cv::make_modular_curve<double>(cv::flat_bspline(meeting, back));
   Eigen::VectorXd cpv(7);
   cpv << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
   c.set_forwards(cpv);
@@ -276,12 +275,12 @@ TEST(BSpline, WCacheReproducesDiscounts) {
   // proving a B-spline curve reprices through the W-cache with NO curve rebuild, the whole point of
   // fast B-spline calibration.
   const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 7, 10};
-  auto c = cv::make_bspline_curve<double>(meeting, back);
+  auto c = cv::make_modular_curve<double>(cv::flat_bspline(meeting, back));
   Eigen::VectorXd x(7);
   x << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
   c.set_forwards(x);
   const std::vector<double> times{0.3, 0.8, 1.5, 3.0, 6.0, 9.5, 10.0};
-  const Eigen::MatrixXd W = px::integral_weight_matrix(meeting, back, times, px::BackScheme::BSpline);
+  const Eigen::MatrixXd W = px::integral_weight_matrix(cv::flat_bspline(meeting, back), times);
   const Eigen::VectorXd DF = (-(W * x).array()).exp();
   double worst = 0;
   for (std::size_t i = 0; i < times.size(); ++i) worst = std::max(worst, std::abs(DF[i] - c.discount(times[i])));
@@ -299,7 +298,7 @@ TEST(BSpline, CollocationMapsControlPointsToForwardsAndIsInvertible) {
 
   Eigen::VectorXd x(7);
   x << 0.031, 0.034, 0.037, 0.040, 0.042, 0.044, 0.046;
-  auto c = cv::make_bspline_curve<double>(meeting, back);
+  auto c = cv::make_modular_curve<double>(cv::flat_bspline(meeting, back));
   c.set_forwards(x);
   const Eigen::VectorXd fwd = B * x;
   const std::vector<double> knots{0.5, 1, 2, 3, 5, 7, 10};

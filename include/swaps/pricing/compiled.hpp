@@ -13,60 +13,23 @@
 #include <vector>
 
 #include "swaps/ad/dual.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/curve_module.hpp"  // runtime ModularCurve -> generic (any-region) W-cache
 
 namespace swaps::pricing {
 
-// Which back-end interpolation the W-cache builds. Default Hermite = the shipped curve, unchanged.
-// GUARD (CLAUDE.md §2): every scheme listed here MUST be a linear map -- the W-cache stores ONE constant
-// weight matrix W with integral(t) = w(t)·x, which is only valid when the curve is linear in x. A
-// value-dependent scheme (MonotoneCubic's Hyman filter, monotone-convex, Hyman) has NO constant W and
-// must NOT appear here; it routes through the AAD engine instead. The static_assert in fill() below turns
-// "someone added a non-linear scheme to this enum" into a compile error rather than a silent wrong W.
-enum class BackScheme { Hermite, BSpline };
-
-// W(i,:) such that integral(times[i]) = W(i,:)*x. Built via one AAD pass (integral is linear, so the
-// gradient is the weight row, independent of x). Setup only, not the hot path. `scheme` selects the
-// back-end interpolation; for BSpline the free values x are B-spline CONTROL POINTS (Part A).
-inline Eigen::MatrixXd integral_weight_matrix(const std::vector<double>& meeting,
-                                              const std::vector<double>& back,
-                                              const std::vector<double>& times,
-                                              BackScheme scheme = BackScheme::Hermite) {
-  const int m = static_cast<int>(meeting.size() + back.size());
-  Eigen::MatrixXd W(static_cast<int>(times.size()), m);
-  auto fill = [&](auto& c) {
-    // GUARD: the W-cache is only meaningful for a curve whose integral is LINEAR in x (a constant W).
-    // Reject any non-linear curve at compile time -- it belongs on the AAD tier, not here.
-    static_assert(std::decay_t<decltype(c)>::is_linear_map,
-                  "integral_weight_matrix: W-cache requires a linear-map curve; a value-dependent scheme "
-                  "(e.g. MonotoneCubic) must calibrate through the AAD engine, not the W-cache.");
-    c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
-    for (std::size_t i = 0; i < times.size(); ++i) {
-      const ad::Dual I = c.integral(times[i]);
-      if (I.derivatives().size() == m)
-        W.row(static_cast<int>(i)) = I.derivatives().transpose();
-      else
-        W.row(static_cast<int>(i)).setZero();
-    }
-  };
-  if (scheme == BackScheme::BSpline) {
-    auto c = curve::make_bspline_curve<ad::Dual>(meeting, back);
-    fill(c);
-  } else {
-    auto c = curve::make_calibration_curve<ad::Dual>(meeting, back);
-    fill(c);
-  }
-  return W;
-}
-
-// Generic W-cache: build the same weight rows for ANY runtime region layout (a ModularCurve of
-// Flat/Linear/NaturalCubic/Hermite pieces). Mechanism is identical to the fixed-curve overload -- one
-// AAD pass, W(i,:) = grad_x integral(times[i]) -- because a linear-in-values curve has a constant
-// weight matrix regardless of how its regions are composed. The Flat front was never a requirement of
-// the cache, only of the two shipped curve factories. Linearity IS required: ModularCurve reports it at
-// runtime (MonotoneCubic's value-dependent filter is non-linear), so we check here and route a
-// non-linear composition to the AAD engine instead of silently caching a wrong W.
+// THE W-cache. W(i,:) such that integral(times[i]) = W(i,:)*x, for ANY region layout -- shipped
+// (curve::flat_hermite / flat_bspline) or user-composed. Built via ONE AAD pass: a linear-in-values
+// curve has integral(t) = w(t)*x, so the gradient IS the weight row, independent of x. Setup only, not
+// the hot path.
+//
+// A flat front was never a requirement of the cache -- only linearity is, and that holds regardless of
+// how the regions are composed. Linearity IS required though: ModularCurve reports it at runtime
+// (MonotoneCubic's value-dependent Hyman filter is non-linear), so we check here and route a non-linear
+// composition to the AAD engine rather than silently caching a wrong W.
+//
+// For a BSpline region the free values x are CONTROL POINTS (docs/bezier-and-moments.md Part A); use
+// bspline_collocation below to present a risk ladder in the forward-at-knot basis.
 inline Eigen::MatrixXd integral_weight_matrix(const std::vector<curve::CurveModule>& regions,
                                               const std::vector<double>& times) {
   auto c = curve::make_modular_curve<ad::Dual>(regions);
@@ -99,7 +62,7 @@ inline Eigen::MatrixXd bspline_collocation(const std::vector<double>& meeting,
   const int m = static_cast<int>(meeting.size() + back.size());
   std::vector<double> knots = meeting;
   knots.insert(knots.end(), back.begin(), back.end());
-  auto c = curve::make_bspline_curve<ad::Dual>(meeting, back);
+  auto c = curve::make_modular_curve<ad::Dual>(curve::flat_bspline(meeting, back));
   c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
   Eigen::MatrixXd B(m, m);
   for (int i = 0; i < m; ++i) {

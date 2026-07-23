@@ -16,7 +16,7 @@
 
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 
 namespace swaps::calibration {
 
@@ -26,7 +26,7 @@ template <class Portfolio>
 Eigen::VectorXd bucketed_delta(const CalibrationProblem& prob, const Eigen::VectorXd& x,
                                const Portfolio& pf) {
   // d(NPV)/dx via one AAD pass, off the calibration curve.
-  auto c = curve::make_calibration_curve<ad::Dual>(prob.meeting_times, prob.back_times);
+  auto c = curve::make_modular_curve<ad::Dual>(curve::flat_hermite(prob.meeting_times, prob.back_times));
   c.set_forwards(ad::seed(x));
   const ad::Dual pv = pf.template npv<ad::Dual>(c);
   const Eigen::VectorXd dnpv_dx = pv.derivatives();

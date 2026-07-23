@@ -15,16 +15,16 @@
 
 #include <cmath>
 
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 
 namespace swaps::curve {
 
 template <class Scalar>
 class SpreadCurve {
  public:
-  SpreadCurve(const CalibrationCurve<double>& base, const std::vector<double>& meeting_times,
+  SpreadCurve(const ModularCurve<double>& base, const std::vector<double>& meeting_times,
               const std::vector<double>& back_times)
-      : base_(&base), spread_(make_calibration_curve<Scalar>(meeting_times, back_times)) {}
+      : base_(&base), spread_(make_modular_curve<Scalar>(flat_hermite(meeting_times, back_times))) {}
 
   int n_knots() const { return spread_.n_knots(); }
   double max_time() const { return spread_.max_time(); }
@@ -50,11 +50,11 @@ class SpreadCurve {
     return integral(t) / t;
   }
 
-  const CalibrationCurve<Scalar>& spread_component() const { return spread_; }
+  const ModularCurve<Scalar>& spread_component() const { return spread_; }
 
  private:
-  const CalibrationCurve<double>* base_;
-  CalibrationCurve<Scalar> spread_;
+  const ModularCurve<double>* base_;
+  ModularCurve<Scalar> spread_;
 };
 
 }  // namespace swaps::curve

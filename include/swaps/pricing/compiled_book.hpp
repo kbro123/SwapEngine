@@ -40,10 +40,14 @@ struct CurveStructure {
   std::vector<double> meeting, back;
   int base = -1;      // -1 = outright; else this curve = curves[base] + spread (spread knots)
   int currency = 0;   // engine-blind tag, mirrors BundleCurveSpec::currency; the W-cache never reads it
-  // Optional custom interpolation regions (mirrors BundleCurveSpec::regions). When non-empty the W-cache
-  // builds this curve's weights from a runtime ModularCurve; meeting/back are ignored. Kept LAST so the
-  // existing positional {meeting, back, base} aggregate initializers stay valid.
+  // Custom interpolation regions (mirrors BundleCurveSpec::regions). When non-empty these define the
+  // curve and meeting/back are ignored; when empty they mean the shipped Flat+Hermite layout. Kept LAST
+  // so the existing positional {meeting, back, base} aggregate initializers stay valid.
   std::vector<curve::CurveModule> regions;
+  // The ONE description of this curve's interpolation -- mirrors BundleCurveSpec::modules().
+  std::vector<curve::CurveModule> modules() const {
+    return regions.empty() ? curve::flat_hermite(meeting, back) : regions;
+  }
   int n_knots() const {
     if (!regions.empty()) {
       int n = 0;
@@ -114,9 +118,7 @@ class CompiledCurveSet {
   Eigen::MatrixXd logdf_weight(int c, const std::vector<double>& times) const {
     Eigen::MatrixXd W = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
     W.middleCols(knot_offset_[c], specs_[c].n_knots()) =
-        specs_[c].regions.empty()
-            ? integral_weight_matrix(specs_[c].meeting, specs_[c].back, times)
-            : integral_weight_matrix(specs_[c].regions, times);  // generic any-region W-cache
+        integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
     if (specs_[c].base >= 0) W += logdf_weight(specs_[c].base, times);
     return W;
   }

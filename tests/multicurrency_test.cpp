@@ -27,7 +27,7 @@
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
 #include <random>
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "swaps/ql/extract.hpp"
@@ -162,7 +162,7 @@ TEST(MultiCcyEur, EoniaDefaultSpreadOverEstr) {
   // ESTR curve at x_true, then EONIA = ESTR + flat 8.5bp forward spread.
   const auto& estr = *b.curve_handles[b.ESTR];
   const std::vector<double> meet{0.5}, back{1, 2, 3, 5, 7, 10, 15, 20, 30};
-  auto sp = swaps::curve::make_calibration_curve<double>(meet, back);
+  auto sp = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(meet, back));
   Eigen::VectorXd s(static_cast<int>(meet.size() + back.size()));
   s.setConstant(kEoniaSpread);
   sp.set_forwards(s);
@@ -269,7 +269,7 @@ TEST(MultiCcyUsd, PrimeDefaultSpreadOverFedFunds) {
   constexpr double kPrimeSpread = 0.0300;  // PRIME ~= Fed Funds + 300bp
   const auto& ff = *b.curve_handles[b.FF];
   const std::vector<double> meet{0.5}, back{1, 2, 3, 5, 7, 10, 15, 20, 30};
-  auto sp = swaps::curve::make_calibration_curve<double>(meet, back);
+  auto sp = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(meet, back));
   Eigen::VectorXd s(static_cast<int>(meet.size() + back.size()));
   s.setConstant(kPrimeSpread);
   sp.set_forwards(s);

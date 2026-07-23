@@ -23,7 +23,7 @@
 
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/parallel/thread_pool.hpp"
 
 namespace swaps::calibration {

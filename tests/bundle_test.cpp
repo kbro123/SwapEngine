@@ -26,7 +26,7 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/calibration/warm.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 #include "tolerances.hpp"
@@ -550,9 +550,9 @@ TEST(BundleSpread, SpreadHandleMatchesBasePlusSpread) {
   const auto C = cal::build_bundle_curves<double>(
       specs, [&](int c, int i) { return c == 0 ? base_f[i] : spread_f[i]; });
 
-  auto base_curve = cv::make_calibration_curve<double>(meeting, back);
+  auto base_curve = cv::make_modular_curve<double>(cv::flat_hermite(meeting, back));
   base_curve.set_forwards(base_f);
-  auto spread_curve = cv::make_calibration_curve<double>(meeting, back);
+  auto spread_curve = cv::make_modular_curve<double>(cv::flat_hermite(meeting, back));
   spread_curve.set_forwards(spread_f);
   double wf = 0.0, wd = 0.0;
   for (double t : {0.1, 0.5, 0.9, 1.5, 3.0, 7.0, 10.0}) {

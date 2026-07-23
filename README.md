@@ -9,8 +9,9 @@ library**, built to be provably faster and more accurate than stock QuantLib on 
 - **Analytic Jacobian via forward-mode AAD** (Eigen `AutoDiffScalar`), reused for **analytic bucketed
   risk** through the implicit-function theorem — no bump-and-reprice.
 - **Multi-region forward interpolation**: piecewise-flat forwards on **central-bank meeting dates** in
-  the front end; a **local C¹ Hermite** spline beyond the last meeting date. The generic
-  `MultiRegionCurve` composes any linear-in-values region policies (Flat/Linear/NaturalCubic/Hermite).
+  the front end; a **local C¹ Hermite** spline beyond the last meeting date. One curve type,
+  `ModularCurve`, composes any sequence of region policies (Flat/Linear/NaturalCubic/Hermite/BSpline/
+  MonotoneCubic) chosen at runtime; the shipped curve is just the `flat_hermite` module list.
 - **Multi-curve bundle**: N curves (e.g. SOFR + Fed-Funds + Prime …) calibrated **simultaneously** over
   one stacked parameter vector, with forecast ≠ discount pricing and basis-swap chains.
 - **Real-time streaming re-calibration**: an exact frozen-Newton path reprices to the market every tick.

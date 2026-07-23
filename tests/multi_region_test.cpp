@@ -1,6 +1,7 @@
-// The generalized MultiRegionCurve<Flat, NaturalCubic> must reproduce the hand-written
-// CalibrationCurve to machine precision -- same interpolation, same knots, same forwards. This
-// is the de-risking step before anything migrates onto the multi-region engine.
+// Multi-region composition: a curve stitched from an arbitrary sequence of region policies must
+// reproduce the shipped flat_hermite layout to machine precision -- same interpolation, same knots,
+// same forwards -- and report linearity correctly. Every curve in the engine is built this way, so
+// this is the region-stitching contract itself, not a migration check.
 
 #include <gtest/gtest.h>
 
@@ -10,18 +11,16 @@
 #include <Eigen/Core>
 
 #include "swaps/ad/dual.hpp"
-#include "swaps/curve/calibration_curve.hpp"
-#include "swaps/curve/multi_region_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/regions.hpp"
-#include "swaps/curve/calibration_curve.hpp"
 
 using swaps::ad::Dual;
 using swaps::curve::Flat;
 using swaps::curve::Hermite;
 using swaps::curve::Linear;
-using swaps::curve::MultiRegionCurve;
+using swaps::curve::make_modular_curve;
+using swaps::curve::Scheme;
 using swaps::curve::NaturalCubic;
-using swaps::curve::CalibrationCurve;
 
 namespace {
 const std::vector<double> kMeeting{0.08, 0.25, 0.45, 0.70};
@@ -30,11 +29,22 @@ const std::vector<double> kX{0.043, 0.041, 0.039, 0.036,          // front (flat
                              0.035, 0.037, 0.040, 0.043, 0.041, 0.038};  // back (spline)
 }  // namespace
 
-TEST(MultiRegion, ReproducesCalibrationCurve) {
-  auto ref = swaps::curve::make_calibration_curve<double>(kMeeting, kBack);
+// The shipped `flat_hermite` helper is a NAME for a module list, nothing more. Pin that: it must be
+// structurally and numerically identical to writing the two modules out by hand, so a caller can always
+// substitute an explicit region list for the shipped layout (which is exactly what the web composer
+// does when a user defines their own regions).
+TEST(MultiRegion, ShippedLayoutIsJustAModuleList) {
+  const auto shipped = swaps::curve::flat_hermite(kMeeting, kBack);
+  ASSERT_EQ(shipped.size(), 2u);
+  EXPECT_EQ(shipped[0].knots, kMeeting);
+  EXPECT_EQ(shipped[0].scheme, Scheme::Flat);
+  EXPECT_EQ(shipped[1].knots, kBack);
+  EXPECT_EQ(shipped[1].scheme, Scheme::Hermite);
+
+  auto ref = swaps::curve::make_modular_curve<double>(shipped);
   ref.set_forwards(kX);
 
-  MultiRegionCurve<double, Flat, Hermite> mr{Flat<double>(kMeeting), Hermite<double>(kBack)};
+  auto mr = make_modular_curve<double>({{kMeeting, Scheme::Flat}, {kBack, Scheme::Hermite}});
   ASSERT_EQ(mr.n_knots(), static_cast<int>(kX.size()));
   mr.set_forwards(kX);
 
@@ -60,10 +70,9 @@ TEST(MultiRegion, HermiteInterpolatesKnotsIsC1AndLocal) {
   const std::vector<double> back{1, 2, 3, 5, 7, 10, 15, 20, 30};
   const std::vector<double> xv{0.040, 0.038,                                                   // front
                                0.035, 0.036, 0.037, 0.038, 0.039, 0.040, 0.041, 0.039, 0.037};  // back
-  static_assert(MultiRegionCurve<double, Flat, Hermite>::is_linear_map);
 
   // Interpolates its back knots exactly, and is C1 (slope continuous) across them.
-  MultiRegionCurve<double, Flat, Hermite> hc{Flat<double>(meeting), Hermite<double>(back)};
+  auto hc = make_modular_curve<double>({{meeting, Scheme::Flat}, {back, Scheme::Hermite}});
   hc.set_forwards(xv);
   for (std::size_t i = 0; i < back.size(); ++i) EXPECT_NEAR(hc.forward(back[i]), xv[2 + i], 1e-12);
   const double e = 1e-6;
@@ -85,8 +94,8 @@ TEST(MultiRegion, HermiteInterpolatesKnotsIsC1AndLocal) {
       if (std::abs(d[k]) > 1e-9) ++nz;
     return nz;
   };
-  MultiRegionCurve<Dual, Flat, Hermite> hd{Flat<Dual>(meeting), Hermite<Dual>(back)};
-  MultiRegionCurve<Dual, Flat, NaturalCubic> cd{Flat<Dual>(meeting), NaturalCubic<Dual>(back)};
+  auto hd = make_modular_curve<Dual>({{meeting, Scheme::Flat}, {back, Scheme::Hermite}});
+  auto cd = make_modular_curve<Dual>({{meeting, Scheme::Flat}, {back, Scheme::NaturalCubic}});
   const int herm = nonzeros(hd), cub = nonzeros(cd);
   std::cout << "  [locality] d forward(6y)/dx nonzeros: Hermite=" << herm << " NaturalCubic=" << cub
             << " (of " << xv.size() << " knots)\n";
@@ -95,14 +104,14 @@ TEST(MultiRegion, HermiteInterpolatesKnotsIsC1AndLocal) {
 }
 
 TEST(MultiRegion, LinearMapTraitAndComposition) {
-  // The trait is the AND over regions; all-linear configs enable the fast path.
-  static_assert(MultiRegionCurve<double, Flat, NaturalCubic>::is_linear_map);
-  static_assert(MultiRegionCurve<double, Flat, Linear, NaturalCubic>::is_linear_map);
-
-  // A three-region curve builds and is continuous in the discount factor across every join.
+  // is_linear_map() is the AND over regions; an all-linear composition enables the W-cache fast path.
   const std::vector<double> m{0.1, 0.3}, lin{0.6, 1.0}, cub{2.0, 5.0, 10.0};
-  MultiRegionCurve<double, Flat, Linear, NaturalCubic> c{Flat<double>(m), Linear<double>(lin),
-                                                         NaturalCubic<double>(cub)};
+  auto c = make_modular_curve<double>({{m, Scheme::Flat}, {lin, Scheme::Linear}, {cub, Scheme::NaturalCubic}});
+  EXPECT_TRUE(c.is_linear_map()) << "Flat+Linear+NaturalCubic are all linear maps";
+  EXPECT_TRUE(make_modular_curve<double>(swaps::curve::flat_hermite(m, cub)).is_linear_map());
+  EXPECT_FALSE(make_modular_curve<double>(swaps::curve::flat_monotone(m, cub)).is_linear_map())
+      << "one non-linear region makes the whole composition non-linear";
+
   std::vector<double> x{0.04, 0.038, 0.037, 0.036, 0.035, 0.037, 0.039};  // 2 + 2 + 3
   ASSERT_EQ(c.n_knots(), static_cast<int>(x.size()));
   c.set_forwards(x);
@@ -129,6 +138,6 @@ TEST(RegionKnots, RejectsDuplicateAndUnsortedKnots) {
   EXPECT_THROW(Flat<double>({}), std::invalid_argument);                        // empty
   EXPECT_NO_THROW(Hermite<double>({1.0, 2.0, 3.0}));                            // strictly increasing OK
   // Cross-region join: first back knot must exceed the last front knot.
-  EXPECT_THROW(swaps::curve::make_calibration_curve<double>({0.5, 1.0}, {1.0, 2.0}), std::invalid_argument);
-  EXPECT_NO_THROW(swaps::curve::make_calibration_curve<double>({0.5, 1.0}, {1.5, 2.0}));
+  EXPECT_THROW(swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite({0.5, 1.0}, {1.0, 2.0})), std::invalid_argument);
+  EXPECT_NO_THROW(swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite({0.5, 1.0}, {1.5, 2.0})));
 }

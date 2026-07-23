@@ -12,7 +12,7 @@
 
 #include <ql/termstructures/yieldtermstructure.hpp>
 
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 
 namespace swaps::qlx {
 

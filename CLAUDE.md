@@ -26,9 +26,9 @@ compiled with the same compiler and flags (§3 perf-gate integrity).
   be our own code consuming QuantLib-extracted schedules.
 
 ### North-star capabilities
-1. **Our calibrated curve is a `QuantLib::YieldTermStructure`.** `make_calibration_curve<Scalar>`
-   (`MultiRegionCurve<Flat, Hermite>`) is the templated math core; the generic
-   `CurveTermStructure<Curve>` wrapper exposes it to QuantLib pricing engines for validation and reuse.
+1. **Our calibrated curve is a `QuantLib::YieldTermStructure`.** `ModularCurve<Scalar>` built from
+   `flat_hermite(meeting, back)` is the templated math core; the generic `CurveTermStructure<Curve>`
+   wrapper exposes it to QuantLib pricing engines for validation and reuse.
 2. **Global curve calibration.** All knot forwards solved **jointly** with Levenberg–Marquardt over
    residuals built from QuantLib rate helpers — not QuantLib's sequential 1-D bootstrapping.
 3. **Analytic Jacobian via AAD.** The LM Jacobian `J[i][k] = d residual_i / d knot_k` is computed by
@@ -96,28 +96,34 @@ optimum**. This is a modelling choice, not a defect.
   stays cleanly differentiable — preserve that property; do not introduce non-differentiable kinks in
   the back end.
 
-### Interpolation is a compile-time, multi-region policy (linear schemes keep the fast path)
-The curve is `MultiRegionCurve<Scalar, Regions...>` (`curve/multi_region_curve.hpp`): an arbitrary
-compile-time sequence of region policies (`curve/regions.hpp`), each **linear in its knot values**,
-stitched with a C⁰ (level) `Boundary` handoff by default (optional C¹ where both regions support it).
-The **shipped** curve is `make_calibration_curve` = `MultiRegionCurve<Flat, Hermite>` (flat meeting-date
-front, **local C¹ Hermite** back) — used everywhere: calibration, pricing, risk, streaming, the bundle.
-The old `TwoRegionForwardCurve` (Flat+NaturalCubic) wrapper was retired; `NaturalCubic`/`Linear`/`BSpline`
-remain as available region policies. Region ctors reject duplicate/unsorted knots (a zero-length segment
-is a 0/0 → silent NaN; caught at construction).
-- **`BSpline` (clamped cubic, CONTROL-POINT) is an alternative back end** (`make_bspline_curve` =
-  `MultiRegionCurve<Flat, BSpline>`; branch `feat/bezier-and-moment-integration`). Free vars are B-spline
+### Interpolation is a multi-region policy, and there is exactly ONE curve type
+The curve is `ModularCurve<Scalar>` (`curve/curve_module.hpp`), built by the single factory
+`make_modular_curve<S>(modules)` from a runtime list of `CurveModule{knots, scheme}` — each region a
+policy from `curve/regions.hpp`, stitched with a C⁰ (level) `Boundary` handoff.
+
+**A curve "flavour" is DATA, not a type.** The shipped curve is the module list `flat_hermite(meeting,
+back)` (flat meeting-date front, **local C¹ Hermite** back) — used everywhere: calibration, pricing,
+risk, streaming, the bundle. `flat_bspline` and `flat_monotone` are the same shape with a different back
+scheme; a user-composed region list from the web composer is just another list. So there is one set of
+region math, one linearity check, one W-cache and one risk path — no per-flavour curve class.
+(The compile-time `MultiRegionCurve<Scalar, Regions...>` was retired: it duplicated this logic and
+measured *slower* — `risk_full_jacobian` 809µs vs 644µs — because AAD gradient allocation dominates the
+type erasure entirely. `TwoRegionForwardCurve` was retired earlier.) Region ctors reject duplicate/
+unsorted knots and `make_modular_curve` rejects overlapping regions (a zero-length segment is a 0/0 →
+silent NaN; caught at construction).
+- **`BSpline` (clamped cubic, CONTROL-POINT) is an alternative back end** (`flat_bspline`; branch
+  `feat/bezier-and-moment-integration`). Free vars are B-spline
   control points (P₀ pinned to the front boundary for a C⁰ join), giving **C²** and the **convex-hull**
   property (forwards can't overshoot; positivity enforceable) that Hermite's C¹ does not. de Boor eval,
   2-pt-Gauss `integral` (exact for the cubic). Fully validated: QuantLib OIS oracle 6.9e-17, calibration
   fit (identifiable), W-cache reprice 1.1e-16, and a `bspline_collocation` risk transform (control-point ↔
   forward-at-knot deltas, invertible). Control points don't lie on the curve, so risk is reported in the
-  forward basis via that transform. `integral_weight_matrix(..., BackScheme::BSpline)` puts it on the fast path.
+  forward basis via that transform. `integral_weight_matrix(flat_bspline(...), times)` puts it on the fast path.
 - **Rule: the interpolation must be a LINEAR MAP of the knot values to keep the microsecond path.**
   Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`, `BSpline`) preserve `integral(t)=w(t)·x`,
   hence the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over regions) gates that tier.
 - **Value-dependent schemes drop to the AAD tier — and `MonotoneCubic` is the first one BUILT and
-  gate-verified** (`make_monotone_curve` = `MultiRegionCurve<Flat, MonotoneCubic>`). It is a C² natural
+  gate-verified** (`flat_monotone`). It is a C² natural
   cubic whose node tangents pass through **Hyman's monotonicity filter**, transcribed to match QuantLib's
   `MonotonicCubicNaturalSpline` **bit-for-bit** (`tests/monotone_cubic_oracle_test.cpp`: `forward` and
   `integral` vs QuantLib to ~1e-11 on monotone AND filter-firing data). Because the filter clamps with
@@ -329,10 +335,10 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
 include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
-include/swaps/curve/         multi_region_curve.hpp + regions.hpp (Flat/Linear/NaturalCubic/Hermite;
-                             region ctors reject duplicate/unsorted knots), calibration_curve.hpp
-                             (make_calibration_curve = MultiRegionCurve<Flat,Hermite> -- the SHIPPED curve),
-                             curve_module.hpp (runtime ModularCurve: build from CurveModule{knots,scheme}),
+include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline region
+                             math; ctors reject duplicate/unsorted knots), curve_module.hpp (THE curve:
+                             ModularCurve + make_modular_curve from CurveModule{knots,scheme}, plus the
+                             named layouts flat_hermite -- the SHIPPED one -- flat_bspline, flat_monotone),
                              spread_curve.hpp, ql_term_structure.hpp (generic CurveTermStructure<Curve>)
 include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instrument/FloatLeg/FixedLeg/
                              QuoteKind model -- see §7c), lm.hpp, risk.hpp, warm.hpp (cached-Jacobian +

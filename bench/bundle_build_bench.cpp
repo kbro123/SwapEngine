@@ -16,7 +16,7 @@
 #include "swaps/calibration/bundle_stage.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/warm.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 

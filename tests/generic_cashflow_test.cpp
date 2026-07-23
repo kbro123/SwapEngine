@@ -16,7 +16,7 @@
 
 #include "reference_curve.hpp"
 #include "swaps/ad/dual.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "tolerances.hpp"
 
@@ -126,7 +126,7 @@ TEST_F(Generic, FullyFixedCouponInsideALiveLegIsAadSafe) {
     for (double f : rm::reference_front_forwards) x[i++] = f;
     for (double g : rm::reference_back_forwards) x[i++] = g;
   }
-  auto dc = swaps::curve::make_calibration_curve<Dual>(mk.meeting_times, mk.back_times);
+  auto dc = swaps::curve::make_modular_curve<Dual>(swaps::curve::flat_hermite(mk.meeting_times, mk.back_times));
   dc.set_forwards(swaps::ad::seed(x));
 
   px::FloatCoupon fixed;  // already fixed: NO sub-periods

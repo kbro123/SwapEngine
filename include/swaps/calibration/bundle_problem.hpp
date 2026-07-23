@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "swaps/calibration/problem.hpp"  // the generic FloatLeg/FixedLeg/Instrument model (design §3)
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/curve_module.hpp"  // runtime ModularCurve for user-defined interpolation regions
 #include "swaps/pricing/cashflows.hpp"
 
@@ -41,8 +41,8 @@ struct CurveHandle {
 };
 template <class S>
 struct OutrightHandle : CurveHandle<S> {
-  curve::CalibrationCurve<S> c;
-  explicit OutrightHandle(curve::CalibrationCurve<S> cc) : c(std::move(cc)) {}
+  curve::ModularCurve<S> c;
+  explicit OutrightHandle(curve::ModularCurve<S> cc) : c(std::move(cc)) {}
   S forward(double t) const override { return c.forward(t); }
   S integral(double t) const override { return c.integral(t); }
   S discount(double t) const override { return c.discount(t); }
@@ -50,32 +50,9 @@ struct OutrightHandle : CurveHandle<S> {
 // forward = base + spread ; integral = base + spread ; DF = base_DF * exp(-int spread).
 template <class S>
 struct SpreadHandle : CurveHandle<S> {
-  curve::CalibrationCurve<S> spread;
-  const CurveHandle<S>* base;
-  SpreadHandle(curve::CalibrationCurve<S> sp, const CurveHandle<S>* b) : spread(std::move(sp)), base(b) {}
-  S forward(double t) const override { return base->forward(t) + spread.forward(t); }
-  S integral(double t) const override { return base->integral(t) + spread.integral(t); }
-  S discount(double t) const override {
-    using std::exp;
-    return exp(-integral(t));
-  }
-};
-// Runtime-region variants (user-defined interpolation regions): identical semantics, but the inner
-// curve is a type-erased ModularCurve so any Flat/Linear/NaturalCubic/Hermite/MonotoneCubic layout works.
-// A bundle holding one of these is NOT W-cacheable (route calibration/streaming through the AAD engine).
-template <class S>
-struct ModularOutrightHandle : CurveHandle<S> {
-  curve::ModularCurve<S> c;
-  explicit ModularOutrightHandle(curve::ModularCurve<S> cc) : c(std::move(cc)) {}
-  S forward(double t) const override { return c.forward(t); }
-  S integral(double t) const override { return c.integral(t); }
-  S discount(double t) const override { return c.discount(t); }
-};
-template <class S>
-struct ModularSpreadHandle : CurveHandle<S> {
   curve::ModularCurve<S> spread;
   const CurveHandle<S>* base;
-  ModularSpreadHandle(curve::ModularCurve<S> sp, const CurveHandle<S>* b) : spread(std::move(sp)), base(b) {}
+  SpreadHandle(curve::ModularCurve<S> sp, const CurveHandle<S>* b) : spread(std::move(sp)), base(b) {}
   S forward(double t) const override { return base->forward(t) + spread.forward(t); }
   S integral(double t) const override { return base->integral(t) + spread.integral(t); }
   S discount(double t) const override {
@@ -83,7 +60,6 @@ struct ModularSpreadHandle : CurveHandle<S> {
     return exp(-integral(t));
   }
 };
-
 // A curve's definition: knots + interpolation (Flat front + Hermite back) + parameterization.
 struct BundleCurveSpec {
   std::vector<double> meeting;  // front (flat) knot times
@@ -94,12 +70,16 @@ struct BundleCurveSpec {
   // curve and FX conversion at construction time (CLAUDE.md §1: the engine names no currency). Default
   // 0 keeps every existing single-currency bundle byte-identical.
   int currency = 0;
-  // Optional user-defined interpolation regions. When non-empty, the curve is built as a runtime
-  // ModularCurve from these region modules (each a scheme + its knot times) and `meeting`/`back` are
-  // ignored. When empty, the default Flat(meeting) + Hermite(back) calibration curve is used (the
-  // W-cacheable fast path). Region knots are the free forwards, region by region, in this order.
+  // Interpolation regions (each a scheme + its knot times). When non-empty these define the curve and
+  // `meeting`/`back` are ignored; when empty they mean "the shipped layout", i.e. Flat(meeting) +
+  // Hermite(back). Either way exactly one curve type is built from modules() below. Region knots are
+  // the free forwards, region by region, in this order.
   std::vector<curve::CurveModule> regions;
-  bool modular() const { return !regions.empty(); }
+
+  // The ONE description of this curve's interpolation -- custom regions or the shipped default.
+  std::vector<curve::CurveModule> modules() const {
+    return regions.empty() ? curve::flat_hermite(meeting, back) : regions;
+  }
   int n_knots() const {
     if (!regions.empty()) {
       int n = 0;
@@ -122,16 +102,7 @@ std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves(
     const int nk = spec.n_knots();
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> xi(nk);
     for (int i = 0; i < nk; ++i) xi[i] = value(c, i);
-    if (spec.modular()) {  // user-defined interpolation regions -> runtime ModularCurve
-      auto inner = curve::make_modular_curve<Scalar>(spec.regions);
-      inner.set_forwards(xi);
-      if (spec.base < 0)
-        C[c] = std::make_unique<ModularOutrightHandle<Scalar>>(std::move(inner));
-      else
-        C[c] = std::make_unique<ModularSpreadHandle<Scalar>>(std::move(inner), C[spec.base].get());
-      continue;
-    }
-    auto inner = curve::make_calibration_curve<Scalar>(spec.meeting, spec.back);
+    auto inner = curve::make_modular_curve<Scalar>(spec.modules());
     inner.set_forwards(xi);
     if (spec.base < 0)
       C[c] = std::make_unique<OutrightHandle<Scalar>>(std::move(inner));

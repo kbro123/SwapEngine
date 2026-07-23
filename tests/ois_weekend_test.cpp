@@ -15,7 +15,7 @@
 #include <cmath>
 #include <vector>
 
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 #include "swaps/pricing/cashflows.hpp"
@@ -85,7 +85,7 @@ TEST(OisWeekend, RealizedCompoundingTilesEveryCalendarDay) {
   const double ql_rate = cpn->rate();
   const px::RateObservation o = qlx::extract_overnight_obs(*cpn, eval, Actual365Fixed());
   ASSERT_TRUE(o.sub_start.empty()) << "a fully-realized coupon carries no forecast sub-periods";
-  auto dummy = cv::make_calibration_curve<double>({0.5}, {1, 2, 5, 10});  // unused (subs empty)
+  auto dummy = cv::make_modular_curve<double>(cv::flat_hermite({0.5}, {1, 2, 5, 10}));  // unused (subs empty)
   Eigen::VectorXd xd(5); xd << 0.04, 0.04, 0.04, 0.04, 0.04; dummy.set_forwards(xd);
   const double our_rate = px::rate<double>(o, dummy);
 
@@ -108,9 +108,9 @@ TEST(OisWeekend, ForecastTelescopingSpansWeekendsAndHolidays) {
   const Date eval(1, July, 2026);
   Settings::instance().evaluationDate() = eval;
   RelinkableHandle<YieldTermStructure> h;
-  auto curve = cv::make_calibration_curve<double>({0.25, 0.5}, {1, 2, 3, 5, 10});
+  auto curve = cv::make_modular_curve<double>(cv::flat_hermite({0.25, 0.5}, {1, 2, 3, 5, 10}));
   Eigen::VectorXd x(7); x << 0.043, 0.044, 0.045, 0.046, 0.047, 0.048, 0.05; curve.set_forwards(x);
-  auto ts = ext::make_shared<qlx::CurveTermStructure<cv::CalibrationCurve<double>>>(eval, Actual365Fixed(), &curve);
+  auto ts = ext::make_shared<qlx::CurveTermStructure<cv::ModularCurve<double>>>(eval, Actual365Fixed(), &curve);
   ts->enableExtrapolation();
   h.linkTo(ts);
   const auto sofr = ext::make_shared<Sofr>(h);

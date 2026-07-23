@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "reference_curve.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
 using namespace QuantLib;
@@ -53,7 +53,7 @@ TEST(MigrationGuard, OvernightValueDatesCoincideWithAccrualDatesOnEveryCoupon) {
 // coupon with no scale set. A power-of-2 scale keeps the linear-scaling assertion bit-exact
 // (round(2x) == 2 round(x) in binary FP, including across the summed annuity), so EXPECT_EQ is honest.
 TEST(FxScale, CouponAndAnnuityScaleExactlyAndDefaultIsIdentity) {
-  auto curve = cv::make_calibration_curve<double>({0.25, 0.5}, {1, 2, 5, 10});
+  auto curve = cv::make_modular_curve<double>(cv::flat_hermite({0.25, 0.5}, {1, 2, 5, 10}));
   Eigen::VectorXd x(6);
   x << 0.043, 0.044, 0.045, 0.046, 0.047, 0.05;
   curve.set_forwards(x);

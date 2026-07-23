@@ -16,7 +16,7 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/residual_engine.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/regions.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
@@ -49,8 +49,11 @@ Eigen::VectorXd vals_wiggly() {
 }  // namespace
 
 TEST(MonotoneCubic, IsNonLinearAndPinsBoundary) {
-  static_assert(!cv::MonotoneCubicCurve<double>::is_linear_map,
-                "MonotoneCubic must NOT be a linear map -- it belongs on the AAD tier");
+  // The region policy declares non-linearity at compile time; a curve CONTAINING it must report it at
+  // runtime, since that runtime flag is what routes the curve to the AAD tier instead of the W-cache.
+  static_assert(!MonotoneCubic<double>::is_linear_map);
+  EXPECT_FALSE(cv::make_modular_curve<double>(cv::flat_monotone({kT0}, kKnots)).is_linear_map())
+      << "MonotoneCubic must NOT be a linear map -- it belongs on the AAD tier";
   const auto mc = make(vals_monotone());
   EXPECT_NEAR(mc.forward(kT0), kV0, 1e-14) << "clamped start pins the boundary value (C0 join)";
   EXPECT_NEAR(mc.integral(kT0), kI0, 1e-15) << "integral at the join equals the incoming integral";
@@ -125,7 +128,7 @@ struct MonotoneCubicProblem {
   int n_residuals() const { return inst.n_residuals(); }
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    auto c = cv::make_monotone_curve<Scalar>(inst.meeting_times, inst.back_times);
+    auto c = cv::make_modular_curve<Scalar>(cv::flat_monotone(inst.meeting_times, inst.back_times));
     c.set_forwards(x);
     return inst.price_residuals<Scalar>(c);
   }
@@ -171,7 +174,7 @@ TEST(MonotoneCubic, CalibratesThroughAadAndReprices) {
   // Self-consistent market from a KNOWN monotone-cubic curve, so x_true zeroes the residual exactly.
   Eigen::VectorXd xt(8);
   xt << 0.030, 0.033, 0.036, 0.039, 0.041, 0.043, 0.044, 0.046;
-  auto ct = cv::make_monotone_curve<double>(prob.inst.meeting_times, prob.inst.back_times);
+  auto ct = cv::make_modular_curve<double>(cv::flat_monotone(prob.inst.meeting_times, prob.inst.back_times));
   ct.set_forwards(xt);
   for (auto& ins : prob.inst.instruments)
     ins.market = px::par_rate<double>(ins.fwd.coupons, ins.fixed.coupons, ct, ct);

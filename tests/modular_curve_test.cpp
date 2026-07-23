@@ -2,7 +2,7 @@
 //
 //  (a) The RUNTIME builder reproduces the compile-time one. A ModularCurve assembled from
 //      {Flat(meeting), Hermite(back)} modules is bit-identical to the compile-time
-//      make_calibration_curve (MultiRegionCurve<Flat,Hermite>) -- same policies, same C0 stitching.
+//      the shipped flat_hermite layout -- same policies, same C0 stitching.
 //
 //  (b) The pole star points at the SHIPPED curve. We calibrate the Hermite curve, wrap it as a
 //      QuantLib::YieldTermStructure via the generalized CurveTermStructure adapter, and let QuantLib
@@ -19,7 +19,7 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
@@ -46,7 +46,7 @@ TEST(ModularCurve, RuntimeBuilderMatchesCompileTimeCurve) {
   cal::CalibrationProblem prob = rb::build_square_problem(mk);
 
   // Same region composition, one compile-time and one assembled at runtime from CurveModule pieces.
-  auto ref = cv::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
+  auto ref = cv::make_modular_curve<double>(cv::flat_hermite(prob.meeting_times, prob.back_times));
   auto mod = cv::make_modular_curve<double>(
       {{prob.meeting_times, cv::Scheme::Flat}, {prob.back_times, cv::Scheme::Hermite}});
   ASSERT_EQ(mod.n_knots(), ref.n_knots());
@@ -71,13 +71,13 @@ struct HermiteOracle : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
   cal::CalibrationProblem prob = rb::build_square_problem(mk);
-  cv::CalibrationCurve<double> curve = cv::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
-  ext::shared_ptr<swaps::qlx::CurveTermStructure<cv::CalibrationCurve<double>>> ts;
+  cv::ModularCurve<double> curve = cv::make_modular_curve<double>(cv::flat_hermite(prob.meeting_times, prob.back_times));
+  ext::shared_ptr<swaps::qlx::CurveTermStructure<cv::ModularCurve<double>>> ts;
 
   void SetUp() override {
     const Eigen::VectorXd x = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.04), true).x;
     curve.set_forwards(x);
-    ts = ext::make_shared<swaps::qlx::CurveTermStructure<cv::CalibrationCurve<double>>>(mk.today, mk.dc, &curve);
+    ts = ext::make_shared<swaps::qlx::CurveTermStructure<cv::ModularCurve<double>>>(mk.today, mk.dc, &curve);
     ts->enableExtrapolation();
     h.linkTo(ts);
     for (auto& s : mk.swaps) s->deepUpdate();

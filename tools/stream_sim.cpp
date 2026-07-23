@@ -18,7 +18,7 @@
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 
 using namespace QuantLib;
 namespace rb = swaps::refbuild;
@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
 
   // Par swap rates and 1-day forward rates off the actual (Hermite) calibration curve.
   auto curve_json = [&](const Eigen::VectorXd& x) {
-    auto c = swaps::curve::make_calibration_curve<double>(prob.meeting_times, prob.back_times);
+    auto c = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times));
     c.set_forwards(x);
     // Par rate of a T-year annual-fixed OIS: (1 - DF(T)) / sum_i alpha_i DF(t_i).
     auto par = [&](double T) {

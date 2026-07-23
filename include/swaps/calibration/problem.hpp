@@ -15,9 +15,9 @@
 #include <cmath>
 #include <vector>
 
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/spread_curve.hpp"
-#include "swaps/curve/calibration_curve.hpp"
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
 namespace swaps::calibration {
@@ -200,7 +200,7 @@ struct CalibrationProblem {
   // r(x) with x = the knot forwards of a standalone two-region curve.
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    auto c = curve::make_calibration_curve<Scalar>(meeting_times, back_times);
+    auto c = curve::make_modular_curve<Scalar>(curve::flat_hermite(meeting_times, back_times));
     c.set_forwards(x);
     return price_residuals<Scalar>(c);
   }
@@ -212,7 +212,7 @@ struct CalibrationProblem {
 // so the same LM + AAD + risk code drives it with no change.
 struct SpreadCalibrationProblem {
   CalibrationProblem inst;                             // instruments + spread knot times
-  const curve::CalibrationCurve<double>* base;    // fixed base curve
+  const curve::ModularCurve<double>* base;    // fixed base curve
 
   int n_knots() const { return inst.n_knots(); }
   int n_residuals() const { return inst.n_residuals(); }

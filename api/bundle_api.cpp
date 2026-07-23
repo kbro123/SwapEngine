@@ -139,6 +139,7 @@ curve::Scheme scheme_from_str(const std::string& s) {
   if (s == "NaturalCubic") return curve::Scheme::NaturalCubic;
   if (s == "Hermite") return curve::Scheme::Hermite;
   if (s == "MonotoneCubic") return curve::Scheme::MonotoneCubic;
+  if (s == "BSpline") return curve::Scheme::BSpline;
   throw std::invalid_argument("unknown interpolation scheme: " + s);
 }
 const char* scheme_to_str(curve::Scheme s) {
@@ -148,6 +149,7 @@ const char* scheme_to_str(curve::Scheme s) {
     case curve::Scheme::NaturalCubic: return "NaturalCubic";
     case curve::Scheme::Hermite: return "Hermite";
     case curve::Scheme::MonotoneCubic: return "MonotoneCubic";
+    case curve::Scheme::BSpline: return "BSpline";
   }
   return "Hermite";
 }
@@ -328,7 +330,7 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
     if (ins.quote == cal::QuoteKind::FxForward || ins.quote == cal::QuoteKind::XccyMtmBasis)
       has_fx_ = true;
   for (const auto& c : prob_.curves) {
-    if (c.modular()) has_modular_ = true;  // custom interpolation regions
+    if (!c.regions.empty()) has_modular_ = true;  // custom interpolation regions
     for (const auto& r : c.regions)        // only a NON-LINEAR scheme forces off the W-cache
       if (r.scheme == curve::Scheme::MonotoneCubic) has_nonlinear_ = true;
   }
