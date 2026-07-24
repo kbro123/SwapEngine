@@ -24,9 +24,9 @@
 #include <vector>
 
 #include "swaps/calibration/problem.hpp"  // the generic FloatLeg/FixedLeg/Instrument model (design §3)
-#include "swaps/curve/curve_module.hpp"
-#include "swaps/curve/curve_module.hpp"  // runtime ModularCurve for user-defined interpolation regions
+#include "swaps/curve/curve_module.hpp"   // runtime ModularCurve for user-defined interpolation regions
 #include "swaps/pricing/cashflows.hpp"
+#include "swaps/pricing/curve_spec.hpp"   // CurveStructure -- BundleCurveSpec is an alias of it
 
 namespace swaps::calibration {
 
@@ -60,35 +60,10 @@ struct SpreadHandle : CurveHandle<S> {
     return exp(-integral(t));
   }
 };
-// A curve's definition: knots + interpolation (Flat front + Hermite back) + parameterization.
-struct BundleCurveSpec {
-  std::vector<double> meeting;  // front (flat) knot times
-  std::vector<double> back;     // back (Hermite) knot times
-  int base = -1;                // -1 = outright; else this curve = curves[base] + spread (spread knots)
-  // Engine-BLIND currency tag (multi-currency support). The kernel — build_bundle_curves, residuals,
-  // the W-cache — NEVER reads it; it exists only so a BUILDER can resolve a per-index default discount
-  // curve and FX conversion at construction time (CLAUDE.md §1: the engine names no currency). Default
-  // 0 keeps every existing single-currency bundle byte-identical.
-  int currency = 0;
-  // Interpolation regions (each a scheme + its knot times). When non-empty these define the curve and
-  // `meeting`/`back` are ignored; when empty they mean "the shipped layout", i.e. Flat(meeting) +
-  // Hermite(back). Either way exactly one curve type is built from modules() below. Region knots are
-  // the free forwards, region by region, in this order.
-  std::vector<curve::CurveModule> regions;
-
-  // The ONE description of this curve's interpolation -- custom regions or the shipped default.
-  std::vector<curve::CurveModule> modules() const {
-    return regions.empty() ? curve::flat_hermite(meeting, back) : regions;
-  }
-  int n_knots() const {
-    if (!regions.empty()) {
-      int n = 0;
-      for (const auto& r : regions) n += static_cast<int>(r.knots.size());
-      return n;
-    }
-    return static_cast<int>(meeting.size() + back.size());
-  }
-};
+// A curve's definition in a bundle: knots (or regions), outright/spread, currency. This is THE SAME
+// TYPE the pricing engine uses -- pricing::CurveStructure (curve_spec.hpp) -- not a mirror of it, so the
+// two can never drift. Named `BundleCurveSpec` here for the calibration layer's vocabulary.
+using BundleCurveSpec = pricing::CurveStructure;
 
 // Build every bundle curve as a handle. `value(c, i)` supplies curve c's local knot i (free from the
 // parameter vector, or a frozen constant). Requires base < c so each spread's base is already built.

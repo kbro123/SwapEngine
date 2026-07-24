@@ -354,7 +354,9 @@ include/swaps/pricing/       templated, QuantLib-free pricing kernel (cashflows.
                              multi-curve OIS: ois_par_rate/basis_par_spread with forecast != discount);
                              compiled.hpp (integral_weight_matrix W primitive) + compiled_book.hpp
                              (CompiledCurveSet + role-aware batches incl. BundleFloatBatch, the ONE
-                             float primitive: the multi-curve W-cache engine)
+                             float primitive: the multi-curve W-cache engine);
+                             curve_spec.hpp (CurveStructure: the per-curve topology shared with the
+                             calibration layer -- BundleCurveSpec is an alias of it)
 include/swaps/ql/            extract.hpp: QuantLib -> plain-data extractors (the one QL-touching layer);
                              generic (dispatch on COUPON TYPE) + the legacy per-shape extractors
 include/swaps/ad/            AAD scalar typedefs / dual helpers

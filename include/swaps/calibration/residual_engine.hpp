@@ -8,10 +8,11 @@
 //   model_rates(x) = the model-implied market quotes at x (= residuals(x) + market)
 //
 // Three implementations, selected at compile time by residual_engine_t<Problem>:
-//   * CalibrationProblem -> CompiledResidual: the vectorized DF = exp(-Wx) path with the ANALYTIC
-//     Jacobian (no AAD in the hot loop). The microsecond single-curve warm/streaming fast path.
-//   * BundleProblem -> CompiledBundleResidual: the SAME analytic W_all fast path, multi-curve. Its
-//     Jacobian refresh is analytic too (that is what took bundle warm re-cal from ~7x to ~71x).
+//   * BundleProblem -> CompiledBundleResidual: the analytic W_all fast path (DF = exp(-Wx) once, cheap
+//     per-type transforms, analytic Jacobian -- no AAD in the hot loop). This is THE compiled engine.
+//   * CalibrationProblem -> CompiledResidual: NOT a second kernel -- a thin delegate that wraps the
+//     single curve as a 1-curve bundle (single_curve_bundle) and runs the exact same CompiledBundleResidual.
+//     Kept only so single-curve callers/tests get the simpler CalibrationProblem interface.
 //   * anything ELSE (BundleBlockProblem for the staged solve, SpreadCalibrationProblem) -> the generic
 //     AadResidualEngine: templated residuals<double>(x) + the AAD Jacobian. Correct and generic, but a
 //     refresh here costs one AAD sweep -- these are the only problem types that still AAD on refresh

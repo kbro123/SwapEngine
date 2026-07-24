@@ -41,10 +41,7 @@ class CompiledBundleResidual {
  public:
   explicit CompiledBundleResidual(const BundleProblem& p)
       : n_gen_(static_cast<int>(p.instruments.size())), market_(p.market()) {
-    std::vector<pricing::CurveStructure> specs;
-    specs.reserve(p.curves.size());
-    for (const auto& c : p.curves) specs.push_back({c.meeting, c.back, c.base, c.currency, c.regions});
-    cs_.init(specs);
+    cs_.init(p.curves);  // p.curves ARE pricing::CurveStructure now (BundleCurveSpec is an alias), no copy
 
     register_generic(p);
 

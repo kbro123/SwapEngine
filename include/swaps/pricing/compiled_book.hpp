@@ -31,32 +31,11 @@
 
 #include "swaps/pricing/cashflows.hpp"
 #include "swaps/pricing/compiled.hpp"  // integral_weight_matrix, detail::to_vec
+#include "swaps/pricing/curve_spec.hpp"  // CurveStructure (shared with the calibration layer)
 
 namespace swaps::pricing {
 
-// A curve's knot structure + parameterization, mirroring BundleProblem::CurveSpec but with no
-// calibration dependency (so this header stays in the pricing layer).
-struct CurveStructure {
-  std::vector<double> meeting, back;
-  int base = -1;      // -1 = outright; else this curve = curves[base] + spread (spread knots)
-  int currency = 0;   // engine-blind tag, mirrors BundleCurveSpec::currency; the W-cache never reads it
-  // Custom interpolation regions (mirrors BundleCurveSpec::regions). When non-empty these define the
-  // curve and meeting/back are ignored; when empty they mean the shipped Flat+Hermite layout. Kept LAST
-  // so the existing positional {meeting, back, base} aggregate initializers stay valid.
-  std::vector<curve::CurveModule> regions;
-  // The ONE description of this curve's interpolation -- mirrors BundleCurveSpec::modules().
-  std::vector<curve::CurveModule> modules() const {
-    return regions.empty() ? curve::flat_hermite(meeting, back) : regions;
-  }
-  int n_knots() const {
-    if (!regions.empty()) {
-      int n = 0;
-      for (const auto& r : regions) n += static_cast<int>(r.knots.size());
-      return n;
-    }
-    return static_cast<int>(meeting.size() + back.size());
-  }
-};
+// CurveStructure (the per-curve topology) is shared with the calibration layer -- see curve_spec.hpp.
 
 // DF_all = exp(-W_all x) over every (curve, time) registered, concatenated into one global vector.
 // reg(curve, t) returns a stable GLOBAL index in registration order; finalize() builds W_all by

@@ -17,7 +17,6 @@
 
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/spread_curve.hpp"
-#include "swaps/curve/curve_module.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
 namespace swaps::calibration {
