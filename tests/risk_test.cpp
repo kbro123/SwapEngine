@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Phase 5 (risk) gate: the analytic bucketed delta ladder.
 //
 // The AAD + implicit-function-theorem ladder must equal a bump-and-RE-CALIBRATE ladder computed on

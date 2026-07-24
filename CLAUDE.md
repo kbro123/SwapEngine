@@ -339,7 +339,7 @@ include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/Monot
                              math; ctors reject duplicate/unsorted knots), curve_module.hpp (THE curve:
                              ModularCurve + make_modular_curve from CurveModule{knots,scheme}, plus the
                              named layouts flat_hermite -- the SHIPPED one -- flat_bspline, flat_monotone),
-                             spread_curve.hpp, ql_term_structure.hpp (generic CurveTermStructure<Curve>)
+                             ql_term_structure.hpp (generic CurveTermStructure<Curve>)
 include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instrument/FloatLeg/FixedLeg/
                              QuoteKind model -- see §7c), lm.hpp, risk.hpp, warm.hpp (cached-Jacobian +
                              linear update), streaming.hpp (exact frozen-Newton live feed),
@@ -676,12 +676,13 @@ delete those, they enforce the rule. Two honest residues:
       ill-conditioned (cond≈636): one knot direction is weakly identified — a smoothness/Tikhonov
       regulariser is the eventual fix. AAD's VectorXd allocation is the next speed target.)*
 - [x] **Phase 4** — Spread curves (forward-spread interpolation to a base curve).
-      *(`swaps/curve/spread_curve.hpp`: `forward = base + spread`, `DF = base_DF·exp(-∫spread)`, spread
-      interpolated with the same two-region scheme so it stays linear/AAD-differentiable; base fixed.
-      `SpreadCalibrationProblem` reuses the instrument set + pricing of a `CalibrationProblem` and
-      duck-types the interface, so the LM/AAD/`calibrate`/`aad_jacobian` code — now templated on the
-      problem type — drives spread calibration unchanged. Decomposition exact to 1e-16; recovers a
-      known spread to 1.5e-13; spread AAD Jacobian matches bump to 1e-7.)*
+      *(`forward = base + spread`, `DF = base_DF·exp(-∫spread)`, spread interpolated with the shipped
+      flat_hermite layout so it stays linear/AAD-differentiable; base fixed. This FIXED-base spread path
+      is TEST-ONLY — production spreads calibrate JOINTLY via the bundle (SpreadHandle) — so `SpreadCurve`
+      and `SpreadCalibrationProblem` live in `tests/spread_reference.hpp` (namespace `swaps::testing`),
+      not in the shipped headers. They duck-type the calibration interface, so the templated
+      LM/AAD/`calibrate`/`aad_jacobian` code drives them unchanged. Decomposition exact to 1e-16; recovers
+      a known spread to 1.5e-13; spread AAD Jacobian matches bump to 1e-7 — see tests/spread_test.cpp.)*
 - [x] **Phase 5** — Vectorized portfolio analytics + analytic bucketed delta.
       *Analytic bucketed delta (`swaps/calibration/risk.hpp`): AAD `d(NPV)/dx` + IFT
       `dx/dq = (JᵀJ)⁻¹Jᵀ` → full ladder from one calibration. Matches bump-and-recalibrate to ~2e-8;

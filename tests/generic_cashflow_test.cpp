@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Design §2 gate: the GENERIC cashflow model's degrees of freedom.
 //
 // The generic kernel is validated against QuantLib to ~1e-16 by extract_test / pricing_test (via the

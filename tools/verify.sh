@@ -33,6 +33,7 @@ for arg in "$@"; do
   esac
 done
 
+pass_oracle="SKIP"
 pass_correctness="SKIP"
 pass_perf="SKIP"
 rc=0
@@ -48,6 +49,16 @@ if [ ! -d "${BUILD_DIR}" ]; then
 fi
 echo ">> building (-j${JOBS})"
 "${CMAKE}" --build "${BUILD_DIR}" -j "${JOBS}" || { echo "build failed"; exit 1; }
+
+# ---- Oracle-test guard ------------------------------------------------------
+# The QuantLib cashflow-for-cashflow validators must not be silently deleted or gutted in a refactor.
+# Cheap check, so it runs even in --bench-only. See tools/check_oracle_tests.sh + tests/ORACLE_TESTS.md.
+echo ">> oracle-test guard"
+if bash "${ROOT}/tools/check_oracle_tests.sh"; then
+  pass_oracle="PASS"
+else
+  pass_oracle="FAIL"; rc=1
+fi
 
 # ---- Correctness gate -------------------------------------------------------
 if [ "${BENCH_ONLY}" -eq 0 ]; then
@@ -80,6 +91,7 @@ fi
 # ---- Summary ----------------------------------------------------------------
 echo ""
 echo "========== VERIFY SUMMARY =========="
+printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
 printf "  %-20s %s\n" "correctness gate:" "${pass_correctness}"
 printf "  %-20s %s\n" "performance gate:" "${pass_perf}"
 echo "===================================="

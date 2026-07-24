@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Phase 4 gate: forward-spread curve calibrated to a fixed base curve.
 //
 //   (a) Decomposition: SpreadCurve DF = base DF * exp(-spread integral); forward = base + spread.
@@ -15,7 +17,7 @@
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
-#include "swaps/curve/spread_curve.hpp"
+#include "spread_reference.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "tolerances.hpp"
 
@@ -26,7 +28,7 @@ namespace rm = swaps::refmkt;
 
 namespace {
 
-Eigen::MatrixXd bump_jacobian(const cal::SpreadCalibrationProblem& p, const Eigen::VectorXd& s,
+Eigen::MatrixXd bump_jacobian(const swaps::testing::SpreadCalibrationProblem& p, const Eigen::VectorXd& s,
                               double h) {
   Eigen::MatrixXd J(p.n_residuals(), p.n_knots());
   for (int k = 0; k < p.n_knots(); ++k) {
@@ -46,7 +48,7 @@ struct SpreadCal : ::testing::Test {
   cal::CalibrationProblem base_prob = rb::build_square_problem(mk);
   swaps::curve::ModularCurve<double> base =
       swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(base_prob.meeting_times, base_prob.back_times));
-  cal::SpreadCalibrationProblem sp;
+  swaps::testing::SpreadCalibrationProblem sp;
   Eigen::VectorXd s_true;
 
   void SetUp() override {
@@ -68,7 +70,7 @@ struct SpreadCal : ::testing::Test {
 };
 
 TEST_F(SpreadCal, DecomposesIntoBaseTimesSpread) {
-  swaps::curve::SpreadCurve<double> total(base, sp.inst.meeting_times, sp.inst.back_times);
+  swaps::testing::SpreadCurve<double> total(base, sp.inst.meeting_times, sp.inst.back_times);
   total.set_spreads(s_true);
   auto spread_only = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(sp.inst.meeting_times, sp.inst.back_times));
   spread_only.set_forwards(s_true);  // the spread's own two-region curve

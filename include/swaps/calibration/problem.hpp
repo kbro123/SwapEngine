@@ -16,7 +16,6 @@
 #include <vector>
 
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/curve/spread_curve.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
 namespace swaps::calibration {
@@ -205,23 +204,8 @@ struct CalibrationProblem {
   }
 };
 
-// Calibrating a spread to a FIXED base curve. Reuses the instrument set + pricing of a
-// CalibrationProblem (its meeting_times/back_times are the SPREAD knot times); the free variables
-// are the spread forwards s. Duck-types with CalibrationProblem (residuals / n_knots / n_residuals),
-// so the same LM + AAD + risk code drives it with no change.
-struct SpreadCalibrationProblem {
-  CalibrationProblem inst;                             // instruments + spread knot times
-  const curve::ModularCurve<double>* base;    // fixed base curve
-
-  int n_knots() const { return inst.n_knots(); }
-  int n_residuals() const { return inst.n_residuals(); }
-
-  template <class Scalar, class Vec>
-  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& s) const {
-    curve::SpreadCurve<Scalar> c(*base, inst.meeting_times, inst.back_times);
-    c.set_spreads(s);
-    return inst.price_residuals<Scalar>(c);
-  }
-};
+// NOTE: fixed-base spread calibration (the former SpreadCalibrationProblem, with its SpreadCurve) was
+// TEST-ONLY -- production spreads calibrate jointly through the bundle path (SpreadHandle). Both now live
+// in tests/spread_reference.hpp (namespace swaps::testing) so they don't sit in the shipped object model.
 
 }  // namespace swaps::calibration

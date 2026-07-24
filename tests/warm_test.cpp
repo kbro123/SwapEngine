@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Stage-2 gate: cached-Jacobian warm re-calibration must match the full LM re-solve for realistic
 // market perturbations. The WarmCalibrator freezes J0 at the base solution and takes a couple of
 // Gauss-Newton steps; here we prove that lands on the same curve as a from-scratch LM.

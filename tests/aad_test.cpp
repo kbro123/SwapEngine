@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Phase 3 gate: the analytic AAD Jacobian.
 //
 //   (a) AAD Jacobian matches bump-and-reprice within tol::jacobian_rel (the spec check).

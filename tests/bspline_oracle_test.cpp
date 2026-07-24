@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // B-spline curve, end-to-end oracle (docs/bezier-and-moments.md Part A). The control-point B-spline
 // must be a usable discount curve: expose it to QuantLib via CurveTermStructure, price OIS swaps off
 // it, and confirm QuantLib's fairRate equals our kernel priced off the SAME curve. Because the DFs are

@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Phase 2 calibration gate: global Levenberg-Marquardt over the knot forwards.
 //
 // Two properties, matching the over-determined design (CLAUDE.md §2/§3):

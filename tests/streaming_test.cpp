@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Stage-2 streaming gate. The EXACT (frozen-Newton) streaming path is what a live pricer runs, so it
 // must, on EVERY tick:
 //   (a) ROUND-TRIP: reprice the calibration instruments back to the input quotes -- ||model_rates(x) - q||

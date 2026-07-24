@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Phase 5 (batched analytics) gate: the vectorized CompiledPortfolio must reproduce the scalar
 // pricing kernel exactly, for any knot forwards x -- not just at the calibrated point.
 

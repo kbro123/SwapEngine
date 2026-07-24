@@ -35,7 +35,7 @@ struct WarmResult {
 // Templated on the problem type via residual_engine_t: CalibrationProblem and BundleProblem both use a
 // compiled engine (CompiledResidual / CompiledBundleResidual: DF = exp(-Wx), ANALYTIC Jacobian) -- the
 // microsecond fast path, and the (rare) refresh recomputes J analytically too, NOT via AAD. Only
-// un-compiled problem types (staged BundleBlockProblem, SpreadCalibrationProblem) fall to the AAD engine.
+// un-compiled problem types (e.g. the staged BundleBlockProblem) fall to the AAD engine.
 // Either way the inner loop is frozen-J Gauss-Newton. Default Problem = CalibrationProblem (CTAD).
 template <class Problem = CalibrationProblem>
 class WarmCalibrator {

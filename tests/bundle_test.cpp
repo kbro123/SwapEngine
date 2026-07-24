@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Stage 3 gate on REALISTIC curve builds: four curves, each flat-forward meeting-date front + par-swap
 // back (the production SOFR structure), calibrated simultaneously and validated against QuantLib.
 //   SOFR   : real reference market -- 12x1M + 8x3M SOFR futures + 9 par swaps (build_market/build_problem)

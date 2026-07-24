@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // INDEPENDENT verification that overnight (OIS) compounding accrues the right fixing over weekends and
 // holidays -- checking QuantLib AND our engine against a from-first-principles calendar walk, not just
 // against each other. The failure mode this targets: a Friday fixing must compound over the 3-day weekend

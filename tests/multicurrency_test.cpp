@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Multi-currency EUR bundle (plan: composed-tickling-snowglobe, Phase 1). Validates the FULL EUR block
 // -- ESTR OIS (compounded overnight), 3M/6M EURIBOR IRS (the previously-untested IBOR/par-coupon path),
 // 3s6s tenor basis, a payment-delay OIS, and an EONIA default-spread curve -- FIRST-PRINCIPLES (self-
