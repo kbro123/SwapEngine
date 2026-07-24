@@ -2,6 +2,14 @@
 
 Guidance for Claude Code when working in this repository. Read this first, every session.
 
+> **[`ARCHITECTURE.md`](ARCHITECTURE.md) is the code graph — read it to orient, and KEEP IT CURRENT.**
+> Any change to the object model **updates `ARCHITECTURE.md` in the same commit**: adding, removing, or
+> renaming a type; moving a file between layers; changing a layer dependency; splitting or merging a
+> responsibility. The layer DAG, the per-layer type table, and the calibration-tier diagram must always
+> match the tree. A stale map misleads the next session worse than no map — treat "update the graph" as
+> part of "done", exactly like updating a test. Likewise keep the two oracle registries honest:
+> `tests/ORACLE_TESTS.md` and the `swaps_oracle_tests` list are enforced by `tools/check_oracle_tests.sh`.
+
 ## 1. What this project is
 
 SwapsEngine is a high-performance **extension of QuantLib** that replaces its two slowest workflows
@@ -349,9 +357,9 @@ include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instr
                              compiled_bundle.hpp (CompiledBundleResidual: multi-curve W-cache residual),
                              bundle_problem.hpp + bundle_stage.hpp (Stage 3 multi-curve bundle)
 include/swaps/pricing/       templated, QuantLib-free pricing kernel (cashflows.hpp: the GENERIC
-                             RateObservation/FloatCoupon/FixedCoupon model (§7c) ALONGSIDE the still-live
-                             legacy OisSwap/CompoundedFuture/AveragedFuture structs; single- AND
-                             multi-curve OIS: ois_par_rate/basis_par_spread with forecast != discount);
+                             RateObservation/FloatCoupon/FixedCoupon model (§7c) -- the index-flavoured
+                             legacy structs (OisSwap/CompoundedFuture/AveragedFuture) were retired; every
+                             shape is now that one generic model with different DATA);
                              compiled.hpp (integral_weight_matrix W primitive) + compiled_book.hpp
                              (CompiledCurveSet + role-aware batches incl. BundleFloatBatch, the ONE
                              float primitive: the multi-curve W-cache engine);
@@ -657,9 +665,10 @@ delete those, they enforce the rule. Two honest residues:
       *(Reference market: 6 FOMC front knots + 17 back knots (8 from 3M-futures end dates + 9
       swap maturities) vs 29 instruments (12×1M then 8×3M sequential futures + 9 swaps 4y–30y),
       over-determined.
-      `TwoRegionForwardCurve<Scalar>` validated against QuantLib's BackwardFlat and natural-cubic
-      interpolators to ~1e-16, with a 1bp negative control. Hull–White futures convexity matches
-      `HullWhite::convexityBias` exactly. `ql_adapter.hpp` exposes our curve to QuantLib as a
+      The two-region forward curve (now `ModularCurve` via `flat_hermite`, see §2) validated against
+      QuantLib's BackwardFlat and natural-cubic interpolators to ~1e-16, with a 1bp negative control.
+      Hull–White futures convexity matches `HullWhite::convexityBias` exactly. `ql_term_structure.hpp`
+      exposes our curve to QuantLib as a
       `YieldTermStructure`, so QuantLib prices instruments off our discount factors.)*
 - [x] **Phase 2** — Core engine: templated pricing kernel + residual vector (RATE units) + global LM.
       *(Kernel prices OIS swaps, 1M averaged & 3M compounded SOFR futures from QuantLib-extracted
@@ -724,7 +733,7 @@ delete those, they enforce the rule. Two honest residues:
 - [ ] **Stage 5 — B-spline curve type + moment integration — PARTIAL, branch `feat/bezier-and-moment-integration`.**
       Design `docs/bezier-and-moments.md`. **DONE & gate-verified (89/89, perf PASS):**
       - **B-spline curve type (Part A) — COMPLETE.** Control-point clamped cubic (`BSpline` region,
-        `make_bspline_curve`): C² + convex-hull, `is_linear_map`, validated end to end — QuantLib OIS
+        `flat_bspline` layout): C² + convex-hull, `is_linear_map`, validated end to end — QuantLib OIS
         oracle 6.9e-17, calibration fit (identifiable), W-cache reprice 1.1e-16, `bspline_collocation`
         risk transform. See the interpolation bullet in §2.
       - **Moment-integrated averaging (Part B) — landed as a FAST APPROXIMATION, additive/opt-in.**

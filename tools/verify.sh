@@ -71,19 +71,20 @@ if [ "${BENCH_ONLY}" -eq 0 ]; then
 fi
 
 # ---- Performance gate -------------------------------------------------------
-# TODO(Phase 6): run google-benchmark targets, parse JSON, compare each metric to
-# baselines/baselines.json, and FAIL if we are not faster than the QuantLib baseline
-# by the agreed threshold (or if we regress vs our own committed baseline).
+# check_perf.py runs the google-benchmark targets, parses their JSON, and compares each metric to
+# baselines/baselines.json -- FAILing if we regress vs our own committed baseline or fall below the
+# required speedup vs the QuantLib baseline. (If the checker is ever absent the gate SKIPs rather than
+# blocking, but it is committed and normally present.)
 if [ "${TEST_ONLY}" -eq 0 ]; then
   echo ">> performance gate"
-  if [ -x "${ROOT}/tools/check_perf.py" ] || [ -f "${ROOT}/tools/check_perf.py" ]; then
+  if [ -f "${ROOT}/tools/check_perf.py" ]; then
     if python3 "${ROOT}/tools/check_perf.py" --build "${BUILD_DIR}" --baselines "${ROOT}/baselines/baselines.json"; then
       pass_perf="PASS"
     else
       pass_perf="FAIL"; rc=1
     fi
   else
-    echo "   (perf checker not implemented yet — Phase 6)"
+    echo "   (tools/check_perf.py missing — perf gate skipped)"
     pass_perf="SKIP"
   fi
 fi

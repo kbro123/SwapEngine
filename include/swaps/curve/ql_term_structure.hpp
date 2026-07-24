@@ -1,5 +1,5 @@
 #pragma once
-// Exposes our CalibrationCurve to QuantLib as a YieldTermStructure.
+// Exposes our calibrated ModularCurve to QuantLib as a YieldTermStructure.
 //
 // This is a CORE ENGINE COMPONENT, not just a test tool (CLAUDE.md §1): our calibrated curve is a
 // QuantLib::YieldTermStructure, so it plugs straight into QuantLib pricing engines. QuantLib
@@ -17,8 +17,8 @@
 namespace swaps::qlx {
 
 // Wrap ANY curve exposing `discount(double)` as a QuantLib::YieldTermStructure -- so our calibrated
-// curve, WHATEVER its region composition (natural-cubic CalibrationCurve, the Hermite
-// make_calibration_curve, or a runtime ModularCurve), plugs straight into QuantLib pricing engines.
+// curve, WHATEVER its region composition (any ModularCurve layout: flat_hermite, flat_bspline, ...),
+// plugs straight into QuantLib pricing engines.
 // This is a CORE ENGINE COMPONENT, not just a test tool (CLAUDE.md §1): QuantLib supplies the
 // instrument machinery it is authoritative for (SOFR average vs compounded accrual, IMM schedules,
 // conventions) while every discount factor comes from our interpolator -- and QuantLib pricing off

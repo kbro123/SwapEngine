@@ -1,0 +1,101 @@
+# SwapEngine — code graph
+
+A readable map of the object model for anyone (human or agent) picking the engine up cold. It is the
+**map**; `CLAUDE.md` is the **law** (invariants, conventions, phase history).
+
+> **Keep this current.** Any change to the object model — add/remove/rename a type, move a file between
+> layers, change a layer dependency, or split/merge a responsibility — updates this file *in the same
+> commit*. A stale map is worse than none. (See the rule in `CLAUDE.md`.)
+> Last verified against the tree at commit: run `git log -1 --format=%h -- ARCHITECTURE.md`.
+
+## Layers (compile-time dependency DAG)
+
+Every arrow is "depends on / includes". It is acyclic — lower layers never see higher ones. This is what
+lets the calibration layer reuse the pricing kernel while the pricing kernel stays QuantLib-free and
+standalone.
+
+```mermaid
+graph TD
+    ad["ad/ — Dual (AAD scalar)"]
+    curve["curve/ — ModularCurve, regions"]
+    parallel["parallel/ — ThreadPool"]
+    pricing["pricing/ — cashflows, W-cache kernel"]
+    calibration["calibration/ — problems, residual engines, solvers"]
+    portfolio["portfolio/ — book valuation"]
+    api["api/ — BundleSession, JSON contract"]
+    ql["ql/ + ql_term_structure — QuantLib ORACLE adapter (tests only)"]
+
+    pricing --> ad
+    pricing --> curve
+    calibration --> ad
+    calibration --> curve
+    calibration --> parallel
+    calibration --> pricing
+    portfolio --> parallel
+    portfolio --> pricing
+    api --> calibration
+    ql --> pricing
+```
+
+## What lives in each layer
+
+| Layer | Key types | Role |
+|-------|-----------|------|
+| `ad/` | `Dual` | Forward-mode AAD scalar (Eigen `AutoDiffScalar`). The engine is templated on `Scalar` so `double` drives the solve and `Dual` yields the analytic Jacobian from the *same* code. |
+| `curve/` | **`ModularCurve<S>`** (THE curve), `CurveModule{knots,scheme}`, `Scheme`, region policies (`Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline` + `Boundary`), named layouts `flat_hermite`/`flat_bspline`/`flat_monotone`, `CurveTermStructure` (QL adapter) | One runtime-composable forward curve. A "flavour" is a **module list**, not a type. `is_linear_map()` gates the W-cache fast path. |
+| `pricing/` | `RateObservation`, `FloatCoupon`, `FixedCoupon` (generic cashflows); **`CurveStructure`** (per-curve topology, `curve_spec.hpp`); `integral_weight_matrix` + `bspline_collocation` (W primitives); `CompiledCurveSet`, `BundleFloatBatch`, `BundleFixedLegs` (`compiled_book.hpp`) | QuantLib-free pricing kernel. `DF = exp(-W·x)` once, then cheap per-quote transforms. The columnar (SoA) hot loop. |
+| `calibration/` | **`Instrument`** + `FloatLeg`/`FixedLeg`/`QuoteKind` (the generic instrument model), `CalibrationProblem` (1 curve), **`BundleProblem`** (N curves) + `BundleCurveSpec` (= `pricing::CurveStructure`) + `CurveHandle`/`OutrightHandle`/`SpreadHandle`, `CompiledBundleResidual` (+ `CompiledResidual` delegate), `AadResidualEngine` + `residual_engine` trait, `calibrate`/`CalibrationResult` (LM), `WarmCalibrator`, `StreamingCalibrator`, `risk`, `SmoothedProblem`, `BundleBlockProblem` | Turns market quotes into knot forwards. Two tiers — see below. |
+| `portfolio/` | `Portfolio` → `CompiledPortfolio` → `ParallelPortfolio` | Book valuation off a calibrated curve: data → W-cache → threaded slices (each escalation adds a capability). |
+| `api/` | `BundleSession`, `run_json`, `bundle_from_json`/`bundle_to_json`, `flat_x0` | The public seam: a JSON object-graph contract + a stateful session. QuantLib-free — this is what the web binding wraps. |
+| `parallel/` | `ThreadPool` | Leaf utility. |
+| `ql/` + `ql_term_structure.hpp` | `extract.hpp` (QL → plain data), `CurveTermStructure` | The **only** QuantLib-touching code. Used to bake reference markets and as the oracle in tests — never on the deployed path. |
+
+## The two calibration tiers
+
+Every problem exposes the same interface (`residuals` / `jacobian` / `model_rates` / `n_residuals`); the
+`residual_engine<Problem>` trait picks the implementation at compile time.
+
+```mermaid
+graph LR
+    subgraph problems
+      CP["CalibrationProblem (1 curve)"]
+      BP["BundleProblem (N curves)"]
+      OTHER["BundleBlockProblem, test-only problems"]
+    end
+    CP -->|single_curve_bundle| CBR
+    CP -.->|residual_engine trait| CR["CompiledResidual (thin delegate)"]
+    CR --> CBR["CompiledBundleResidual"]
+    BP -->|residual_engine trait| CBR
+    OTHER -->|residual_engine trait| AAD["AadResidualEngine (templated + AAD Jacobian)"]
+    CBR -->|"linear map only"| WCACHE["W-cache: DF = exp(-Wx), analytic J — µs"]
+    AAD -->|"value-dependent schemes, xccy"| AADPATH["AAD sweep per refresh — sub-ms"]
+```
+
+- **Compiled / W-cache tier** — the microsecond fast path. Requires a linear-map curve (`is_linear_map()`)
+  and no curve-dependent notionals. `CompiledResidual` is **not** a second kernel: it wraps the single
+  curve as a 1-curve bundle (`single_curve_bundle`) and runs `CompiledBundleResidual`.
+- **AAD tier** — the generic fallback for value-dependent schemes (`MonotoneCubic`), cross-currency
+  quotes, the staged `BundleBlockProblem`, and test-only problems. Correct and generic; a refresh costs
+  one AAD sweep.
+
+`WarmCalibrator` and `StreamingCalibrator` are written against the interface, so they drive either tier
+unchanged.
+
+## A calibration, end to end
+
+1. **Build** — a `BundleProblem` of `BundleCurveSpec` curves (each `modules()` → a `ModularCurve` layout)
+   + `Instrument`s (legs carry their own forecast/discount curve roles; `QuoteKind` is the transform).
+2. **Compile** — `residual_engine_t<BundleProblem>` = `CompiledBundleResidual`: `CompiledCurveSet` builds
+   the block `W_all`; instruments register into columnar batches (`BundleFloatBatch`/`BundleFixedLegs`).
+3. **Solve** — `calibrate()` runs Levenberg–Marquardt: `residuals(x)` = `exp(-W·x)` + per-quote transforms,
+   `jacobian(x)` analytic. Under-determined bundles wrap in `SmoothedProblem` (Tikhonov).
+4. **Stream** — `start_streaming()` anchors a `StreamingCalibrator`; each `update(q)` re-solves to the exact
+   curve via frozen-Newton (µs) or, off the W-cache, re-calibrates (sub-ms).
+5. **Sample / value** — `BundleSession::sample(times)` reads DFs; `Portfolio` values a book off the curve.
+
+## Test-only scaffolding (not shipped)
+
+Lives in `tests/`, never in `include/`: `spread_reference.hpp` (`swaps::testing::SpreadCurve` +
+`SpreadCalibrationProblem` — the fixed-base spread path, used only by `spread_test.cpp`; production spreads
+calibrate jointly via `SpreadHandle`), and the `reference_*.hpp` QuantLib market builders. See
+`tests/ORACLE_TESTS.md` for the oracle-test policy.
