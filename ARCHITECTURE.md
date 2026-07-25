@@ -80,6 +80,14 @@ graph LR
   instruments **touch** (`AutoDiffScalar<VectorXd>` is dynamic-width, so this shrinks every gradient), and
   reuses its seed/buffers across ticks. When nothing is non-cacheable it is a zero-overhead delegate to
   `CompiledBundleResidual`. Pinned == full-AAD in `multicurrency_test.cpp`.
+  A mixed FX/MtM bundle also **streams frozen-Newton** now (it no longer recalibrates each tick): the
+  block exposes `residuals_vs_into`/`jacobian_vs_into` against the live market, so `StreamingCalibrator`
+  drives the same hybrid engine. Each tick reprices the cacheable rows on the W-cache and the FX/MtM rows
+  as cheap doubles; the block's width-reduced AAD Jacobian is recomputed **only on a staleness refresh**,
+  not every tick — so on a smooth feed an FX bundle streams with zero AAD sweeps (measured: 0 refreshes,
+  reprice to machine precision, `XccyFx.HybridStreamingEqualsRecalibrate`). The FX residual carries the
+  live market *inside* its log-basis, so the streamer threads `q` through `instrument_residual(ins, C, q)`
+  (a market-override overload of the single residual definition — no forked residual code).
 - **AAD tier** — the fully-generic fallback for a bundle with **no `W` at all** — a value-dependent
   scheme (`MonotoneCubic`) — plus the staged `BundleBlockProblem` and test-only problems.
 
@@ -115,7 +123,9 @@ unchanged.
 3. **Solve** — `calibrate()` runs Levenberg–Marquardt: `residuals(x)` = `exp(-W·x)` + per-quote transforms,
    `jacobian(x)` analytic. Under-determined bundles wrap in `SmoothedProblem` (Tikhonov).
 4. **Stream** — `start_streaming()` anchors a `StreamingCalibrator`; each `update(q)` re-solves to the exact
-   curve via frozen-Newton (µs) or, off the W-cache, re-calibrates (sub-ms).
+   curve via frozen-Newton (µs). Hard, banded, portfolio AND mixed FX/MtM bundles all take this path (FX/MtM
+   on the hybrid engine, its AAD Jacobian refreshed only on staleness); only a MonotoneCubic scheme — which
+   has no constant W at all — falls back to per-tick `recalibrate()`.
 5. **Sample / value** — `BundleSession::sample(times)` reads DFs; `Portfolio` values a book off the curve.
 
 ## Test-only scaffolding (not shipped)

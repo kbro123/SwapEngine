@@ -443,10 +443,12 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
 void BundleSession::start_streaming(const RegSpec& reg) {
   if (needs_recalibrate())
     throw std::runtime_error(
-        "exact frozen-Newton streaming requires a W-cacheable, hard-target bundle (no FX/MtM, no "
-        "non-linear region schemes, no Portfolio, no bid/offer band); use recalibrate() per tick for "
-        "those -- a band is a SOFT target, so exact reprice would ignore it");
-  cal::CompiledBundleResidual engine(prob_);
+        "frozen-Newton streaming needs a bundle with a constant W (a MonotoneCubic region scheme has "
+        "none); use recalibrate() per tick for those. FX/MtM, bands and portfolios all stream -- FX/MtM "
+        "on the hybrid engine (their AAD Jacobian refreshes only on staleness).");
+  // The StreamingCalibrator builds its own hybrid engine from prob_; no compiled engine is constructed
+  // here (that would throw on an FX/MtM leaf, which the hybrid handles on its AAD block).
+  //
   // Anchor at the market MIDS (prob_.market()). For a hard bundle these equal the curve's reprice; for a
   // banded (soft) bundle the curve sits off-market inside the bands, and the streaming feed IS the mids,
   // so anchoring at the mids keeps the drift ~0 at the first real tick.

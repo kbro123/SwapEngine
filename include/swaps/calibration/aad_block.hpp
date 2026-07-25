@@ -101,6 +101,39 @@ class AadBlock {
     }
   }
 
+  // --- Streaming (frozen-Newton) forms: residual/Jacobian against a LIVE market q instead of the stored
+  // mids, so a mixed FX/MtM bundle streams on the SAME hybrid engine (cacheable rows W-cache, these rows
+  // AAD) rather than recalibrating each tick. residuals_vs_into runs every tick (cheap doubles);
+  // jacobian_vs_into runs only on a Jacobian REFRESH (staleness), so the AAD sweep is off the hot path.
+
+  // True residuals against the live market q, into out[global_row]: instrument_residual with q as the
+  // target (FX gets ln F_model − ln q[row]; a banded row gets w(q_model)·(q_model − q[row])).
+  void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const {
+    if (rows_.empty()) return;
+    const auto C = build_bundle_curves<double>(sub_.curves, [&](int c, int i) { return x[sub_.offset(c) + i]; });
+    const auto curve_of = [&C](int i) -> const CurveHandle<double>& { return *C[i]; };
+    for (int j = 0; j < size(); ++j)
+      out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of, q[rows_[j]]);
+  }
+
+  // Jacobian of residuals_vs_into via WIDTH-REDUCED AAD, into the touched columns of J.row(global_row).
+  // Consistent with residuals_vs_into by construction: AAD differentiates the SAME instrument_residual
+  // (so the band chain-rule term (q_model − q) and the FX 1/F_model factor fall out automatically).
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
+    if (rows_.empty()) return;
+    for (int k = 0; k < n_knots_; ++k) xd_[k].value() = x[k];   // reuse the seed: values only
+    const auto C = build_bundle_curves<ad::Dual>(sub_.curves, [&](int c, int i) { return xd_[sub_.offset(c) + i]; });
+    const auto curve_of = [&C](int i) -> const CurveHandle<ad::Dual>& { return *C[i]; };
+    const int w = static_cast<int>(touched_.size());
+    for (int j = 0; j < size(); ++j) {
+      const ad::Dual rj = instrument_residual<ad::Dual>(sub_.instruments[j], curve_of, q[rows_[j]]);
+      J.row(rows_[j]).setZero();
+      const auto& g = rj.derivatives();
+      if (g.size() == w)
+        for (int t = 0; t < w; ++t) J(rows_[j], touched_[t]) = g[t];
+    }
+  }
+
  private:
   // Curve roles an instrument reads (recursing through Portfolio components).
   static void collect_curves(const Instrument& ins, std::set<int>& s) {

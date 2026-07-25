@@ -61,13 +61,25 @@ class HybridBundleResidual {
     return res_;
   }
 
-  // Streaming residual/Jacobian against a live market q. Only reached for a bundle WITHOUT a non-cacheable
-  // block (those route to recalibrate), so it is a straight delegate.
+  // Streaming residual/Jacobian against a live market q (global residual order). Drives frozen-Newton for
+  // a mixed FX/MtM bundle too: cacheable rows on the W-cache `_vs` path, non-cacheable rows on the AAD
+  // block's `_vs` forms. When nothing is non-cacheable it is a straight delegate (q is already global).
+  // The cacheable engine indexes q by ITS sub-rows, so the global q is first gathered onto them.
   const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
-    return cacheable_.residuals_vs(x, q);
+    if (nc_.empty()) return cacheable_.residuals_vs(x, q);
+    gather_cache(q, qsub_);
+    scatter(cacheable_.residuals_vs(x, qsub_), res_);  // cacheable rows (incl. their bands)
+    nc_.residuals_vs_into(x, q, res_);                 // non-cacheable rows against the live global q
+    return res_;
   }
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
-    return cacheable_.jacobian_vs(x, q);
+    if (nc_.empty()) return cacheable_.jacobian_vs(x, q);
+    gather_cache(q, qsub_);
+    Eigen::MatrixXd J = Eigen::MatrixXd::Zero(n_res_, nknots(x));
+    const Eigen::MatrixXd Jc = cacheable_.jacobian_vs(x, qsub_);
+    for (std::size_t j = 0; j < cache_rows_.size(); ++j) J.row(cache_rows_[j]) = Jc.row(static_cast<int>(j));
+    nc_.jacobian_vs_into(x, q, J);                     // scatters the non-cacheable rows (touched cols)
+    return J;
   }
 
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
@@ -101,11 +113,18 @@ class HybridBundleResidual {
     for (std::size_t j = 0; j < cache_rows_.size(); ++j) full[cache_rows_[j]] = sub[static_cast<int>(j)];
   }
 
+  // Gather a GLOBAL streaming market q onto the cacheable engine's sub-rows (qsub[j] = q[cache_rows_[j]]),
+  // so cacheable_.residuals_vs / jacobian_vs see the live feed in their own sub-row order.
+  void gather_cache(const Eigen::VectorXd& q, Eigen::VectorXd& qsub) const {
+    qsub.resize(static_cast<int>(cache_rows_.size()));
+    for (std::size_t j = 0; j < cache_rows_.size(); ++j) qsub[static_cast<int>(j)] = q[cache_rows_[j]];
+  }
+
   int n_res_;
   std::vector<int> cache_rows_;  // cacheable sub-row -> global residual row (identity when nc empty)
   CompiledBundleResidual cacheable_;
   AadBlock nc_;
-  mutable Eigen::VectorXd out_, res_;
+  mutable Eigen::VectorXd out_, res_, qsub_;
 };
 
 }  // namespace swaps::calibration

@@ -584,6 +584,47 @@ TEST(XccyFx, HybridResidualMatchesAadAndRecovers) {
   EXPECT_LT((sol.x - b.x_true).cwiseAbs().maxCoeff(), 1e-6) << "hybrid solve recovers the curve";
 }
 
+// A MIXED FX/MtM bundle now STREAMS on the hybrid frozen-Newton path instead of recalibrating each tick:
+// the cacheable rows ride the W-cache and the FX/MtM rows ride the AAD block, whose Jacobian is refreshed
+// only on staleness (not every tick). The per-tick solution must equal a full cold recalibrate at the same
+// market to machine precision -- i.e. the hybrid streamer solves the SAME nonlinear system, just frozen.
+TEST(XccyFx, HybridStreamingEqualsRecalibrate) {
+  const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
+  cal::BundleProblem prob = b.prob;
+  const Eigen::VectorXd x0 = cal::calibrate(prob, b.x0).x;  // start on the calibrated curve
+  const Eigen::VectorXd q_anchor = prob.market();
+
+  // A FEASIBLE market move: perturb the KNOTS and reprice, so q_new is exactly reproducible by x_pert.
+  // (An arbitrary per-quote bump would be infeasible for the FX/MtM couplings -- the recalibrate would
+  // leave the same nonzero least-squares residual, so a reprice==0 assertion could not tell streaming
+  // apart from recalibrate. This keeps the true nonlinear system solvable and the recovery checkable.)
+  Eigen::VectorXd x_pert = x0;
+  for (int k = 0; k < x_pert.size(); ++k) x_pert[k] += 5e-4 * ((k % 2) ? 1.0 : -1.0);  // ~5bp zig-zag
+  const auto Cp = cal::build_bundle_curves<double>(
+      prob.curves, [&](int c, int i) { return x_pert[prob.offset(c) + i]; });
+  const auto curve_of = [&Cp](int i) -> const cal::CurveHandle<double>& { return *Cp[i]; };
+  Eigen::VectorXd q_new(prob.n_residuals());
+  for (int i = 0; i < prob.n_residuals(); ++i)
+    q_new[i] = cal::instrument_model_quote<double>(prob.instruments[i], curve_of);
+
+  cal::StreamingCalibrator<cal::BundleProblem> sc(prob, x0, q_anchor, {});  // engine = HybridBundleResidual
+  const cal::StreamTick t = sc.update(q_new);
+
+  cal::BundleProblem prob2 = prob;  // reference: cold recalibrate at the new (self-consistent) market
+  for (int i = 0; i < prob2.n_residuals(); ++i) prob2.instruments[i].market = q_new[i];
+  const Eigen::VectorXd x_ref = cal::calibrate(prob2, x0).x;
+
+  const double dx = (sc.current() - x_ref).cwiseAbs().maxCoeff();
+  const double dtruth = (sc.current() - x_pert).cwiseAbs().maxCoeff();  // recovers the perturbed curve
+  const double rr = prob2.residuals<double>(sc.current()).cwiseAbs().maxCoeff();  // reprices to the feed
+  std::cout << "  [mc-fx-stream] |x_stream - x_recal|=" << dx << " |x_stream - x_truth|=" << dtruth
+            << " ||reprice||inf=" << rr << " newton_steps=" << t.newton_steps
+            << " refreshes=" << t.refreshes << "\n";
+  EXPECT_LT(dx, 1e-8) << "hybrid frozen-Newton streaming == cold recalibrate for a mixed FX/MtM bundle";
+  EXPECT_LT(dtruth, 1e-6) << "the streamed solution recovers the perturbed curve";
+  EXPECT_LT(rr, 1e-8) << "the streamed curve reprices every instrument (incl. FX/MtM) to the live market";
+}
+
 // EUR-in-USD genuinely depends on BOTH ESTR (spread base) and SOFR (FX-forward denominator / funding leg).
 TEST(XccyFx, DependsOnBothSofrAndEstr) {
   const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();

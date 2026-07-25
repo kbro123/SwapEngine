@@ -233,22 +233,35 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
 // transforms never hit this: DF(pay) always carries the derivatives (see float_coupon_pv).
 // A banded instrument (band_upper > band_lower) weights its residual: r = w(q)·(q − market) with w from
 // band_weight(). The band is NOT applied to FxForward (its residual is already a log-basis transform).
+//
+// `market` is the target quote the residual is measured against. It defaults (overload below) to the
+// instrument's stored mid `ins.market` — the calibration case — but the frozen-Newton STREAMER passes the
+// LIVE feed instead, so the SAME residual definition drives both cold calibrate and each tick. FX needs
+// the market INSIDE the log (ln F_model − ln market), so a live feed cannot be applied by subtracting
+// afterward; threading it through here keeps FX (and the band `q − market` term) exact per tick. The band
+// bounds stay absolute bid/offer levels, independent of the live market.
 template <class Scalar, class CurveOf>
-Scalar instrument_residual(const Instrument& ins, const CurveOf& C) {
+Scalar instrument_residual(const Instrument& ins, const CurveOf& C, double market) {
   if (ins.quote == QuoteKind::FxForward) {
     // Residual in RATE units (CLAUDE.md §2): the implied-basis discrepancy (ln F_model − ln F_market)/T.
     // A 1bp basis error maps to ~1bp REGARDLESS of tenor, so short-dated forwards are not swamped by 1y.
     using std::log;
-    return (log(instrument_model_quote<Scalar>(ins, C)) - std::log(ins.market)) / ins.fx_time;
+    return (log(instrument_model_quote<Scalar>(ins, C)) - std::log(market)) / ins.fx_time;
   }
   const bool banded = ins.band_upper > ins.band_lower;
   // Rate keeps its bit-exact `rate + (convexity - market)` association when there is NO band (design §2's
   // backward-compatibility invariant); a banded Rate uses the general q·weight form.
   if (ins.quote == QuoteKind::Rate && !banded)
-    return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + (ins.convexity - ins.market);
+    return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + (ins.convexity - market);
   const Scalar q = instrument_model_quote<Scalar>(ins, C);
-  const Scalar raw = q - ins.market;
+  const Scalar raw = q - market;
   return banded ? band_weight<Scalar>(q, ins.band_lower, ins.band_upper, ins.band_decay) * raw : raw;
+}
+// Calibration default: residual against the instrument's stored mid. Bit-identical to the pre-override
+// code (same value flows into the same expressions), so every existing caller is unchanged.
+template <class Scalar, class CurveOf>
+Scalar instrument_residual(const Instrument& ins, const CurveOf& C) {
+  return instrument_residual<Scalar>(ins, C, ins.market);
 }
 
 struct CalibrationProblem {

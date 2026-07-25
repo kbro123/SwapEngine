@@ -93,8 +93,11 @@ class BundleSession {
   // does NOT force recalibrate(). This flag is informational (e.g. to label a soft-calibrated bundle).
   bool has_band() const { return has_band_; }
   // True when the bundle cannot use the frozen-Newton streaming path (start_streaming/update) at all and
-  // must recalibrate() each tick: FX/MtM, a non-linear region scheme, or a Portfolio (a band does NOT).
-  bool needs_recalibrate() const { return has_fx_ || has_nonlinear_; }
+  // must recalibrate() each tick. Only a NON-LINEAR region scheme (MonotoneCubic) qualifies now: it has no
+  // constant W for ANY curve, so there is no compiled engine to freeze. FX/MtM no longer forces this — the
+  // HYBRID engine streams the cacheable rows on the W-cache and the FX/MtM rows on a width-reduced AAD
+  // block, refreshing the AAD Jacobian only on staleness. A band is a soft target and never forced it.
+  bool needs_recalibrate() const { return has_nonlinear_; }
 
   // Query the built curves at the current x on a shared time grid.
   std::vector<CurveSample> sample(const std::vector<double>& times) const;
@@ -108,10 +111,11 @@ class BundleSession {
   // portfolio's d(NPV)/dx (one AAD pass) by M for a full analytic delta ladder, no bumping (CLAUDE.md #4).
   Eigen::MatrixXd risk_operator(const RegSpec& reg = {}) const;
 
-  // ---- streaming (all-linear bundles only) -------------------------------------------------------
+  // ---- streaming (any bundle with a constant W: hard, banded, portfolio, or mixed FX/MtM) ---------
   // Anchor a StreamingCalibrator at the current x; each stream_update(q) re-solves to the exact curve
-  // for the new market q (frozen-Newton off the cached Jacobian, refreshed only on staleness). Throws
-  // if the bundle contains an FX/MtM instrument (not W-cacheable).
+  // for the new market q (frozen-Newton off the cached Jacobian, refreshed only on staleness). A mixed
+  // FX/MtM bundle streams on the hybrid engine (its FX rows refresh their AAD Jacobian only on staleness).
+  // Throws only for a bundle with no constant W at all (a MonotoneCubic region scheme) — recalibrate those.
   void start_streaming(const RegSpec& reg = {});
   const Eigen::VectorXd& stream_update(const Eigen::VectorXd& new_market);
   bool streaming() const { return static_cast<bool>(stream_); }
