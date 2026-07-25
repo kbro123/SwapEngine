@@ -87,7 +87,10 @@ class CompiledBundleResidual {
   }
 
   const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const {
-    res_ = model_rates(x) - market_;  // model_rates fills out_; res_ (a distinct member) holds r
+    const Eigen::VectorXd& mr = model_rates(x);  // model_rates fills out_; res_ (a distinct member) holds r
+    res_ = mr - market_;
+    for (const auto& b : band_)  // banded rows: r = w(q)·(q - market), q = model rate
+      res_[b.row] *= band_weight_d(mr[b.row], b.lower, b.upper, b.decay).first;
     return res_;
   }
 
@@ -97,6 +100,13 @@ class CompiledBundleResidual {
   // out automatically because those are the only nonzero W_all columns for its DF entries.
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
     const Eigen::VectorXd& DF = df_at(x);
+    // Capture the model quotes for banded rows BEFORE the batch scratch below is overwritten.
+    std::vector<double> qb;
+    if (!band_.empty()) {
+      const Eigen::VectorXd& mr = model_rates(x);
+      qb.reserve(band_.size());
+      for (const auto& b : band_) qb.push_back(mr[b.row]);
+    }
     G_.setZero();  // reuse the scratch buffer (sized once in the ctor)
     Eigen::MatrixXd& G = G_;
 
@@ -130,6 +140,13 @@ class CompiledBundleResidual {
       gen_rate_.d_rate(DF, dr, 0);
       for (int j = 0; j < nr; ++j) G.row(r_rows_[j]) = dr.row(j);
     }
+    // Band chain rule: r = w(q)·(q-market) => dr/dx = (w + w'·(q-market))·dq/dx. Scale each banded row's
+    // dr/dDF (G) by that scalar before the W matmul (the matmul is linear, so scaling commutes).
+    for (std::size_t k = 0; k < band_.size(); ++k) {
+      const Band& b = band_[k];
+      const std::pair<double, double> wd = band_weight_d(qb[k], b.lower, b.upper, b.decay);
+      G.row(b.row) *= (wd.first + wd.second * (qb[k] - market_[b.row]));
+    }
     return -((G * DF.asDiagonal()) * cs_.W());
   }
 
@@ -161,6 +178,14 @@ class CompiledBundleResidual {
         throw std::invalid_argument(
             "CompiledBundleResidual: FX-forward / MtM-xccy quotes are not W-cacheable (a DF ratio / a "
             "curve-dependent notional is not a single exp(-Wx)); calibrate on the AAD engine");
+      if (ins.quote == QuoteKind::Portfolio)
+        throw std::invalid_argument(
+            "CompiledBundleResidual: Portfolio (combination) quotes are a weighted sum of transformed "
+            "component quotes, not a single W-cache transform; calibrate on the AAD engine");
+      // A bid/offer band re-weights this row's residual (r = w(q)·(q-market)); the weight is a per-row
+      // scalar post-transform, so the row stays on the W-cache path. Captured here, applied below.
+      if (ins.band_upper > ins.band_lower)
+        band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
       if (ins.quote == QuoteKind::Rate) {
         gen_rate_.add_future(cs_, ins.forecast, ins.obs, ins.convexity);
         r_rows_.push_back(row++);
@@ -185,6 +210,10 @@ class CompiledBundleResidual {
   pricing::BundleFloatBatch gen_pos_, gen_neg_, gen_rate_;
   pricing::BundleFixedLegs gen_fixed_;
   std::vector<int> q_rows_, r_rows_;  // batch position -> residual row
+  // Bid/offer bands: a residual row whose value + Jacobian get the w(q) post-transform (see residuals /
+  // jacobian). Empty for a plain bundle, so the fast path is untouched when no instrument is banded.
+  struct Band { int row; double lower, upper, decay; };
+  std::vector<Band> band_;
   Eigen::VectorXd market_;
   // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.

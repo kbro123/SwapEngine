@@ -72,6 +72,7 @@ const char* quote_to_str(cal::QuoteKind q) {
     case cal::QuoteKind::Rate: return "Rate";
     case cal::QuoteKind::FxForward: return "FxForward";
     case cal::QuoteKind::XccyMtmBasis: return "XccyMtmBasis";
+    case cal::QuoteKind::Portfolio: return "Portfolio";
   }
   return "ParRate";
 }
@@ -80,6 +81,7 @@ cal::QuoteKind quote_from_str(const std::string& s) {
   if (s == "Rate") return cal::QuoteKind::Rate;
   if (s == "FxForward") return cal::QuoteKind::FxForward;
   if (s == "XccyMtmBasis") return cal::QuoteKind::XccyMtmBasis;
+  if (s == "Portfolio") return cal::QuoteKind::Portfolio;
   if (s == "ParRate") return cal::QuoteKind::ParRate;
   throw std::invalid_argument("unknown quote kind: " + s);
 }
@@ -269,6 +271,14 @@ cal::Instrument instrument_from_json(const json::value& v) {
   ins.fx_den = get_i(o, "fx_den", -1);
   ins.fx_spot = get_d(o, "fx_spot", 1.0);
   ins.fx_time = get_d(o, "fx_time", 0.0);
+  ins.band_lower = get_d(o, "band_lower", 0.0);
+  ins.band_upper = get_d(o, "band_upper", 0.0);
+  ins.band_decay = get_d(o, "band_decay", 1.0);
+  if (o.contains("combination"))  // Portfolio components (recursive)
+    for (const auto& e : o.at("combination").as_array()) {
+      const auto& c = e.as_object();
+      ins.combination.push_back({get_d(c, "weight", 1.0), instrument_from_json(c.at("instrument"))});
+    }
   return ins;
 }
 
@@ -288,6 +298,19 @@ json::value instrument_to_json(const cal::Instrument& ins) {
   o["fx_den"] = ins.fx_den;
   o["fx_spot"] = ins.fx_spot;
   o["fx_time"] = ins.fx_time;
+  o["band_lower"] = ins.band_lower;
+  o["band_upper"] = ins.band_upper;
+  o["band_decay"] = ins.band_decay;
+  if (!ins.combination.empty()) {
+    json::array combo;
+    for (const auto& c : ins.combination) {
+      json::object ce;
+      ce["weight"] = c.weight;
+      ce["instrument"] = instrument_to_json(c.instrument);  // recursive
+      combo.push_back(std::move(ce));
+    }
+    o["combination"] = std::move(combo);
+  }
   return o;
 }
 
@@ -326,9 +349,12 @@ Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
 // BundleSession
 // =================================================================================================
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
-  for (const auto& ins : prob_.instruments)
+  for (const auto& ins : prob_.instruments) {
     if (ins.quote == cal::QuoteKind::FxForward || ins.quote == cal::QuoteKind::XccyMtmBasis)
       has_fx_ = true;
+    if (ins.quote == cal::QuoteKind::Portfolio)
+      has_nonlinear_ = true;  // a weighted sum of transformed component quotes is not W-cacheable -> AAD
+  }
   for (const auto& c : prob_.curves) {
     if (!c.regions.empty()) has_modular_ = true;  // custom interpolation regions
     for (const auto& r : c.regions)        // only a NON-LINEAR scheme forces off the W-cache

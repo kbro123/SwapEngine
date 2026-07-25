@@ -12,7 +12,9 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 #include "swaps/curve/curve_module.hpp"
@@ -58,7 +60,16 @@ enum class QuoteKind {
   // not a single exp(-Wx)); CompiledBundleResidual rejects them, so they ride the AAD/templated path.
   FxForward,      // FX-forward point: fx_spot · DF[fx_num](fx_time)/DF[fx_den](fx_time) (pins fx_num vs fx_den)
   XccyMtmBasis,   // MtM (FX-resettable-notional) xccy basis: par basis incl. the resetting funding leg
+  Portfolio,      // linear combination of component instruments: model quote = Σ weight·quote(component).
+                  // `market` is the COMBINED quote (a butterfly/condor spread), so you calibrate to the
+                  // combo directly without pinning each leg's outright rate. Components are full nested
+                  // Instruments, so portfolios compose. ONE residual, no knots (knots are in the curve
+                  // spec). Not W-cacheable -> rides the AAD/templated path.
 };
+
+// Forward declarations for the recursive Portfolio components (each component is itself an Instrument).
+struct Instrument;
+struct WeightedInstrument;
 
 // One calibration instrument.
 //
@@ -81,6 +92,18 @@ struct Instrument {
   // Rate only. An INPUT NUMBER (design §3): the convexity MODEL (Hull-White etc.) lives in tests.
   double convexity = 0.0;
   double market = 0.0;  // the market quote, in the units of `quote` (always rate units)
+
+  // Bid/offer BAND (soft calibration target). When `band_upper > band_lower` (bounds in the quote's rate
+  // units) the residual is a WEIGHTED pull to mid: r = w(q)·(q − market), with the weight w decaying from
+  // 1 outside the band down to a floor `band_decay` inside it (see band_weight()). So the solver treats
+  // any model value within [lower, upper] as ~satisfied and spends its freedom on the hard targets. The
+  // default (band_upper <= band_lower, band_decay = 1) leaves the residual as the plain (q − market).
+  double band_lower = 0.0, band_upper = 0.0, band_decay = 1.0;
+
+  // Portfolio (QuoteKind::Portfolio) components: model quote = Σ weight·model_quote(component). Ignored
+  // for every other quote kind. Defined out-of-line below (recursive type).
+  std::vector<WeightedInstrument> combination;
+
   // The currency the quote/residual is expressed in (multi-currency). Consulted ONLY by a cross-
   // currency quote that mixes legs of different currencies (to name the PV numeraire); every single-
   // currency quote ignores it. Default 0 keeps existing instruments byte-identical.
@@ -98,13 +121,57 @@ struct Instrument {
   FloatLeg mtm;
 
   // The curve this instrument primarily PINS. Used by the staged solver to assign it to a dependency
-  // block; FxForward pins its FOREIGN (fx_num) curve, every leg-based quote its fwd leg's forecast.
-  int primary_curve() const {
-    if (quote == QuoteKind::Rate) return forecast;
-    if (quote == QuoteKind::FxForward) return fx_num;
-    return fwd.forecast;
-  }
+  // block; FxForward pins its FOREIGN (fx_num) curve, every leg-based quote its fwd leg's forecast, a
+  // Portfolio its first component's. Defined out-of-line (Portfolio dereferences the nested type).
+  int primary_curve() const;
 };
+
+// A weighted component of a Portfolio instrument. Holds a full Instrument by value, so portfolios nest.
+struct WeightedInstrument {
+  double weight = 1.0;
+  Instrument instrument;
+};
+
+inline int Instrument::primary_curve() const {
+  if (quote == QuoteKind::Rate) return forecast;
+  if (quote == QuoteKind::FxForward) return fx_num;
+  if (quote == QuoteKind::Portfolio)
+    return combination.empty() ? 0 : combination.front().instrument.primary_curve();
+  return fwd.forecast;
+}
+
+// Bid/offer band weight for a model quote q (see the Instrument band fields). Returns 1 when there is no
+// band (upper <= lower). Otherwise w = decay + (1-decay)·(1 - exp(-(outside/s)^2)), where `outside` is
+// the distance of q OUTSIDE [lower, upper] (0 inside the band) and s = upper - lower. w is 1 far outside
+// the band and decays smoothly to the floor `decay` inside it; it is C1 across the edges (dw/dq -> 0 as
+// q approaches an edge from outside), so LM/AAD see no kink. Max is done by branch selection so it is
+// AAD-safe (the derivative flows through the selected term; inside the band `outside` is the constant 0).
+template <class Scalar>
+Scalar band_weight(const Scalar& q, double lower, double upper, double decay) {
+  if (!(upper > lower)) return Scalar(1.0);
+  using std::exp;
+  const Scalar below = Scalar(lower) - q;   // > 0 below the band
+  const Scalar above = q - Scalar(upper);   // > 0 above the band
+  Scalar outside = below > above ? below : above;      // max(below, above)
+  if (outside < Scalar(0.0)) outside = Scalar(0.0);     // inside the band -> 0 (constant, zero derivative)
+  const Scalar z = outside / (upper - lower);
+  return Scalar(decay) + Scalar(1.0 - decay) * (Scalar(1.0) - exp(-(z * z)));
+}
+
+// Plain-double (w, dw/dq) of band_weight, for the compiled path's ANALYTIC Jacobian. MUST match
+// band_weight() above term-for-term -- a divergence would make the compiled and AAD residuals disagree
+// (the compiled_residual oracle test pins exactly this equality).
+inline std::pair<double, double> band_weight_d(double q, double lower, double upper, double decay) {
+  if (!(upper > lower)) return {1.0, 0.0};
+  const double s = upper - lower;
+  const double below = lower - q, above = q - upper;
+  const double outside = std::max(std::max(below, above), 0.0);
+  const double doutside = outside <= 0.0 ? 0.0 : (below > above ? -1.0 : 1.0);  // d outside / dq
+  const double z = outside / s, e = std::exp(-(z * z));
+  const double w = decay + (1.0 - decay) * (1.0 - e);
+  const double dw = (1.0 - decay) * e * 2.0 * z * (doutside / s);  // dw/dq = (1-decay)·e·2z·(doutside/s)
+  return {w, dw};
+}
 
 // Model quote of an instrument, per the design §3 table. `C(role)` maps a curve role index to the
 // curve object (anything with `Scalar discount(double)`); a single-curve problem passes a lambda that
@@ -112,6 +179,13 @@ struct Instrument {
 template <class Scalar, class CurveOf>
 Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
   switch (ins.quote) {
+    case QuoteKind::Portfolio: {
+      // Σ weight·model_quote(component). Recursive, so a component may itself be a Portfolio.
+      Scalar acc(0.0);
+      for (const auto& c : ins.combination)
+        acc += Scalar(c.weight) * instrument_model_quote<Scalar>(c.instrument, C);
+      return acc;
+    }
     case QuoteKind::Rate:
       return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + ins.convexity;
     case QuoteKind::ParSpread:
@@ -157,17 +231,24 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
 // AAD note: a fully-fixed observation (empty sub-periods) makes `Rate` a genuine CONSTANT residual
 // row with an empty derivative vector — aad_jacobian() zeroes such rows defensively. The quotient
 // transforms never hit this: DF(pay) always carries the derivatives (see float_coupon_pv).
+// A banded instrument (band_upper > band_lower) weights its residual: r = w(q)·(q − market) with w from
+// band_weight(). The band is NOT applied to FxForward (its residual is already a log-basis transform).
 template <class Scalar, class CurveOf>
 Scalar instrument_residual(const Instrument& ins, const CurveOf& C) {
-  if (ins.quote == QuoteKind::Rate)
-    return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + (ins.convexity - ins.market);
   if (ins.quote == QuoteKind::FxForward) {
     // Residual in RATE units (CLAUDE.md §2): the implied-basis discrepancy (ln F_model − ln F_market)/T.
     // A 1bp basis error maps to ~1bp REGARDLESS of tenor, so short-dated forwards are not swamped by 1y.
     using std::log;
     return (log(instrument_model_quote<Scalar>(ins, C)) - std::log(ins.market)) / ins.fx_time;
   }
-  return instrument_model_quote<Scalar>(ins, C) - ins.market;
+  const bool banded = ins.band_upper > ins.band_lower;
+  // Rate keeps its bit-exact `rate + (convexity - market)` association when there is NO band (design §2's
+  // backward-compatibility invariant); a banded Rate uses the general q·weight form.
+  if (ins.quote == QuoteKind::Rate && !banded)
+    return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + (ins.convexity - ins.market);
+  const Scalar q = instrument_model_quote<Scalar>(ins, C);
+  const Scalar raw = q - ins.market;
+  return banded ? band_weight<Scalar>(q, ins.band_lower, ins.band_upper, ins.band_decay) * raw : raw;
 }
 
 struct CalibrationProblem {

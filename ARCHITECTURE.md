@@ -44,7 +44,7 @@ graph TD
 | `ad/` | `Dual` | Forward-mode AAD scalar (Eigen `AutoDiffScalar`). The engine is templated on `Scalar` so `double` drives the solve and `Dual` yields the analytic Jacobian from the *same* code. |
 | `curve/` | **`ModularCurve<S>`** (THE curve), `CurveModule{knots,scheme}`, `Scheme`, region policies (`Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline` + `Boundary`), named layouts `flat_hermite`/`flat_bspline`/`flat_monotone`, `CurveTermStructure` (QL adapter) | One runtime-composable forward curve. A "flavour" is a **module list**, not a type. `is_linear_map()` gates the W-cache fast path. |
 | `pricing/` | `RateObservation`, `FloatCoupon`, `FixedCoupon` (generic cashflows); **`CurveStructure`** (per-curve topology, `curve_spec.hpp`); `integral_weight_matrix` + `bspline_collocation` (W primitives); `CompiledCurveSet`, `BundleFloatBatch`, `BundleFixedLegs` (`compiled_book.hpp`) | QuantLib-free pricing kernel. `DF = exp(-W·x)` once, then cheap per-quote transforms. The columnar (SoA) hot loop. |
-| `calibration/` | **`Instrument`** + `FloatLeg`/`FixedLeg`/`QuoteKind` (the generic instrument model), `CalibrationProblem` (1 curve), **`BundleProblem`** (N curves) + `BundleCurveSpec` (= `pricing::CurveStructure`) + `CurveHandle`/`OutrightHandle`/`SpreadHandle`, `CompiledBundleResidual` (+ `CompiledResidual` delegate), `AadResidualEngine` + `residual_engine` trait, `calibrate`/`CalibrationResult` (LM), `WarmCalibrator`, `StreamingCalibrator`, `risk`, `SmoothedProblem`, `BundleBlockProblem` | Turns market quotes into knot forwards. Two tiers — see below. |
+| `calibration/` | **`Instrument`** (+ `WeightedInstrument` for Portfolio components) + `FloatLeg`/`FixedLeg`/`QuoteKind` (the generic instrument model), `band_weight` (bid/offer soft target), `CalibrationProblem` (1 curve), **`BundleProblem`** (N curves) + `BundleCurveSpec` (= `pricing::CurveStructure`) + `CurveHandle`/`OutrightHandle`/`SpreadHandle`, `CompiledBundleResidual` (+ `CompiledResidual` delegate), `AadResidualEngine` + `residual_engine` trait, `calibrate`/`CalibrationResult` (LM), `WarmCalibrator`, `StreamingCalibrator`, `risk`, `SmoothedProblem`, `BundleBlockProblem` | Turns market quotes into knot forwards. Two tiers — see below. |
 | `portfolio/` | `Portfolio` → `CompiledPortfolio` → `ParallelPortfolio` | Book valuation off a calibrated curve: data → W-cache → threaded slices (each escalation adds a capability). |
 | `api/` | `BundleSession`, `run_json`, `bundle_from_json`/`bundle_to_json`, `flat_x0` | The public seam: a JSON object-graph contract + a stateful session. QuantLib-free — this is what the web binding wraps. |
 | `parallel/` | `ThreadPool` | Leaf utility. |
@@ -80,6 +80,18 @@ graph LR
 
 `WarmCalibrator` and `StreamingCalibrator` are written against the interface, so they drive either tier
 unchanged.
+
+### Quote kinds worth calling out
+
+- **`Portfolio`** — a linear combination `Σ weight·quote(component)` of nested `Instrument`s (a swap
+  butterfly/condor as ONE residual, no leg outrights). It is a sum of transformed component quotes, not a
+  single W-cache transform, so it throws in `CompiledBundleResidual` and routes to the AAD tier.
+- **Bid/offer band** (`band_lower`/`band_upper`/`band_decay` on any instrument) — a soft target: the
+  residual becomes `w(q)·(q−market)` where `band_weight` decays from 1 outside the band to the floor
+  `band_decay` inside, so a value within bid/offer is ~satisfied and the solver spends its freedom on the
+  hard targets. `w(q)` is a per-row scalar transform (value + analytic derivative in `band_weight_d`), so
+  banded rows **stay on the compiled W-cache path** — no loss of µs streaming. The compiled band Jacobian
+  is pinned against AAD in `portfolio_instrument_test.cpp`.
 
 ## A calibration, end to end
 
