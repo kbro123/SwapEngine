@@ -69,19 +69,21 @@ class CompiledBundleResidual {
   // by quote kind internally then scattered back to each instrument's own row.
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
     const Eigen::VectorXd& DF = df_at(x);
-    out_.resize(n_residuals());  // engine scratch: reused, no per-tick allocation
+    out_.setZero(n_residuals());  // ACCUMULATE: a portfolio row sums its components' weighted quotes; a
+                                  // plain row has one entry with weight 1 (0 + 1·q == q, bit-identical).
     if (!q_rows_.empty()) {
       const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);  // refs into DISTINCT batch objects,
       const Eigen::VectorXd& pp = gen_pos_.pv(DF);          // so all three are simultaneously live
       const Eigen::VectorXd& pn = gen_neg_.pv(DF);
       for (std::size_t j = 0; j < q_rows_.size(); ++j) {
         const int i = static_cast<int>(j);
-        out_[q_rows_[j]] = (pp[i] - pn[i]) / ann[i];  // bit-identical to (pp-pn)/ann then scatter
+        out_[q_rows_[j].row] += q_rows_[j].weight * (pp[i] - pn[i]) / ann[i];
       }
     }
     if (!r_rows_.empty()) {
       const Eigen::VectorXd& v = gen_rate_.rate(DF);
-      for (std::size_t j = 0; j < r_rows_.size(); ++j) out_[r_rows_[j]] = v[static_cast<int>(j)];
+      for (std::size_t j = 0; j < r_rows_.size(); ++j)
+        out_[r_rows_[j].row] += r_rows_[j].weight * v[static_cast<int>(j)];
     }
     return out_;
   }
@@ -139,8 +141,9 @@ class CompiledBundleResidual {
       gen_pos_.d_pv_from_num(num_pos, DF, dnum, 0, 1.0);
       gen_neg_.d_pv_from_num(num_neg, DF, dnum, 0, -1.0);
       gen_fixed_.d_annuity(dann, 0);
-      for (int j = 0; j < nq; ++j)  // d(num/ann) = dnum/ann - num·dann/ann²
-        G.row(q_rows_[j]) = dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]);
+      for (int j = 0; j < nq; ++j)  // d(num/ann) = dnum/ann - num·dann/ann²; accumulate (portfolio rows)
+        G.row(q_rows_[j].row) +=
+            q_rows_[j].weight * (dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]));
     }
     // `Rate` rows ARE the futures batch's rate rows (convexity is a constant -> zero row).
     if (!r_rows_.empty()) {
@@ -148,7 +151,7 @@ class CompiledBundleResidual {
       dr_.setZero();
       Eigen::MatrixXd& dr = dr_;
       gen_rate_.d_rate(DF, dr, 0);
-      for (int j = 0; j < nr; ++j) G.row(r_rows_[j]) = dr.row(j);
+      for (int j = 0; j < nr; ++j) G.row(r_rows_[j].row) += r_rows_[j].weight * dr.row(j);
     }
     // Band chain rule: r = w(q)·(q-market) => dr/dx = (w + w'·(q-market))·dq/dx. Scale each banded row's
     // dr/dDF (G) by that scalar before the W matmul (the matmul is linear, so scaling commutes).
@@ -181,36 +184,44 @@ class CompiledBundleResidual {
   // ParRate contributing an EMPTY `neg` leg (a leg with no coupons has no entries in R_cpn, so its
   // pv row is exactly 0.0 and its d_pv contributes nothing).
   void register_generic(const BundleProblem& p) {
-    int row = 0;
-    const std::vector<pricing::FloatCoupon> no_leg;
-    for (const auto& ins : p.instruments) {
-      if (ins.quote == QuoteKind::FxForward || ins.quote == QuoteKind::XccyMtmBasis)
-        throw std::invalid_argument(
-            "CompiledBundleResidual: FX-forward / MtM-xccy quotes are not W-cacheable (a DF ratio / a "
-            "curve-dependent notional is not a single exp(-Wx)); calibrate on the AAD engine");
-      if (ins.quote == QuoteKind::Portfolio)
-        throw std::invalid_argument(
-            "CompiledBundleResidual: Portfolio (combination) quotes are a weighted sum of transformed "
-            "component quotes, not a single W-cache transform; calibrate on the AAD engine");
+    for (int row = 0; row < static_cast<int>(p.instruments.size()); ++row) {
+      const Instrument& ins = p.instruments[row];
       // A bid/offer band re-weights this row's residual (r = w(q)·(q-market)); the weight is a per-row
       // scalar post-transform, so the row stays on the W-cache path. Captured here, applied below.
       if (ins.band_upper > ins.band_lower)
         band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
-      if (ins.quote == QuoteKind::Rate) {
-        gen_rate_.add_future(cs_, ins.forecast, ins.obs, ins.convexity);
-        r_rows_.push_back(row++);
-        continue;
-      }
-      const bool spread = (ins.quote == QuoteKind::ParSpread);
-      const FloatLeg& pos = spread ? ins.bench : ins.fwd;  // ParSpread: +bench; ParRate: +fwd
-      gen_pos_.add(cs_, pos.forecast, pos.discount, pos.coupons);
-      if (spread)
-        gen_neg_.add(cs_, ins.fwd.forecast, ins.fwd.discount, ins.fwd.coupons);  // ParSpread: -fwd
-      else
-        gen_neg_.add(cs_, 0, 0, no_leg);  // ParRate: nothing subtracted
-      gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);
-      q_rows_.push_back(row++);
+      register_at(ins, row, 1.0);
     }
+  }
+
+  // Register one instrument's legs into the batches, targeting residual `row` with `weight`. A Portfolio
+  // recurses -- each component registers onto the SAME row with the product of weights -- so a butterfly
+  // of par swaps becomes three weighted batch entries summed into one row, fully on the W-cache path.
+  // Only a genuinely non-W-cacheable LEAF (FX/MtM, here or nested in a portfolio) forces the AAD engine.
+  void register_at(const Instrument& ins, int row, double weight) {
+    static const std::vector<pricing::FloatCoupon> no_leg;
+    if (ins.quote == QuoteKind::Portfolio) {
+      for (const auto& comp : ins.combination) register_at(comp.instrument, row, weight * comp.weight);
+      return;
+    }
+    if (ins.quote == QuoteKind::FxForward || ins.quote == QuoteKind::XccyMtmBasis)
+      throw std::invalid_argument(
+          "CompiledBundleResidual: FX-forward / MtM-xccy quotes (including inside a Portfolio) are not "
+          "W-cacheable (a DF ratio / a curve-dependent notional is not a single exp(-Wx)); use the AAD engine");
+    if (ins.quote == QuoteKind::Rate) {
+      gen_rate_.add_future(cs_, ins.forecast, ins.obs, ins.convexity);
+      r_rows_.push_back({row, weight});
+      return;
+    }
+    const bool spread = (ins.quote == QuoteKind::ParSpread);
+    const FloatLeg& pos = spread ? ins.bench : ins.fwd;  // ParSpread: +bench; ParRate: +fwd
+    gen_pos_.add(cs_, pos.forecast, pos.discount, pos.coupons);
+    if (spread)
+      gen_neg_.add(cs_, ins.fwd.forecast, ins.fwd.discount, ins.fwd.coupons);  // ParSpread: -fwd
+    else
+      gen_neg_.add(cs_, 0, 0, no_leg);  // ParRate: nothing subtracted
+    gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);
+    q_rows_.push_back({row, weight});
   }
 
   int n_gen_;
@@ -219,7 +230,11 @@ class CompiledBundleResidual {
   // Rate futures use the rate batch.
   pricing::BundleFloatBatch gen_pos_, gen_neg_, gen_rate_;
   pricing::BundleFixedLegs gen_fixed_;
-  std::vector<int> q_rows_, r_rows_;  // batch position -> residual row
+  // Batch position -> (residual row, weight). A plain instrument is one batch entry with weight 1 on its
+  // own row; a Portfolio's components are several batch entries that ACCUMULATE (weighted) onto the ONE
+  // portfolio row -- which is exactly why a portfolio of W-cacheable components stays W-cacheable.
+  struct Scatter { int row; double weight; };
+  std::vector<Scatter> q_rows_, r_rows_;
   // Bid/offer bands: a residual row whose value + Jacobian get the w(q) post-transform (see residuals /
   // jacobian). Empty for a plain bundle, so the fast path is untouched when no instrument is banded.
   struct Band { int row; double lower, upper, decay; };

@@ -348,14 +348,22 @@ Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
 // =================================================================================================
 // BundleSession
 // =================================================================================================
+// A W-cache-incompatible LEAF anywhere in an instrument (including nested inside a Portfolio): FX/MtM,
+// whose DF-ratio / curve-dependent notional is not a single exp(-Wx). A Portfolio of otherwise-cacheable
+// components (par swaps, futures) IS W-cacheable -- its row is a weighted sum of cacheable transforms.
+static bool has_noncacheable_leaf(const cal::Instrument& ins) {
+  if (ins.quote == cal::QuoteKind::FxForward || ins.quote == cal::QuoteKind::XccyMtmBasis) return true;
+  if (ins.quote == cal::QuoteKind::Portfolio)
+    for (const auto& c : ins.combination)
+      if (has_noncacheable_leaf(c.instrument)) return true;
+  return false;
+}
+
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   for (const auto& ins : prob_.instruments) {
-    if (ins.quote == cal::QuoteKind::FxForward || ins.quote == cal::QuoteKind::XccyMtmBasis)
-      has_fx_ = true;
-    if (ins.quote == cal::QuoteKind::Portfolio)
-      has_nonlinear_ = true;  // a weighted sum of transformed component quotes is not W-cacheable -> AAD
+    if (has_noncacheable_leaf(ins)) has_fx_ = true;  // FX/MtM (incl. inside a Portfolio) -> AAD engine
     if (ins.band_upper > ins.band_lower)
-      has_band_ = true;  // soft target: compiled COLD calibrate is fine, but stream via recalibrate()
+      has_band_ = true;  // soft target: compiled COLD calibrate is fine, streams frozen-Newton (soft LS)
   }
   for (const auto& c : prob_.curves) {
     if (!c.regions.empty()) has_modular_ = true;  // custom interpolation regions

@@ -103,9 +103,30 @@ TEST(PortfolioInstrument, ButterflyCalibratesTheBellyKnot) {
   bfly.market = quote_at(bfly, truth);
   prob.instruments = {s1, s2, s10, bfly};
 
-  const auto res = cal::calibrate(prob, Eigen::VectorXd::Constant(4, 0.02), /*use_aad=*/false);
+  const auto res = cal::calibrate(prob, Eigen::VectorXd::Constant(4, 0.02));  // compiled W-cache path
   EXPECT_LT(res.rms_residual, 1e-10);
   EXPECT_LT((res.x - truth).cwiseAbs().maxCoeff(), 1e-8) << "the butterfly pins the 5y knot";
+}
+
+// The portfolio is now on the compiled W-cache path (its components register as weighted batch entries
+// that SUM into one row). So the compiled residual AND analytic Jacobian must match the templated + AAD
+// path term-for-term -- this pins the weighted-accumulation scatter.
+TEST(PortfolioInstrument, CompiledResidualAndJacobianMatchAad) {
+  const Eigen::VectorXd truth = knots();
+  cal::Instrument bfly = butterfly(2, 5, 10);
+  bfly.market = quote_at(bfly, truth);
+  cal::BundleProblem prob;
+  prob.curves = specs();
+  prob.instruments = {par_swap(1, quote_at(par_swap(1), truth)), par_swap(2, quote_at(par_swap(2), truth)),
+                      bfly, par_swap(10, quote_at(par_swap(10), truth))};
+
+  Eigen::VectorXd x(4);
+  x << 0.033, 0.039, 0.047, 0.041;  // away from the solution
+  const Eigen::VectorXd r_aad = prob.residuals<double>(x);
+  const Eigen::MatrixXd J_aad = cal::aad_jacobian(prob, x);
+  cal::CompiledBundleResidual eng(prob);  // no longer throws on the portfolio -- it is W-cacheable
+  EXPECT_LT((eng.residuals(x) - r_aad).cwiseAbs().maxCoeff(), 1e-11) << "compiled portfolio residual == AAD";
+  EXPECT_LT((eng.jacobian(x) - J_aad).cwiseAbs().maxCoeff(), 1e-7) << "compiled portfolio Jacobian == AAD";
 }
 
 // The band weight profile: floor = decay inside [lower, upper], -> 1 far outside, monotone in distance.
