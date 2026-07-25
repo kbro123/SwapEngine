@@ -85,6 +85,10 @@ class CompiledBundleResidual {
       for (std::size_t j = 0; j < r_rows_.size(); ++j)
         out_[r_rows_[j].row] += r_rows_[j].weight * v[static_cast<int>(j)];
     }
+    // FX forward OUTRIGHT F = fx_spot · DF_num(T) / DF_den(T) (the model quote; its LOG-basis residual is
+    // applied in residuals_vs). Just a DF ratio -- the two DFs were registered into W like any other.
+    for (const auto& f : fx_rows_)
+      out_[f.row] = f.fx_spot * DF[f.idx_num] / DF[f.idx_den];
     return out_;
   }
 
@@ -99,6 +103,12 @@ class CompiledBundleResidual {
     res_ = mr - q;
     for (const auto& b : band_)  // banded rows: r = w(q_model)·(q_model - q)
       res_[b.row] *= band_weight_d(mr[b.row], b.lower, b.upper, b.decay).first;
+    // FX rows: the residual is the implied-basis discrepancy (ln F_model − ln q)/T in RATE units, NOT the
+    // raw outright difference F − q. (FX rows are never banded, so this cleanly overwrites mr − q.)
+    for (const auto& f : fx_rows_) {
+      using std::log;
+      res_[f.row] = (log(mr[f.row]) - log(q[f.row])) / f.fx_time;
+    }
     return res_;
   }
 
@@ -153,6 +163,14 @@ class CompiledBundleResidual {
       gen_rate_.d_rate(DF, dr, 0);
       for (int j = 0; j < nr; ++j) G.row(r_rows_[j].row) += r_rows_[j].weight * dr.row(j);
     }
+    // FX rows: r = (ln F − ln q)/T with F = fx_spot·DF_num/DF_den. Only TWO dr/dDF entries per row:
+    //   dr/dDF_num = +1/(DF_num·T),  dr/dDF_den = −1/(DF_den·T).
+    // The -(G·diag(DF))·W matmul below then yields the constant (W_den − W_num)/T row (ln F is affine in
+    // x). FX rows are disjoint from the batch/band rows, so G starts at zero here.
+    for (const auto& f : fx_rows_) {
+      G(f.row, f.idx_num) += 1.0 / (DF[f.idx_num] * f.fx_time);
+      G(f.row, f.idx_den) += -1.0 / (DF[f.idx_den] * f.fx_time);
+    }
     // Band chain rule: r = w(q)·(q-market) => dr/dx = (w + w'·(q-market))·dq/dx. Scale each banded row's
     // dr/dDF (G) by that scalar before the W matmul (the matmul is linear, so scaling commutes).
     for (std::size_t k = 0; k < band_.size(); ++k) {
@@ -204,10 +222,20 @@ class CompiledBundleResidual {
       for (const auto& comp : ins.combination) register_at(comp.instrument, row, weight * comp.weight);
       return;
     }
-    if (ins.quote == QuoteKind::FxForward || ins.quote == QuoteKind::XccyMtmBasis)
+    if (ins.quote == QuoteKind::FxForward) {
+      // FX forward F = fx_spot·DF_num(T)/DF_den(T). ln F is AFFINE in x (ln DF = -W·x), so the residual
+      // (ln F − ln q)/T rides the W-cache: register the two DFs and remember them; dr/dDF is two entries.
+      // Only STANDALONE FX (weight 1) -- a Σ of FX log-residuals inside a Portfolio isn't this transform.
+      if (weight != 1.0)
+        throw std::invalid_argument("CompiledBundleResidual: FX-forward inside a Portfolio is not W-cacheable; use the AAD engine");
+      fx_rows_.push_back({row, cs_.reg(ins.fx_num, ins.fx_time), cs_.reg(ins.fx_den, ins.fx_time),
+                          ins.fx_spot, ins.fx_time});
+      return;
+    }
+    if (ins.quote == QuoteKind::XccyMtmBasis)
       throw std::invalid_argument(
-          "CompiledBundleResidual: FX-forward / MtM-xccy quotes (including inside a Portfolio) are not "
-          "W-cacheable (a DF ratio / a curve-dependent notional is not a single exp(-Wx)); use the AAD engine");
+          "CompiledBundleResidual: MtM-xccy quote (a curve-dependent FX-reset notional) is not yet "
+          "W-cacheable; use the AAD engine");
     if (ins.quote == QuoteKind::Rate) {
       gen_rate_.add_future(cs_, ins.forecast, ins.obs, ins.convexity);
       r_rows_.push_back({row, weight});
@@ -235,6 +263,10 @@ class CompiledBundleResidual {
   // portfolio row -- which is exactly why a portfolio of W-cacheable components stays W-cacheable.
   struct Scatter { int row; double weight; };
   std::vector<Scatter> q_rows_, r_rows_;
+  // FX-forward rows: F = fx_spot·DF[idx_num]/DF[idx_den] at time fx_time; residual (ln F − ln q)/fx_time.
+  // Affine in x (ln DF = −Wx), so it rides the W-cache with a constant Jacobian row -- no AAD needed.
+  struct Fx { int row, idx_num, idx_den; double fx_spot, fx_time; };
+  std::vector<Fx> fx_rows_;
   // Bid/offer bands: a residual row whose value + Jacobian get the w(q) post-transform (see residuals /
   // jacobian). Empty for a plain bundle, so the fast path is untouched when no instrument is banded.
   struct Band { int row; double lower, upper, decay; };

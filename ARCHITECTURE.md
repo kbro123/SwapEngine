@@ -75,8 +75,9 @@ graph LR
   and no curve-dependent notionals. `CompiledResidual` is **not** a second kernel: it wraps the single
   curve as a 1-curve bundle (`single_curve_bundle`) and runs `CompiledBundleResidual`.
 - **Hybrid tier** — `residual_engine_t<BundleProblem>` = `HybridBundleResidual`: cacheable rows on the
-  W-cache **plus** an `AadBlock` for any non-cacheable rows (FX/MtM, or a portfolio containing them), so
-  one FX trade no longer drops the whole book to AAD. The AAD block seeds only the knots those
+  W-cache **plus** an `AadBlock` for any non-cacheable rows (MtM-xccy, or a portfolio containing an FX/MtM
+  leaf), so one exotic trade no longer drops the whole book to AAD. (Standalone FX forwards are now on the
+  W-cache — see `FxForward` below — so only the MtM-xccy basis and MonotoneCubic still need the AAD tier.) The AAD block seeds only the knots those
   instruments **touch** (`AutoDiffScalar<VectorXd>` is dynamic-width, so this shrinks every gradient), and
   reuses its seed/buffers across ticks. It also holds **`BundleCurveSet`** objects (reusable `double` +
   `Dual` curves): the curve topology is fixed tick to tick, so the handles are built once and their knot
@@ -104,7 +105,14 @@ unchanged.
   components register as extra batch entries whose weighted quotes ACCUMULATE onto the portfolio's single
   row (`q_rows_/r_rows_` carry a (row, weight) pair; `register_at` recurses so nested portfolios flatten).
   So a swap butterfly stays on the compiled path and streams frozen-Newton at µs. Only a genuinely
-  non-cacheable LEAF (FX/MtM, here or nested) forces the whole bundle to the AAD tier.
+  non-cacheable LEAF (an MtM-xccy basis, here or nested) forces that instrument to the AAD tier.
+- **`FxForward`** — a standalone FX forward is **W-cacheable**. `F = fx_spot·DF_num(T)/DF_den(T)`, so the
+  residual `(ln F − ln q)/T` is AFFINE in x (`ln DF = −Wx`): `CompiledBundleResidual` registers the two
+  DFs, emits `F` in `model_rates`, applies the log-basis in `residuals_vs`, and scatters a two-entry
+  `dr/dDF` (`+1/(DF_num·T)`, `−1/(DF_den·T)`) — the `−(G·diag(DF))·W` matmul then yields the *constant*
+  `(W_den−W_num)/T` Jacobian row. So an FX-forward-only cross-currency book streams at pure W-cache µs
+  (measured: 3 FX add ~0.1µs). Pinned == AAD in `multicurrency_test.cpp`. (FX INSIDE a portfolio still
+  routes to AAD — a Σ of FX log-residuals isn't this transform.)
 - **Bid/offer band** (`band_lower`/`band_upper`/`band_decay` on any instrument) — a soft target: the
   residual becomes `w(q)·(q−market)` where `band_weight` decays from 1 outside the band to the floor
   `band_decay` inside, so a value within bid/offer is ~satisfied and the solver spends its freedom on the

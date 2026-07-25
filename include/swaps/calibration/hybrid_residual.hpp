@@ -22,12 +22,16 @@
 
 namespace swaps::calibration {
 
-// A W-cache-incompatible LEAF anywhere in an instrument (FX/MtM, incl. nested inside a Portfolio).
+// True iff this instrument must go to the AAD block rather than the W-cache. A STANDALONE FX forward is
+// now W-cacheable (its (ln F − ln q)/T residual is affine in x -- CompiledBundleResidual handles it), so
+// only XccyMtmBasis (a curve-dependent FX-reset notional) remains non-cacheable. FX INSIDE a Portfolio is
+// still excluded: a Σ of FX log-residuals isn't the compiled transform, so the whole portfolio goes AAD.
 inline bool instrument_is_noncacheable(const Instrument& ins) {
-  if (ins.quote == QuoteKind::FxForward || ins.quote == QuoteKind::XccyMtmBasis) return true;
+  if (ins.quote == QuoteKind::XccyMtmBasis) return true;
   if (ins.quote == QuoteKind::Portfolio)
     for (const auto& c : ins.combination)
-      if (instrument_is_noncacheable(c.instrument)) return true;
+      if (c.instrument.quote == QuoteKind::FxForward || instrument_is_noncacheable(c.instrument))
+        return true;
   return false;
 }
 
