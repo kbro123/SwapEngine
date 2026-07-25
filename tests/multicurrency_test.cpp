@@ -23,6 +23,7 @@
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
+#include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/regularize.hpp"
@@ -565,6 +566,22 @@ TEST(XccyFx, RecoversAndFxForwardsReprice) {
             << " max|F_model - F_market|=" << worst_fx << "\n";
   EXPECT_LT(err, 1e-6) << "curve recovers from FX forwards + MtM swaps";
   EXPECT_LT(worst_fx, 1e-10) << "every FX forward point reprices off the calibrated curve";
+}
+
+// The HYBRID engine on a genuinely mixed bundle: cacheable swaps on the W-cache + the FX/MtM rows on a
+// width-reduced AAD block. It must (a) not throw (the old compiled engine did), (b) match the templated
+// residual and the full AAD Jacobian -- which also proves the touched-knot set captures every non-zero
+// column of the FX rows -- and (c) recover the curve via the default use_aad path.
+TEST(XccyFx, HybridResidualMatchesAadAndRecovers) {
+  const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
+  cal::HybridBundleResidual hr(b.prob);  // FX/MtM rows -> AAD block, cacheable rows -> W-cache
+  const double dr = (hr.residuals(b.x_true) - b.prob.residuals<double>(b.x_true)).cwiseAbs().maxCoeff();
+  const double dj = (hr.jacobian(b.x_true) - cal::aad_jacobian(b.prob, b.x_true)).cwiseAbs().maxCoeff();
+  std::cout << "  [mc-fx-hybrid] |residual - templated|=" << dr << " |Jacobian - AAD|=" << dj << "\n";
+  EXPECT_LT(dr, 1e-11) << "hybrid residual (W-cache + AAD block) matches the templated kernel";
+  EXPECT_LT(dj, 1e-8) << "hybrid Jacobian matches AAD (incl. zeros on untouched knots)";
+  const auto sol = cal::calibrate(b.prob, b.x0);  // use_aad=true -> the hybrid engine
+  EXPECT_LT((sol.x - b.x_true).cwiseAbs().maxCoeff(), 1e-6) << "hybrid solve recovers the curve";
 }
 
 // EUR-in-USD genuinely depends on BOTH ESTR (spread base) and SOFR (FX-forward denominator / funding leg).

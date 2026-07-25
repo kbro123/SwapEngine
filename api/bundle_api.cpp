@@ -376,11 +376,13 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
   if (reg.on())
     result_ = cal::calibrate(cal::smoothed(prob_, reg.lambda, reg.curves), x0, /*use_aad=*/true);
-  else if (!has_fx_ && !has_nonlinear_)
-    result_ = cal::calibrate(prob_, x0, /*use_aad=*/true);  // compiled W-cache (any LINEAR region layout)
+  else if (!has_nonlinear_)
+    // HYBRID W-cache: cacheable rows on the fast path, any FX/MtM (or portfolio-with-FX) rows on a
+    // width-reduced AAD block -- so one FX trade no longer drops the whole book to AAD.
+    result_ = cal::calibrate(prob_, x0, /*use_aad=*/true);
   else
-    // FX/MtM or a non-linear region scheme (MonotoneCubic) -> not W-cacheable; a zero-reg smoothed
-    // wrapper routes the solve through the generic AAD ANALYTIC engine (exact Jacobian, no bumping).
+    // A non-linear region scheme (MonotoneCubic) has NO constant W at all, so the whole bundle prices on
+    // the generic AAD engine (a zero-reg smoothed wrapper routes there).
     result_ = cal::calibrate(cal::smoothed(prob_, 0.0, {}), x0, /*use_aad=*/true);
   x_ = result_.x;
   return result_;

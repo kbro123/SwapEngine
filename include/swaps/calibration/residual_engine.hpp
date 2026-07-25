@@ -8,8 +8,10 @@
 //   model_rates(x) = the model-implied market quotes at x (= residuals(x) + market)
 //
 // Three implementations, selected at compile time by residual_engine_t<Problem>:
-//   * BundleProblem -> CompiledBundleResidual: the analytic W_all fast path (DF = exp(-Wx) once, cheap
-//     per-type transforms, analytic Jacobian -- no AAD in the hot loop). This is THE compiled engine.
+//   * BundleProblem -> HybridBundleResidual: the analytic W_all fast path (DF = exp(-Wx) once, cheap
+//     per-type transforms, analytic Jacobian -- no AAD in the hot loop) for the cacheable rows, PLUS a
+//     width-reduced AAD block for any non-cacheable rows (FX/MtM). When nothing is non-cacheable it is a
+//     zero-overhead delegate to a single CompiledBundleResidual -- the fast path is unchanged.
 //   * CalibrationProblem -> CompiledResidual: NOT a second kernel -- a thin delegate that wraps the
 //     single curve as a 1-curve bundle (single_curve_bundle) and runs the exact same CompiledBundleResidual.
 //     Kept only so single-curve callers/tests get the simpler CalibrationProblem interface.
@@ -25,6 +27,7 @@
 
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/compiled_residual.hpp"
+#include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
 
 namespace swaps::calibration {
@@ -66,7 +69,9 @@ struct residual_engine<CalibrationProblem> {
 };
 template <>
 struct residual_engine<BundleProblem> {
-  using type = CompiledBundleResidual;
+  // Hybrid: W-cache for the cacheable rows + a width-reduced AAD block for any non-cacheable ones
+  // (FX/MtM). A zero-overhead delegate to CompiledBundleResidual when nothing is non-cacheable.
+  using type = HybridBundleResidual;
 };
 template <class Problem>
 using residual_engine_t = typename residual_engine<Problem>::type;

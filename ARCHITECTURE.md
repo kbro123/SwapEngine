@@ -74,9 +74,14 @@ graph LR
 - **Compiled / W-cache tier** — the microsecond fast path. Requires a linear-map curve (`is_linear_map()`)
   and no curve-dependent notionals. `CompiledResidual` is **not** a second kernel: it wraps the single
   curve as a 1-curve bundle (`single_curve_bundle`) and runs `CompiledBundleResidual`.
-- **AAD tier** — the generic fallback for value-dependent schemes (`MonotoneCubic`), cross-currency
-  quotes, the staged `BundleBlockProblem`, and test-only problems. Correct and generic; a refresh costs
-  one AAD sweep.
+- **Hybrid tier** — `residual_engine_t<BundleProblem>` = `HybridBundleResidual`: cacheable rows on the
+  W-cache **plus** an `AadBlock` for any non-cacheable rows (FX/MtM, or a portfolio containing them), so
+  one FX trade no longer drops the whole book to AAD. The AAD block seeds only the knots those
+  instruments **touch** (`AutoDiffScalar<VectorXd>` is dynamic-width, so this shrinks every gradient), and
+  reuses its seed/buffers across ticks. When nothing is non-cacheable it is a zero-overhead delegate to
+  `CompiledBundleResidual`. Pinned == full-AAD in `multicurrency_test.cpp`.
+- **AAD tier** — the fully-generic fallback for a bundle with **no `W` at all** — a value-dependent
+  scheme (`MonotoneCubic`) — plus the staged `BundleBlockProblem` and test-only problems.
 
 `WarmCalibrator` and `StreamingCalibrator` are written against the interface, so they drive either tier
 unchanged.
