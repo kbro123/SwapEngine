@@ -90,8 +90,13 @@ unchanged.
   residual becomes `w(q)·(q−market)` where `band_weight` decays from 1 outside the band to the floor
   `band_decay` inside, so a value within bid/offer is ~satisfied and the solver spends its freedom on the
   hard targets. `w(q)` is a per-row scalar transform (value + analytic derivative in `band_weight_d`), so
-  banded rows **stay on the compiled W-cache path** — no loss of µs streaming. The compiled band Jacobian
-  is pinned against AAD in `portfolio_instrument_test.cpp`.
+  banded rows **stay on the compiled W-cache path for cold calibrate AND µs streaming**. The streamer is
+  Gauss-Newton, so it solves the soft least-squares directly: `StreamingCalibrator` drives the banded
+  residual `residuals_vs(x, q)` against the live market `q` (not an exact reprice `model_rates−q`), with a
+  consistent `jacobian_vs(x, q)`; at the soft minimum `dx = J⁺·r → 0` even though `r ≠ 0`. Measured: a
+  banded tick is ~16 µs (same as plain) and equals a full recalibrate to machine precision. The compiled
+  band Jacobian is pinned against AAD, and streaming-==-recalibrate is pinned, in
+  `portfolio_instrument_test.cpp`.
 
 ## A calibration, end to end
 

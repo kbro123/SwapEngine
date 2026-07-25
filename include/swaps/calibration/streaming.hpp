@@ -86,7 +86,10 @@ class StreamingCalibrator {
     Eigen::VectorXd& x = x_;  // reused scratch: the frozen-Newton loop below allocates nothing
     int frozen = 0;
     for (;;) {
-      r_.noalias() = engine_.model_rates(x) - q_new;  // engine reprice writes into its own scratch
+      // The residual is engine-defined against the live market q_new: model_rates - q_new for hard
+      // instruments, w(q)·(model - q_new) for soft (banded) ones. Driving THIS (not the raw reprice) is
+      // what makes frozen-Newton solve the soft least-squares -- dx = J⁺·r -> 0 at the soft minimum.
+      r_ = engine_.residuals_vs(x, q_new);
       dx_.noalias() = M_ * r_;
       if (RtR_.size()) dx_.noalias() += B_ * x;  // curvature pull toward the smoothest market-consistent curve
       x.noalias() -= dx_;
@@ -134,7 +137,7 @@ class StreamingCalibrator {
     Eigen::VectorXd x = x_anchor_ + M_ * d;
     int frozen = 0;
     for (;;) {
-      const Eigen::VectorXd r = engine_.model_rates(x) - q_new;
+      const Eigen::VectorXd r = engine_.residuals_vs(x, q_new);
       const Eigen::VectorXd dx = M_ * r;
       x.noalias() -= dx;
       ++t.newton_steps;
@@ -158,7 +161,7 @@ class StreamingCalibrator {
   void set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     x_anchor_ = x;
     q_anchor_ = q;
-    const Eigen::MatrixXd J = engine_.jacobian(x);
+    const Eigen::MatrixXd J = engine_.jacobian_vs(x, q);  // band term consistent with residuals_vs(·,q)
     if (RtR_.size()) {
       const Eigen::MatrixXd A = J.transpose() * J + RtR_;  // SPD (full rank) thanks to the regulariser
       const Eigen::MatrixXd Ainv = A.ldlt().solve(Eigen::MatrixXd::Identity(A.rows(), A.rows()));

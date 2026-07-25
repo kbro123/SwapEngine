@@ -86,10 +86,16 @@ class CompiledBundleResidual {
     return out_;
   }
 
-  const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const {
+  const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const { return residuals_vs(x, market_); }
+
+  // Residual against an ARBITRARY market q -- the live streaming feed, not the stored anchor market. With
+  // no bands this is model_rates(x) - q; with a band it is the SOFT residual w(q_model)·(q_model - q).
+  // This is what lets the frozen-Newton streamer solve the banded LEAST-SQUARES on the fast path (drive
+  // this residual, not model_rates-q): at the soft minimum dx = J⁺·r -> 0 even though r != 0.
+  const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& mr = model_rates(x);  // model_rates fills out_; res_ (a distinct member) holds r
-    res_ = mr - market_;
-    for (const auto& b : band_)  // banded rows: r = w(q)·(q - market), q = model rate
+    res_ = mr - q;
+    for (const auto& b : band_)  // banded rows: r = w(q_model)·(q_model - q)
       res_[b.row] *= band_weight_d(mr[b.row], b.lower, b.upper, b.decay).first;
     return res_;
   }
@@ -98,7 +104,11 @@ class CompiledBundleResidual {
   // pricing sensitivity scattered into the global DF columns; the W_all matmul maps DF-space back to
   // the stacked knot space. Block structure (an instrument touches only its role curves' knots) falls
   // out automatically because those are the only nonzero W_all columns for its DF entries.
-  Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
+  Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const { return jacobian_vs(x, market_); }
+
+  // Jacobian of residuals_vs(x, q): the band chain-rule term (q_model - q) uses the SAME market q as the
+  // residual, so a frozen-Newton streamer's M is consistent with the residual it drives.
+  Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& DF = df_at(x);
     // Capture the model quotes for banded rows BEFORE the batch scratch below is overwritten.
     std::vector<double> qb;
@@ -145,7 +155,7 @@ class CompiledBundleResidual {
     for (std::size_t k = 0; k < band_.size(); ++k) {
       const Band& b = band_[k];
       const std::pair<double, double> wd = band_weight_d(qb[k], b.lower, b.upper, b.decay);
-      G.row(b.row) *= (wd.first + wd.second * (qb[k] - market_[b.row]));
+      G.row(b.row) *= (wd.first + wd.second * (qb[k] - q[b.row]));  // (q_model - q), q = the live market
     }
     return -((G * DF.asDiagonal()) * cs_.W());
   }

@@ -18,6 +18,7 @@
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
+#include "swaps/calibration/streaming.hpp"
 
 namespace cal = swaps::calibration;
 namespace px = swaps::pricing;
@@ -153,6 +154,37 @@ TEST(BandResidual, CompiledMatchesAadWithBand) {
 
   EXPECT_LT((r_c - r_aad).cwiseAbs().maxCoeff(), 1e-11) << "compiled banded residual == AAD";
   EXPECT_LT((J_c - J_aad).cwiseAbs().maxCoeff(), 1e-7) << "compiled banded Jacobian == AAD";
+}
+
+// A banded bundle STREAMS on the frozen-Newton fast path (residuals_vs drives the soft residual, not an
+// exact reprice), and its per-tick solution equals a full cold recalibrate at the same market — i.e. the
+// streamer solves the soft LEAST-SQUARES, not a reprice. This is what keeps bands at µs, not ms.
+TEST(BandResidual, FrozenNewtonStreamsTheSoftLeastSquares) {
+  const Eigen::VectorXd truth = knots();
+  const double q5 = quote_at(par_swap(5), truth);
+  cal::Instrument s5 = par_swap(5, q5);
+  s5.band_lower = q5 - 0.0010;
+  s5.band_upper = q5 + 0.0010;
+  s5.band_decay = 0.1;
+  cal::BundleProblem prob;  // 4 instruments for 4 knots -> determined (unique solution to compare)
+  prob.curves = specs();
+  prob.instruments = {par_swap(1, quote_at(par_swap(1), truth)), par_swap(2, quote_at(par_swap(2), truth)),
+                      s5, par_swap(10, quote_at(par_swap(10), truth))};
+
+  const Eigen::VectorXd x0 = cal::calibrate(prob, Eigen::VectorXd::Constant(4, 0.02)).x;
+  const Eigen::VectorXd q_anchor = prob.market();
+  cal::StreamingCalibrator<cal::BundleProblem> sc(prob, x0, q_anchor, {});
+
+  Eigen::VectorXd q_new = q_anchor;  // a market move
+  q_new[0] += 0.0005;
+  q_new[3] -= 0.0004;
+  sc.update(q_new);
+
+  cal::BundleProblem prob2 = prob;  // reference: cold recalibrate at the new market
+  for (int i = 0; i < prob2.n_residuals(); ++i) prob2.instruments[i].market = q_new[i];
+  const Eigen::VectorXd x_ref = cal::calibrate(prob2, x0).x;
+  EXPECT_LT((sc.current() - x_ref).cwiseAbs().maxCoeff(), 1e-9)
+      << "frozen-Newton streaming == cold recalibrate for a banded (soft) bundle";
 }
 
 // Behaviourally: inside the band the residual is down-weighted (softer) vs the same miss unbanded.

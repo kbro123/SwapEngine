@@ -25,6 +25,13 @@ class CompiledResidual {
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const { return impl_.model_rates(x); }
   const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const { return impl_.residuals(x); }
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const { return impl_.jacobian(x); }
+  // Streaming against an arbitrary live market q (banded soft residual + consistent Jacobian).
+  const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
+    return impl_.residuals_vs(x, q);
+  }
+  Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
+    return impl_.jacobian_vs(x, q);
+  }
 
  private:
   CompiledBundleResidual impl_;

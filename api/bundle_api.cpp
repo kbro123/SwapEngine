@@ -354,6 +354,8 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
       has_fx_ = true;
     if (ins.quote == cal::QuoteKind::Portfolio)
       has_nonlinear_ = true;  // a weighted sum of transformed component quotes is not W-cacheable -> AAD
+    if (ins.band_upper > ins.band_lower)
+      has_band_ = true;  // soft target: compiled COLD calibrate is fine, but stream via recalibrate()
   }
   for (const auto& c : prob_.curves) {
     if (!c.regions.empty()) has_modular_ = true;  // custom interpolation regions
@@ -429,12 +431,16 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
 }
 
 void BundleSession::start_streaming(const RegSpec& reg) {
-  if (has_fx_ || has_nonlinear_)
+  if (needs_recalibrate())
     throw std::runtime_error(
-        "microsecond streaming requires a W-cacheable bundle (no FX/MtM, no non-linear region schemes "
-        "like MonotoneCubic); use recalibrate() per tick for those");
+        "exact frozen-Newton streaming requires a W-cacheable, hard-target bundle (no FX/MtM, no "
+        "non-linear region schemes, no Portfolio, no bid/offer band); use recalibrate() per tick for "
+        "those -- a band is a SOFT target, so exact reprice would ignore it");
   cal::CompiledBundleResidual engine(prob_);
-  const Eigen::VectorXd q0 = engine.model_rates(x_);  // anchor market = what the current curve reprices
+  // Anchor at the market MIDS (prob_.market()). For a hard bundle these equal the curve's reprice; for a
+  // banded (soft) bundle the curve sits off-market inside the bands, and the streaming feed IS the mids,
+  // so anchoring at the mids keeps the drift ~0 at the first real tick.
+  const Eigen::VectorXd q0 = prob_.market();
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
   if (reg.on()) opt.regularizer = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
   stream_ = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(prob_, x_, q0, opt);

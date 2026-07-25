@@ -87,6 +87,14 @@ class BundleSession {
   // can't ride the W-cache — calibration/streaming route through the AAD engine. LINEAR custom regions
   // (Flat/Linear/NaturalCubic/Hermite) are W-cacheable and stream at microseconds like the shipped curve.
   bool has_nonlinear() const { return has_nonlinear_; }
+  // A bid/offer BAND makes the calibration a soft least-squares fit (banded instruments sit off-market
+  // within their band). This still streams on the fast frozen-Newton path: the streamer drives the
+  // BANDED residual (residuals_vs), so it solves the soft least-squares, not an exact reprice. So a band
+  // does NOT force recalibrate(). This flag is informational (e.g. to label a soft-calibrated bundle).
+  bool has_band() const { return has_band_; }
+  // True when the bundle cannot use the frozen-Newton streaming path (start_streaming/update) at all and
+  // must recalibrate() each tick: FX/MtM, a non-linear region scheme, or a Portfolio (a band does NOT).
+  bool needs_recalibrate() const { return has_fx_ || has_nonlinear_; }
 
   // Query the built curves at the current x on a shared time grid.
   std::vector<CurveSample> sample(const std::vector<double>& times) const;
@@ -115,6 +123,7 @@ class BundleSession {
   bool has_fx_ = false;
   bool has_modular_ = false;
   bool has_nonlinear_ = false;
+  bool has_band_ = false;
   std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;
 };
 
