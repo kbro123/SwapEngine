@@ -232,10 +232,21 @@ class CompiledBundleResidual {
                           ins.fx_spot, ins.fx_time});
       return;
     }
-    if (ins.quote == QuoteKind::XccyMtmBasis)
-      throw std::invalid_argument(
-          "CompiledBundleResidual: MtM-xccy quote (a curve-dependent FX-reset notional) is not yet "
-          "W-cacheable; use the AAD engine");
+    if (ins.quote == QuoteKind::XccyMtmBasis) {
+      // A PAR funding leg makes the FX-reset-notional term identically zero (see mtm_funding_leg_is_par),
+      // so the MtM basis quote (pv_self − pv_fx)/ann + mtm/(fx_spot·ann) collapses to the ParSpread
+      // quotient (pv_self − pv_fx)/ann = (+pv_fwd − pv_bench)/annuity -- exactly the pos/neg/fixed batches
+      // (note the sign is the ParSpread's mirror: pos = the SELF leg, neg = the FOREIGN-index leg).
+      if (weight != 1.0 || !mtm_funding_leg_is_par(ins))
+        throw std::invalid_argument(
+            "CompiledBundleResidual: MtM-xccy with a non-par funding leg (a genuine curve-dependent "
+            "FX-reset notional) is not W-cacheable; use the AAD engine");
+      gen_pos_.add(cs_, ins.fwd.forecast, ins.fwd.discount, ins.fwd.coupons);         // + pv_self
+      gen_neg_.add(cs_, ins.bench.forecast, ins.bench.discount, ins.bench.coupons);   // − pv_fx
+      gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);                     // annuity
+      q_rows_.push_back({row, weight});
+      return;
+    }
     if (ins.quote == QuoteKind::Rate) {
       gen_rate_.add_future(cs_, ins.forecast, ins.obs, ins.convexity);
       r_rows_.push_back({row, weight});

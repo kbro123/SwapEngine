@@ -538,25 +538,27 @@ TEST(MultiCcyMtm, MtmBasisEqualsConstantNotionalBasis) {
 
 // The compiled W-cache engine must REJECT the cross-currency quotes (a DF ratio / a curve-dependent
 // notional is not exp(-Wx)); they ride the AAD/templated path.
-// A STANDALONE FX forward is now W-cacheable: its residual (ln F − ln q)/T is affine in x (ln DF = −Wx),
-// so CompiledBundleResidual prices it analytically (register the two DFs; dr/dDF is two entries). MtM-xccy
-// (a curve-dependent FX-reset notional) is NOT yet W-cacheable, so the full FX+MtM bundle still throws;
-// the same bundle with the MtM rows removed compiles and matches AAD to machine precision.
-TEST(XccyFx, CompiledEngineTakesFxRejectsMtm) {
+// Both cross-currency quotes are now W-cacheable in standard form: a STANDALONE FX forward (affine
+// (ln F − ln q)/T residual) and a MtM-xccy basis with a PAR funding leg (its FX-reset-notional term is
+// identically zero, so it collapses to the ParSpread quotient). So the WHOLE FX+MtM oracle bundle compiles
+// and matches AAD to machine precision. A NON-par funding leg keeps a genuine curve-dependent notional and
+// must still reject (fall back to AAD).
+TEST(XccyFx, CompiledEngineTakesFxAndParMtm) {
   const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
-  EXPECT_THROW(cal::CompiledBundleResidual cr(b.prob), std::invalid_argument)
-      << "MtM-xccy (a curve-dependent FX-reset notional) must not silently reach the W-cache";
+  cal::CompiledBundleResidual cr(b.prob);  // FX + par-MtM -> fully W-cacheable (no throw)
+  const double dr = (cr.residuals(b.x_true) - b.prob.residuals<double>(b.x_true)).cwiseAbs().maxCoeff();
+  const double dj = (cr.jacobian(b.x_true) - cal::aad_jacobian(b.prob, b.x_true)).cwiseAbs().maxCoeff();
+  std::cout << "  [mc-fx-compiled] full FX+MtM on the W-cache: |resid-templated|=" << dr
+            << " |Jac-AAD|=" << dj << "\n";
+  EXPECT_LT(dr, 1e-11) << "compiled FX + par-MtM residual matches the templated kernel";
+  EXPECT_LT(dj, 1e-8) << "compiled FX + par-MtM Jacobian matches AAD";
 
-  cal::BundleProblem fx = b.prob;  // strip the MtM rows -> a pure FX + linear bundle, now W-cacheable
-  fx.instruments.clear();
-  for (const auto& ins : b.prob.instruments)
-    if (ins.quote != cal::QuoteKind::XccyMtmBasis) fx.instruments.push_back(ins);
-  cal::CompiledBundleResidual cr(fx);  // must NOT throw now -- FX rides the W-cache
-  const double dr = (cr.residuals(b.x_true) - fx.residuals<double>(b.x_true)).cwiseAbs().maxCoeff();
-  const double dj = (cr.jacobian(b.x_true) - cal::aad_jacobian(fx, b.x_true)).cwiseAbs().maxCoeff();
-  std::cout << "  [mc-fx-compiled] FX on the W-cache: |resid-templated|=" << dr << " |Jac-AAD|=" << dj << "\n";
-  EXPECT_LT(dr, 1e-11) << "compiled FX residual matches the templated kernel";
-  EXPECT_LT(dj, 1e-8) << "compiled FX Jacobian matches AAD (the analytic (W_den−W_num)/T row)";
+  // Break the par funding leg (make discount != forecast) -> a genuine curve-dependent notional -> reject.
+  cal::BundleProblem np = b.prob;
+  for (auto& ins : np.instruments)
+    if (ins.quote == cal::QuoteKind::XccyMtmBasis) ins.mtm.discount = b.EURUSD;  // dc != fc (was SOFR)
+  EXPECT_THROW(cal::CompiledBundleResidual cr2(np), std::invalid_argument)
+      << "a non-par MtM funding leg (curve-dependent FX-reset notional) must not reach the W-cache";
 }
 
 // Build the curve from FX forwards + MtM swaps, and confirm (a) the curve recovers on the AAD path, and
