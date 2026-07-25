@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "swaps/ad/dual.hpp"               // ad::Dual, for the MtM funding-term numerical guard
 #include "swaps/calibration/problem.hpp"  // the generic FloatLeg/FixedLeg/Instrument model (design §3)
 #include "swaps/curve/curve_module.hpp"   // runtime ModularCurve for user-defined interpolation regions
 #include "swaps/pricing/cashflows.hpp"
@@ -122,6 +123,48 @@ class BundleCurveSet {
   std::vector<std::unique_ptr<CurveHandle<Scalar>>> handles_;
   std::vector<Eigen::Matrix<Scalar, Eigen::Dynamic, 1>> scratch_;  // reused per-curve knot buffers
 };
+
+// Numerically decide whether a MtM-xccy basis's FX-reset FUNDING term is NEGLIGIBLE, so the quote collapses
+// EXACTLY to the ParSpread quotient (pv_self − pv_fx)/ann and becomes W-cacheable. It prices the DROPPED
+// term mtm/(fx_spot·ann) -- value AND gradient -- through the FULL templated kernel on the REAL rolled-out
+// cashflows, at two distinct reference curves, and returns true only if both are below `tol`.
+//
+// This is a DATA-DRIVEN guard, not a structural field-match: it is robust to payment lags (pay != period
+// end), averaging convexity (fixing_step > 0), non-native / CSA funding-leg discounting (discount !=
+// forecast) and any day-count subtlety. Any of those makes the term nonzero, so the instrument correctly
+// falls back to the AAD engine instead of silently dropping a real cashflow. Two reference curves (with
+// distinct, non-flat DFs) guard against a term that is accidentally ~0 at a single point -- a par leg's
+// bracket is an algebraic zero (DF(e)·(DF(s)/DF(e)−1) + DF(e) − DF(s)), zero at every x with zero gradient.
+inline bool mtm_funding_term_negligible(const Instrument& ins, const std::vector<BundleCurveSpec>& curves,
+                                        double tol = 1e-10) {
+  if (ins.quote != QuoteKind::XccyMtmBasis || ins.mtm.coupons.empty()) return false;
+  if (ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0)
+    return false;  // an incomplete MtM leg cannot be verified -> price it on the AAD engine
+  int nk = 0;
+  std::vector<int> off(curves.size());
+  for (std::size_t c = 0; c < curves.size(); ++c) { off[c] = nk; nk += curves[c].n_knots(); }
+  auto term_at = [&](double base, double slope) -> ad::Dual {
+    Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd(nk);
+    for (int k = 0; k < nk; ++k) {
+      xd[k].value() = base + slope * k;
+      xd[k].derivatives() = Eigen::VectorXd::Unit(nk, k);
+    }
+    const auto C = build_bundle_curves<ad::Dual>(curves, [&](int c, int i) { return xd[off[c] + i]; });
+    const auto cv = [&C](int i) -> const CurveHandle<ad::Dual>& { return *C[i]; };
+    const ad::Dual ann = pricing::annuity<ad::Dual>(ins.fixed.coupons, cv(ins.fixed.discount));
+    const ad::Dual mtm = pricing::xccy_mtm_leg_pv<ad::Dual>(
+        ins.mtm.coupons, ins.mtm.fx_spot, cv(ins.mtm.forecast), cv(ins.mtm.discount),
+        cv(ins.mtm.reset_num), cv(ins.mtm.reset_den));
+    return mtm / (ins.mtm.fx_spot * ann);
+  };
+  const double refs[2][2] = {{0.015, 0.0007}, {0.035, -0.0003}};  // two distinct non-flat curves
+  for (const auto& r : refs) {
+    const ad::Dual t = term_at(r[0], r[1]);
+    if (std::abs(t.value()) > tol) return false;
+    if (t.derivatives().size() && t.derivatives().cwiseAbs().maxCoeff() > tol) return false;
+  }
+  return true;
+}
 
 class BundleProblem {
  public:

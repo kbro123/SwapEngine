@@ -208,7 +208,7 @@ class CompiledBundleResidual {
       // scalar post-transform, so the row stays on the W-cache path. Captured here, applied below.
       if (ins.band_upper > ins.band_lower)
         band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
-      register_at(ins, row, 1.0);
+      register_at(ins, row, 1.0, p.curves);
     }
   }
 
@@ -216,10 +216,10 @@ class CompiledBundleResidual {
   // recurses -- each component registers onto the SAME row with the product of weights -- so a butterfly
   // of par swaps becomes three weighted batch entries summed into one row, fully on the W-cache path.
   // Only a genuinely non-W-cacheable LEAF (FX/MtM, here or nested in a portfolio) forces the AAD engine.
-  void register_at(const Instrument& ins, int row, double weight) {
+  void register_at(const Instrument& ins, int row, double weight, const std::vector<BundleCurveSpec>& curves) {
     static const std::vector<pricing::FloatCoupon> no_leg;
     if (ins.quote == QuoteKind::Portfolio) {
-      for (const auto& comp : ins.combination) register_at(comp.instrument, row, weight * comp.weight);
+      for (const auto& comp : ins.combination) register_at(comp.instrument, row, weight * comp.weight, curves);
       return;
     }
     if (ins.quote == QuoteKind::FxForward) {
@@ -233,14 +233,16 @@ class CompiledBundleResidual {
       return;
     }
     if (ins.quote == QuoteKind::XccyMtmBasis) {
-      // A PAR funding leg makes the FX-reset-notional term identically zero (see mtm_funding_leg_is_par),
-      // so the MtM basis quote (pv_self − pv_fx)/ann + mtm/(fx_spot·ann) collapses to the ParSpread
-      // quotient (pv_self − pv_fx)/ann = (+pv_fwd − pv_bench)/annuity -- exactly the pos/neg/fixed batches
-      // (note the sign is the ParSpread's mirror: pos = the SELF leg, neg = the FOREIGN-index leg).
-      if (weight != 1.0 || !mtm_funding_leg_is_par(ins))
+      // The FX-reset-notional term is NUMERICALLY negligible (mtm_funding_term_negligible prices the real
+      // rolled-out funding cashflows -- value AND gradient -- and confirms it), so the MtM basis quote
+      // (pv_self − pv_fx)/ann + mtm/(fx_spot·ann) collapses to the ParSpread quotient (pv_self − pv_fx)/ann
+      // = (+pv_fwd − pv_bench)/annuity -- exactly the pos/neg/fixed batches (sign is the ParSpread's mirror:
+      // pos = the SELF leg, neg = the FOREIGN-index leg). A payment lag, averaging convexity or non-native
+      // (CSA) funding discount makes the term nonzero -> this rejects and the instrument uses the AAD engine.
+      if (weight != 1.0 || !mtm_funding_term_negligible(ins, curves))
         throw std::invalid_argument(
-            "CompiledBundleResidual: MtM-xccy with a non-par funding leg (a genuine curve-dependent "
-            "FX-reset notional) is not W-cacheable; use the AAD engine");
+            "CompiledBundleResidual: MtM-xccy with a non-negligible FX-reset funding term (payment lag / "
+            "averaging convexity / non-native CSA discounting) is not W-cacheable; use the AAD engine");
       gen_pos_.add(cs_, ins.fwd.forecast, ins.fwd.discount, ins.fwd.coupons);         // + pv_self
       gen_neg_.add(cs_, ins.bench.forecast, ins.bench.discount, ins.bench.coupons);   // − pv_fx
       gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);                     // annuity

@@ -119,10 +119,15 @@ unchanged.
   funding (mtm) leg value is `Σ N_i·[float_coupon_pv(c_i) + (DF_dc(e_i)−DF_dc(s_i))]`; for a par leg
   (`discount==forecast`, plain OIS coupons paying at period end) each bracket is IDENTICALLY zero
   (`DF(e)·(DF(s)/DF(e)−1) + DF(e) − DF(s) = 0`, value AND derivative), so the FX-reset-notional term
-  vanishes and the quote collapses to the ParSpread quotient `(pv_self − pv_fx)/ann`. `register_at`
-  reduces it (pos = self leg, neg = foreign-index leg, + annuity) when `mtm_funding_leg_is_par(ins)`; a
-  NON-par funding leg keeps a genuine curve-dependent notional and throws → AAD. Measured: 8 MtM add
-  ~1.4µs on the W-cache (was ~52µs on the AAD block). Pinned == AAD in `multicurrency_test.cpp`.
+  vanishes and the quote collapses to the ParSpread quotient `(pv_self − pv_fx)/ann`. The reduction is
+  guarded by a **numerical** check `mtm_funding_term_negligible(ins, curves)` (bundle_problem.hpp): at
+  construction it prices the DROPPED funding term `mtm/(fx_spot·ann)` — value AND gradient — through the
+  full templated kernel on the REAL rolled-out cashflows, at two reference curves, and only reduces if
+  both are below tol. This is DATA-DRIVEN, not a structural field-match, so a payment lag, averaging
+  convexity (`fixing_step>0`), a funding spread or non-native/CSA funding-leg discounting all make the term
+  nonzero → the instrument correctly falls back to the AAD engine instead of silently dropping a real
+  cashflow. Measured: 8 par MtM add ~1.4µs on the W-cache (was ~52µs on the AAD block). Pinned == AAD, and
+  the four practical deviations pinned to reject, in `multicurrency_test.cpp`.
 - **Bid/offer band** (`band_lower`/`band_upper`/`band_decay` on any instrument) — a soft target: the
   residual becomes `w(q)·(q−market)` where `band_weight` decays from 1 outside the band to the floor
   `band_decay` inside, so a value within bid/offer is ~satisfied and the solver spends its freedom on the

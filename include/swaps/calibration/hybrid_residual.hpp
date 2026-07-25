@@ -27,12 +27,15 @@ namespace swaps::calibration {
 // MtM-xccy basis with a PAR funding leg (its FX-reset-notional term is identically zero, so it collapses to
 // the ParSpread quotient). Only a non-par MtM funding leg -- a genuine curve-dependent notional -- still
 // needs AAD. FX/MtM INSIDE a Portfolio are excluded too (the compiled transforms don't compose in a Σ).
-inline bool instrument_is_noncacheable(const Instrument& ins) {
-  if (ins.quote == QuoteKind::XccyMtmBasis) return !mtm_funding_leg_is_par(ins);
+inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<BundleCurveSpec>& curves) {
+  // A MtM basis is cacheable only if its FX-reset funding term is NUMERICALLY negligible on the real
+  // rolled-out cashflows (mtm_funding_term_negligible prices it) -- robust to lags/convexity/CSA, not a
+  // structural pattern-match.
+  if (ins.quote == QuoteKind::XccyMtmBasis) return !mtm_funding_term_negligible(ins, curves);
   if (ins.quote == QuoteKind::Portfolio)
     for (const auto& c : ins.combination)
       if (c.instrument.quote == QuoteKind::FxForward || c.instrument.quote == QuoteKind::XccyMtmBasis ||
-          instrument_is_noncacheable(c.instrument))
+          instrument_is_noncacheable(c.instrument, curves))
         return true;
   return false;
 }
@@ -46,7 +49,7 @@ class HybridBundleResidual {
     std::vector<Instrument> nc;
     std::vector<int> nc_rows;
     for (int r = 0; r < n_res_; ++r)
-      if (instrument_is_noncacheable(p.instruments[r])) { nc.push_back(p.instruments[r]); nc_rows.push_back(r); }
+      if (instrument_is_noncacheable(p.instruments[r], p.curves)) { nc.push_back(p.instruments[r]); nc_rows.push_back(r); }
     nc_.init(p.curves, std::move(nc), std::move(nc_rows), p.n_knots());
   }
 
@@ -107,7 +110,7 @@ class HybridBundleResidual {
     BundleProblem c;
     c.curves = p.curves;
     for (int r = 0; r < static_cast<int>(p.instruments.size()); ++r)
-      if (!instrument_is_noncacheable(p.instruments[r])) {
+      if (!instrument_is_noncacheable(p.instruments[r], p.curves)) {
         c.instruments.push_back(p.instruments[r]);
         cache_rows_.push_back(r);
       }

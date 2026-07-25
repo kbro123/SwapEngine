@@ -264,25 +264,6 @@ Scalar instrument_residual(const Instrument& ins, const CurveOf& C) {
   return instrument_residual<Scalar>(ins, C, ins.market);
 }
 
-// True iff a MtM-xccy basis has a PAR funding (mtm) leg: discount == forecast and every coupon is a plain
-// single-period OIS coupon paying at its period end (no weights/spread/realized, tau_pay == tau_index,
-// scale == 1). Then each funding bracket float_coupon_pv(c) + (DF_dc(e) − DF_dc(s)) is IDENTICALLY zero --
-// DF(e)·(DF(s)/DF(e) − 1) + DF(e) − DF(s) = 0 for all x -- so the whole FX-reset-notional term (value AND
-// derivative) vanishes and the quote collapses to the ParSpread quotient (pv_self − pv_fx)/ann, which is
-// W-cacheable. A NON-par funding leg keeps a genuine curve-dependent notional and must use the AAD engine.
-// (The funding leg is par by construction in a standard xccy basis, so this is the common case.)
-inline bool mtm_funding_leg_is_par(const Instrument& ins) {
-  if (ins.quote != QuoteKind::XccyMtmBasis) return false;
-  if (ins.mtm.forecast != ins.mtm.discount) return false;
-  for (const auto& c : ins.mtm.coupons) {
-    const pricing::RateObservation& o = c.obs;
-    if (o.compounded || o.sub_start.size() != 1 || !o.weight.empty()) return false;
-    if (o.realized != 0.0 || c.spread != 0.0 || c.tau_pay != o.tau_index || c.scale != 1.0) return false;
-    if (c.pay != o.sub_end.back()) return false;  // pays at period end -> the bracket is identically 0
-  }
-  return true;
-}
-
 struct CalibrationProblem {
   // Curve topology (year fractions on the curve day count).
   std::vector<double> meeting_times;

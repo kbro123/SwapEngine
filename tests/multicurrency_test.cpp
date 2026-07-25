@@ -553,12 +553,23 @@ TEST(XccyFx, CompiledEngineTakesFxAndParMtm) {
   EXPECT_LT(dr, 1e-11) << "compiled FX + par-MtM residual matches the templated kernel";
   EXPECT_LT(dj, 1e-8) << "compiled FX + par-MtM Jacobian matches AAD";
 
-  // Break the par funding leg (make discount != forecast) -> a genuine curve-dependent notional -> reject.
-  cal::BundleProblem np = b.prob;
-  for (auto& ins : np.instruments)
-    if (ins.quote == cal::QuoteKind::XccyMtmBasis) ins.mtm.discount = b.EURUSD;  // dc != fc (was SOFR)
-  EXPECT_THROW(cal::CompiledBundleResidual cr2(np), std::invalid_argument)
-      << "a non-par MtM funding leg (curve-dependent FX-reset notional) must not reach the W-cache";
+  // The guard is NUMERICAL (mtm_funding_term_negligible prices the real rolled-out funding cashflows,
+  // value AND gradient), so PRACTICAL deviations that a structural field-match could miss also correctly
+  // fall back to AAD. Each tweak makes the funding bracket nonzero -> CompiledBundleResidual must reject.
+  auto rejects = [&](const char* what, auto tweak) {
+    cal::BundleProblem p = b.prob;
+    for (auto& ins : p.instruments) if (ins.quote == cal::QuoteKind::XccyMtmBasis) tweak(ins);
+    EXPECT_THROW(cal::CompiledBundleResidual cr2(p), std::invalid_argument)
+        << what << " must not silently reach the W-cache";
+  };
+  rejects("CSA discounting (mtm.discount != forecast)",
+          [&](cal::Instrument& ins) { ins.mtm.discount = b.EURUSD; });                 // dc != fc
+  rejects("a payment lag (pay != period end)",
+          [](cal::Instrument& ins) { for (auto& c : ins.mtm.coupons) c.pay += 2.0 / 365.0; });
+  rejects("averaging convexity (fixing_step > 0)",
+          [](cal::Instrument& ins) { for (auto& c : ins.mtm.coupons) c.obs.fixing_step = 1.0 / 252.0; });
+  rejects("a funding spread",
+          [](cal::Instrument& ins) { for (auto& c : ins.mtm.coupons) c.spread = 1e-4; });
 }
 
 // Build the curve from FX forwards + MtM swaps, and confirm (a) the curve recovers on the AAD path, and
