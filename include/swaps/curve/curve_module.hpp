@@ -99,15 +99,18 @@ class ModularCurve {
   }
 
   // x = all knot forwards, region by region; stitched left-to-right with a C0 boundary handoff.
+  // buf_ is a REUSED member (sized once): on a streaming re-solve the same curve is set_forwards'd every
+  // tick, so allocating a fresh contiguous buffer each call is pure churn. `resize` keeps capacity, so
+  // after the first call this never reallocates.
   template <class Vec>
   void set_forwards(const Vec& x) {
     if (static_cast<int>(x.size()) != n_) throw std::invalid_argument("set_forwards: wrong size");
-    std::vector<S> buf(n_);  // contiguous scalar buffer so each region can index x[off+k]
-    for (int i = 0; i < n_; ++i) buf[i] = x[i];
+    buf_.resize(n_);  // contiguous scalar buffer so each region can index x[off+k]; reused across calls
+    for (int i = 0; i < n_; ++i) buf_[i] = x[i];
     Boundary<S> b{};
     int off = 0;
     for (auto& r : regions_) {
-      r->build(buf.data(), off, b);
+      r->build(buf_.data(), off, b);
       off += r->n_values();
       b = r->out();
     }
@@ -135,6 +138,7 @@ class ModularCurve {
   }
   std::vector<std::unique_ptr<RegionIface<S>>> regions_;
   int n_ = 0;
+  std::vector<S> buf_;  // reused set_forwards scratch (see set_forwards) — sized once, no per-call alloc
 };
 
 // Cross-region join check, for ANY layout: each region must start strictly after the previous one ends.

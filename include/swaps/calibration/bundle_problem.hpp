@@ -38,6 +38,9 @@ struct CurveHandle {
   virtual S forward(double t) const = 0;
   virtual S integral(double t) const = 0;
   virtual S discount(double t) const = 0;
+  // Overwrite this curve's knot forwards IN PLACE (the structure is fixed; only the values change). Lets a
+  // streaming caller reuse one handle across ticks instead of rebuilding the object -- see BundleCurveSet.
+  virtual void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) = 0;
 };
 template <class S>
 struct OutrightHandle : CurveHandle<S> {
@@ -46,6 +49,7 @@ struct OutrightHandle : CurveHandle<S> {
   S forward(double t) const override { return c.forward(t); }
   S integral(double t) const override { return c.integral(t); }
   S discount(double t) const override { return c.discount(t); }
+  void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { c.set_forwards(x); }
 };
 // forward = base + spread ; integral = base + spread ; DF = base_DF * exp(-int spread).
 template <class S>
@@ -59,6 +63,7 @@ struct SpreadHandle : CurveHandle<S> {
     using std::exp;
     return exp(-integral(t));
   }
+  void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { spread.set_forwards(x); }
 };
 // A curve's definition in a bundle: knots (or regions), outright/spread, currency. This is THE SAME
 // TYPE the pricing engine uses -- pricing::CurveStructure (curve_spec.hpp) -- not a mirror of it, so the
@@ -86,6 +91,37 @@ std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves(
   }
   return C;
 }
+
+// A reusable set of bundle curves for a FIXED structure. Build the handles ONCE, then `update()` their
+// knot forwards in place each tick -- no object reconstruction, no per-tick handle allocation. This is the
+// streaming form of build_bundle_curves: the curve topology (knot times, schemes, spread graph) never
+// changes tick to tick, only the values do, so the objects (and their per-curve knot buffers) are reused.
+template <class Scalar>
+class BundleCurveSet {
+ public:
+  BundleCurveSet() = default;
+  // Build the handles once with zero forwards. `specs` must outlive this object (it is not copied).
+  void build(const std::vector<BundleCurveSpec>& specs) {
+    handles_ = build_bundle_curves<Scalar>(specs, [](int, int) { return Scalar(0.0); });
+    scratch_.resize(specs.size());
+    for (std::size_t c = 0; c < specs.size(); ++c) scratch_[c].resize(specs[c].n_knots());
+  }
+  // Overwrite every curve's forwards from value(c, i), reusing the per-curve scratch buffers (no alloc).
+  template <class ValueFn>
+  void update(ValueFn value) {
+    for (int c = 0; c < static_cast<int>(handles_.size()); ++c) {
+      auto& xi = scratch_[c];
+      for (int i = 0; i < static_cast<int>(xi.size()); ++i) xi[i] = value(c, i);
+      handles_[c]->set_forwards(xi);
+    }
+  }
+  const CurveHandle<Scalar>& operator[](int i) const { return *handles_[i]; }
+  bool empty() const { return handles_.empty(); }
+
+ private:
+  std::vector<std::unique_ptr<CurveHandle<Scalar>>> handles_;
+  std::vector<Eigen::Matrix<Scalar, Eigen::Dynamic, 1>> scratch_;  // reused per-curve knot buffers
+};
 
 class BundleProblem {
  public:

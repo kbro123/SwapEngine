@@ -78,8 +78,11 @@ graph LR
   W-cache **plus** an `AadBlock` for any non-cacheable rows (FX/MtM, or a portfolio containing them), so
   one FX trade no longer drops the whole book to AAD. The AAD block seeds only the knots those
   instruments **touch** (`AutoDiffScalar<VectorXd>` is dynamic-width, so this shrinks every gradient), and
-  reuses its seed/buffers across ticks. When nothing is non-cacheable it is a zero-overhead delegate to
-  `CompiledBundleResidual`. Pinned == full-AAD in `multicurrency_test.cpp`.
+  reuses its seed/buffers across ticks. It also holds **`BundleCurveSet`** objects (reusable `double` +
+  `Dual` curves): the curve topology is fixed tick to tick, so the handles are built once and their knot
+  forwards are overwritten IN PLACE each pass (`CurveHandle::set_forwards`) instead of reconstructing the
+  objects — no per-tick handle/curve allocation. When nothing is non-cacheable it is a zero-overhead
+  delegate to `CompiledBundleResidual`. Pinned == full-AAD in `multicurrency_test.cpp`.
   A mixed FX/MtM bundle also **streams frozen-Newton** now (it no longer recalibrates each tick): the
   block exposes `residuals_vs_into`/`jacobian_vs_into` against the live market, so `StreamingCalibrator`
   drives the same hybrid engine. Each tick reprices the cacheable rows on the W-cache and the FX/MtM rows

@@ -66,6 +66,11 @@ class AadBlock {
     xd_.resize(n_knots_);
     for (int k = 0; k < n_knots_; ++k) xd_[k].derivatives() = Eigen::VectorXd::Zero(w);
     for (int j = 0; j < w; ++j) xd_[touched_[j]].derivatives()[j] = 1.0;
+
+    // Build the reusable curve objects ONCE (the structure is fixed tick to tick). Every residual/Jacobian
+    // pass overwrites their forwards IN PLACE instead of reconstructing the handles/curves each call.
+    dcurves_.build(sub_.curves);
+    ducurves_.build(sub_.curves);
   }
 
   // Model quotes of the block's instruments (doubles), written to out[global_row]. (Used only to fill the
@@ -73,8 +78,8 @@ class AadBlock {
   // are never the driver of a frozen-Newton reprice.)
   void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const {
     if (rows_.empty()) return;
-    const auto C = build_bundle_curves<double>(sub_.curves, [&](int c, int i) { return x[sub_.offset(c) + i]; });
-    const auto curve_of = [&C](int i) -> const CurveHandle<double>& { return *C[i]; };
+    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
+    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_model_quote<double>(sub_.instruments[j], curve_of);
   }
@@ -82,8 +87,10 @@ class AadBlock {
   // True residuals (doubles) of the block's instruments against their stored markets, into out[global_row].
   void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const {
     if (rows_.empty()) return;
-    const Eigen::VectorXd r = sub_.residuals<double>(x);
-    for (int j = 0; j < size(); ++j) out[rows_[j]] = r[j];
+    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
+    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
+    for (int j = 0; j < size(); ++j)
+      out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of);
   }
 
   // Jacobian rows d(residual)/dx via WIDTH-REDUCED AAD, into J.row(global_row) of an (n_res x n_knots) J.
@@ -91,11 +98,13 @@ class AadBlock {
   void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const {
     if (rows_.empty()) return;
     for (int k = 0; k < n_knots_; ++k) xd_[k].value() = x[k];   // reuse the seed: values only
-    const auto rd = sub_.residuals<ad::Dual>(xd_);
+    ducurves_.update([&](int c, int i) { return xd_[sub_.offset(c) + i]; });
+    const auto curve_of = [this](int i) -> const CurveHandle<ad::Dual>& { return ducurves_[i]; };
     const int w = static_cast<int>(touched_.size());
     for (int j = 0; j < size(); ++j) {
+      const ad::Dual rj = instrument_residual<ad::Dual>(sub_.instruments[j], curve_of);
       J.row(rows_[j]).setZero();
-      const auto& g = rd[j].derivatives();
+      const auto& g = rj.derivatives();
       if (g.size() == w)
         for (int t = 0; t < w; ++t) J(rows_[j], touched_[t]) = g[t];
     }
@@ -110,8 +119,8 @@ class AadBlock {
   // target (FX gets ln F_model − ln q[row]; a banded row gets w(q_model)·(q_model − q[row])).
   void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const {
     if (rows_.empty()) return;
-    const auto C = build_bundle_curves<double>(sub_.curves, [&](int c, int i) { return x[sub_.offset(c) + i]; });
-    const auto curve_of = [&C](int i) -> const CurveHandle<double>& { return *C[i]; };
+    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
+    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of, q[rows_[j]]);
   }
@@ -122,8 +131,8 @@ class AadBlock {
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
     if (rows_.empty()) return;
     for (int k = 0; k < n_knots_; ++k) xd_[k].value() = x[k];   // reuse the seed: values only
-    const auto C = build_bundle_curves<ad::Dual>(sub_.curves, [&](int c, int i) { return xd_[sub_.offset(c) + i]; });
-    const auto curve_of = [&C](int i) -> const CurveHandle<ad::Dual>& { return *C[i]; };
+    ducurves_.update([&](int c, int i) { return xd_[sub_.offset(c) + i]; });
+    const auto curve_of = [this](int i) -> const CurveHandle<ad::Dual>& { return ducurves_[i]; };
     const int w = static_cast<int>(touched_.size());
     for (int j = 0; j < size(); ++j) {
       const ad::Dual rj = instrument_residual<ad::Dual>(sub_.instruments[j], curve_of, q[rows_[j]]);
@@ -162,6 +171,8 @@ class AadBlock {
   std::vector<int> touched_;   // global knot indices these instruments differentiate w.r.t. (sorted)
   int n_knots_ = 0;
   mutable Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd_;  // reused width-reduced seed (values updated)
+  mutable BundleCurveSet<double> dcurves_;     // reusable double curves: built once, forwards updated in place
+  mutable BundleCurveSet<ad::Dual> ducurves_;  // reusable Dual curves for the width-reduced Jacobian
 };
 
 }  // namespace swaps::calibration
