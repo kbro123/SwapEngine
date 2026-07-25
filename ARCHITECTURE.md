@@ -84,8 +84,11 @@ unchanged.
 ### Quote kinds worth calling out
 
 - **`Portfolio`** — a linear combination `Σ weight·quote(component)` of nested `Instrument`s (a swap
-  butterfly/condor as ONE residual, no leg outrights). It is a sum of transformed component quotes, not a
-  single W-cache transform, so it throws in `CompiledBundleResidual` and routes to the AAD tier.
+  butterfly/condor as ONE residual, no leg outrights). It is **W-cacheable when its components are**: the
+  components register as extra batch entries whose weighted quotes ACCUMULATE onto the portfolio's single
+  row (`q_rows_/r_rows_` carry a (row, weight) pair; `register_at` recurses so nested portfolios flatten).
+  So a swap butterfly stays on the compiled path and streams frozen-Newton at µs. Only a genuinely
+  non-cacheable LEAF (FX/MtM, here or nested) forces the whole bundle to the AAD tier.
 - **Bid/offer band** (`band_lower`/`band_upper`/`band_decay` on any instrument) — a soft target: the
   residual becomes `w(q)·(q−market)` where `band_weight` decays from 1 outside the band to the floor
   `band_decay` inside, so a value within bid/offer is ~satisfied and the solver spends its freedom on the
