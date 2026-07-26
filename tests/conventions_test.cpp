@@ -6,11 +6,10 @@
 // index convention shifts, or edits the DB away from the market, this fails -- the DB can never silently
 // drift from the instruments the oracle prices.
 //
-// NOTE (open item, desk question 2026-07): the DB currently carries ONE "USD" calendar, but QuantLib splits
-// the USD overnight world three ways -- SOFR fixes on a dedicated "SOFR fixing calendar", Fed Funds on the
-// "Federal Reserve" calendar, and FX/xccy settlement on "US settlement". Until the desk confirms how to
-// encode these, we assert the USD *day counts* (unambiguous, ACT/360) but NOT the USD calendars. The EUR
-// side (TARGET everywhere) and the EURIBOR fixing lag ARE asserted.
+// The USD overnight world splits three ways (desk 2026-07, now encoded): SOFR fixes on QuantLib's dedicated
+// SOFR calendar (DB "USD-SOFR", SIFMA incl. Good Friday close), Fed Funds on the Federal Reserve calendar
+// (DB "USD-FED"), and the EUR/USD FX & xccy joint calendar uses SIFMA government-bond (DB "USD") on the USD
+// side. All three are asserted below against QuantLib's own index calendars.
 
 #include <ql/quantlib.hpp>
 
@@ -53,6 +52,19 @@ TEST(Conventions, EurIndexCalendarsAreTarget) {
   EXPECT_EQ(conv::calendar(conv::index("EUR-EURIBOR-3M").calendar).name(), Euribor3M(h).fixingCalendar().name());
   EXPECT_EQ(conv::calendar(conv::index("EUR-EURIBOR-6M").calendar).name(), Euribor6M(h).fixingCalendar().name());
   EXPECT_EQ(TARGET().name(), conv::calendar("EUR").name());
+}
+
+TEST(Conventions, UsdOvernightCalendarsMatchQuantLib) {
+  const auto h = RelinkableHandle<YieldTermStructure>();
+  // SOFR fixes on QuantLib's dedicated SOFR calendar; the DB "USD-SOFR" must resolve to exactly it.
+  EXPECT_EQ(conv::calendar(conv::index("USD-SOFR").calendar).name(), Sofr(h).fixingCalendar().name());
+  // Fed Funds/EFFR fixes on the Federal Reserve calendar (holiday-identical to UnitedStates::FederalReserve).
+  EXPECT_EQ(conv::calendar(conv::index("USD-FEDFUNDS").calendar).name(), FedFunds(h).fixingCalendar().name());
+  EXPECT_EQ(conv::calendar("USD-FED").name(), UnitedStates(UnitedStates::FederalReserve).name());
+  // The SOFR and Fed calendars genuinely differ -- the split is not cosmetic.
+  EXPECT_NE(conv::calendar("USD-SOFR").name(), conv::calendar("USD-FED").name());
+  // FX/xccy USD side = SIFMA government-bond (the joint EURUSD calendar).
+  EXPECT_EQ(conv::calendar("USD").name(), UnitedStates(UnitedStates::GovernmentBond).name());
 }
 
 TEST(Conventions, EuriborFixingLagMatchesQuantLib) {

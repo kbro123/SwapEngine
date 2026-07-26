@@ -595,7 +595,8 @@ inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(
     b.prob.instruments.push_back(ois_par(b.estr, p, b.ESTR));
   }
   // FX forward points (short end): T/N, S/N, 1w, 2w, 3w, 1m, 2m, 3m, 6m, 1y -- the standard strip.
-  const Calendar fxcal = JointCalendar(TARGET(), UnitedStates(UnitedStates::Settlement));
+  // EUR/USD FX & xccy joint calendar, PULLED from the DB: TARGET + SIFMA government-bond (desk 2026-07).
+  const Calendar fxcal = conv::calendar("EURUSD");
   const Date spot = fxcal.advance(eval, 2, Days);
   std::vector<double> fx_times{t(fxcal.advance(eval, 1, Days)),    // T/N (tom-next)
                                t(fxcal.advance(spot, 1, Days))};   // S/N (spot-next)
@@ -942,7 +943,8 @@ inline MultiCcyBundle build_eur_multicurrency() {
   }
   // EUR-in-USD: FX forward points (fx_num=EUR-in-USD, fx_den=SOFR) + MtM xccy basis (funding leg on SOFR).
   auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
-  const Calendar fxcal = JointCalendar(TARGET(), UnitedStates(UnitedStates::Settlement));
+  // EUR/USD FX & xccy joint calendar, PULLED from the DB: TARGET + SIFMA government-bond (desk 2026-07).
+  const Calendar fxcal = conv::calendar("EURUSD");
   const Date spot = fxcal.advance(eval, 2, Days);
   std::vector<double> fx_times{t(fxcal.advance(eval, 1, Days)), t(fxcal.advance(spot, 1, Days))};
   for (const Period& p : {Period(1, Weeks), Period(2, Weeks), Period(3, Weeks), Period(1, Months),
@@ -1216,7 +1218,8 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
     b.prob.instruments.push_back(ois_basis(prime_idx, PRIME, b.fedfunds, b.FF, b.SOFR, Period(y, Years)));  // PRIME/FF
   }
   // EUR-in-USD: FX forward points + MtM xccy basis.
-  const Calendar fxcal = JointCalendar(TARGET(), UnitedStates(UnitedStates::Settlement));
+  // EUR/USD FX & xccy joint calendar, PULLED from the DB: TARGET + SIFMA government-bond (desk 2026-07).
+  const Calendar fxcal = conv::calendar("EURUSD");
   const Date spot = fxcal.advance(eval, 2, Days);
   std::vector<double> fx_times{t(fxcal.advance(eval, 1, Days)), t(fxcal.advance(spot, 1, Days))};
   for (const Period& p : {Period(1, Weeks), Period(2, Weeks), Period(3, Weeks), Period(1, Months),

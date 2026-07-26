@@ -34,12 +34,16 @@ inline QuantLib::BusinessDayConvention bdc(std::string_view b) {
   throw std::runtime_error("conventions_ql: unknown bdc '" + std::string(b) + "'");
 }
 
-// Calendar id (a currency/pair tag from the DB) -> QuantLib calendar, matching conventions.json
-// "calendars".*.quantlib. USD = US SIFMA (government-bond); EUR = TARGET; EURUSD = the joint calendar.
+// Calendar id (from the DB) -> QuantLib calendar, matching conventions.json "calendars".*.quantlib.
+// The USD overnight world splits three ways (desk 2026-07): USD = SIFMA/US-government-securities (bond
+// market, used for the EUR/USD FX & xccy joint calendar); USD-SOFR = QuantLib's dedicated SOFR fixing
+// calendar (SIFMA incl. Good Friday close); USD-FED = Federal Reserve (Fedwire, for EFFR/Fed Funds).
 inline QuantLib::Calendar calendar(std::string_view cid) {
   using namespace QuantLib;
   if (cid == "EUR") return TARGET();
   if (cid == "USD") return UnitedStates(UnitedStates::GovernmentBond);
+  if (cid == "USD-SOFR") return Sofr(RelinkableHandle<YieldTermStructure>()).fixingCalendar();
+  if (cid == "USD-FED") return UnitedStates(UnitedStates::FederalReserve);
   if (cid == "EURUSD") return JointCalendar(UnitedStates(UnitedStates::GovernmentBond), TARGET());
   throw std::runtime_error("conventions_ql: unknown calendar '" + std::string(cid) + "'");
 }
