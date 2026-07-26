@@ -506,7 +506,7 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   return Ainv * J.transpose();  // n_knots x n_res  = dx/dq
 }
 
-void BundleSession::start_streaming(const RegSpec& reg) {
+void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
   if (needs_recalibrate())
     throw std::runtime_error(
         "frozen-Newton streaming needs a bundle with a constant W (a MonotoneCubic region scheme has "
@@ -521,6 +521,7 @@ void BundleSession::start_streaming(const RegSpec& reg) {
   const Eigen::VectorXd q0 = prob_.market();
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
   if (reg.on()) opt.regularizer = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+  if (step_tol > 0.0) opt.step_tol = step_tol;  // looser tol -> fewer corrector steps (speed/accuracy knob)
   stream_ = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(prob_, x_, q0, opt);
   stream_sum_us_ = 0;  // reset the running average for this streaming session
   stream_ticks_ = 0;

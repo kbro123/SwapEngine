@@ -117,7 +117,10 @@ class BundleSession {
   // for the new market q (frozen-Newton off the cached Jacobian, refreshed only on staleness). A mixed
   // FX/MtM bundle streams on the hybrid engine (its FX rows refresh their AAD Jacobian only on staleness).
   // Throws only for a bundle with no constant W at all (a MonotoneCubic region scheme) — recalibrate those.
-  void start_streaming(const RegSpec& reg = {});
+  // step_tol > 0 overrides the frozen-Newton convergence tolerance (||dx||_inf); 0 keeps the exact default
+  // (machine-precision reprice each tick). A looser tol stops in fewer corrector steps — a speed/accuracy
+  // knob for a live viewer — while still refreshing the Jacobian on staleness (so it stays robust).
+  void start_streaming(const RegSpec& reg = {}, double step_tol = 0.0);
   const Eigen::VectorXd& stream_update(const Eigen::VectorXd& new_market);
   bool streaming() const { return static_cast<bool>(stream_); }
 
