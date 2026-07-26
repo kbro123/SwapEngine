@@ -27,8 +27,9 @@
 
   "day_counts": {
     "ACT/360": "Actual/360 (money-market)",
-    "30U/360": "30/360 US (bond basis) — EUR IRS fixed leg",
-    "ACT/365F": "Actual/365 Fixed"
+    "30E/360": "30E/360 (Eurobond basis / 30/360 ICMA) — EUR IRS fixed leg (ISDA/market standard)",
+    "30U/360": "30/360 US (bond basis) — USD-Libor-era fixed leg; NOT used by EUR IRS",
+    "ACT/365F": "Actual/365 Fixed (curve time axis only)"
   },
 
   "indices": {
@@ -59,15 +60,15 @@
       "float_leg": { "index": "EUR-ESTR", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360" }
     },
     "EUR-EURIBOR-3M-IRS": {
-      "description": "EUR vanilla fixed vs EURIBOR-3M. Fixed leg 30U/360 annual; float EURIBOR-3M Act/360 quarterly.",
+      "description": "EUR vanilla fixed vs EURIBOR-3M. Fixed leg 30E/360 annual (Eurobond basis); float EURIBOR-3M Act/360 quarterly.",
       "currency": "EUR", "spot_lag": 2, "payment_lag": 0, "bdc": "ModifiedFollowing", "calendar": "EUR",
-      "fixed_leg": { "day_count": "30U/360", "frequency": "1Y" },
+      "fixed_leg": { "day_count": "30E/360", "frequency": "1Y" },
       "float_leg": { "index": "EUR-EURIBOR-3M", "frequency": "3M", "day_count": "ACT/360", "fixing_lag": 2 }
     },
     "EUR-EURIBOR-6M-IRS": {
-      "description": "EUR vanilla fixed vs EURIBOR-6M. Fixed leg 30U/360 annual; float EURIBOR-6M Act/360 semiannual.",
+      "description": "EUR vanilla fixed vs EURIBOR-6M. Fixed leg 30E/360 annual (Eurobond basis); float EURIBOR-6M Act/360 semiannual.",
       "currency": "EUR", "spot_lag": 2, "payment_lag": 0, "bdc": "ModifiedFollowing", "calendar": "EUR",
-      "fixed_leg": { "day_count": "30U/360", "frequency": "1Y" },
+      "fixed_leg": { "day_count": "30E/360", "frequency": "1Y" },
       "float_leg": { "index": "EUR-EURIBOR-6M", "frequency": "6M", "day_count": "ACT/360", "fixing_lag": 2 }
     },
     "EUR-3S6S-BASIS": {

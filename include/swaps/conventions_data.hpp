@@ -25,8 +25,8 @@ struct IndexConv {
 inline constexpr std::array<ProductConv, 12> kProducts = {{
   {"EUR-3S6S-BASIS", "EUR", "EUR", "ModifiedFollowing", 2, 0, {"", "", "", "", -1, false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", -1, true, false, false}},
   {"EUR-ESTR-OIS", "EUR", "EUR", "ModifiedFollowing", 2, 2, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"EUR-ESTR", "ACT/360", "1Y", "compounded", -1, false, false, false}},
-  {"EUR-EURIBOR-3M-IRS", "EUR", "EUR", "ModifiedFollowing", 2, 0, {"", "30U/360", "1Y", "", -1, false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", 2, false, false, false}},
-  {"EUR-EURIBOR-6M-IRS", "EUR", "EUR", "ModifiedFollowing", 2, 0, {"", "30U/360", "1Y", "", -1, false, false, false}, {"EUR-EURIBOR-6M", "ACT/360", "6M", "", 2, false, false, false}},
+  {"EUR-EURIBOR-3M-IRS", "EUR", "EUR", "ModifiedFollowing", 2, 0, {"", "30E/360", "1Y", "", -1, false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", 2, false, false, false}},
+  {"EUR-EURIBOR-6M-IRS", "EUR", "EUR", "ModifiedFollowing", 2, 0, {"", "30E/360", "1Y", "", -1, false, false, false}, {"EUR-EURIBOR-6M", "ACT/360", "6M", "", 2, false, false, false}},
   {"FX-FWD-EURUSD", "", "EURUSD", "", 2, -1, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
   {"USD-FEDFUNDS-1M-FUTURE", "USD", "USD-FED", "", -1, -1, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
   {"USD-FEDFUNDS-OIS", "USD", "USD-FED", "ModifiedFollowing", 2, 2, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"USD-FEDFUNDS", "ACT/360", "1Y", "compounded", -1, false, false, false}},

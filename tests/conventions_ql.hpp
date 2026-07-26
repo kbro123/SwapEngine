@@ -20,7 +20,8 @@ namespace swaps::refbuild::conv {
 inline QuantLib::DayCounter day_counter(std::string_view dc) {
   using namespace QuantLib;
   if (dc == "ACT/360") return Actual360();
-  if (dc == "30U/360") return Thirty360(Thirty360::BondBasis);
+  if (dc == "30E/360") return Thirty360(Thirty360::European);   // Eurobond basis — EUR IRS fixed leg
+  if (dc == "30U/360") return Thirty360(Thirty360::BondBasis);  // US bond basis (not used by EUR IRS)
   if (dc == "ACT/365F") return Actual365Fixed();
   throw std::runtime_error("conventions_ql: unknown day_count '" + std::string(dc) + "'");
 }

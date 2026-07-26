@@ -82,10 +82,10 @@ TEST(Conventions, EuriborFixingLagMatchesQuantLib) {
 
 TEST(Conventions, EuriborIrsFixedLegPullsExpectedQuantLibConventions) {
   // reference_multicurrency.hpp builds the EURIBOR IRS fixed leg from these DB fields; assert they map to
-  // the QuantLib objects the code previously hardcoded (30U/360, annual, ModFol, TARGET).
+  // the market EUR convention (30E/360 Eurobond basis, annual, ModFol, TARGET).
   for (const char* pid : {"EUR-EURIBOR-3M-IRS", "EUR-EURIBOR-6M-IRS"}) {
     const auto p = conv::product(pid);
-    EXPECT_EQ(conv::day_counter(p.fixed.day_count).name(), Thirty360(Thirty360::BondBasis).name()) << pid;
+    EXPECT_EQ(conv::day_counter(p.fixed.day_count).name(), Thirty360(Thirty360::European).name()) << pid;
     EXPECT_EQ(conv::period(p.fixed.frequency), Period(1, Years)) << pid;
     EXPECT_EQ(conv::bdc(p.bdc), ModifiedFollowing) << pid;
     EXPECT_EQ(conv::calendar(p.calendar).name(), TARGET().name()) << pid;
