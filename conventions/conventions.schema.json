@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Market conventions database",
+  "type": "object",
+  "required": ["meta", "calendars", "day_counts", "indices", "products"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "meta": {
+      "type": "object",
+      "required": ["title", "description"],
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "calendars": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "quantlib": { "type": "string" },
+          "join": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "day_counts": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "indices": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["currency", "type", "day_count", "calendar"],
+        "properties": {
+          "currency": { "type": "string" },
+          "type": { "enum": ["overnight", "ibor"] },
+          "tenor": { "type": "string", "pattern": "^[0-9]+[DWMY]$" },
+          "day_count": { "type": "string" },
+          "calendar": { "type": "string" },
+          "publication_lag": { "type": "integer", "minimum": 0 },
+          "fixing_lag": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "products": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description"],
+        "properties": {
+          "description": { "type": "string" },
+          "currency": { "type": "string" },
+          "pair": { "type": "string" },
+          "base": { "type": "string" },
+          "quote": { "type": "string" },
+          "base_currency": { "type": "string" },
+          "type": { "type": "string" },
+          "movable": { "type": "boolean" },
+          "index": { "type": "string" },
+          "base_index": { "type": "string" },
+          "discount_index": { "type": "string" },
+          "accrual": { "enum": ["compounded", "averaged"] },
+          "schedule": { "type": "string" },
+          "settlement": { "type": "string" },
+          "outright": { "type": "string" },
+          "calendar": { "type": "string" },
+          "bdc": { "enum": ["Following", "ModifiedFollowing", "Preceding", "ModifiedPreceding"] },
+          "spot_lag": { "type": "integer", "minimum": 0 },
+          "payment_lag": { "type": "integer", "minimum": 0 },
+          "frequency": { "type": "string", "pattern": "^[0-9]+[DWMY]$" },
+          "fixed_leg": { "$ref": "#/$defs/leg" },
+          "float_leg": { "$ref": "#/$defs/leg" },
+          "spread_leg": { "$ref": "#/$defs/leg" },
+          "flat_leg": { "$ref": "#/$defs/leg" },
+          "usd_leg": { "$ref": "#/$defs/leg" },
+          "eur_leg": { "$ref": "#/$defs/leg" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "leg": {
+      "type": "object",
+      "properties": {
+        "index": { "type": "string" },
+        "day_count": { "type": "string" },
+        "frequency": { "type": "string", "pattern": "^[0-9]+[DWMY]$" },
+        "compounding": { "enum": ["compounded", "averaged", "none"] },
+        "fixing_lag": { "type": "integer", "minimum": 0 },
+        "carries_spread": { "type": "boolean" },
+        "flat": { "type": "boolean" },
+        "notional_resets": { "type": "boolean" }
+      }
+    }
+  }
+}

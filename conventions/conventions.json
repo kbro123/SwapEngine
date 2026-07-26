@@ -1,0 +1,110 @@
+{
+  "$schema": "./conventions.schema.json",
+  "meta": {
+    "title": "Market conventions — single source of truth",
+    "description": "Canonical per-product market conventions. All code (C++ reference builders, the Python web compiler and seed) MUST pull from here rather than hardcoding conventions inline. New instruments add an entry here first. Cross-checked against OpenGamma Strata (codified conventions), CME (SOFR OIS + SR1/SR3 futures + EUR/USD xccy), ISDA/ARRC (RFR + interdealer xccy), Fed/ECB (SOFR/ESTR). Ambiguities resolved with the desk 2026-07.",
+    "sources": [
+      "OpenGamma Strata FixedOvernightSwapConventions / FixedIborSwapConventions (codified, current)",
+      "CME SOFR futures contract specifications; EUR/USD xccy basis futures",
+      "ISDA RFR Conventions and IBOR Fallbacks Product Table (Oct 2021); ISDA notional/tenor survey (2021)",
+      "ARRC interdealer cross-currency swap recommendations; Clarus RFR xccy mechanics"
+    ],
+    "notes": [
+      "Business-day convention is ModifiedFollowing throughout unless stated.",
+      "'spot_lag' / 'payment_lag' / 'fixing_lag' are in BUSINESS DAYS on the stated calendar.",
+      "Convexity for futures is NOT a convention: it is a per-quote user input added to the quote before calibration (desk decision 2026-07)."
+    ]
+  },
+
+  "calendars": {
+    "USD": { "name": "US SIFMA (US government securities)", "quantlib": "UnitedStates::GovernmentBond" },
+    "EUR": { "name": "TARGET (EUR settlement)", "quantlib": "TARGET" },
+    "EURUSD": { "name": "Joint US + TARGET (FX/xccy)", "join": ["USD", "EUR"] }
+  },
+
+  "day_counts": {
+    "ACT/360": "Actual/360 (money-market)",
+    "30U/360": "30/360 US (bond basis) — EUR IRS fixed leg",
+    "ACT/365F": "Actual/365 Fixed"
+  },
+
+  "indices": {
+    "USD-SOFR":        { "currency": "USD", "type": "overnight", "day_count": "ACT/360", "calendar": "USD", "publication_lag": 1 },
+    "USD-FEDFUNDS":    { "currency": "USD", "type": "overnight", "day_count": "ACT/360", "calendar": "USD", "publication_lag": 1 },
+    "EUR-ESTR":        { "currency": "EUR", "type": "overnight", "day_count": "ACT/360", "calendar": "EUR", "publication_lag": 1 },
+    "EUR-EURIBOR-3M":  { "currency": "EUR", "type": "ibor", "tenor": "3M", "day_count": "ACT/360", "calendar": "EUR", "fixing_lag": 2 },
+    "EUR-EURIBOR-6M":  { "currency": "EUR", "type": "ibor", "tenor": "6M", "day_count": "ACT/360", "calendar": "EUR", "fixing_lag": 2 }
+  },
+
+  "products": {
+    "USD-SOFR-OIS": {
+      "description": "USD fixed vs SOFR OIS. >1Y annual; <=1Y single period.",
+      "currency": "USD", "spot_lag": 2, "payment_lag": 2, "bdc": "ModifiedFollowing", "calendar": "USD",
+      "fixed_leg": { "day_count": "ACT/360", "frequency": "1Y" },
+      "float_leg": { "index": "USD-SOFR", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360" }
+    },
+    "USD-FEDFUNDS-OIS": {
+      "description": "USD fixed vs Fed Funds OIS. Fed Funds OIS COMPOUNDS the overnight fixings (the averaged variant is a separate product, same fixings).",
+      "currency": "USD", "spot_lag": 2, "payment_lag": 2, "bdc": "ModifiedFollowing", "calendar": "USD",
+      "fixed_leg": { "day_count": "ACT/360", "frequency": "1Y" },
+      "float_leg": { "index": "USD-FEDFUNDS", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360" }
+    },
+    "EUR-ESTR-OIS": {
+      "description": "EUR fixed vs ESTR OIS. Payment lag 2 BD (desk-confirmed; EONIA legacy was 1 BD).",
+      "currency": "EUR", "spot_lag": 2, "payment_lag": 2, "bdc": "ModifiedFollowing", "calendar": "EUR",
+      "fixed_leg": { "day_count": "ACT/360", "frequency": "1Y" },
+      "float_leg": { "index": "EUR-ESTR", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360" }
+    },
+    "EUR-EURIBOR-3M-IRS": {
+      "description": "EUR vanilla fixed vs EURIBOR-3M. Fixed leg 30U/360 annual; float EURIBOR-3M Act/360 quarterly.",
+      "currency": "EUR", "spot_lag": 2, "payment_lag": 0, "bdc": "ModifiedFollowing", "calendar": "EUR",
+      "fixed_leg": { "day_count": "30U/360", "frequency": "1Y" },
+      "float_leg": { "index": "EUR-EURIBOR-3M", "frequency": "3M", "day_count": "ACT/360", "fixing_lag": 2 }
+    },
+    "EUR-EURIBOR-6M-IRS": {
+      "description": "EUR vanilla fixed vs EURIBOR-6M. Fixed leg 30U/360 annual; float EURIBOR-6M Act/360 semiannual.",
+      "currency": "EUR", "spot_lag": 2, "payment_lag": 0, "bdc": "ModifiedFollowing", "calendar": "EUR",
+      "fixed_leg": { "day_count": "30U/360", "frequency": "1Y" },
+      "float_leg": { "index": "EUR-EURIBOR-6M", "frequency": "6M", "day_count": "ACT/360", "fixing_lag": 2 }
+    },
+    "EUR-3S6S-BASIS": {
+      "description": "EUR 3s6s tenor basis: EURIBOR-3M + spread vs EURIBOR-6M flat. Spread on the SHORTER (3M) leg. ESTR-discounted.",
+      "currency": "EUR", "spot_lag": 2, "payment_lag": 0, "bdc": "ModifiedFollowing", "calendar": "EUR",
+      "spread_leg": { "index": "EUR-EURIBOR-3M", "frequency": "3M", "day_count": "ACT/360", "carries_spread": true },
+      "flat_leg":   { "index": "EUR-EURIBOR-6M", "frequency": "6M", "day_count": "ACT/360", "carries_spread": false },
+      "discount_index": "EUR-ESTR"
+    },
+    "USD-SOFR-1M-FUTURE": {
+      "description": "CME SR1: 100 - arithmetic AVERAGE of daily SOFR over the calendar month. Act/360. Convexity is a user input on the quote.",
+      "currency": "USD", "index": "USD-SOFR", "accrual": "averaged", "day_count": "ACT/360",
+      "schedule": "calendar-month", "settlement": "100 - average_rate"
+    },
+    "USD-SOFR-3M-FUTURE": {
+      "description": "CME SR3: 100 - COMPOUNDED SOFR over the IMM quarter. Act/360. Convexity is a user input on the quote.",
+      "currency": "USD", "index": "USD-SOFR", "accrual": "compounded", "day_count": "ACT/360",
+      "schedule": "IMM-quarterly", "settlement": "100 - compounded_rate"
+    },
+    "USD-FEDFUNDS-1M-FUTURE": {
+      "description": "CME FF 1M: 100 - arithmetic AVERAGE of daily Fed Funds over the calendar month. Act/360. Convexity is a user input.",
+      "currency": "USD", "index": "USD-FEDFUNDS", "accrual": "averaged", "day_count": "ACT/360",
+      "schedule": "calendar-month", "settlement": "100 - average_rate"
+    },
+    "FX-FWD-EURUSD": {
+      "description": "EUR/USD FX forward outright = spot * DF_EUR(T) / DF_USD(T). Spot T+2 on the joint calendar.",
+      "pair": "EURUSD", "base": "EUR", "quote": "USD", "spot_lag": 2, "calendar": "EURUSD",
+      "outright": "spot * DF_foreign / DF_domestic"
+    },
+    "XCCY-MTM-EURUSD": {
+      "description": "EUR/USD mark-to-market cross-currency basis (RFR vs RFR). USD SOFR leg is FLAT and RESETTABLE (notional resets to FX spot); EUR ESTR leg carries the basis spread and has constant notional (EUR is the base). Quarterly, 2 BD lag on coupons/resets/notional exchanges.",
+      "pair": "EURUSD", "base_currency": "EUR", "spot_lag": 2, "payment_lag": 2, "calendar": "EURUSD",
+      "frequency": "3M",
+      "usd_leg":  { "index": "USD-SOFR", "compounding": "compounded", "day_count": "ACT/360", "flat": true, "notional_resets": true },
+      "eur_leg":  { "index": "EUR-ESTR", "compounding": "compounded", "day_count": "ACT/360", "carries_spread": true, "notional_resets": false }
+    },
+    "USD-PRIME": {
+      "description": "US Prime — a bank-administered reference rate, generally set but occasionally movable. Modelled as a user-remarkable basis (a spread curve, e.g. over Fed Funds) that users may re-mark periodically. NOT a hard market-calibrated instrument.",
+      "currency": "USD", "calendar": "USD", "type": "administered-basis", "movable": true,
+      "base_index": "USD-FEDFUNDS"
+    }
+  }
+}
