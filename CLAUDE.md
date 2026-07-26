@@ -28,6 +28,16 @@ compiled with the same compiler and flags (§3 perf-gate integrity).
 ### The division of labour (the core architectural rule)
 - **Reused from QuantLib (setup, done once, not differentiable):** calendars, day counts, schedules,
   instrument/cashflow definitions. Extract dates and accrual factors from QuantLib objects here.
+
+> **Conventions live in the DB, not in literals.** `conventions/conventions.json` is the single source
+> of truth for per-product market conventions (day counts, frequencies, calendars, spot/payment/fixing
+> lags), cross-checked against market sources and desk-confirmed. The C++ reference builders **pull** from
+> it via the codegen'd `include/swaps/conventions_data.hpp` (regenerate with
+> `python3 tools/gen_conventions_hpp.py` after any JSON edit — `verify.sh` fails if stale) mapped to
+> QuantLib objects through `tests/conventions_ql.hpp`; the Python web layer pulls from the same JSON via
+> `server/conventions_db.py`. New instruments add a product entry to the JSON **first**; don't hardcode
+> conventions inline. `tests/conventions_test.cpp` asserts the DB agrees with QuantLib's own index
+> conventions so the two can't silently drift.
 - **Ours (hot path, templated on `Scalar`, differentiable, vectorized):** the curve interpolation,
   the discount/forward math, the residual vector, and the batched portfolio kernels. QuantLib is not
   templated, so AAD cannot flow through `OvernightIndexedSwap::NPV()`; the differentiable kernel must
