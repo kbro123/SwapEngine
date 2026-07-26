@@ -14,6 +14,7 @@ add_executable(swaps_tests
   compiled_generic_test.cpp
   generic_instrument_test.cpp
   portfolio_instrument_test.cpp
+  fixings_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
 target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
