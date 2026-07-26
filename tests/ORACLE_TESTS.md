@@ -45,6 +45,7 @@ because the engine reimplements what QuantLib already does — that duplication 
 | `ois_weekend_test.cpp` | OIS weekend/holiday accrual vs QuantLib. |
 | `migration_guard_test.cpp` | Legacy shapes re-expressed as generic instruments reprice bit-for-bit. |
 | `multicurrency_test.cpp` | Cross-currency (FX forward, MtM basis) vs QuantLib. |
+| `conventions_test.cpp` | Market-conventions DB (`conventions.json`) vs QuantLib's own index conventions. |
 
 Reference builders (`reference_curve.hpp`, `reference_bundle.hpp`, `reference_multicurrency.hpp`) build
 the QuantLib-consistent markets these tests calibrate to; they are part of the oracle surface.

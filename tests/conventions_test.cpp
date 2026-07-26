@@ -1,3 +1,6 @@
+// @oracle-test — validates the conventions DB against QuantLib's own index conventions. DO NOT DELETE OR
+// WEAKEN without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+//
 // Conformance gate for the market-conventions DB (conventions/conventions.json -> conventions_data.hpp).
 //
 // The DB is the single source of truth the reference builders + the Python web layer both pull from. This

@@ -41,6 +41,11 @@ TEST(OisWeekend, RealizedCompoundingTilesEveryCalendarDay) {
   const Calendar cal = sofr->fixingCalendar();
   const DayCounter idc = sofr->dayCounter();  // Actual/360
 
+  // Hermetic: SOFR fixing history is GLOBAL (IndexManager), so clear any fixings a prior test seeded before
+  // we lay down ours -- otherwise a duplicate-with-different-value in this span makes addFixing throw and
+  // this test fails only in a full-suite run (it passes in isolation).
+  IndexManager::instance().clearHistory(sofr->name());
+
   // A coupon fully in the PAST spanning many weekends AND Memorial Day (Mon 25 May 2026) + Juneteenth
   // (Fri 19 Jun 2026): both create long accrual spans a naive engine would mishandle.
   const Date start = cal.adjust(Date(15, May, 2026)), end = cal.adjust(Date(26, June, 2026));
