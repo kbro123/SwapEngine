@@ -32,11 +32,11 @@
   },
 
   "indices": {
-    "USD-SOFR":        { "currency": "USD", "type": "overnight", "day_count": "ACT/360", "calendar": "USD-SOFR", "publication_lag": 1 },
-    "USD-FEDFUNDS":    { "currency": "USD", "type": "overnight", "day_count": "ACT/360", "calendar": "USD-FED", "publication_lag": 1 },
-    "EUR-ESTR":        { "currency": "EUR", "type": "overnight", "day_count": "ACT/360", "calendar": "EUR", "publication_lag": 1 },
-    "EUR-EURIBOR-3M":  { "currency": "EUR", "type": "ibor", "tenor": "3M", "day_count": "ACT/360", "calendar": "EUR", "fixing_lag": 2 },
-    "EUR-EURIBOR-6M":  { "currency": "EUR", "type": "ibor", "tenor": "6M", "day_count": "ACT/360", "calendar": "EUR", "fixing_lag": 2 }
+    "USD-SOFR":        { "label": "USD SOFR (overnight)", "currency": "USD", "type": "overnight", "day_count": "ACT/360", "calendar": "USD-SOFR", "publication_lag": 1, "par_product": "USD-SOFR-OIS" },
+    "USD-FEDFUNDS":    { "label": "USD Fed Funds / EFFR (overnight)", "currency": "USD", "type": "overnight", "day_count": "ACT/360", "calendar": "USD-FED", "publication_lag": 1, "par_product": "USD-FEDFUNDS-OIS" },
+    "EUR-ESTR":        { "label": "EUR €STR (overnight)", "currency": "EUR", "type": "overnight", "day_count": "ACT/360", "calendar": "EUR", "publication_lag": 1, "par_product": "EUR-ESTR-OIS" },
+    "EUR-EURIBOR-3M":  { "label": "EUR EURIBOR 3M", "currency": "EUR", "type": "ibor", "tenor": "3M", "day_count": "ACT/360", "calendar": "EUR", "fixing_lag": 2, "par_product": "EUR-EURIBOR-3M-IRS" },
+    "EUR-EURIBOR-6M":  { "label": "EUR EURIBOR 6M", "currency": "EUR", "type": "ibor", "tenor": "6M", "day_count": "ACT/360", "calendar": "EUR", "fixing_lag": 2, "par_product": "EUR-EURIBOR-6M-IRS" }
   },
 
   "products": {

@@ -38,13 +38,15 @@
         "type": "object",
         "required": ["currency", "type", "day_count", "calendar"],
         "properties": {
+          "label": { "type": "string" },
           "currency": { "type": "string" },
           "type": { "enum": ["overnight", "ibor"] },
           "tenor": { "type": "string", "pattern": "^[0-9]+[DWMY]$" },
           "day_count": { "type": "string" },
           "calendar": { "type": "string" },
           "publication_lag": { "type": "integer", "minimum": 0 },
-          "fixing_lag": { "type": "integer", "minimum": 0 }
+          "fixing_lag": { "type": "integer", "minimum": 0 },
+          "par_product": { "type": "string" }
         }
       }
     },
