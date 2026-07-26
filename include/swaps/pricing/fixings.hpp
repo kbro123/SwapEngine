@@ -105,15 +105,9 @@ struct PricingContext {
 };
 
 // ---- A resolvable observation's per-day schedule --------------------------------------------------
-// One accrual day of an RFR observation: its fixing date, its index-day-count accrual, and — if the day
-// turns out to be in the future — the forecast sub-period [t_start, t_end] (curve time) and its weight.
-struct FixingDay {
-  int fixing_date = 0;    // serial
-  double accrual = 0.0;   // index-day-count accrual of the accrual span (for the realized sum / product)
-  double t_start = 0.0;   // forecast sub-period start (curve time) — used only if the day is in the future
-  double t_end = 0.0;     // forecast sub-period end (curve time)
-  double weight = 1.0;    // forecast weight = accrual / curve-yf(fixing_date, d2)
-};
+// FixingDay lives in cashflows.hpp (RateObservation carries a std::vector<FixingDay>). The standalone
+// FixingSchedule below is the same data as {index, RateObservation.fixing_schedule, tau_index, compounded}
+// and is used by resolve()/tests; resolve_into() operates directly on an observation that carries one.
 
 // The unresolved schedule for one observation: enough to split past/future against a context and either
 // look up (past) or forecast (future) each day.
@@ -153,6 +147,26 @@ inline RateObservation resolve(const FixingSchedule& sch, const PricingContext& 
   obs.realized = realized;
   obs.realized_factor = rf;
   return obs;
+}
+
+// Resolve an observation that carries its own schedule (obs.fixing_index + obs.fixing_schedule), IN PLACE:
+// writes realized / realized_factor and the forecast sub-periods from the context, preserving the schedule
+// (so it can re-resolve later). No-op if the observation carries no schedule (legacy baked path). Throws
+// MissingFixing if a required past fixing is absent. This is what the BundleSession calls on build + on
+// each fixing-table update.
+inline void resolve_into(RateObservation& obs, const PricingContext& ctx) {
+  if (obs.fixing_schedule.empty()) return;  // already-baked observation — leave untouched
+  FixingSchedule sch;
+  sch.index = obs.fixing_index;
+  sch.days = obs.fixing_schedule;
+  sch.tau_index = obs.tau_index;
+  sch.compounded = obs.compounded;
+  const RateObservation r = resolve(sch, ctx);
+  obs.realized = r.realized;
+  obs.realized_factor = r.realized_factor;
+  obs.sub_start = r.sub_start;
+  obs.sub_end = r.sub_end;
+  obs.weight = r.weight;
 }
 
 // ---- A context-bound observation: resolves on attach + re-resolves whenever the table updates -------

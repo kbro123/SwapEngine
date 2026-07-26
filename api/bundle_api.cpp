@@ -98,6 +98,21 @@ px::RateObservation obs_from(const json::object& o) {
   r.fixing_step3 = get_d(o, "fixing_step3", 0.0);
   r.compounded = get_b(o, "compounded", false);
   r.realized_factor = get_d(o, "realized_factor", 1.0);
+  // E2: an optional fixing SCHEDULE (index + per-day dates/accruals) — when present the engine RESOLVES
+  // realized + forecast subs from the pricing context's fixing table instead of reading a baked `realized`.
+  r.fixing_index = get_s(o, "fixing_index", "");
+  if (o.contains("fixing_schedule") && o.at("fixing_schedule").is_array()) {
+    for (const auto& e : o.at("fixing_schedule").as_array()) {
+      const auto& d = e.as_object();
+      px::FixingDay fd;
+      fd.fixing_date = static_cast<int>(get_d(d, "fixing_date", 0.0));
+      fd.accrual = get_d(d, "accrual", 0.0);
+      fd.t_start = get_d(d, "t_start", 0.0);
+      fd.t_end = get_d(d, "t_end", 0.0);
+      fd.weight = get_d(d, "weight", 1.0);
+      r.fixing_schedule.push_back(fd);
+    }
+  }
   return r;
 }
 px::FloatCoupon fcpn_from(const json::object& o) {
@@ -185,6 +200,20 @@ json::object obs_to(const px::RateObservation& r) {
   o["fixing_step3"] = r.fixing_step3;
   o["compounded"] = r.compounded;
   o["realized_factor"] = r.realized_factor;
+  if (!r.fixing_schedule.empty()) {
+    o["fixing_index"] = r.fixing_index;
+    json::array sch;
+    for (const px::FixingDay& d : r.fixing_schedule) {
+      json::object jd;
+      jd["fixing_date"] = d.fixing_date;
+      jd["accrual"] = d.accrual;
+      jd["t_start"] = d.t_start;
+      jd["t_end"] = d.t_end;
+      jd["weight"] = d.weight;
+      sch.push_back(std::move(jd));
+    }
+    o["fixing_schedule"] = std::move(sch);
+  }
   return o;
 }
 json::object fcpn_to(const px::FloatCoupon& c) {

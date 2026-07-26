@@ -16,9 +16,23 @@
 // `double` (AutoDiffScalar has a `+ double` overload that preserves the derivatives).
 
 #include <cassert>
+#include <string>
 #include <vector>
 
 namespace swaps::pricing {
+
+// One fixing day of an RFR observation's schedule (E2 — fixings as a pricing context). Its fixing date
+// (an integer serial the caller defines), the index-day-count accrual of its span, and — for a day that
+// turns out to be in the FUTURE — the forecast sub-period [t_start, t_end] (curve time) + weight. When an
+// observation carries a schedule, the engine RESOLVES it against a FixingTable (swaps/pricing/fixings.hpp)
+// at build + on each table update, instead of the caller baking `realized`. Plain data (no deps).
+struct FixingDay {
+  int fixing_date = 0;
+  double accrual = 0.0;
+  double t_start = 0.0;
+  double t_end = 0.0;
+  double weight = 1.0;
+};
 
 // =================================================================================================
 // GENERIC CASHFLOW MODEL (docs/generic-instrument-pipeline.md §2)
@@ -68,6 +82,15 @@ struct RateObservation {
   // (the compounded analogue of the additive `realized`): total growth = realized_factor · ∏_future.
   // 1.0 => no realized prefix. Only consulted when `compounded`.
   double realized_factor = 1.0;
+
+  // E2 (fixings as a pricing context): when `fixing_schedule` is non-empty, the fields above (`realized`
+  // / `realized_factor` and the forecast sub-periods) are RESOLVED from the pricing context's FixingTable
+  // (swaps/pricing/fixings.hpp resolve_into) at build + on each table update — past days come from the
+  // table (throwing MissingFixing if absent), future days become forecast sub-periods. Empty schedule =>
+  // legacy already-baked path, untouched. `fixing_index` names the series in the table. These are read
+  // only during resolution, never on the price/W-cache hot path.
+  std::string fixing_index;
+  std::vector<FixingDay> fixing_schedule;
 };
 
 // One floating coupon: an observation, discounted at its own pay date on its own accrual basis.
