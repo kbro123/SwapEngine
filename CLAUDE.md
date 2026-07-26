@@ -262,26 +262,41 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
 
 ## 4. Build environment (this machine) & commands
 
-### Hard constraints of the dev machine — do not re-litigate these
-- **MacBook Pro 15" 2017 (`MacBookPro14,3`), i7-7820HQ Kaby Lake, 4 physical cores / 8 threads, 16 GB.**
-- **SIMD *on this host*: AVX2 + FMA, no AVX-512 → 4 doubles/register.** This is a *fact about this
-  machine*, **not a design constant**. The ISA is detected automatically at configure time by
-  `cmake/DetectISA.cmake` (AVX-512 / AVX2 / AVX / NEON / SSE2), so the project builds optimally on
-  any host. See the no-hard-coded-width rule in §5.
-- **macOS 13.7.8 (Ventura) is the final supported OS for this Mac.** No macOS upgrade is possible.
-- **Cap build parallelism at 4 (physical cores). Never use ninja's default (`logical+2` = 10).**
-  Ten concurrent clang processes on this 4-core/16 GB box exhausted memory and tripped an
-  **APFS kernel panic** (`OSMetaClassBase::_RESERVEDOSMetaClassBase6`, panicking task `clang`),
-  plus non-deterministic clang segfaults that look like compiler ICEs but are not — the same
-  file compiles fine when run alone. `bootstrap_deps.sh` caps via `SWAPS_BUILD_JOBS`.
-- **Never run benchmarks while anything else is compiling.** Perf numbers taken under load are
-  garbage (we measured a load average of ~17 during a build).
-- **Homebrew is "Tier 3" on macOS 13 → it ships NO prebuilt bottles.** `brew install` compiles
-  everything from source and drags in `go`/`rust`/`llvm` build deps. **Do not use Homebrew for
-  project dependencies.** Vendor them into `third_party/` instead.
-- Toolchain is **Apple clang 15** via Command Line Tools for Xcode 15.4 (Apple clang 12, which
-  shipped with this machine, cannot compile C++20 — it rejects `-std=c++20`).
-  Ensure `xcode-select -p` → `/Library/Developer/CommandLineTools`, **not** the stale `Xcode.app` (12.4).
+### The dev machine (current) & what's a fact vs a design constant
+> Development moved to a **2019 Mac Pro** (details below); the earlier machine was a 2017 MacBook Pro
+> (Kaby Lake, AVX2-only, Ventura). The infra (ISA autodetect + per-fingerprint baselines) already handles
+> the switch — the notes below describe *this* box, and none of the ISA/core numbers are design constants.
+
+- **Mac Pro 2019 (`MacPro7,1`), Intel Xeon W-3223 Cascade Lake, 8 physical cores / 16 threads.**
+- **SIMD *on this host*: AVX-512 (→ 8 doubles/register), auto-enabled.** This is a *fact about this
+  machine*, **not a design constant.** The ISA is detected at configure time by `cmake/DetectISA.cmake`
+  (AVX-512 / AVX2 / AVX / NEON / SSE2) — it sets `SWAPS_ARCH_FLAGS` (`-march=native`), `SWAPS_ISA_NAME`,
+  and `SWAPS_EIGEN_DEFINES` (`EIGEN_ENABLE_AVX512` here); `SWAPS_ENABLE_AVX512` is ON when detected. See
+  the no-hard-coded-width rule in §5. The project builds optimally on any host.
+- **macOS 14.7.3 Sonoma (Darwin 23.6.0).**
+- **Perf baselines are per machine-fingerprint** (`baselines/baselines.json`, keyed by cpu+isa+compiler):
+  this box is fingerprint **`a8c9a844826e`** (Xeon W-3223 / AVX-512 / clang 16), re-baselined 2026-07-18;
+  the old MacBook Pro (`52e94be82bc4`, AVX2 / clang 14) is retained but never compared against. `check_perf.py`
+  refuses to compare across fingerprints, so a machine switch can't manufacture a fake speedup.
+- **Cap build parallelism at the physical-core count** (8 here). `bootstrap_deps.sh` / `verify.sh` cap via
+  `SWAPS_BUILD_JOBS`. History (old 4-core/16 GB box): 10 concurrent clang processes exhausted memory and
+  tripped an **APFS kernel panic** (`OSMetaClassBase::_RESERVEDOSMetaClassBase6`, panicking task `clang`)
+  plus clang segfaults that looked like ICEs but weren't. Less acute on the Mac Pro, but keep the cap.
+- **Never run benchmarks while anything else is compiling.** Perf numbers taken under load are garbage.
+- **Do not use Homebrew for project dependencies** (Tier-3 on this OS → source builds, drags in
+  `go`/`rust`/`llvm`). Vendor deps into `third_party/` instead.
+- Toolchain: **Apple clang 16 via Command Line Tools 16.2** (`xcode-select -p` →
+  `/Library/Developer/CommandLineTools`; no full Xcode installed). C++20 (`-std=c++20`) requires clang 15+.
+  ⚠️ **CLT 16.2 shipped a BROKEN libc++**: its bundled headers dir
+  `/Library/Developer/CommandLineTools/usr/include/c++/v1` is empty except a `__cxx_version` stub (~1500
+  headers missing), so every compile fails `'cstddef' file not found` — clang won't fall back to the SDK's
+  complete copy because the empty dir still *exists* and shadows it. **Fix:** reinstall CLT
+  (`sudo softwareupdate --install "Command Line Tools for Xcode-16.2"`), then check
+  `ls /Library/Developer/CommandLineTools/usr/include/c++/v1 | wc -l` is ~150+, not 1. **Workaround if
+  still broken:** point at a present SDK's libc++ —
+  `export CPLUS_INCLUDE_PATH=$(xcrun --show-sdk-path)/usr/include/c++/v1` (or append
+  `-nostdinc++ -isystem "$(xcrun --show-sdk-path)/usr/include/c++/v1"` to `CMAKE_CXX_FLAGS`); the SDK copy
+  is complete, so builds work and codegen is identical (perf gate unaffected).
 
 ### Dependencies (all vendored under `third_party/`, gitignored)
 Eigen (header-only), GoogleTest, Google Benchmark, Boost headers, and QuantLib
