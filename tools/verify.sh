@@ -60,6 +60,22 @@ else
   pass_oracle="FAIL"; rc=1
 fi
 
+# ---- Conventions-DB sync guard ----------------------------------------------
+# include/swaps/conventions_data.hpp is codegen'd from conventions/conventions.json. Regenerate into a
+# temp file and diff: a JSON edit without re-running the generator (so the C++ builders would read stale
+# conventions) FAILs here. Cheap, so it runs even in --bench-only.
+echo ">> conventions-DB sync guard"
+pass_conv="PASS"
+_conv_tmp="$(mktemp)"
+if python3 "${ROOT}/tools/gen_conventions_hpp.py" --stdout > "${_conv_tmp}" 2>/dev/null \
+   && diff -q "${_conv_tmp}" "${ROOT}/include/swaps/conventions_data.hpp" >/dev/null; then
+  pass_conv="PASS"
+else
+  echo "   conventions_data.hpp is STALE — run: python3 tools/gen_conventions_hpp.py"
+  pass_conv="FAIL"; rc=1
+fi
+rm -f "${_conv_tmp}"
+
 # ---- Correctness gate -------------------------------------------------------
 if [ "${BENCH_ONLY}" -eq 0 ]; then
   echo ">> correctness gate (ctest)"
@@ -93,6 +109,7 @@ fi
 echo ""
 echo "========== VERIFY SUMMARY =========="
 printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
+printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
 printf "  %-20s %s\n" "correctness gate:" "${pass_correctness}"
 printf "  %-20s %s\n" "performance gate:" "${pass_perf}"
 echo "===================================="

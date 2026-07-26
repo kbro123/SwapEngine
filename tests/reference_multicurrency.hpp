@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "conventions_ql.hpp"    // conv::* -- pull instrument conventions from the market-conventions DB
 #include "reference_curve.hpp"  // build_market / build_problem (SOFR base), Market, Future, sofr_start/end
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/curve/ql_term_structure.hpp"
@@ -136,15 +137,19 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
   // EURIBOR IRS (fixed 30/360 annual vs float ACT/360 quarterly[3M]/semi[6M]): the float leg forecasts
   // its EURIBOR curve, discounts ESTR. MakeVanillaSwap attaches the IborCouponPricer extract_ibor_obs
   // needs. Returns a ParRate instrument (fixed rate is irrelevant to the par quote and is not extracted).
-  auto make_ibor_inst = [&](const Period& tenor, const ext::shared_ptr<IborIndex>& idx, int fc, int disc) {
+  // Fixed-leg conventions (30U/360, annual, ModFol, TARGET) are PULLED from the DB per product id
+  // (EUR-EURIBOR-3M-IRS / -6M-IRS) rather than hardcoded -- see conventions/conventions.json.
+  auto make_ibor_inst = [&](const Period& tenor, const ext::shared_ptr<IborIndex>& idx, int fc, int disc,
+                            std::string_view product_id) {
+    const auto pc = conv::product(product_id);
     auto s = ext::shared_ptr<VanillaSwap>(
         MakeVanillaSwap(tenor, idx, 0.03)
             .withDiscountingTermStructure(b.h[disc])
-            .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
-            .withFixedLegTenor(1 * Years)
-            .withFixedLegConvention(ModifiedFollowing)
-            .withFixedLegCalendar(TARGET())
-            .withFloatingLegCalendar(TARGET()));
+            .withFixedLegDayCount(conv::day_counter(pc.fixed.day_count))
+            .withFixedLegTenor(conv::period(pc.fixed.frequency))
+            .withFixedLegConvention(conv::bdc(pc.bdc))
+            .withFixedLegCalendar(conv::calendar(pc.calendar))
+            .withFloatingLegCalendar(conv::calendar(pc.calendar)));
     cal::Instrument ins;
     ins.quote = cal::QuoteKind::ParRate;
     ins.fwd = {swaps::qlx::extract_float_leg(s->floatingLeg(), eval, dc), fc, disc};
@@ -186,12 +191,13 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
 
   // EUR3M pillars: one 3M-EURIBOR IRS per EUR3M knot.
   {
-    auto [ins, s] = make_ibor_inst(6 * Months, b.eur3m, b.EUR3M, disc_estr);
+    auto [ins, s] = make_ibor_inst(6 * Months, b.eur3m, b.EUR3M, disc_estr, "EUR-EURIBOR-3M-IRS");
     b.prob.instruments.push_back(ins);
     vs_keep.push_back(s);
   }
   for (double T : eur_back) {
-    auto [ins, s] = make_ibor_inst(Period(static_cast<int>(T), Years), b.eur3m, b.EUR3M, disc_estr);
+    auto [ins, s] =
+        make_ibor_inst(Period(static_cast<int>(T), Years), b.eur3m, b.EUR3M, disc_estr, "EUR-EURIBOR-3M-IRS");
     b.prob.instruments.push_back(ins);
     vs_keep.push_back(s);
   }
@@ -199,12 +205,13 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
   // EUR6M pillars: one 6M-EURIBOR IRS per EUR6M knot, plus a few 3s6s basis (over-determined -- fine
   // with a self-consistent market, and more realistic).
   {
-    auto [ins, s] = make_ibor_inst(6 * Months, b.eur6m, b.EUR6M, disc_estr);
+    auto [ins, s] = make_ibor_inst(6 * Months, b.eur6m, b.EUR6M, disc_estr, "EUR-EURIBOR-6M-IRS");
     b.prob.instruments.push_back(ins);
     vs_keep.push_back(s);
   }
   for (double T : eur_back) {
-    auto [ins, s] = make_ibor_inst(Period(static_cast<int>(T), Years), b.eur6m, b.EUR6M, disc_estr);
+    auto [ins, s] =
+        make_ibor_inst(Period(static_cast<int>(T), Years), b.eur6m, b.EUR6M, disc_estr, "EUR-EURIBOR-6M-IRS");
     b.prob.instruments.push_back(ins);
     vs_keep.push_back(s);
   }
@@ -641,6 +648,8 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
   Settings::instance().evaluationDate() = eval;
   const DayCounter dc = b.dc;
   const Calendar cal = TARGET();
+  // EURIBOR IRS fixed-leg conventions (30U/360, annual, TARGET), PULLED from the DB (3M/6M share them).
+  const auto eur_irs = conv::product("EUR-EURIBOR-3M-IRS");
   auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
   auto nextm = [](int m, int y) { return (m == 12) ? std::make_pair(1, y + 1) : std::make_pair(m + 1, y); };
 
@@ -711,10 +720,10 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
         MakeOIS(tenor, b.estr, 0.03).withDiscountingTermStructure(b.h[b.ESTR]));
     auto s3 = ext::shared_ptr<VanillaSwap>(MakeVanillaSwap(tenor, b.eur3m, 0.03)
                                                .withDiscountingTermStructure(b.h[b.ESTR])
-                                               .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
-                                               .withFixedLegTenor(1 * Years)
-                                               .withFixedLegCalendar(TARGET())
-                                               .withFloatingLegCalendar(TARGET()));
+                                               .withFixedLegDayCount(conv::day_counter(eur_irs.fixed.day_count))
+                                               .withFixedLegTenor(conv::period(eur_irs.fixed.frequency))
+                                               .withFixedLegCalendar(conv::calendar(eur_irs.calendar))
+                                               .withFloatingLegCalendar(conv::calendar(eur_irs.calendar)));
     cal::Instrument ins;
     ins.quote = cal::QuoteKind::ParSpread;
     ins.fwd = {swaps::qlx::extract_float_leg(oe->overnightLeg(), eval, dc), b.ESTR, b.ESTR};  // PRIMARY = ESTR
@@ -797,10 +806,10 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
   auto eur6m_outright = [&](int y) {
     auto s = ext::shared_ptr<VanillaSwap>(MakeVanillaSwap(Period(y, Years), b.eur6m, 0.03)
                                               .withDiscountingTermStructure(b.h[b.ESTR])
-                                              .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
-                                              .withFixedLegTenor(1 * Years)
-                                              .withFixedLegCalendar(TARGET())
-                                              .withFloatingLegCalendar(TARGET()));
+                                              .withFixedLegDayCount(conv::day_counter(eur_irs.fixed.day_count))
+                                              .withFixedLegTenor(conv::period(eur_irs.fixed.frequency))
+                                              .withFixedLegCalendar(conv::calendar(eur_irs.calendar))
+                                              .withFloatingLegCalendar(conv::calendar(eur_irs.calendar)));
     cal::Instrument ins;
     ins.quote = cal::QuoteKind::ParRate;
     ins.fwd = {swaps::qlx::extract_float_leg(s->floatingLeg(), eval, dc), b.EUR6M, b.ESTR};
@@ -1022,6 +1031,8 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
   const Calendar cal = TARGET();
   auto t = [&](const Date& d) { return dc.yearFraction(eval, d); };
   auto nextm = [](int m, int y) { return (m == 12) ? std::make_pair(1, y + 1) : std::make_pair(m + 1, y); };
+  // EURIBOR IRS fixed-leg conventions (30U/360, annual, TARGET), PULLED from the DB (3M/6M share them).
+  const auto eur_irs = conv::product("EUR-EURIBOR-3M-IRS");
   b.ESTR = 0; b.EUR3M = 1; b.EUR6M = 2;
   b.prob.curves.resize(3);
   const std::vector<Date> ecb{Date(30, July, 2026),    Date(17, September, 2026), Date(29, October, 2026),
@@ -1063,10 +1074,10 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
   auto irs_par = [&](const ext::shared_ptr<IborIndex>& idx, int fc, const Period& p) {
     auto s = ext::shared_ptr<VanillaSwap>(MakeVanillaSwap(p, idx, 0.03)
                                               .withDiscountingTermStructure(b.h[0])
-                                              .withFixedLegDayCount(Thirty360(Thirty360::BondBasis))
-                                              .withFixedLegTenor(1 * Years)
-                                              .withFixedLegCalendar(TARGET())
-                                              .withFloatingLegCalendar(TARGET()));
+                                              .withFixedLegDayCount(conv::day_counter(eur_irs.fixed.day_count))
+                                              .withFixedLegTenor(conv::period(eur_irs.fixed.frequency))
+                                              .withFixedLegCalendar(conv::calendar(eur_irs.calendar))
+                                              .withFloatingLegCalendar(conv::calendar(eur_irs.calendar)));
     cal::Instrument ins; ins.quote = cal::QuoteKind::ParRate;
     ins.fwd = {swaps::qlx::extract_float_leg(s->floatingLeg(), eval, dc), fc, 0};
     ins.fixed = {swaps::qlx::extract_fixed_leg(s->fixedLeg(), eval, dc), 0};
