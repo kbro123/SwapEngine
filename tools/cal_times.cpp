@@ -7,8 +7,9 @@
 // This tool times a cold LM solve of both feeds, both problem sizes, and prints iterations, the achieved
 // rms residual (bp) and first-order optimality ||Jᵀr||∞, so the calibration times are directly comparable.
 //
-// Build (not in CMake; links the vendored QuantLib static lib). On the Mac Pro set the 14.5-SDK libc++:
-//   export CPLUS_INCLUDE_PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX14.5.sdk/usr/include/c++/v1
+// Build (not in CMake; links the vendored QuantLib static lib). If the CLT libc++ headers are missing
+// (CLT 16.2 breakage, see CLAUDE.md §4), point at the active SDK's libc++ first:
+//   export CPLUS_INCLUDE_PATH="$(xcrun --show-sdk-path)/usr/include/c++/v1"
 //   clang++ -std=c++20 -O2 -march=native -DNDEBUG \
 //       -I include -I tests -I build/generated -I third_party/eigen -I third_party/boost \
 //       -I third_party/quantlib/install/include \

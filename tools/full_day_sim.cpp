@@ -5,8 +5,9 @@
 // 10,000-swap portfolio (40% USD SOFR book, 40% EUR ESTR book -- both on the vectorized CompiledPortfolio
 // kernel -- and 20% EURUSD FX-forwards), and records the portfolio NPV + the reprice time. Emits full_day.json.
 //
-// Build (not in CMake; links the vendored QuantLib static lib). On the Mac Pro set the 14.5-SDK libc++:
-//   export CPLUS_INCLUDE_PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX14.5.sdk/usr/include/c++/v1
+// Build (not in CMake; links the vendored QuantLib static lib). If the CLT libc++ headers are missing
+// (CLT 16.2 breakage, see CLAUDE.md §4), point at the active SDK's libc++ first:
+//   export CPLUS_INCLUDE_PATH="$(xcrun --show-sdk-path)/usr/include/c++/v1"
 //   c++ -std=c++20 -O3 -march=native -DEIGEN_ENABLE_AVX512 \
 //       -I include -I tests -I third_party/eigen -I third_party/boost -I third_party/quantlib/install/include \
 //       tools/full_day_sim.cpp third_party/quantlib/install/lib/libQuantLib.a -o full_day_sim

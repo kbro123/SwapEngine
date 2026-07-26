@@ -6,8 +6,9 @@
 // they are always achievable), the StreamingCalibrator recovers it each tick, and we record the
 // calibration time (min/max/avg) plus periodic forward snapshots on a knot-aware grid.
 //
-// Build (not in CMake; links the vendored QuantLib static lib, like tools/stream_sim.cpp). On the Mac Pro
-// set CPLUS_INCLUDE_PATH to the 14.5-SDK libc++ first (see memory / CLAUDE.md §4):
+// Build (not in CMake; links the vendored QuantLib static lib, like tools/stream_sim.cpp). If the CLT
+// libc++ headers are missing (CLT 16.2 breakage, see CLAUDE.md §4), point at the active SDK's libc++ first:
+//   export CPLUS_INCLUDE_PATH="$(xcrun --show-sdk-path)/usr/include/c++/v1"
 //   c++ -std=c++20 -O3 -march=native -DEIGEN_ENABLE_AVX512 \
 //       -I include -I tests -I third_party/eigen -I third_party/boost -I third_party/quantlib/install/include \
 //       tools/bundle_day_sim.cpp third_party/quantlib/install/lib/libQuantLib.a -o bundle_day_sim

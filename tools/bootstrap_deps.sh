@@ -64,9 +64,10 @@ fetch() {
 CXX_BIN="${CXX:-c++}"
 if ! echo 'int main(){}' | "${CXX_BIN}" -std=c++20 -x c++ - -o /dev/null 2>/dev/null; then
   die "${CXX_BIN} does not support -std=c++20.
-     Install Command Line Tools for Xcode 15.4, then:
+     Install the Command Line Tools (Apple clang 15+ required for C++20 — no exact version pinned), then:
+       sudo softwareupdate --install \"Command Line Tools for Xcode-16.2\"   # or: sudo xcode-select --install
        sudo xcode-select -s /Library/Developer/CommandLineTools
-     Verify with: clang++ --version   (expect Apple clang 15.x)"
+     Verify with: clang++ --version"
 fi
 log "compiler OK: $("${CXX_BIN}" --version | head -1)"
 
