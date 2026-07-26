@@ -29,6 +29,46 @@
 
 namespace swaps::calibration {
 
+// ---- vectorised discount-factor cache (hot-path optimisation) ------------------------------------
+// The block's coupon times are FIXED at init, so integral(t_i) is a constant linear map over the knot
+// forwards: integral(t_i) = M.row(i) . x. So the whole per-step discount layer = one GEMV (M x) + one
+// vectorised exp, then an O(log) slot lookup -- instead of the per-call region search + scalar exp that
+// dominated the FX/MtM tick. This wraps a real curve: discount(t) returns the precomputed DF for a known
+// time and FALLS BACK to the underlying curve for anything else, so it can never be wrong, only faster.
+struct CachedDisc : CurveHandle<double> {
+  const CurveHandle<double>* real = nullptr;
+  const std::vector<double>* times = nullptr;   // sorted distinct query times (fallback search)
+  const Eigen::VectorXd* df = nullptr;          // exp(-(M x + b)), refreshed once per residual eval
+  // The pricing queries discounts in a FIXED order every eval, so we replay that order with a cursor --
+  // direct index, no search. seq_slot[k] is the df index of the k-th discount() call; seq_t[k] its time
+  // (guards against any order divergence -> fall back to a search, then an exact curve reprice).
+  const std::vector<int>* seq_slot = nullptr;
+  const std::vector<double>* seq_t = nullptr;
+  mutable std::size_t cursor = 0;
+  double discount(double t) const override {
+    if (cursor < seq_t->size() && (*seq_t)[cursor] == t)    // fast path: the expected next DF, O(1)
+      return (*df)[(*seq_slot)[cursor++]];
+    const auto it = std::lower_bound(times->begin(), times->end(), t);  // order diverged: search
+    if (it != times->end() && *it == t) return (*df)[static_cast<int>(it - times->begin())];
+    return real->discount(t);                   // not a cached time: exact fallback
+  }
+  // The FX/MtM kernel prices purely off discount(); integral/forward just delegate for safety.
+  double integral(double t) const override { return real->integral(t); }
+  double forward(double t) const override { return real->forward(t); }
+  void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}  // real curve owns knots
+};
+
+// Records every discount(t) a curve is asked for during a discovery replay of the block's pricing, so the
+// cache set is EXACTLY what the kernel queries (query times are x-independent -- the schedule is fixed).
+struct RecordingCurve : CurveHandle<double> {
+  const CurveHandle<double>* real = nullptr;
+  std::vector<double>* log = nullptr;
+  double discount(double t) const override { log->push_back(t); return real->discount(t); }
+  double integral(double t) const override { return real->integral(t); }
+  double forward(double t) const override { return real->forward(t); }
+  void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}
+};
+
 class AadBlock {
  public:
   AadBlock() = default;
@@ -71,6 +111,8 @@ class AadBlock {
     // pass overwrites their forwards IN PLACE instead of reconstructing the handles/curves each call.
     dcurves_.build(sub_.curves);
     ducurves_.build(sub_.curves);
+
+    build_df_cache();
   }
 
   // Model quotes of the block's instruments (doubles), written to out[global_row]. (Used only to fill the
@@ -87,8 +129,8 @@ class AadBlock {
   // True residuals (doubles) of the block's instruments against their stored markets, into out[global_row].
   void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const {
     if (rows_.empty()) return;
-    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
-    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
+    refresh_curves(x);
+    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return *resolve_[i]; };
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of);
   }
@@ -119,8 +161,8 @@ class AadBlock {
   // target (FX gets ln F_model − ln q[row]; a banded row gets w(q_model)·(q_model − q[row])).
   void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const {
     if (rows_.empty()) return;
-    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
-    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
+    refresh_curves(x);
+    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return *resolve_[i]; };
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of, q[rows_[j]]);
   }
@@ -166,6 +208,67 @@ class AadBlock {
     }
   }
 
+  // Build the per-curve discount cache: discover the query times, then the constant affine map to their
+  // integrals (integral(t) = M.row . x + b), so a residual eval computes DF = exp(-(M x + b)) vectorised.
+  void build_df_cache() {
+    const int NC = static_cast<int>(sub_.curves.size());
+    disc_times_.assign(NC, {}); disc_M_.assign(NC, {}); disc_b_.assign(NC, {}); disc_df_.assign(NC, {});
+    seq_t_.assign(NC, {}); seq_slot_.assign(NC, {});
+    cached_.assign(NC, CachedDisc{}); resolve_.assign(NC, nullptr);
+    cached_ids_.clear();
+    for (int c = 0; c < NC; ++c) resolve_[c] = &dcurves_[c];  // default: the real reusable curve
+    if (rows_.empty()) return;
+
+    // 1) Discovery replay: record every discount(t) per curve IN ORDER. The query TIMES are x-independent
+    //    (the schedule is fixed), so any x works -- price the block once at x = 0 with recording curves.
+    dcurves_.update([](int, int) { return 0.0; });
+    std::vector<std::vector<double>> seq(NC);   // ordered discount-query times, as the kernel asks them
+    std::vector<RecordingCurve> rec(NC);
+    for (int c = 0; c < NC; ++c) { rec[c].real = &dcurves_[c]; rec[c].log = &seq[c]; }
+    const auto rec_of = [&](int i) -> const CurveHandle<double>& { return rec[i]; };
+    for (const auto& ins : sub_.instruments) (void)instrument_residual<double>(ins, rec_of);
+
+    // 2) Per queried curve: the DISTINCT sorted times (df layout + fallback search) and the AFFINE map to
+    //    integral(t) via AAD (integral is affine in x for any streamable/constant-W scheme, so derivatives
+    //    = M exactly at any seed and value at x=0 = b). Then the ordered play-list of slots (seq_slot).
+    std::vector<ad::Dual> xd(n_knots_);
+    for (int k = 0; k < n_knots_; ++k) { xd[k].value() = 0.0; xd[k].derivatives() = Eigen::VectorXd::Unit(n_knots_, k); }
+    const auto Cu = build_bundle_curves<ad::Dual>(sub_.curves, [&](int c, int i) { return xd[sub_.offset(c) + i]; });
+    for (int c = 0; c < NC; ++c) {
+      if (seq[c].empty()) continue;
+      std::vector<double> uniq = seq[c];
+      std::sort(uniq.begin(), uniq.end());
+      uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+      const int nt = static_cast<int>(uniq.size());
+      disc_times_[c] = uniq;
+      disc_M_[c].resize(nt, n_knots_);
+      disc_b_[c].resize(nt);
+      for (int i = 0; i < nt; ++i) {
+        const ad::Dual I = Cu[c]->integral(uniq[i]);
+        disc_b_[c][i] = I.value();
+        if (I.derivatives().size() == n_knots_) disc_M_[c].row(i) = I.derivatives().transpose();
+        else disc_M_[c].row(i).setZero();
+      }
+      disc_df_[c].resize(nt);
+      // ordered play-list: slot of each recorded query, so eval is df[seq_slot[cursor++]] -- no search.
+      seq_t_[c] = seq[c];
+      seq_slot_[c].resize(seq[c].size());
+      for (std::size_t k = 0; k < seq[c].size(); ++k)
+        seq_slot_[c][k] = static_cast<int>(std::lower_bound(uniq.begin(), uniq.end(), seq[c][k]) - uniq.begin());
+      cached_[c].real = &dcurves_[c]; cached_[c].times = &disc_times_[c]; cached_[c].df = &disc_df_[c];
+      cached_[c].seq_t = &seq_t_[c]; cached_[c].seq_slot = &seq_slot_[c];
+      resolve_[c] = &cached_[c];
+      cached_ids_.push_back(c);
+    }
+  }
+
+  // Per residual eval: update the reusable curves (fallback + integral/forward), recompute each cached
+  // curve's DFs as one GEMV + one vectorised exp, and rewind its cursor to replay the fixed query order.
+  void refresh_curves(const Eigen::VectorXd& x) const {
+    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
+    for (int c : cached_ids_) { disc_df_[c] = (-(disc_M_[c] * x + disc_b_[c])).array().exp(); cached_[c].cursor = 0; }
+  }
+
   BundleProblem sub_;          // the non-cacheable instruments over the SAME curves (built once)
   std::vector<int> rows_;      // block index -> global residual row
   std::vector<int> touched_;   // global knot indices these instruments differentiate w.r.t. (sorted)
@@ -173,6 +276,17 @@ class AadBlock {
   mutable Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd_;  // reused width-reduced seed (values updated)
   mutable BundleCurveSet<double> dcurves_;     // reusable double curves: built once, forwards updated in place
   mutable BundleCurveSet<ad::Dual> ducurves_;  // reusable Dual curves for the width-reduced Jacobian
+
+  // ---- vectorised discount cache (per curve; only for curves the block prices off) ----
+  std::vector<std::vector<double>> disc_times_;  // [curve] sorted distinct query times
+  std::vector<Eigen::MatrixXd> disc_M_;          // [curve] (n_times x n_knots): integral(t) = M.row.x + b
+  std::vector<Eigen::VectorXd> disc_b_;          // [curve] constant term of the affine integral map
+  mutable std::vector<Eigen::VectorXd> disc_df_; // [curve] exp(-(M x + b)), refreshed per eval
+  std::vector<std::vector<double>> seq_t_;        // [curve] ordered query times (cursor replay guard)
+  std::vector<std::vector<int>> seq_slot_;        // [curve] ordered df slots -> discount is df[seq_slot[k]]
+  std::vector<CachedDisc> cached_;               // [curve] cache handle (stable address -> pointers hold)
+  std::vector<const CurveHandle<double>*> resolve_;  // [curve] cached_ where cached, else the real curve
+  std::vector<int> cached_ids_;                  // curve ids that have a cache (drives the refresh loop)
 };
 
 }  // namespace swaps::calibration
