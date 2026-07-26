@@ -287,16 +287,16 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   `go`/`rust`/`llvm`). Vendor deps into `third_party/` instead.
 - Toolchain: **Apple clang 16 via Command Line Tools 16.2** (`xcode-select -p` →
   `/Library/Developer/CommandLineTools`; no full Xcode installed). C++20 (`-std=c++20`) requires clang 15+.
-  ⚠️ **CLT 16.2 shipped a BROKEN libc++**: its bundled headers dir
-  `/Library/Developer/CommandLineTools/usr/include/c++/v1` is empty except a `__cxx_version` stub (~1500
-  headers missing), so every compile fails `'cstddef' file not found` — clang won't fall back to the SDK's
-  complete copy because the empty dir still *exists* and shadows it. **Fix:** reinstall CLT
-  (`sudo softwareupdate --install "Command Line Tools for Xcode-16.2"`), then check
-  `ls /Library/Developer/CommandLineTools/usr/include/c++/v1 | wc -l` is ~150+, not 1. **Workaround if
-  still broken:** point at a present SDK's libc++ —
-  `export CPLUS_INCLUDE_PATH=$(xcrun --show-sdk-path)/usr/include/c++/v1` (or append
-  `-nostdinc++ -isystem "$(xcrun --show-sdk-path)/usr/include/c++/v1"` to `CMAKE_CXX_FLAGS`); the SDK copy
-  is complete, so builds work and codegen is identical (perf gate unaffected).
+  Under CLT 16.x, **libc++ lives in the SDK, not the toolchain** — a missing
+  `/Library/Developer/CommandLineTools/usr/include/c++` directory is NORMAL, and plain `-std=c++20` builds
+  resolve libc++ from the active SDK (`xcrun --show-sdk-path`) with no extra flags.
+  ⚠️ **Historical gotcha (fixed 2026-07-26):** a corrupted/partial CLT install had left an *empty-but-
+  present* `usr/include/c++/v1` stub dir (just a `__cxx_version` file) that **shadowed** the SDK's copy, so
+  every compile failed `'cstddef' file not found` and clang never fell back. **Fix that worked:** a clean
+  reinstall — `sudo softwareupdate --install "Command Line Tools for Xcode-16.2"` — removed the stub. If
+  that symptom ever returns without reinstalling, the crutch is
+  `-nostdinc++ -isystem "$(xcrun --show-sdk-path)/usr/include/c++/v1"` on `CMAKE_CXX_FLAGS` (SDK copy is
+  complete; codegen identical, perf gate unaffected).
 
 ### Dependencies (all vendored under `third_party/`, gitignored)
 Eigen (header-only), GoogleTest, Google Benchmark, Boost headers, and QuantLib
