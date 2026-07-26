@@ -5,6 +5,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 
+#include <chrono>
 #include <stdexcept>
 #include <utility>
 
@@ -436,6 +437,7 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
 }
 
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
+  const auto t0 = std::chrono::steady_clock::now();
   if (reg.on())
     result_ = cal::calibrate(cal::smoothed(prob_, reg.lambda, reg.curves), x0, /*use_aad=*/true);
   else if (!has_nonlinear_)
@@ -446,6 +448,8 @@ const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0
     // A non-linear region scheme (MonotoneCubic) has NO constant W at all, so the whole bundle prices on
     // the generic AAD engine (a zero-reg smoothed wrapper routes there).
     result_ = cal::calibrate(cal::smoothed(prob_, 0.0, {}), x0, /*use_aad=*/true);
+  last_solve_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+  result_.solve_micros = last_solve_us_;
   x_ = result_.x;
   return result_;
 }
@@ -518,11 +522,20 @@ void BundleSession::start_streaming(const RegSpec& reg) {
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
   if (reg.on()) opt.regularizer = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
   stream_ = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(prob_, x_, q0, opt);
+  stream_sum_us_ = 0;  // reset the running average for this streaming session
+  stream_ticks_ = 0;
 }
 
 const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_market) {
   if (!stream_) throw std::runtime_error("start_streaming() must be called first");
-  stream_->update(new_market);
+  const auto t0 = std::chrono::steady_clock::now();
+  const cal::StreamTick tick = stream_->update(new_market);
+  last_solve_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+  stream_sum_us_ += last_solve_us_;
+  ++stream_ticks_;
+  last_newton_steps_ = tick.newton_steps;
+  last_refreshes_ = tick.refreshes;
+  last_drift_ = tick.drift;
   x_ = stream_->current();
   return x_;
 }

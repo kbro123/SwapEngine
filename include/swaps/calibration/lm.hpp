@@ -97,6 +97,9 @@ struct CalibrationResult {
   int info = 0;             // Eigen::LevenbergMarquardtSpace::Status
   double rms_residual = 0;  // sqrt(||r||^2 / m)
   double stationarity = 0;  // ||J^T r||_inf  -- the over-determined optimality measure
+  double solve_micros = 0;  // engine-measured wall time of the solve (excludes any marshalling); the
+                            // caller (BundleSession) stamps this so callers report the ENGINE's own
+                            // calibration time, not a language-boundary wall-clock.
 };
 
 // use_aad = drive the LM with the ANALYTIC residual engine (default; compiled W-cache Jacobian for

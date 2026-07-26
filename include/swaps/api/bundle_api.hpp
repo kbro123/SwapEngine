@@ -121,6 +121,19 @@ class BundleSession {
   const Eigen::VectorXd& stream_update(const Eigen::VectorXd& new_market);
   bool streaming() const { return static_cast<bool>(stream_); }
 
+  // ---- solve-time telemetry (measured by default; a steady_clock pair is ~100ns, <0.1% of a solve) --
+  // Every calibrate/recalibrate/stream_update stamps the ENGINE-measured wall time of the solve itself
+  // (no marshalling). Callers should report these instead of timing across a language boundary.
+  double last_solve_us() const { return last_solve_us_; }        // most recent solve, any path (µs)
+  // Running mean of stream_update solve times since the last start_streaming(); 0 before the first tick.
+  double stream_avg_us() const { return stream_ticks_ ? stream_sum_us_ / stream_ticks_ : 0.0; }
+  long stream_ticks() const { return stream_ticks_; }            // stream_update calls since start_streaming
+  // Frozen-Newton introspection for the LAST stream_update (all 0 on the pure fast path): Gauss-Newton
+  // steps taken, analytic-Jacobian refreshes triggered, and the market drift that provoked them.
+  int last_newton_steps() const { return last_newton_steps_; }
+  int last_refreshes() const { return last_refreshes_; }
+  double last_drift() const { return last_drift_; }
+
   // ---- fixings as pricing context (E2) -----------------------------------------------------------
   // Any observation carrying a fixing_schedule is RESOLVED from this session's fixing table against the
   // evaluation date: past days -> `realized` (throwing/flagging MissingFixing if absent), future days ->
@@ -158,6 +171,14 @@ class BundleSession {
   swaps::pricing::FixingTable fixings_;
   int eval_date_ = 0;
   int n_unresolved_ = 0;
+
+  // Solve-time telemetry (stamped by calibrate/recalibrate/stream_update; see the getters above).
+  double last_solve_us_ = 0;
+  double stream_sum_us_ = 0;   // sum of stream_update solve times since start_streaming()
+  long stream_ticks_ = 0;      // count of those ticks
+  int last_newton_steps_ = 0;
+  int last_refreshes_ = 0;
+  double last_drift_ = 0;
 };
 
 // One-shot stateless JSON dispatcher for a web call. Request:
