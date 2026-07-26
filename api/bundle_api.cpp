@@ -388,6 +388,38 @@ static bool has_noncacheable_leaf(const cal::Instrument& ins) {
   return false;
 }
 
+// Collect every schedule-carrying RateObservation in an instrument (Rate future obs + float-leg coupons,
+// recursing into portfolio components), so the session can resolve them against the fixing context.
+namespace {
+void collect_sched_obs(cal::Instrument& ins, std::vector<px::RateObservation*>& out) {
+  auto leg = [&](cal::FloatLeg& l) {
+    for (auto& c : l.coupons)
+      if (!c.obs.fixing_schedule.empty()) out.push_back(&c.obs);
+  };
+  if (ins.quote == cal::QuoteKind::Rate && !ins.obs.fixing_schedule.empty()) out.push_back(&ins.obs);
+  leg(ins.fwd);
+  leg(ins.bench);
+  leg(ins.mtm);
+  for (auto& w : ins.combination) collect_sched_obs(w.instrument, out);
+}
+}  // namespace
+
+int BundleSession::resolve_fixings() {
+  std::vector<px::RateObservation*> obs;
+  for (auto& ins : prob_.instruments) collect_sched_obs(ins, obs);
+  const px::PricingContext ctx{eval_date_, &fixings_};
+  int missing = 0;
+  for (px::RateObservation* o : obs) {
+    try {
+      px::resolve_into(*o, ctx);  // rewrites realized/subs in place; no recompile
+    } catch (const px::MissingFixing&) {
+      ++missing;  // leave the observation as-is; the instrument is un-priceable until the fixing arrives
+    }
+  }
+  n_unresolved_ = missing;
+  return missing;
+}
+
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   for (const auto& ins : prob_.instruments) {
     if (has_noncacheable_leaf(ins)) has_fx_ = true;  // FX/MtM (incl. inside a Portfolio) -> AAD engine
@@ -400,6 +432,7 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
       if (r.scheme == curve::Scheme::MonotoneCubic) has_nonlinear_ = true;
   }
   x_ = Eigen::VectorXd::Zero(prob_.n_knots());
+  resolve_fixings();  // resolve any schedule-carrying observations (no-op when none carry a schedule)
 }
 
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {

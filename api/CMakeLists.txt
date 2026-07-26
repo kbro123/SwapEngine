@@ -13,7 +13,9 @@ target_link_libraries(swaps_api_cli PRIVATE swaps_api)
 
 # Self-contained round-trip test (no QuantLib): hand-built bundle -> JSON -> back -> calibrate.
 if(SWAPS_BUILD_TESTS AND GTest_FOUND)
-  add_executable(swaps_api_tests ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_test.cpp)
+  add_executable(swaps_api_tests
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_fixings_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost)
   gtest_discover_tests(swaps_api_tests)

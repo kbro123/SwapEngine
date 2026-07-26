@@ -28,6 +28,7 @@
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
+#include "swaps/pricing/fixings.hpp"
 
 namespace swaps::api {
 
@@ -120,7 +121,32 @@ class BundleSession {
   const Eigen::VectorXd& stream_update(const Eigen::VectorXd& new_market);
   bool streaming() const { return static_cast<bool>(stream_); }
 
+  // ---- fixings as pricing context (E2) -----------------------------------------------------------
+  // Any observation carrying a fixing_schedule is RESOLVED from this session's fixing table against the
+  // evaluation date: past days -> `realized` (throwing/flagging MissingFixing if absent), future days ->
+  // forecast sub-periods. Resolution runs on construction and on every set_evaluation_date/set_fixings.
+  // It only rewrites `realized`/subs (constants) in prob_ -- it does NOT recompile: the next
+  // calibrate()/stream picks the change up (a `realized`-only change is a residual-constant shift the
+  // streamer absorbs; a past/future boundary move changes subs and refreshes W via streamer staleness).
+
+  // Set the evaluation date (integer serial the caller defines); fixings strictly before it are fixed.
+  void set_evaluation_date(int serial) { eval_date_ = serial; resolve_fixings(); }
+  // Upsert fixings for one index and re-resolve every schedule-carrying observation in place. Returns the
+  // number of observations still un-priceable (a required past fixing is missing) after the update.
+  int set_fixings(const std::string& index, const std::vector<std::pair<int, double>>& rows) {
+    fixings_.bulk_set(index, rows);  // notifies (unused here; the session drives resolution directly)
+    return resolve_fixings();
+  }
+  int evaluation_date() const { return eval_date_; }
+  int n_unresolved() const { return n_unresolved_; }
+  const swaps::pricing::FixingTable& fixings() const { return fixings_; }
+
  private:
+  // Collect pointers to every schedule-carrying observation in prob_ (futures obs + float-leg coupons,
+  // recursing into portfolio components), and resolve them against {eval_date_, fixings_}. Returns the
+  // count that could not resolve (missing a past fixing). Pointers are stable: prob_ is not resized.
+  int resolve_fixings();
+
   cal::BundleProblem prob_;
   Eigen::VectorXd x_;
   cal::CalibrationResult result_;
@@ -129,6 +155,9 @@ class BundleSession {
   bool has_nonlinear_ = false;
   bool has_band_ = false;
   std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;
+  swaps::pricing::FixingTable fixings_;
+  int eval_date_ = 0;
+  int n_unresolved_ = 0;
 };
 
 // One-shot stateless JSON dispatcher for a web call. Request:
