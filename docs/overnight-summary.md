@@ -8,7 +8,7 @@ _Generated for morning review. Branch: `feat/tension-splines` (engine), `feat/te
 - **Track B (tension-energy regularizer) — COMPLETE.** Constant pseudo-residual smoothness penalty landed as `9d0f76d`; drops the ill-conditioned EUR-trio normal-matrix condition number from **~1e18 (rank-deficient) to ~1.2e10** and damps null-space wander ~24x. Honest caveat: it smooths but does not fully pin the long-end null.
 - **Web wiring — COMPLETE (local only).** Both tracks wired into the composer on `feat/tension-web` (`0295b4d`, `dbe9710`); Python-level verification passed. Browser UI check and `fly deploy` deliberately left for you.
 - **Fast-path audit — COMPLETE, no fix needed.** Both changes are off the hot loop by construction; measured per-tick cost is unchanged (Tension-back B/A=0.998, tension-reg C/D=1.007 vs baselines). One optional cosmetic micro-opt noted, not applied.
-- **Separate pipeline-overhead research — DID NOT RUN.** No `docs/calibration-overhead-analysis.md` and no `research/calibration-overhead` branch exist; that stage produced no output. See §6/§7.
+- **Separate pipeline-overhead research — COMPLETE (re-run).** `docs/calibration-overhead-analysis.md` on branch `research/calibration-overhead` (`fde890c`, pushed). Micro-benchmarks under the real flags **overturned the obvious optimizations** — inline-asm/SIMD on the exp/`W·x`/`M·r` kernels is bandwidth-bound and NOT worth it; the biggest real win is a pooled fixed-width AAD `Dual`. See §6.
 
 ## 2. Track B — tension-energy regularizer
 
@@ -100,19 +100,22 @@ Perf gate (baseline → current, ns): curve_build 812,742 → 657,274; risk_full
 
 ## 6. Separate pipeline-overhead research
 
-**Status: DID NOT RUN — no output produced.**
+**Status: COMPLETE (re-run after the workflow's parallel stage died on a worktree-isolation error).** Deliverable: `docs/calibration-overhead-analysis.md` on branch `research/calibration-overhead` (`fde890c`, pushed to origin). The analysis read the whole pipeline (lm / streaming / residual_engine / aad_block / compiled_bundle / hybrid_residual / regularize / bundle_problem / compiled_book / compiled / cashflows / regions / curve_module / simd + DetectISA + CMakeLists) and ran micro-benchmarks under the real flags (`-O3 -march=native -DEIGEN_ENABLE_AVX512`) on the AVX-512 host. Several measurements **overturned the "obvious" optimizations** — that is the main value of the doc.
 
-The task expected a research deliverable at `docs/calibration-overhead-analysis.md` on branch `research/calibration-overhead` with top-ranked recommendations. **Neither exists.** The research stage's input was `null`, and I confirmed on disk:
+**Top 5 recommendations (impact × safety):**
+1. **Compiler flags** — add `-fno-math-errno` + ThinLTO on the api/bench TUs; keep FMA at clang's default (`on`). **Forbid** `-ffast-math` / `-funsafe-math` / reassociation and `-ffinite-math-only` — they break the ~1e-10 QuantLib oracle *and* the internal bit-identical gates, and the code reasons about NaN. Safest, essentially free.
+2. **Pooled / fixed-width AAD `Dual`** — `AutoDiffScalar<VectorXd>` heap-allocates a gradient per arithmetic op; this is the one hot-path cost the code comments explicitly defer. A fixed-K inline gradient (FX/MtM touches ≤~32 knots) removes it. Largest real code win on the AAD tier; arithmetic unchanged ⇒ oracle-safe.
+3. **Cold-Jacobian `.noalias()` member buffers** — `-((G*diagDF)*W)` allocates a ~192 KB temp + result every LM iteration; split into reused members. (The ~82 µs GEMM itself dominates cold calibrate; a naive sparse rewrite measured *slower* — flagged honestly, not a quick win.)
+4. **Triangular `W` GEMV for local schemes** — the per-tick `W·x` is memory-bandwidth-bound (AVX-512 == AVX2, confirmed); float32 `W` would break the oracle, so the only safe lever is exploiting `W`'s near-lower-triangular fill for flat-front / Hermite / Tension layouts (~1.5–2×).
+5. **`noalias` the FX/MtM `refresh_curves` temporary** (`aad_block.hpp:269`) — small per-tick alloc on the hybrid path; trivially bit-identical.
 
-- `docs/calibration-overhead-analysis.md` — **not present** (only `bezier-and-moments.md`, `generic-instrument-pipeline.md`, `tension-spline-research.md` are in `docs/`).
-- branch `research/calibration-overhead` — **not present** (no branch matching `overhead`).
+**Anti-recommendation (important):** do NOT add SIMD intrinsics / inline asm to the `exp` / `W·x` / `M·r` kernels — measured bandwidth-bound or trivially small. The inline-asm idea, although explicitly authorized for this task, does not pay off here; the compiler-flag + pooled-Dual + `noalias` route is where the real, oracle-safe wins are.
 
-There are therefore **no recommendations to report**. This item is carried into §7 as not-completed.
+**Tension-code check:** confirmed no hot-loop overhead — all `sinh/cosh` + tridiagonal work is in `Tension::build()` (setup), `is_linear_map=true` so it rides the W-cache, and `tension_energy_operator`'s eigensolve is one-time regularizer setup. One honest note: `Tension::integral()` uses transcendentals, so the one-time W-BUILD is ~5–10× slower than Hermite's on that single pass — off the tick/iteration path, acceptable.
 
 ## 7. What did NOT complete + exact next steps
 
-1. **Pipeline-overhead research (§6) — not started.** No doc, no branch, no findings.
-   - Next: run the research stage explicitly, targeting `docs/calibration-overhead-analysis.md` on a fresh `research/calibration-overhead` branch; produce ranked recommendations on where calibration wall-clock is spent (setup vs solve vs binding marshalling).
+1. **Pipeline-overhead research (§6) — COMPLETE.** `docs/calibration-overhead-analysis.md` on `research/calibration-overhead` (`fde890c`, pushed). Actionable next step from it: implement the top-2 oracle-safe wins — (a) `-fno-math-errno` + ThinLTO on the api/bench TUs, and (b) the pooled fixed-width AAD `Dual` — each gated by `verify.sh`. The inline-asm/SIMD kernel idea was measured NOT worth it.
 2. **Browser UI verification of the web wiring — not done** (requires interactive auth).
    - Next: open the composer, set a region to Tension (confirm the σ input appears), toggle the Tension-energy penalty, then calibrate + stream a Tension bundle and confirm the frozen-Newton fast path in the UI.
 3. **Tension-energy weight/preset calibration — not done.**
