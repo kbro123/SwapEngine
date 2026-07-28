@@ -438,7 +438,13 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
 
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
   const auto t0 = std::chrono::steady_clock::now();
-  if (reg.on())
+  if (reg.on() && reg.tension)
+    // Continuous tension-energy penalty: a constant pseudo-residual block R (= sqrt(mu)*L) appended to
+    // the least squares (regularize.hpp §5). Built once, off the AAD hot path, like the second-diff path.
+    result_ = cal::calibrate(
+        cal::linearly_regularized(prob_, cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)),
+        x0, /*use_aad=*/true);
+  else if (reg.on())
     result_ = cal::calibrate(cal::smoothed(prob_, reg.lambda, reg.curves), x0, /*use_aad=*/true);
   else if (!has_nonlinear_)
     // HYBRID W-cache: cacheable rows on the fast path, any FX/MtM (or portfolio-with-FX) rows on a
@@ -499,7 +505,9 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   const Eigen::MatrixXd J = cal::aad_jacobian(prob_, x_);  // n_res x n_knots
   Eigen::MatrixXd A = J.transpose() * J;                   // n_knots x n_knots
   if (reg.on()) {
-    const Eigen::MatrixXd R = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+    const Eigen::MatrixXd R = reg.tension
+                                  ? cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)
+                                  : cal::second_difference_operator(prob_, reg.lambda, reg.curves);
     A.noalias() += R.transpose() * R;
   }
   const Eigen::MatrixXd Ainv = A.ldlt().solve(Eigen::MatrixXd::Identity(A.rows(), A.rows()));
@@ -520,7 +528,10 @@ void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
   // so anchoring at the mids keeps the drift ~0 at the first real tick.
   const Eigen::VectorXd q0 = prob_.market();
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
-  if (reg.on()) opt.regularizer = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+  if (reg.on())
+    opt.regularizer = reg.tension
+                          ? cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)
+                          : cal::second_difference_operator(prob_, reg.lambda, reg.curves);
   if (step_tol > 0.0) opt.step_tol = step_tol;  // looser tol -> fewer corrector steps (speed/accuracy knob)
   stream_ = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(prob_, x_, q0, opt);
   stream_sum_us_ = 0;  // reset the running average for this streaming session
@@ -569,6 +580,8 @@ std::string run_json(const std::string& request) {
       const auto& r = o.at("regularize").as_object();
       reg.lambda = get_d(r, "lambda", 0.0);
       reg.curves = get_ia(r, "curves");
+      reg.tension = get_b(r, "tension", false);  // continuous tension energy vs discrete second-difference
+      reg.sigma = get_d(r, "sigma", 0.0);        // tension parameter (tension=true); 0 => pure curvature
     }
 
     const cal::CalibrationResult& res = sess.calibrate(x0, reg);

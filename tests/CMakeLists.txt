@@ -15,6 +15,7 @@ add_executable(swaps_tests
   generic_instrument_test.cpp
   portfolio_instrument_test.cpp
   fixings_test.cpp
+  tension_regularizer_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
 target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -55,6 +56,7 @@ if(TARGET quantlib_oracle)
     migration_guard_test.cpp
     multicurrency_test.cpp
     conventions_test.cpp
+    tension_regularizer_oracle_test.cpp
   )
   target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
   target_include_directories(swaps_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

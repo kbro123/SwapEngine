@@ -48,9 +48,15 @@ struct CurveSample {
 // Optional Tikhonov smoothness regulariser (include/swaps/calibration/regularize.hpp): penalise the
 // curvature of the listed curves' knot forwards. lambda <= 0 or empty `curves` => off. Needed for
 // basis-only forecast curves whose forward shape is a rank-deficient null (CLAUDE.md §7b, EUR trio).
+// The `tension` flag switches the operator from the discrete second-difference penalty to the continuous
+// TENSION ENERGY mu*x^T(K2+sigma^2 K1)x (regularize.hpp, research note §5): `lambda` is then the row
+// weight (mu = lambda^2) and `sigma` the tension parameter -- sigma = 0 is pure bending energy INT(f'')^2,
+// sigma > 0 adds the membrane term INT(f')^2 (taut, overshoot-damped). sigma is ignored when tension=false.
 struct RegSpec {
   double lambda = 0.0;
   std::vector<int> curves;
+  bool tension = false;  // false: second-difference curvature; true: continuous tension energy
+  double sigma = 0.0;    // tension parameter (tension=true only); 0 => pure curvature penalty
   bool on() const { return lambda > 0.0 && !curves.empty(); }
 };
 
@@ -187,7 +193,9 @@ class BundleSession {
 // One-shot stateless JSON dispatcher for a web call. Request:
 //   { "bundle": {...},                         (required) the BundleProblem object graph
 //     "x0": [...],                             (optional) start; else a flat guess
-//     "regularize": {"lambda":1.0,"curves":[3,4]},  (optional)
+//     "regularize": {"lambda":1.0,"curves":[3,4],   (optional) smoothness penalty on those curves;
+//                     "tension":true,"sigma":0.0},   add tension:true for the continuous tension energy
+//                                                     (sigma=0 curvature, sigma>0 taut) vs 2nd-difference
 //     "sample_times": [...],                   (optional) grid to sample every curve on
 //     "price": [ {instrument}, ... ],          (optional) instruments to price off the solved curves
 //     "risk": true }                           (optional) include the dx/dq operator
