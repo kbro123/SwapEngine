@@ -158,6 +158,7 @@ curve::Scheme scheme_from_str(const std::string& s) {
   if (s == "Hermite") return curve::Scheme::Hermite;
   if (s == "MonotoneCubic") return curve::Scheme::MonotoneCubic;
   if (s == "BSpline") return curve::Scheme::BSpline;
+  if (s == "Tension") return curve::Scheme::Tension;
   throw std::invalid_argument("unknown interpolation scheme: " + s);
 }
 const char* scheme_to_str(curve::Scheme s) {
@@ -168,6 +169,7 @@ const char* scheme_to_str(curve::Scheme s) {
     case curve::Scheme::Hermite: return "Hermite";
     case curve::Scheme::MonotoneCubic: return "MonotoneCubic";
     case curve::Scheme::BSpline: return "BSpline";
+    case curve::Scheme::Tension: return "Tension";
   }
   return "Hermite";
 }
@@ -184,6 +186,7 @@ cal::BundleCurveSpec spec_from(const json::object& o) {
       curve::CurveModule m;
       m.scheme = scheme_from_str(get_s(ro, "scheme", "Hermite"));
       m.knots = get_da(ro, "knots");
+      m.sigma = get_d(ro, "sigma", 0.0);  // tension hyperparameter (Scheme::Tension only); else ignored
       s.regions.push_back(std::move(m));
     }
   return s;
@@ -266,6 +269,7 @@ json::object spec_to(const cal::BundleCurveSpec& s) {
       json::object mo;
       mo["scheme"] = scheme_to_str(m.scheme);
       mo["knots"] = da(m.knots);
+      if (m.scheme == curve::Scheme::Tension) mo["sigma"] = m.sigma;
       rs.push_back(mo);
     }
     o["regions"] = rs;

@@ -52,18 +52,39 @@ struct RegionHolder final : RegionIface<S> {
   Boundary<S> out() const override { return p.out(); }
 };
 
+// Tension needs a second construction argument (σ), so it gets its own holder rather than the generic
+// RegionHolder (which passes only knots). Everything else about the contract is identical.
+template <class S>
+struct TensionHolder final : RegionIface<S> {
+  Tension<S> p;
+  TensionHolder(std::vector<double> knots, double sigma) : p(std::move(knots), sigma) {}
+  int n_values() const override { return p.n_values(); }
+  double t_end() const override { return p.t_end(); }
+  bool linear() const override { return Tension<S>::is_linear_map; }
+  void build(const S* x, int off, const Boundary<S>& in) override { p.build(x, off, p.n_values(), in); }
+  S forward(double t) const override { return p.forward(t); }
+  S integral(double t) const override { return p.integral(t); }
+  Boundary<S> out() const override { return p.out(); }
+};
+
 // MonotoneCubic is the one NON-LINEAR scheme here: RegionHolder<S,MonotoneCubic>::linear() returns false,
 // so a ModularCurve containing it reports is_linear_map()==false -- the runtime signal to route that curve
 // through the AAD engine rather than the W-cache (which its static_assert would reject at compile time).
 // BSpline is linear too, but note its free values are CONTROL POINTS, which do not lie on the curve
 // (docs/bezier-and-moments.md Part A) -- calibrated x are control points, mapped to forward-at-knot for
 // a risk ladder by pricing::bspline_collocation. That is a property of the REGION, not of a curve type.
-enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline };
+// Tension is the second LINEAR hyperbolic scheme (research note §3): with σ a FIXED hyperparameter its
+// coefficients depend only on knot spacings, so is_linear_map = true -- it rides the W-cache exactly
+// like NaturalCubic/BSpline, unlike the value-dependent MonotoneCubic. σ travels in CurveModule::sigma.
+enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline, Tension };
 
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
   std::vector<double> knots;  // knot times (year fractions), ascending, within this region
   Scheme scheme;              // interpolation scheme over those knots
+  // Tension hyperparameter (Scheme::Tension only): pulls the spline taut, σ→0 recovers NaturalCubic,
+  // σ→∞ approaches piecewise-linear. Ignored by every other scheme. <=0 means "use the default 1.0".
+  double sigma = 0.0;
 };
 
 template <class S>
@@ -85,6 +106,12 @@ class ModularCurve {
       case Scheme::Hermite: return add<Hermite>(m.knots);
       case Scheme::MonotoneCubic: return add<MonotoneCubic>(m.knots);
       case Scheme::BSpline: return add<BSpline>(m.knots);
+      case Scheme::Tension: {
+        regions_.push_back(
+            std::make_unique<TensionHolder<S>>(m.knots, m.sigma > 0.0 ? m.sigma : 1.0));
+        n_ += regions_.back()->n_values();
+        return *this;
+      }
     }
     return *this;
   }
@@ -203,6 +230,18 @@ inline std::vector<CurveModule> flat_bspline(const std::vector<double>& meeting,
 inline std::vector<CurveModule> flat_monotone(const std::vector<double>& meeting,
                                               const std::vector<double>& back) {
   return two_region_layout(meeting, back, Scheme::MonotoneCubic);
+}
+
+// Tension-spline back end (research note §3): a flat meeting-date front + a spline-under-tension back
+// with fixed hyperparameter σ. Like flat_hermite/flat_bspline it stays a LINEAR MAP of the knot forwards
+// (σ fixed), so it is W-cacheable and analytic-Jacobian ready; σ trades smoothness (σ→0 == the natural
+// cubic) for tautness (large σ suppresses overshoot). Validated end-to-end against QuantLib.
+inline std::vector<CurveModule> flat_tension(const std::vector<double>& meeting,
+                                             const std::vector<double>& back, double sigma) {
+  std::vector<CurveModule> m;
+  if (!meeting.empty()) m.push_back({meeting, Scheme::Flat, 0.0});
+  if (!back.empty()) m.push_back({back, Scheme::Tension, sigma});
+  return m;
 }
 
 }  // namespace swaps::curve

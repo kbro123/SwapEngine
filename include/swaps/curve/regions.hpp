@@ -646,4 +646,232 @@ class BSpline {
   Scalar I0_{0.0}, region_int_{0.0};
 };
 
+// ---- Tension-spline shape functions (research note §1,§3,§6) --------------------------------------
+// A spline under tension has f in span{1, t, sinh(σt), cosh(σt)} per interval. Assembling it needs a
+// handful of scalar functions of (σ, h) and (σ, h, v) built from sinh/cosh. All are pure DOUBLE
+// (structure-only: σ is a fixed hyperparameter, h/v are times) -- the AAD-carrying knot values enter
+// only linearly, multiplying these coefficients (see class Tension). Every function is written to be
+// numerically stable across the whole σh range:
+//   * σh small: naive hyperbolic forms are 0/0 with catastrophic cancellation. Each function is
+//     rewritten so the leading linear part cancels ANALYTICALLY, leaving a stable "minus-linear"
+//     helper (sinhm1 = sinh(x)-x, coshm2 = cosh(x)-1-x²/2, xcoshm = x·cosh(x)-sinh(x)) evaluated by
+//     Taylor SERIES for |x| < 0.5. In the σ→0 limit these reproduce the natural-cubic coefficients
+//     EXACTLY (leading term), so Tension → NaturalCubic continuously.
+//   * σh large (> 20): sinh/cosh overflow; use scaled-exponential asymptotics (coth→1, csch→0). The
+//     interval is effectively taut there anyway.
+// None of this touches the differentiated hot loop -- it runs once in Tension::build().
+namespace tension_detail {
+
+// sinh(x) - x = x³/6 + x⁵/120 + x⁷/5040 + ...   (stable for small x; direct subtraction is fine large)
+inline double sinhm1(double x) {
+  const double ax = std::abs(x);
+  if (ax < 0.5) {
+    const double x2 = x * x;
+    // Horner in x² for x³/6 + x⁵/120 + x⁷/5040 + x⁹/362880 + x¹¹/39916800
+    double s = 1.0 / 39916800.0;
+    s = s * x2 + 1.0 / 362880.0;
+    s = s * x2 + 1.0 / 5040.0;
+    s = s * x2 + 1.0 / 120.0;
+    s = s * x2 + 1.0 / 6.0;
+    return s * x2 * x;  // x³·(...)
+  }
+  return std::sinh(x) - x;
+}
+
+// cosh(x) - 1 - x²/2 = x⁴/24 + x⁶/720 + x⁸/40320 + ...   (stable for small x)
+inline double coshm2(double x) {
+  const double ax = std::abs(x);
+  if (ax < 0.5) {
+    const double x2 = x * x;
+    double s = 1.0 / 6227020800.0;  // x¹²/12!
+    s = s * x2 + 1.0 / 40320.0;     // x⁸/8!
+    s = s * x2 + 1.0 / 720.0;       // x⁶/6!
+    s = s * x2 + 1.0 / 24.0;        // x⁴/4!
+    return s * x2 * x2;             // x⁴·(...)
+  }
+  return std::cosh(x) - 1.0 - 0.5 * x * x;
+}
+
+// x·cosh(x) - sinh(x) = x³/3 + x⁵/30 + x⁷/840 + ...   (stable for small x)
+inline double xcoshm(double x) {
+  const double ax = std::abs(x);
+  if (ax < 0.5) {
+    const double x2 = x * x;
+    // coefficient of x^(2k+1) is (2k)/(2k+1)! : 1/3, 1/30, 1/840, 1/45360, ...
+    double s = 10.0 / 39916800.0;  // 10/11!
+    s = s * x2 + 8.0 / 362880.0;   // 8/9!
+    s = s * x2 + 6.0 / 5040.0;     // 6/7!
+    s = s * x2 + 4.0 / 120.0;      // 4/5!
+    s = s * x2 + 2.0 / 6.0;        // 2/3!
+    return s * x2 * x;             // x³·(...)
+  }
+  return x * std::cosh(x) - std::sinh(x);
+}
+
+// p(σ,h) = [1/h - σ/sinh(σh)] / σ²  = sinhm1(σh) / (h·σ²·sinh(σh)).  σ→0: → h/6 (natural-cubic off-diag).
+inline double p_coef(double sigma, double h) {
+  const double x = sigma * h;
+  if (x > 20.0) {  // sinh huge: 1/h - σ/sinh(σh) → 1/h;  p → 1/(h σ²) with an exp-small correction.
+    const double e = std::exp(-2.0 * x);
+    const double ratio = 2.0 * x * std::exp(-x) / (1.0 - e);  // = σh / sinh(σh)
+    return (1.0 - ratio) / (h * sigma * sigma);
+  }
+  return sinhm1(x) / (h * sigma * sigma * std::sinh(x));
+}
+
+// q(σ,h) = [σ·coth(σh) - 1/h] / σ²  = xcoshm(σh) / (h·σ²·sinh(σh)).  σ→0: → h/3 (natural-cubic diag/side).
+inline double q_coef(double sigma, double h) {
+  const double x = sigma * h;
+  if (x > 20.0) {  // coth → 1:  q → (σ - 1/h)/σ² = 1/σ - 1/(σ²h), plus exp-small.
+    const double e = std::exp(-2.0 * x);
+    const double coth = 1.0 + 2.0 * e / (1.0 - e);
+    return (sigma * coth - 1.0 / h) / (sigma * sigma);
+  }
+  return xcoshm(x) / (h * sigma * sigma * std::sinh(x));
+}
+
+// Curvature shape function on [0,h]:  Φ(σ,h,v) = [sinh(σv)/sinh(σh) - v/h] / σ², with Φ(·,·,0)=Φ(·,·,h)=0.
+// Stable "minus-linear" form: numerator h·sinh(σv) - v·sinh(σh) = h·sinhm1(σv) - v·sinhm1(σh) (the σv, σh
+// terms cancel analytically). σ→0: Φ → (v³ - v h²)/(6h), the natural-cubic curvature shape.
+inline double Phi(double sigma, double h, double v) {
+  const double xh = sigma * h;
+  if (xh > 20.0) {  // scaled-exponential: sinh(σv)/sinh(σh) = e^{-σ(h-v)}(1-e^{-2σv})/(1-e^{-2σh}).
+    const double r = std::exp(-sigma * (h - v)) * (1.0 - std::exp(-2.0 * sigma * v)) /
+                     (1.0 - std::exp(-2.0 * xh));
+    return (r - v / h) / (sigma * sigma);
+  }
+  const double num = h * sinhm1(sigma * v) - v * sinhm1(xh);
+  return num / (h * sigma * sigma * std::sinh(xh));
+}
+
+// ∫₀^v Φ(σ,h,w) dw = [(cosh(σv)-1)/(σ sinh(σh)) - v²/(2h)] / σ². Stable minus-quadratic form:
+//   2h(cosh(σv)-1) - v²σ sinh(σh) = 2h·coshm2(σv) - v²·σ·sinhm1(σh)   (leading σ²v²h terms cancel).
+// σ→0: Ψ → (v⁴ - 2v²h²)/(24h), the antiderivative of the natural-cubic curvature shape.
+inline double Psi(double sigma, double h, double v) {
+  const double xh = sigma * h;
+  if (xh > 20.0) {  // (cosh(σv)-1)/(σ sinh(σh)) via scaled exponentials (all exponents ≤ 0, no overflow):
+    // = [e^{σ(v-h)} + e^{-σ(v+h)} - 2e^{-σh}] / (σ(1-e^{-2σh})).
+    const double term = std::exp(sigma * (v - h)) + std::exp(-sigma * (v + h)) - 2.0 * std::exp(-xh);
+    const double first = term / (sigma * (1.0 - std::exp(-2.0 * xh)));
+    return (first - v * v / (2.0 * h)) / (sigma * sigma);
+  }
+  const double num = 2.0 * h * coshm2(sigma * v) - v * v * sigma * sinhm1(xh);
+  return num / (2.0 * h * sigma * sigma * sigma * std::sinh(xh));
+}
+
+}  // namespace tension_detail
+
+// Spline under TENSION on the forward-at-knot values (research note §1,§3). Like NaturalCubic it is a
+// C² interpolant with natural end curvature (f''=0 at both ends) and pins its leading value to the
+// incoming boundary (C0 join). What differs is the basis: on each interval f ∈ span{1, t, sinh(σt),
+// cosh(σt)} instead of a cubic, so a fixed hyperparameter σ ("tension") pulls the curve taut between
+// knots -- σ→0 recovers the natural cubic exactly, σ→∞ approaches piecewise linear, killing the
+// overshoot a plain cubic can produce (Hagan-West). Crucially, with σ FIXED the knot curvatures solve a
+// tridiagonal system A(h,σ) z = B(h,σ) y whose matrices depend ONLY on the spacings h and σ, never on
+// the values y, so z = A⁻¹B·y is a CONSTANT matrix times y and f (and ∫f) are LINEAR in the knot
+// forwards. Therefore is_linear_map = true: the W-cache + analytic Jacobian ride it unchanged, and all
+// the sinh/cosh + tridiagonal work happens ONCE here in build(), never in the differentiated hot loop
+// (which stays DF = exp(-Wx)). This is what MonotoneCubic could not offer -- tension controls overshoot
+// WITHOUT value-dependent branches, so it stays on the fast path.
+template <class Scalar>
+class Tension {
+ public:
+  explicit Tension(std::vector<double> knots, double sigma = 1.0)
+      : s_(std::move(knots)), sigma_(sigma) {
+    require_increasing_knots(s_, "Tension");
+    if (!(sigma_ > 0.0) || !std::isfinite(sigma_))
+      throw std::invalid_argument("Tension: sigma must be finite and > 0 (use NaturalCubic for σ=0)");
+  }
+  int n_values() const { return static_cast<int>(s_.size()); }
+  double t_end() const { return s_.back(); }
+  static constexpr bool is_linear_map = true;
+
+  template <class Vec>
+  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
+    const int N = n + 1;  // spline points: [in.time, s_...]; point 0 pinned to the boundary value (C0)
+    xs_.resize(N);
+    ys_.resize(N);
+    xs_[0] = in.time;
+    ys_[0] = in.value;  // C0 join
+    for (int i = 0; i < n; ++i) {
+      xs_[i + 1] = s_[i];
+      ys_[i + 1] = x[off + i];
+    }
+    const int nseg = N - 1;
+    h_.resize(nseg);
+    for (int i = 0; i < nseg; ++i) h_[i] = xs_[i + 1] - xs_[i];
+
+    // Knot curvatures z (= f''(t_i)); natural BC z[0]=z[N-1]=0, interior from the tension tridiagonal.
+    // Scaled by σ² out of both A and B so the system is the well-conditioned cubic-limit matrix:
+    //   Ã_{i,i-1} = p(σ,h_{i-1}),  Ã_{i,i} = q(σ,h_{i-1}) + q(σ,h_i),  Ã_{i,i+1} = p(σ,h_i),
+    //   B̃_i = (y_{i+1}-y_i)/h_i - (y_i-y_{i-1})/h_{i-1}   (linear in y).
+    // p,q → natural-cubic h/6, h/3 as σ→0 (tension_detail), so z → the natural-cubic moments exactly.
+    z_.assign(N, Scalar(0.0));
+    if (nseg >= 2) {
+      const int k = nseg - 1;  // interior unknowns z[1..N-2]
+      std::vector<double> lower(k), diag(k), upper(k);
+      std::vector<Scalar> rhs(k);
+      for (int i = 1; i <= k; ++i) {
+        lower[i - 1] = tension_detail::p_coef(sigma_, h_[i - 1]);
+        diag[i - 1] = tension_detail::q_coef(sigma_, h_[i - 1]) + tension_detail::q_coef(sigma_, h_[i]);
+        upper[i - 1] = tension_detail::p_coef(sigma_, h_[i]);
+        rhs[i - 1] = (ys_[i + 1] - ys_[i]) / h_[i] - (ys_[i] - ys_[i - 1]) / h_[i - 1];
+      }
+      // Thomas (double bands, Scalar rhs -> AAD flows through the values).
+      for (int i = 1; i < k; ++i) {
+        const double w = lower[i] / diag[i - 1];
+        diag[i] -= w * upper[i - 1];
+        rhs[i] = rhs[i] - w * rhs[i - 1];
+      }
+      std::vector<Scalar> zi(k);
+      zi[k - 1] = rhs[k - 1] / diag[k - 1];
+      for (int i = k - 1; i-- > 0;) zi[i] = (rhs[i] - upper[i] * zi[i + 1]) / diag[i];
+      for (int i = 1; i <= k; ++i) z_[i] = zi[i - 1];
+    }
+
+    // Cumulative integral at each knot: full-segment ∫ = (y_i+y_{i+1})h/2 + (z_i+z_{i+1})·Ψ(σ,h,h).
+    Is_.resize(N);
+    Is_[0] = in.integral;
+    for (int i = 0; i < nseg; ++i) {
+      const double psih = tension_detail::Psi(sigma_, h_[i], h_[i]);
+      Is_[i + 1] = Is_[i] + (ys_[i] + ys_[i + 1]) * (0.5 * h_[i]) + (z_[i] + z_[i + 1]) * psih;
+    }
+    // End slope for the C1 handoff: f'(t_end) = (y_N-y_{N-1})/h + z_{N-2}·p + z_{N-1}·q (z_{N-1}=0).
+    const double hl = h_[nseg - 1];
+    end_slope_ = (ys_[N - 1] - ys_[N - 2]) / hl + z_[N - 2] * tension_detail::p_coef(sigma_, hl) +
+                 z_[N - 1] * tension_detail::q_coef(sigma_, hl);
+  }
+
+  Scalar forward(double t) const {
+    if (t >= xs_.back()) return ys_.back();  // flat extrapolation
+    const int i = seg(t);
+    const double h = h_[i], u = t - xs_[i];
+    // f = y_i(h-u)/h + y_{i+1}u/h + z_i·Φ(σ,h,h-u) + z_{i+1}·Φ(σ,h,u)   (linear in y and z).
+    return ys_[i] * ((h - u) / h) + ys_[i + 1] * (u / h) +
+           z_[i] * tension_detail::Phi(sigma_, h, h - u) + z_[i + 1] * tension_detail::Phi(sigma_, h, u);
+  }
+  Scalar integral(double t) const {
+    if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
+    const int i = seg(t);
+    const double h = h_[i], u = t - xs_[i];
+    // ∫_{t_i}^{t} f = y_i(u - u²/2h) + y_{i+1}u²/2h + z_i[Ψ(h)-Ψ(h-u)] + z_{i+1}Ψ(u).
+    const double lin_i = u - 0.5 * u * u / h, lin_ip1 = 0.5 * u * u / h;
+    const double psi_h = tension_detail::Psi(sigma_, h, h);
+    const double psi_hmu = tension_detail::Psi(sigma_, h, h - u);
+    const double psi_u = tension_detail::Psi(sigma_, h, u);
+    return Is_[i] + ys_[i] * lin_i + ys_[i + 1] * lin_ip1 + z_[i] * (psi_h - psi_hmu) + z_[i + 1] * psi_u;
+  }
+  Boundary<Scalar> out() const { return {xs_.back(), ys_.back(), end_slope_, Is_.back()}; }
+
+ private:
+  int seg(double t) const {
+    auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
+    return static_cast<int>(it - xs_.begin()) - 1;
+  }
+  std::vector<double> s_, xs_, h_;
+  double sigma_ = 1.0;
+  std::vector<Scalar> ys_, z_, Is_;
+  Scalar end_slope_{0.0};
+};
+
 }  // namespace swaps::curve
