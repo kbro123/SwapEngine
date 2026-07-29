@@ -12,7 +12,12 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Aggressive, reproducible optimization for the engine + benchmarks.
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+# -fno-math-errno: math functions (exp/pow/…) never set errno, so the compiler can inline/vectorize them
+# freely and drop the errno-store barrier. This is VALUE-PRESERVING — it changes error reporting, not
+# results — so the ~1e-10 QuantLib oracle and the internal bit-identical gates are unaffected. (Deliberately
+# NOT -ffast-math / -funsafe-math / reassociation, which WOULD break those gates — see
+# docs/calibration-overhead-analysis.md.)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -fno-math-errno")
 
 # ---- Automatic ISA/SIMD detection (portable across hosts) -------------------
 # Detects AVX2 / AVX-512 / NEON / SSE2 on whatever machine this is built on and

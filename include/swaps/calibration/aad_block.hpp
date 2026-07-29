@@ -266,7 +266,12 @@ class AadBlock {
   // curve's DFs as one GEMV + one vectorised exp, and rewind its cursor to replay the fixed query order.
   void refresh_curves(const Eigen::VectorXd& x) const {
     dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
-    for (int c : cached_ids_) { disc_df_[c] = (-(disc_M_[c] * x + disc_b_[c])).array().exp(); cached_[c].cursor = 0; }
+    for (int c : cached_ids_) {
+      // GEMV straight into the df buffer (noalias -> no heap temp for M*x), then the affine + exp in place.
+      disc_df_[c].noalias() = disc_M_[c] * x;
+      disc_df_[c] = (-(disc_df_[c] + disc_b_[c])).array().exp();
+      cached_[c].cursor = 0;
+    }
   }
 
   BundleProblem sub_;          // the non-cacheable instruments over the SAME curves (built once)
