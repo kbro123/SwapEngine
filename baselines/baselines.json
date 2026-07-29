@@ -90,28 +90,28 @@
         "compiler": "Apple clang version 16.0.0 (clang-1600.0.26.6)",
         "arch_flag": "-march=native"
       },
-      "captured_utc": "2026-07-18T22:49:30Z",
-      "notes": "Captured by tools/check_perf.py --update (3 reps, benchmark_min_time=0.5s) on this Mac Pro (Xeon W-3223, AVX-512, Apple clang 16) at machine load ~2 (quiesced, no compiles). Re-baselined after the analytic-Jacobian cold-calibrate optimization: curve_build 4.73ms->1.01ms (15.6x vs QuantLib GlobalBootstrap, up from 3.2x) -- cold calibrate() now uses the compiled W-cache Jacobian, not an AAD sweep. Speedup RATIOS are load-robust (both sides timed back to back); absolute ns are best-effort at load ~2.",
+      "captured_utc": "2026-07-29T21:31:25Z",
+      "notes": "AVX2 re-baseline (2026-07-29). The `isa` field below reflects the CPU capability (AVX-512), but the engine now BUILDS with AVX2 (256-bit / 4-wide Eigen packets) by default: SWAPS_ENABLE_AVX512 is OFF (cmake/DetectISA.cmake), because heavy AVX-512 DOWNCLOCKS this Intel core and measured SLOWER for the engine's small matrices -- curve_build 813->584us (-28%), risk_full_jacobian 826->497us (-40%), portfolio/warm ~flat. -march=native tuning minus the 512-bit width. Captured by check_perf.py --update (3 reps) with some background load (a concurrent compile); the speedup RATIOS are load-robust, absolute ns best-effort. Turn SWAPS_ENABLE_AVX512=ON to re-test on a core where AVX-512 does not throttle (e.g. AMD Zen4).",
       "metrics": {
         "curve_build": {
-          "quantlib_ns": 15571343,
-          "ours_ns": 812742,
-          "speedup": 19.16
+          "quantlib_ns": 16069341,
+          "ours_ns": 583751,
+          "speedup": 27.53
         },
         "risk_full_jacobian": {
-          "quantlib_ns": 17045049,
-          "ours_ns": 825542,
-          "speedup": 20.65
+          "quantlib_ns": 17356290,
+          "ours_ns": 496789,
+          "speedup": 34.94
         },
         "portfolio_analytics": {
-          "quantlib_ns": 22237475,
-          "ours_ns": 97838,
-          "speedup": 227.29
+          "quantlib_ns": 24367274,
+          "ours_ns": 93468,
+          "speedup": 260.7
         },
         "warm_recalibration": {
-          "quantlib_ns": 994803,
-          "ours_ns": 20578,
-          "speedup": 48.34
+          "quantlib_ns": 1078080,
+          "ours_ns": 20842,
+          "speedup": 51.73
         }
       }
     }

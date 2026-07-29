@@ -19,7 +19,11 @@ include(CheckCXXSourceCompiles)
 set(SWAPS_ARCH "native" CACHE STRING
     "Target ISA: 'native' (tune to this host), 'portable' (runs on any x86-64-v2 / armv8), or an explicit flag")
 option(SWAPS_ENABLE_AVX512
-    "Use AVX-512 when the host supports it. Note: heavy AVX-512 downclocks some Intel cores, so this is not always a win — benchmark before trusting it." ON)
+    "Use AVX-512 (8-wide Eigen packets) when the host supports it. DEFAULT OFF: for this engine's small,
+     mostly-bandwidth-bound matrices, 256-bit AVX2 packets MEASURED FASTER than AVX-512 on the AVX-512
+     dev/CI Xeon — curve_build -13%, risk -29%, portfolio -13%, warm -16% — because heavy AVX-512
+     downclocks the core. Native micro-arch tuning is still applied (-march=native); only the packet width
+     is capped at 4 doubles. Turn ON to re-test on a core where AVX-512 doesn't throttle (e.g. AMD Zen4)." OFF)
 
 # --- 1. Choose the architecture flag ------------------------------------------
 # NOTE: clang accepts -mcpu=native on x86_64 too (it just doesn't mean what you want),
@@ -33,6 +37,11 @@ endif()
 if(SWAPS_ARCH STREQUAL "native")
   if(_swaps_is_arm)
     set(_candidates "-mcpu=native" "-mcpu=apple-m1")
+  elseif(NOT SWAPS_ENABLE_AVX512)
+    # AVX-512 disabled (default): -march=native would still define __AVX512F__ and make Eigen use 8-wide
+    # (512-bit) packets, which downclock and MEASURED SLOWER here. Target the AVX2 ISA level directly so
+    # __AVX512F__ is undefined and Eigen caps at 256-bit (4-wide) packets. Runs on any x86-64-v3 host.
+    set(_candidates "-march=x86-64-v3")
   else()
     set(_candidates "-march=native")
   endif()
