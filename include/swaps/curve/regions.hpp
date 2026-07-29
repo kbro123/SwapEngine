@@ -646,4 +646,186 @@ class BSpline {
   Scalar I0_{0.0}, region_int_{0.0};
 };
 
+// Spline UNDER TENSION (Schweikert 1966 / Cline 1974) on the forward-at-knot values, with a FIXED
+// tension sigma (docs/tension-spline-research.md). Between knots f satisfies the Euler-Lagrange equation
+// f'''' = sigma^2 f'' of the tension energy int[(f'')^2 + sigma^2 (f')^2], so each piece lives in
+// span{1, t, sinh(sigma t), cosh(sigma t)} -- hyperbolic, not cubic. sigma is the smoothness<->tautness
+// knob:
+//   sigma -> 0    reduces to the natural cubic spline (this region reproduces NaturalCubic exactly);
+//   sigma -> inf  pulls the forward taut to piecewise-linear between knots (no overshoot).
+// So it gives the overshoot control of MonotoneCubic WITHOUT MonotoneCubic's value-dependent Hyman
+// filter: with sigma a FIXED hyperparameter the node curvatures z (= f''(x_i)) solve a tridiagonal
+// system whose coefficients depend only on the knot SPACINGS and sigma -- never the values -- so
+// z = A^{-1} B y is a CONSTANT linear map and the whole interpolant is a linear map of the knot forwards.
+// Hence is_linear_map = true: the W-cache / analytic-Jacobian / microsecond warm-recal fast path is
+// preserved (CLAUDE.md sec.2), and AAD is used only to build W once. C0 at the near join (pinned leading
+// value) + natural (zero-curvature) ends, matching NaturalCubic.
+//
+// The hyperbolic basis functions (g and the tridiagonal coefficients P, Q) are PURE DOUBLE -- they
+// depend only on sigma and knot times, never on the (AAD) forward values -- so no sinh/cosh ever rides
+// the differentiated path; AAD flows solely through the linear combinations of ys_/z_. Small-argument
+// series make the sigma*h -> 0 (and short-segment) limit cancellation-free, so the cubic limit is exact.
+//
+// integral(t) uses adaptive 7-point Gauss-Legendre (each knot segment subdivided so sigma*sub <= 0.5;
+// exact to ~1e-14 for the smooth hyperbolic f), exactly as BSpline integrates by Gauss: a fixed linear
+// combination of forward() values -> linear in x and AAD-safe, and setup-only (the W-cache calls it once
+// per node, never on the hot path).
+template <class Scalar>
+class Tension {
+ public:
+  Tension(std::vector<double> knots, double sigma) : s_(std::move(knots)), sigma_(sigma) {
+    require_increasing_knots(s_, "Tension");
+    if (!std::isfinite(sigma_) || !(sigma_ > 0.0))
+      throw std::invalid_argument("Tension: sigma must be finite and > 0 (use NaturalCubic for the sigma->0 cubic limit)");
+  }
+  int n_values() const { return static_cast<int>(s_.size()); }
+  double t_end() const { return s_.back(); }
+  static constexpr bool is_linear_map = true;
+
+  template <class Vec>
+  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
+    const int N = n + 1;  // nodes: [in.time, s_...]; node 0 pinned to the boundary value (C0 join)
+    if (N < 2) throw std::invalid_argument("Tension: needs >= 1 back knot");
+    xs_.resize(N);
+    ys_.resize(N);
+    xs_[0] = in.time;
+    ys_[0] = in.value;
+    for (int i = 0; i < n; ++i) {
+      xs_[i + 1] = s_[i];
+      ys_[i + 1] = x[off + i];
+    }
+    const int nseg = N - 1;
+    h_.resize(nseg);
+    sh_.resize(nseg);
+    std::vector<Scalar> S(nseg);  // secant slopes
+    for (int i = 0; i < nseg; ++i) {
+      h_[i] = xs_[i + 1] - xs_[i];
+      sh_[i] = std::sinh(sigma_ * h_[i]);
+      S[i] = (ys_[i + 1] - ys_[i]) / h_[i];
+    }
+
+    // Node curvatures z = f''(x_i): natural ends z_0 = z_{N-1} = 0; interior via the tension tridiagonal
+    //   pcoef(h_{i-1}) z_{i-1} + [qcoef(h_{i-1}) + qcoef(h_i)] z_i + pcoef(h_i) z_{i+1} = S_i - S_{i-1}.
+    // Coefficients are pure double (knot spacings + sigma); rhs is linear in ys -> z is linear in x. As
+    // sigma -> 0 this reduces EXACTLY to NaturalCubic's tridiagonal (pcoef -> h/6, qcoef -> h/3).
+    z_.assign(N, Scalar(0.0));
+    if (nseg >= 2) {
+      const int k = nseg - 1;  // interior unknowns z_1..z_{N-2}
+      std::vector<double> lower(k), diag(k), upper(k);
+      std::vector<Scalar> rhs(k);
+      for (int i = 1; i <= k; ++i) {
+        lower[i - 1] = pcoef(h_[i - 1]);
+        diag[i - 1] = qcoef(h_[i - 1]) + qcoef(h_[i]);
+        upper[i - 1] = pcoef(h_[i]);
+        rhs[i - 1] = S[i] - S[i - 1];
+      }
+      for (int i = 1; i < k; ++i) {
+        const double w = lower[i] / diag[i - 1];
+        diag[i] -= w * upper[i - 1];
+        rhs[i] = rhs[i] - w * rhs[i - 1];
+      }
+      std::vector<Scalar> zi(k);
+      zi[k - 1] = rhs[k - 1] / diag[k - 1];
+      for (int i = k - 1; i-- > 0;) zi[i] = (rhs[i] - upper[i] * zi[i + 1]) / diag[i];
+      for (int i = 1; i <= k; ++i) z_[i] = zi[i - 1];
+    }
+
+    // Cumulative integrals at the nodes (setup-only Gauss over the hyperbolic f).
+    Is_.resize(N);
+    Is_[0] = in.integral;
+    for (int i = 0; i < nseg; ++i) Is_[i + 1] = Is_[i] + seg_int(i, xs_[i + 1]);
+    // f'(t_end): S_last + z_{N-2} * pcoef(h_last)  (z_{N-1} = 0). AAD-safe (pcoef is double).
+    end_slope_ = S[nseg - 1] + z_[nseg - 1] * pcoef(h_[nseg - 1]);
+  }
+
+  Scalar forward(double t) const {
+    if (t >= xs_.back()) return ys_.back();  // flat extrapolation
+    return eval(seg(t), t);
+  }
+  Scalar integral(double t) const {
+    if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
+    const int i = seg(t);
+    return Is_[i] + seg_int(i, t);
+  }
+  Boundary<Scalar> out() const { return {xs_.back(), ys_.back(), end_slope_, Is_.back()}; }
+
+ private:
+  int seg(double t) const {
+    auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
+    return static_cast<int>(it - xs_.begin()) - 1;
+  }
+  // f on segment i at time t: linear part in ys + hyperbolic node terms in z. g() is pure double; AAD
+  // rides ys_/z_. f(x) = y_i r/h + y_{i+1} s/h + z_i g(r) + z_{i+1} g(s), s = t - x_i, r = h - s.
+  Scalar eval(int i, double t) const {
+    const double s = t - xs_[i], r = h_[i] - s, inv_h = 1.0 / h_[i];
+    return ys_[i] * (r * inv_h) + ys_[i + 1] * (s * inv_h) + z_[i] * g(r, h_[i], sh_[i]) +
+           z_[i + 1] * g(s, h_[i], sh_[i]);
+  }
+  // int_{xs_[i]}^{t} f: subdivide so sigma*sub <= 0.5, 7-pt Gauss each. Fixed linear combo of eval() ->
+  // linear in x, AAD-safe. Seed the accumulator from the first sub-interval so it carries derivatives.
+  Scalar seg_int(int i, double t) const {
+    const double a = xs_[i], b = t;
+    if (b <= a) return Scalar(0.0);
+    const int m = std::max(1, static_cast<int>(std::ceil(sigma_ * (b - a) / 0.5)));
+    const double dh = (b - a) / m;
+    Scalar acc = gauss7(i, a, a + dh);
+    for (int p = 1; p < m; ++p) acc += gauss7(i, a + p * dh, a + (p + 1) * dh);
+    return acc;
+  }
+  Scalar gauss7(int i, double a, double b) const {
+    static const double gx[4] = {0.0, 0.4058451513773972, 0.7415311855993945, 0.9491079123427585};
+    static const double gw[4] = {0.4179591836734694, 0.3818300505051189, 0.2797053914892766,
+                                 0.1294849661688697};
+    const double hc = 0.5 * (b - a), c = 0.5 * (a + b);
+    Scalar s = eval(i, c) * (gw[0] * hc);
+    for (int j = 1; j < 4; ++j) {
+      s += eval(i, c - gx[j] * hc) * (gw[j] * hc);
+      s += eval(i, c + gx[j] * hc) * (gw[j] * hc);
+    }
+    return s;
+  }
+  // Node hyperbolic basis g(s) = (1/sigma^2)[ sinh(sigma s)/sinh(sigma h) - s/h ]. Pure double, stable at
+  // every scale: exp form for large sigma*h (no sinh overflow), direct hyperbolic mid-range, and a
+  // cancellation-free series for small sigma*h so the cubic limit g -> s(s^2 - h^2)/(6h) is exact.
+  double g(double s, double h, double shh) const {
+    const double z = sigma_ * h;
+    if (z > 30.0) {  // sinh(sigma s)/sinh(sigma h) -> e^{sigma(s-h)} - e^{-sigma(s+h)} (s <= h; no overflow)
+      const double ratio = std::exp(sigma_ * (s - h)) - std::exp(-sigma_ * (s + h));
+      return (ratio - s / h) / (sigma_ * sigma_);
+    }
+    if (z >= 0.5) return (std::sinh(sigma_ * s) / shh - s / h) / (sigma_ * sigma_);
+    // small z: g = (h^2/z^2) * N/sinh(z), N = sinh(rho z) - rho sinh(z)
+    //             = sum_{k>=1} rho(rho^{2k} - 1) z^{2k+1}/(2k+1)!  (leading k=0 term cancels: no subtraction)
+    const double rho = s / h;
+    double N = 0.0, zk = z * z * z, fact = 6.0, r2 = rho * rho;  // k=1: z^3 / 3!
+    for (int k = 1; k <= 8; ++k) {
+      N += rho * (r2 - 1.0) * zk / fact;
+      zk *= z * z;
+      fact *= (2.0 * k + 2.0) * (2.0 * k + 3.0);
+      r2 *= rho * rho;
+    }
+    return (h * h) * (N / shh) / (z * z);
+  }
+  // Tridiagonal coefficients (pure double): sub/super = P(sigma h)/(sigma^2 h), diag piece = Q(sigma h)/sigma.
+  double pcoef(double h) const { return p_stable(sigma_ * h) / (sigma_ * sigma_ * h); }
+  double qcoef(double h) const { return q_stable(sigma_ * h) / sigma_; }
+  // P(z) = 1 - z/sinh z  (-> z^2/6 as z->0, so pcoef -> h/6, matching NaturalCubic's sub/super band).
+  static double p_stable(double z) {
+    if (z >= 0.5) return 1.0 - z / std::sinh(z);
+    const double z2 = z * z;
+    return z2 * (1.0 / 6 + z2 * (-7.0 / 360 + z2 * (31.0 / 15120 + z2 * (-127.0 / 604800 + z2 * (73.0 / 3421440)))));
+  }
+  // Q(z) = coth z - 1/z  (-> z/3 as z->0, so qcoef -> h/3, matching NaturalCubic's diagonal band).
+  static double q_stable(double z) {
+    if (z >= 0.5) return 1.0 / std::tanh(z) - 1.0 / z;
+    const double z2 = z * z;
+    return z * (1.0 / 3 + z2 * (-1.0 / 45 + z2 * (2.0 / 945 + z2 * (-1.0 / 4725 + z2 * (2.0 / 93555)))));
+  }
+
+  std::vector<double> s_, xs_, h_, sh_;
+  std::vector<Scalar> ys_, z_, Is_;
+  double sigma_ = 1.0;
+  Scalar end_slope_{0.0};
+};
+
 }  // namespace swaps::curve

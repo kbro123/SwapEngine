@@ -41,7 +41,11 @@ struct RegionIface {
 template <class S, template <class> class Policy>
 struct RegionHolder final : RegionIface<S> {
   Policy<S> p;
-  explicit RegionHolder(std::vector<double> knots) : p(std::move(knots)) {}
+  // Variadic so a policy needing more than knots (Tension takes a fixed sigma) constructs through the
+  // same path; policies that take only knots ignore the empty pack.
+  template <class... Args>
+  explicit RegionHolder(std::vector<double> knots, Args&&... args)
+      : p(std::move(knots), std::forward<Args>(args)...) {}
   int n_values() const override { return p.n_values(); }
   double t_end() const override { return p.t_end(); }
   bool linear() const override { return Policy<S>::is_linear_map; }
@@ -58,12 +62,13 @@ struct RegionHolder final : RegionIface<S> {
 // BSpline is linear too, but note its free values are CONTROL POINTS, which do not lie on the curve
 // (docs/bezier-and-moments.md Part A) -- calibrated x are control points, mapped to forward-at-knot for
 // a risk ladder by pricing::bspline_collocation. That is a property of the REGION, not of a curve type.
-enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline };
+enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline, Tension };
 
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
   std::vector<double> knots;  // knot times (year fractions), ascending, within this region
   Scheme scheme;              // interpolation scheme over those knots
+  double tension = 0.0;       // fixed sigma for Scheme::Tension (ignored by every other scheme)
 };
 
 template <class S>
@@ -71,9 +76,9 @@ class ModularCurve {
  public:
   ModularCurve() = default;
 
-  template <template <class> class Policy>
-  ModularCurve& add(std::vector<double> knots) {
-    regions_.push_back(std::make_unique<RegionHolder<S, Policy>>(std::move(knots)));
+  template <template <class> class Policy, class... Args>
+  ModularCurve& add(std::vector<double> knots, Args&&... args) {
+    regions_.push_back(std::make_unique<RegionHolder<S, Policy>>(std::move(knots), std::forward<Args>(args)...));
     n_ += regions_.back()->n_values();
     return *this;
   }
@@ -85,6 +90,7 @@ class ModularCurve {
       case Scheme::Hermite: return add<Hermite>(m.knots);
       case Scheme::MonotoneCubic: return add<MonotoneCubic>(m.knots);
       case Scheme::BSpline: return add<BSpline>(m.knots);
+      case Scheme::Tension: return add<Tension>(m.knots, m.tension);
     }
     return *this;
   }
@@ -203,6 +209,20 @@ inline std::vector<CurveModule> flat_bspline(const std::vector<double>& meeting,
 inline std::vector<CurveModule> flat_monotone(const std::vector<double>& meeting,
                                               const std::vector<double>& back) {
   return two_region_layout(meeting, back, Scheme::MonotoneCubic);
+}
+
+// Spline-under-tension back end with a FIXED tension sigma (docs/tension-spline-research.md). Unlike
+// MonotoneCubic, the shape control is a fixed hyperparameter, not a value-dependent filter, so the
+// interpolant stays a LINEAR MAP of the knot forwards -- is_linear_map()==true, W-cache fast path
+// preserved. sigma is the smoothness<->tautness knob (sigma->0 == flat_hermite's cubic-like smoothness
+// with global C2, sigma->inf == taut/piecewise-linear, no overshoot). A larger sigma damps the spurious
+// forward humps a natural cubic can produce, while keeping local, non-oscillating, analytic-risk forwards.
+inline std::vector<CurveModule> flat_tension(const std::vector<double>& meeting,
+                                             const std::vector<double>& back, double sigma) {
+  std::vector<CurveModule> m;
+  if (!meeting.empty()) m.push_back({meeting, Scheme::Flat, 0.0});
+  if (!back.empty()) m.push_back({back, Scheme::Tension, sigma});
+  return m;
 }
 
 }  // namespace swaps::curve

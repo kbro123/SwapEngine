@@ -138,8 +138,16 @@ silent NaN; caught at construction).
   forward-at-knot deltas, invertible). Control points don't lie on the curve, so risk is reported in the
   forward basis via that transform. `integral_weight_matrix(flat_bspline(...), times)` puts it on the fast path.
 - **Rule: the interpolation must be a LINEAR MAP of the knot values to keep the microsecond path.**
-  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`, `BSpline`) preserve `integral(t)=w(t)·x`,
-  hence the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over regions) gates that tier.
+  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`, `BSpline`, `Tension`) preserve
+  `integral(t)=w(t)·x`, hence the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over
+  regions) gates that tier. **`Tension` (spline-under-tension, `flat_tension(meeting, back, σ)`)** is a
+  FIXED-σ hyperbolic spline (`span{1,t,sinh σt,cosh σt}` per interval): σ→0 reproduces `NaturalCubic`
+  exactly, σ→∞ → piecewise-linear/taut. It gives `MonotoneCubic`'s overshoot control WITHOUT a
+  value-dependent filter — the node curvatures solve a tridiagonal whose coefficients depend only on knot
+  spacings + σ, so it stays a LINEAR MAP (`is_linear_map = true`) and rides the W-cache. The hyperbolic
+  basis is PURE DOUBLE (σ + knot times only), so no `sinh` ever rides the AAD path; AAD builds `W` once.
+  `integral` is adaptive 7-pt Gauss (like `BSpline`), small-σ series make the cubic limit cancellation-free.
+  See `docs/tension-spline-research.md`.
 - **Value-dependent schemes drop to the AAD tier — and `MonotoneCubic` is the first one BUILT and
   gate-verified** (`flat_monotone`). It is a C² natural
   cubic whose node tangents pass through **Hyman's monotonicity filter**, transcribed to match QuantLib's
@@ -368,10 +376,11 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
 include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
-include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline region
-                             math; ctors reject duplicate/unsorted knots), curve_module.hpp (THE curve:
-                             ModularCurve + make_modular_curve from CurveModule{knots,scheme}, plus the
-                             named layouts flat_hermite -- the SHIPPED one -- flat_bspline, flat_monotone),
+include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline/Tension
+                             region math; ctors reject duplicate/unsorted knots), curve_module.hpp (THE
+                             curve: ModularCurve + make_modular_curve from CurveModule{knots,scheme,tension},
+                             plus the named layouts flat_hermite -- the SHIPPED one -- flat_bspline,
+                             flat_monotone, flat_tension),
                              ql_term_structure.hpp (generic CurveTermStructure<Curve>)
 include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instrument/FloatLeg/FixedLeg/
                              QuoteKind model -- see §7c), lm.hpp, risk.hpp, warm.hpp (cached-Jacobian +

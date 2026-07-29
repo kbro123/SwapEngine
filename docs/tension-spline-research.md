@@ -1,6 +1,7 @@
 # Tension Splines — research notes
 
-**Status:** pure research, no code yet. Branch `claude/tension-spline-research-v8eyc2`.
+**Status:** the `Tension` REGION is now BUILT + validated (see §10). Branch `claude/tension-spline-research-v8eyc2`.
+The regulariser (§5) and positivity constraint (§7) are still research.
 **Scope:** (1) first-principles math of tension splines, (2) the lowest-energy proof, (3) how to
 implement so it stays OFF the AAD hot path, (4) whether minimum energy suppresses arbitrageable
 forward artifacts. Ties throughout to the engine's linear-map / W-cache architecture (CLAUDE.md §2).
@@ -308,6 +309,47 @@ constraint activation. Steady state keeps the microsecond path.
 5. **Frozen-tension convergence** argument in full rigor (semismooth Newton, `∂σ/∂x` order).
 6. Decide default: global fixed σ (simple, fast, non-local) vs fixed-tension Hermite (local, `C¹`) vs
    adaptive (guaranteed monotone, AAD/frozen tier).
+
+## 10. BUILT — the `Tension` region (2026-07-29)
+
+Open thread #1 is done: `Tension<Scalar>` lands in `include/swaps/curve/regions.hpp`, wired through
+`Scheme::Tension` + `CurveModule.tension` + `flat_tension(meeting, back, σ)` in `curve_module.hpp`.
+Mirrors how `BSpline` was added — a linear-map region, no engine plumbing beyond the curve layer.
+
+**Formulation (what shipped).** Free vars are forward-at-knot values (like `NaturalCubic`/`Hermite`, NOT
+control points). Node curvatures `z_i = f''(x_i)` solve the tension tridiagonal
+`pcoef(h_{i-1}) z_{i-1} + [qcoef(h_{i-1})+qcoef(h_i)] z_i + pcoef(h_i) z_{i+1} = S_i − S_{i-1}`, natural
+ends `z_0 = z_{N-1} = 0`, C⁰ pinned near join. Coefficients are pure double:
+`pcoef(h) = P(σh)/(σ²h)`, `qcoef(h) = Q(σh)/σ`, with `P(z)=1−z/sinh z` (→ z²/6), `Q(z)=coth z−1/z`
+(→ z/3) — so the tridiagonal → `NaturalCubic`'s (h/6, h/3 bands) as σ→0. Node basis
+`g(s) = (1/σ²)[sinh(σs)/sinh(σh) − s/h]`. `integral` = adaptive 7-pt Gauss (subdivide so σ·sub ≤ 0.5),
+exactly the `BSpline` pattern; linear in x, AAD-safe, setup-only.
+
+**Numerics.** `g`, `P`, `Q` are PURE DOUBLE (σ + knot times only) — no `sinh` on the AAD path; AAD rides
+only the linear combos of `ys`/`z`. Three-branch stability: exp form for σh > 30 (no `sinh` overflow),
+direct hyperbolic mid-range, cancellation-free series for σh < 0.5 (`g` via `N = sinh(ρz) − ρ sinh(z) =
+Σ_{k≥1} ρ(ρ^{2k}−1)z^{2k+1}/(2k+1)!`; `P`,`Q` via their Maclaurin series). So the σ→0 and short-segment
+limits are exact, not catastrophically-cancelling.
+
+**Validated** (standalone `g++`, double-only + a minimal dual — QuantLib deps not vendored in the build
+container, so the full `swaps_oracle_tests` gate was NOT run here; `tests/tension_test.cpp` carries the
+QuantLib-env gate):
+- σ=1e-5 forward AND integral == `NaturalCubic` to ~1e-13 (scales O(σ²): ~1e-11 at σ=1e-4). ✓
+- interpolates knots exactly (0.0) at every σ; linear map in x to 2e-16. ✓
+- `integral` vs dense trapezoid quadrature to 8e-13 across σ ∈ {0.1…20}. ✓
+- σ=400 forward == piecewise-linear to 1e-6 (taut limit). ✓
+- `flat_tension` composes into a valid curve: DF(0)=1, positive & decreasing, `is_linear_map()==true`. ✓
+- AAD: `Tension<Dual>` differentiates; d integral/dy == finite-diff to 1.5e-10 (so the W-cache path — which
+  seeds `ad::Dual` through `integral_weight_matrix` — works). ✓
+
+**`tests/tension_test.cpp`** (in `swaps_tests`, no QuantLib) mirrors `bspline_test.cpp`:
+σ→0-vs-NaturalCubic, knot interpolation, linearity, integral-vs-quadrature, σ→∞-taut, valid-curve,
+W-cache reproduce (`exp(−Wx)==discount`), and an end-to-end `TensionProblem` calibrate-and-reprice.
+
+**Still not done from this thread:** the `√μ L` energy regulariser (§5), the positivity obstacle (§7),
+and a `scheme`/σ selector on the production `CalibrationProblem`/`BundleProblem` (today only the
+standalone `TensionProblem` test picks the tension scheme, exactly as `BSplineProblem` does for B-spline).
+`K₁`/`K₂` closed forms (open thread #2) are the natural next build.
 
 ## 9. Key references
 
