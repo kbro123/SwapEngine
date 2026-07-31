@@ -20,6 +20,7 @@ namespace swaps::api {
 namespace json = boost::json;
 namespace px = swaps::pricing;
 namespace curve = swaps::curve;
+namespace ad = swaps::ad;  // Dual (forward-AAD scalar) for the PV01 pass in price_portfolio
 
 // =================================================================================================
 // JSON accessors -- tolerant: a missing key returns the supplied default (so a minimal document is
@@ -396,6 +397,43 @@ json::value bundle_to_json(const cal::BundleProblem& p) {
   return o;
 }
 
+namespace pf = swaps::portfolio;
+
+// A book of positions to reprice (schema documented on the declaration). Reuses the SAME coupon parsers
+// (fcpn_from/xcpn_from) as the instrument (de)serializer, so the web reuses its existing schedule builders.
+pf::MultiCurveBook book_from_json(const json::value& v) {
+  pf::MultiCurveBook book;
+  const auto& o = v.as_object();
+  if (!o.contains("positions") || !o.at("positions").is_array()) return book;
+  auto floats = [](const json::object& po, const char* key, std::vector<px::FloatCoupon>& out) {
+    if (po.contains(key) && po.at(key).is_array())
+      for (const auto& e : po.at(key).as_array()) out.push_back(fcpn_from(e.as_object()));
+  };
+  for (const auto& e : o.at("positions").as_array()) {
+    const auto& po = e.as_object();
+    pf::MultiCurveBook::Position p;
+    p.kind = (get_s(po, "kind", "swap") == "xccy") ? pf::MultiCurveBook::Kind::Xccy
+                                                   : pf::MultiCurveBook::Kind::Swap;
+    p.notional = get_d(po, "notional", 1.0);
+    p.fixed_rate = get_d(po, "fixed_rate", 0.0);
+    p.fwd_curve = get_i(po, "fwd_curve", 0);
+    p.disc_curve = get_i(po, "disc_curve", 0);
+    p.fixed_curve = get_i(po, "fixed_curve", p.disc_curve);  // defaults to the float discount curve
+    floats(po, "float_coupons", p.float_coupons);
+    if (po.contains("fixed_coupons") && po.at("fixed_coupons").is_array())
+      for (const auto& c : po.at("fixed_coupons").as_array()) p.fixed_coupons.push_back(xcpn_from(c.as_object()));
+    // xccy-only: the resetting foreign funding leg + its FX-forward reset roles.
+    p.fx_spot = get_d(po, "fx_spot", 1.0);
+    p.mtm_fwd_curve = get_i(po, "mtm_fwd_curve", 0);
+    p.mtm_disc_curve = get_i(po, "mtm_disc_curve", 0);
+    p.mtm_reset_num = get_i(po, "mtm_reset_num", 0);
+    p.mtm_reset_den = get_i(po, "mtm_reset_den", 0);
+    floats(po, "mtm_coupons", p.mtm_coupons);
+    book.positions.push_back(std::move(p));
+  }
+  return book;
+}
+
 Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
   Eigen::VectorXd x(prob.n_knots());
   int o = 0;
@@ -545,6 +583,41 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   }
   const Eigen::MatrixXd Ainv = A.ldlt().solve(Eigen::MatrixXd::Identity(A.rows(), A.rows()));
   return Ainv * J.transpose();  // n_knots x n_res  = dx/dq
+}
+
+PortfolioReprice BundleSession::price_portfolio(const pf::MultiCurveBook& book) const {
+  PortfolioReprice out;
+  out.n = static_cast<int>(book.positions.size());
+  if (out.n == 0) { last_price_us_ = 0.0; return out; }  // empty book: NPV/PV01 = 0, nothing to time
+
+  // ---- pure ENGINE pricing pass (double), engine-timed -- no marshalling inside the clock ----------
+  // Build the double curve handles off the CALIBRATED x, then value every position through the pricing
+  // kernel. A steady_clock pair brackets exactly this pass, mirroring how calibrate() stamps its solve.
+  const auto t0 = std::chrono::steady_clock::now();
+  const auto Cd = cal::build_bundle_curves<double>(
+      prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });
+  const auto curve_d = [&Cd](int i) -> const cal::CurveHandle<double>& { return *Cd[i]; };
+  out.npv = book.value<double>(curve_d);
+  last_price_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+  out.price_us = last_price_us_;
+
+  // ---- PV01: ONE forward-AAD pass (not part of the timed pricing pass) -----------------------------
+  // Seed x as vector-duals, reprice the book once with Scalar = ad::Dual, and read d(NPV)/d(knot forward)
+  // straight off the derivative vector. PV01 = 1bp · Σⱼ ∂NPV/∂xⱼ = the book's NPV change for a +1bp
+  // PARALLEL shift of every fitted knot forward -- no bump-and-reprice. (Left-multiplying this same
+  // gradient by risk_operator() would instead give the full per-quote delta ladder, CLAUDE.md #4.)
+  const int nk = prob_.n_knots();
+  const Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd = ad::seed(x_);
+  const auto Cad = cal::build_bundle_curves<ad::Dual>(
+      prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
+  const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::Dual>& { return *Cad[i]; };
+  const ad::Dual npv_ad = book.value<ad::Dual>(curve_ad);
+  out.pv01 = npv_ad.derivatives().size() ? 1e-4 * npv_ad.derivatives().sum() : 0.0;
+  return out;
+}
+
+PortfolioReprice BundleSession::price_portfolio_json(const std::string& book_json) const {
+  return price_portfolio(book_from_json(json::parse(book_json)));
 }
 
 void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {

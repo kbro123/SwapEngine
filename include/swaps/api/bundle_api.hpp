@@ -28,6 +28,7 @@
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
+#include "swaps/portfolio/portfolio.hpp"  // MultiCurveBook — the batched reprice kernel
 #include "swaps/pricing/fixings.hpp"
 
 namespace swaps::api {
@@ -60,12 +61,35 @@ struct RegSpec {
   bool on() const { return lambda > 0.0 && !curves.empty(); }
 };
 
+// Result of a batched portfolio reprice (BundleSession::price_portfolio). `price_us` is the ENGINE-
+// measured wall time of the pure pricing pass ONLY (a steady_clock pair around the double NPV valuation
+// off the calibrated curves — no JSON/marshalling), the exact analogue of last_solve_us() for calibration.
+struct PortfolioReprice {
+  double npv = 0.0;      // total book NPV off the currently calibrated curves (discount-currency units)
+  double pv01 = 0.0;     // d(NPV) for a +1bp PARALLEL shift of every fitted knot forward, one AAD pass
+  double price_us = 0.0;  // pure engine pricing time of the double NPV pass, microseconds
+  int n = 0;             // number of positions priced
+};
+
 // ---- JSON <-> engine object graph (definitions in bundle_api.cpp) --------------------------------
 // Every field is optional on parse and defaults to the struct default, so a minimal document is valid.
 cal::BundleProblem bundle_from_json(const boost::json::value& v);
 boost::json::value bundle_to_json(const cal::BundleProblem& p);
 cal::Instrument instrument_from_json(const boost::json::value& v);
 boost::json::value instrument_to_json(const cal::Instrument& ins);
+
+// A book of positions to reprice. Reuses the SAME coupon JSON shapes the instrument (de)serializers
+// parse (obs/pay/tau_pay/... for a FloatCoupon, pay/tau/scale for a FixedCoupon) so the web reuses its
+// existing schedule builders. Schema (every field optional, defaults to the struct default):
+//   { "positions": [
+//       { "kind":"swap", "notional":<double>, "fixed_rate":<double>,
+//         "fwd_curve":<int>, "disc_curve":<int>, "float_coupons":[<FloatCoupon>...],
+//         "fixed_curve":<int>, "fixed_coupons":[<FixedCoupon>...] },
+//       { "kind":"xccy", "notional":<double>, "fx_spot":<double>,
+//         "fwd_curve":<int>, "disc_curve":<int>, "float_coupons":[<FloatCoupon>...],   // domestic leg
+//         "mtm_fwd_curve":<int>, "mtm_disc_curve":<int>,
+//         "mtm_reset_num":<int>, "mtm_reset_den":<int>, "mtm_coupons":[<FloatCoupon>...] } ] }
+swaps::portfolio::MultiCurveBook book_from_json(const boost::json::value& v);
 
 // A flat starting guess sized to the problem: outright curves at `level`, spread curves at 0.
 Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level = 0.02);
@@ -118,6 +142,17 @@ class BundleSession {
   // portfolio's d(NPV)/dx (one AAD pass) by M for a full analytic delta ladder, no bumping (CLAUDE.md #4).
   Eigen::MatrixXd risk_operator(const RegSpec& reg = {}) const;
 
+  // ---- batched portfolio reprice (the web "reprice N random swaps" feature) -----------------------
+  // Reprice a full multi-curve + xccy book off the CURRENTLY CALIBRATED curves (the current x) and report
+  // {npv, pv01, price_us, n}. The NPV is a pure double pass through the pricing kernel (float_leg_pv /
+  // annuity / xccy_mtm_leg_pv), timed by a steady_clock around that pass ONLY — the engine stamps the
+  // pricing time exactly as calibrate() stamps last_solve_us(), with no Python marshalling inside price_us.
+  // PV01 is d(NPV) for a +1bp parallel shift of every fitted knot forward, from ONE forward-AAD pass (no
+  // bump-and-reprice). Also cached in last_price_us(). The book references curves by their bundle index.
+  PortfolioReprice price_portfolio(const swaps::portfolio::MultiCurveBook& book) const;
+  // Convenience for a language binding: parse a book JSON document (schema on book_from_json) and reprice.
+  PortfolioReprice price_portfolio_json(const std::string& book_json) const;
+
   // ---- streaming (any bundle with a constant W: hard, banded, portfolio, or mixed FX/MtM) ---------
   // Anchor a StreamingCalibrator at the current x; each stream_update(q) re-solves to the exact curve
   // for the new market q (frozen-Newton off the cached Jacobian, refreshed only on staleness). A mixed
@@ -134,6 +169,7 @@ class BundleSession {
   // Every calibrate/recalibrate/stream_update stamps the ENGINE-measured wall time of the solve itself
   // (no marshalling). Callers should report these instead of timing across a language boundary.
   double last_solve_us() const { return last_solve_us_; }        // most recent solve, any path (µs)
+  double last_price_us() const { return last_price_us_; }        // most recent price_portfolio pricing pass (µs)
   // Running mean of stream_update solve times since the last start_streaming(); 0 before the first tick.
   double stream_avg_us() const { return stream_ticks_ ? stream_sum_us_ / stream_ticks_ : 0.0; }
   long stream_ticks() const { return stream_ticks_; }            // stream_update calls since start_streaming
@@ -183,6 +219,8 @@ class BundleSession {
 
   // Solve-time telemetry (stamped by calibrate/recalibrate/stream_update; see the getters above).
   double last_solve_us_ = 0;
+  // Pricing-time telemetry, stamped by the (const) price_portfolio; mutable so the query stays const.
+  mutable double last_price_us_ = 0;
   double stream_sum_us_ = 0;   // sum of stream_update solve times since start_streaming()
   long stream_ticks_ = 0;      // count of those ticks
   int last_newton_steps_ = 0;
