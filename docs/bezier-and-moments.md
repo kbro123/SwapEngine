@@ -8,9 +8,16 @@ gate-green at every commit. This doc is authoritative; implement from it.
 
 ## Part A — B-spline region policy (control-point parameterization)
 
-A new back-end region alongside `Flat` / `Linear` / `NaturalCubic` / `Hermite` in `curve/regions.hpp`,
+A region alongside `Flat` / `Linear` / `NaturalCubic` / `Hermite` in `curve/regions.hpp`,
 satisfying the same contract (`n_values`, `t_end`, `build`, `forward`, `integral`, `out`,
 `is_linear_map = true`). Scalar-templated so AAD flows through.
+
+> **Note (order-agnostic update, engine `88de1ab`):** regions are no longer front/back — BSpline can
+> LEAD, follow, or sit in the middle like any scheme (ARCHITECTURE.md `curve/` row). The "back-end" /
+> "C⁰ join to the front" framing below describes BSpline as a FOLLOWING region and is unchanged in that
+> case; when BSpline LEADS (region 0, `Boundary::has_predecessor == false`) `P_0` is instead tied to the
+> first FREE control point `x[off]` and the region starts with a flat pre-segment at that calibrated
+> value — symmetric with the far-end clamp, not a phantom `f(0)=0`. The math below is otherwise as-is.
 
 **Parameterization (decided): the free variables ARE the control points.** A cubic B-spline
 `f(u) = Σ_i P_i N_{i,3}(u)` over the back-knot times, with:

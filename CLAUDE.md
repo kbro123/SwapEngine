@@ -10,6 +10,30 @@ Guidance for Claude Code when working in this repository. Read this first, every
 > part of "done", exactly like updating a test. Likewise keep the two oracle registries honest:
 > `tests/ORACLE_TESTS.md` and the `swaps_oracle_tests` list are enforced by `tools/check_oracle_tests.sh`.
 
+## 0. Design principles (the North Star — every change must hold these)
+
+- **Generic building blocks, not special cases.** There is ONE curve type — `ModularCurve` = an ordered
+  list of interpolation REGIONS. The schemes {Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline,
+  Tension} compose in ANY order and ANY position — there is **no front/back concept**. Region 0 is LEADING
+  and flat-extrapolates its first knot; following regions C0-join (`Boundary::has_predecessor`). A "curve
+  flavour" is DATA (a module list), not a subclass. Same spirit everywhere: prefer a generic, composable
+  abstraction over a per-case branch.
+- **Specifics as data, not hardcoded.** Market conventions (day counts, calendars, frequencies, spot/pay/
+  fixing lags, index & product definitions) live in the conventions DB (`conventions/conventions.json`,
+  codegen'd to `include/swaps/conventions_data.hpp`) and FLOW through the code — nothing inlined. A new
+  product/index/instrument is a DATA entry, not a code branch. The C++ reference builders pull from the same
+  JSON; zero index/currency/calendar identifiers appear in engine code (§7c). See
+  `docs/generic-instrument-pipeline.md` — the canonical statement of the generic-instrument model.
+- **Templated & parsimonious.** Scalar-templated throughout (`double` for pricing, `AutoDiffScalar` for
+  AAD) so ONE implementation yields value AND analytic Jacobian. Minimal, composable abstractions; no
+  duplication.
+- **Performance is a first-class constraint, protected by gates.** The hot path — the W-cache
+  (`DF = exp(-Wx)`, `W` structure-only, built once), frozen-Newton streaming, analytic Jacobian — stays
+  LEAN: nothing allocated or branched per tick. Region schemes are LINEAR MAPS so the W-cache / analytic-
+  Jacobian fast path is preserved; a value-dependent scheme (`MonotoneCubic`) is `is_linear_map=false` and
+  routes to the AAD tier EXPLICITLY. Any generic abstraction must not bloat the differentiated hot loop.
+  `tools/verify.sh` + per-fingerprint baselines enforce the perf gates (§3).
+
 ## 1. What this project is
 
 SwapsEngine is a high-performance **extension of QuantLib** that replaces its two slowest workflows
@@ -117,7 +141,14 @@ optimum**. This is a modelling choice, not a defect.
 ### Interpolation is a multi-region policy, and there is exactly ONE curve type
 The curve is `ModularCurve<Scalar>` (`curve/curve_module.hpp`), built by the single factory
 `make_modular_curve<S>(modules)` from a runtime list of `CurveModule{knots, scheme}` — each region a
-policy from `curve/regions.hpp`, stitched with a C⁰ (level) `Boundary` handoff.
+policy from `curve/regions.hpp`, stitched left-to-right by a `Boundary` handoff. **Regions are
+ORDER-AGNOSTIC** (§0): any scheme leads, follows, or sits in the middle. Region 0 is LEADING
+(`Boundary::has_predecessor == false`) and flat-extrapolates its first free knot (`forward(t<t1)=v1`,
+symmetric with the far-end flat extrapolation) rather than pinning `f(0)=0`; every following region
+C⁰-joins its predecessor (byte-identical to the old back-region path). `region_combinatorial_test.cpp`
+proves it: 7 singles + 49 ordered pairs + 343 triples off one `ALL_SCHEMES[]` list, C0 at every join.
+The shipped SOFR curve is just ONE such list (a flat region then a smooth one); the front/back split
+below is a property of THAT layout and the knot strategy, not of the curve engine.
 
 **A curve "flavour" is DATA, not a type.** The shipped curve is the module list `flat_hermite(meeting,
 back)` (flat meeting-date front, **local C¹ Hermite** back) — used everywhere: calibration, pricing,
@@ -138,8 +169,9 @@ silent NaN; caught at construction).
   forward-at-knot deltas, invertible). Control points don't lie on the curve, so risk is reported in the
   forward basis via that transform. `integral_weight_matrix(flat_bspline(...), times)` puts it on the fast path.
 - **Rule: the interpolation must be a LINEAR MAP of the knot values to keep the microsecond path.**
-  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`, `BSpline`) preserve `integral(t)=w(t)·x`,
-  hence the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over regions) gates that tier.
+  Only linear schemes (`Flat`, `Linear`, `NaturalCubic`, `Hermite`, `BSpline`, `Tension`) preserve
+  `integral(t)=w(t)·x`, hence the `W`-cache, analytic Jacobian and warm update. `is_linear_map` (AND over
+  regions) gates that tier.
 - **Value-dependent schemes drop to the AAD tier — and `MonotoneCubic` is the first one BUILT and
   gate-verified** (`flat_monotone`). It is a C² natural
   cubic whose node tangents pass through **Hyman's monotonicity filter**, transcribed to match QuantLib's

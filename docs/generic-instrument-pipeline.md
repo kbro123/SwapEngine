@@ -10,36 +10,37 @@ without further input.
 
 ---
 
-## STATUS (reconciled 2026-07-16, branch `feat/generic-instrument-pipeline`, gates green: 74/74 + perf PASS)
+## STATUS — COMPLETE, ADOPTED, legacy DELETED (see CLAUDE.md §7c for the current reference)
 
-**The pipeline is BUILT and TESTED but NOT ADOPTED.** Every section below is implemented EXCEPT the
-retirement in §2 — the generic model was **appended** alongside the legacy one, never substituted.
-That is exactly why "existing numbers unchanged" holds, and it is also the outstanding debt.
+**The generic pipeline is now the ONLY path.** Every section below is implemented AND the §2 retirement
+is done: the generic model REPLACED the legacy one — it is not merely appended. Every call site (the
+reference market `build_problem`/`build_square_problem`, the `Portfolio`, the single-curve
+`CalibrationProblem`, the multi-curve `BundleProblem`, and ALL benchmarks) constructs generic
+`Instrument`s only. `OisSwap`/`CompoundedFuture`/`AveragedFuture`, their pricing functions, their
+extractors and the legacy compiled adapters are GONE. There is ONE cashflow model
+(`RateObservation`/`FloatCoupon`/`FixedCoupon`) and ONE residual/W-cache path.
+
+This is the **specifics-as-data** principle in force (CLAUDE.md §0): a new product / index / instrument
+is a DATA entry — market conventions come from the conventions DB (`conventions/conventions.json` →
+codegen'd `include/swaps/conventions_data.hpp`), and index/currency/calendar knowledge lives only in
+tests/fixtures. It composes with the **order-agnostic curve model** (`ModularCurve`, `curve/regions.hpp`,
+ARCHITECTURE.md `curve/` row): generic instruments over generic composable regions, one templated kernel.
 
 | § | Item | Status |
 | --- | --- | --- |
 | 1 | ONE rate formula for every shape | **LANDED** |
 | 2 | `RateObservation`/`FloatCoupon`/`FixedCoupon` + pricing | **LANDED** |
-| 2 | Backward-compat invariant (legacy reduction) | **LANDED** — asserted bit-exact (`EXPECT_EQ(d, 0.0)`) |
-| 2 | **"Retire `OisSwap`/`CompoundedFuture`/`AveragedFuture`"** | **NOT DONE** — still live structs with their own pricing fns in `cashflows.hpp`; still what the reference market and all 4 benchmarks build |
+| 2 | Backward-compat invariant (legacy reduction) | **PINNED** by `migration_guard_test.cpp` (bit-for-bit before the structs were removed) |
+| 2 | **"Retire `OisSwap`/`CompoundedFuture`/`AveragedFuture`"** | **DONE** — structs, pricing fns, extractors and legacy batches DELETED; every call site + all benchmarks build generic `Instrument`s |
 | 3 | `FloatLeg`/`FixedLeg`, roles on legs | **LANDED** |
-| 3 | `Instrument` + `ParRate`/`ParSpread`/`Rate` | **LANDED** — but constructed ONLY by `tests/{extract,generic_instrument}_test.cpp` |
+| 3 | `Instrument` + `ParRate`/`ParSpread`/`Rate` | **LANDED** — now the only construction path |
 | 3 | Documented deterministic residual order | **LANDED** — `avg_futs, comp_futs, swaps, bases, instruments`; generic block appended LAST so no existing row renumbers |
 | 4 | ONE float batch (`BundleFloatBatch`) | **LANDED** — legs + comp + avg futures; both fused fast paths (`sub_is_identity`, `cpn_is_plain`) preserved |
 | 4 | Analytic Jacobian chain vs AAD ~1e-9 | **LANDED** — achieved **6.4e-16** |
-| 5 | Generic extractors, dispatch on coupon type | **LANDED** — legacy per-shape extractors retained alongside |
+| 5 | Generic extractors, dispatch on coupon type | **LANDED** — legacy per-shape extractors removed |
 | 6 | All 10 regression items | **LANDED** |
 | 7 | Non-goals | respected — `W_all`, interpolation, knot strategy, risk-ladder API untouched |
 | 8 | Both gates green every commit | **HELD** |
-
-**Remaining work (the adoption step), in order:**
-1. Migrate `tests/reference_curve.hpp::build_problem` onto `extract_float_leg`/`extract_fixed_leg` +
-   `Instrument`. **Assert, do not assume:** the generic OIS path uses `valueDates().front()/back()`
-   where the legacy path uses `accrualStartDate()/accrualEndDate()`. They coincide on the reference
-   market (both hit `fairRate` at ~6e-17) — pin it with a test before the call sites move.
-2. Migrate the four benchmarks; re-run the perf gate (baselines are legacy-path numbers today).
-3. Delete the legacy structs, their pricing functions, their extractors and their batches; drop the
-   now-dead residual-order blocks 1–4 and the `cashflows.hpp:107–126` index-naming comments with them.
 
 **Deviations from this document, deliberate and already merged** (see CLAUDE.md §7c for the why):
 - §5's IBOR `[fixingPeriodStart, fixingPeriodEnd]` does not exist in QL 1.34 → `fixingValueDate()` /
@@ -115,9 +116,9 @@ bit-comparable** (to ~1e-15). If a test moves numerically, the generalization is
 Retire `OisSwap`, `CompoundedFuture`, `AveragedFuture` as distinct *pricing* concepts; they become
 data shapes a test builds. Keep a swap as two legs (see §3).
 
-> **NOT DONE — see STATUS above.** These three are still live pricing structs in `cashflows.hpp`
-> with their own pricing functions, and are still what `tests/reference_curve.hpp` and all four
-> benchmarks build. The generic model was added alongside them, not in place of them.
+> **DONE — see STATUS above.** These three structs, their pricing functions and their extractors have
+> been DELETED. Every shape is now the one generic `RateObservation`/`FloatCoupon`/`FixedCoupon` model
+> with different DATA; the reference market and all benchmarks build generic `Instrument`s.
 
 ## 3. Instruments, legs, roles, quotes
 

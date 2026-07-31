@@ -8,10 +8,15 @@ library**, built to be provably faster and more accurate than stock QuantLib on 
 - **Global calibration** of all knot forwards via **Levenberg–Marquardt** (not sequential bootstrapping).
 - **Analytic Jacobian via forward-mode AAD** (Eigen `AutoDiffScalar`), reused for **analytic bucketed
   risk** through the implicit-function theorem — no bump-and-reprice.
-- **Multi-region forward interpolation**: piecewise-flat forwards on **central-bank meeting dates** in
-  the front end; a **local C¹ Hermite** spline beyond the last meeting date. One curve type,
-  `ModularCurve`, composes any sequence of region policies (Flat/Linear/NaturalCubic/Hermite/BSpline/
-  MonotoneCubic) chosen at runtime; the shipped curve is just the `flat_hermite` module list.
+- **Order-agnostic region interpolation**: ONE curve type, `ModularCurve`, is an ordered list of
+  interpolation regions. The schemes (Flat/Linear/NaturalCubic/Hermite/BSpline/MonotoneCubic/Tension)
+  compose in **any order and any position** — no front/back concept; a "curve flavour" is just a module
+  list chosen at runtime. Linear schemes ride the analytic W-cache fast path; a value-dependent scheme
+  (MonotoneCubic) routes to the AAD tier. The shipped SOFR curve is one such list: piecewise-flat forwards
+  on central-bank meeting dates, then a local C¹ Hermite region.
+- **Conventions are data, not code**: day counts, calendars, frequencies and lags live in a conventions DB
+  (`conventions/conventions.json`), so a new product or index is a data entry — no index/currency/calendar
+  identifier appears in engine code.
 - **Multi-curve bundle**: N curves (e.g. SOFR + Fed-Funds + Prime …) calibrated **simultaneously** over
   one stacked parameter vector, with forecast ≠ discount pricing and basis-swap chains.
 - **Real-time streaming re-calibration**: an exact frozen-Newton path reprices to the market every tick.
