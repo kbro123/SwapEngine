@@ -175,9 +175,15 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
   const std::vector<double> bp = detail::forward_pieces(mods);
   const int P = static_cast<int>(bp.size()) - 1;
 
-  // Fixed cubic Vandermonde on the normalised nodes {0, 1/3, 2/3, 1} (working in s = (t-a)/h keeps the
-  // fit well-conditioned regardless of the interval width h).
-  const double s[4] = {0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0};
+  // Fixed cubic Vandermonde on the INTERIOR nodes {1/8, 3/8, 5/8, 7/8} (working in s = (t-a)/h keeps the
+  // fit well-conditioned regardless of the interval width h). The forward is a single polynomial (<= cubic)
+  // on the OPEN interval, so any 4 distinct nodes recover it EXACTLY for every smooth scheme -- the energy
+  // is identical to sampling the endpoints. But the nodes MUST stay interior: a Flat region is
+  // DISCONTINUOUS at its knots (the piece endpoints), so sampling an endpoint reads the neighbouring
+  // segment and makes an intended meeting-date STEP look like a steep ramp -- the smoother would then
+  // charge bending energy for it and erase the discontinuity. Interior nodes see only the constant
+  // segment, so a Flat piece contributes ZERO energy and the explicit jumps we put in are never smoothed.
+  const double s[4] = {0.125, 0.375, 0.625, 0.875};
   Eigen::Matrix4d V;
   for (int m = 0; m < 4; ++m)
     for (int c = 0; c < 4; ++c) V(m, c) = std::pow(s[m], c);

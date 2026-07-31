@@ -39,6 +39,40 @@ cal::BundleProblem one_region_problem(curve::Scheme scheme, const std::vector<do
 // x^T (R^T R) x = ||R x||^2 -- the energy the operator penalises.
 double energy(const Eigen::MatrixXd& R, const Eigen::VectorXd& x) { return (R * x).squaredNorm(); }
 
+// Independent reference tension energy of a SMOOTH single-region curve. Reconstructs each piece's cubic
+// from the ENDPOINT-inclusive nodes {0, 1/3, 2/3, 1} -- a DIFFERENT node set than the operator's interior
+// {1/8, 3/8, 5/8, 7/8} -- and integrates the derivative squares in the same per-piece closed form. For a
+// smooth scheme every piece IS a single cubic on its interval, so BOTH node sets recover it EXACTLY; the
+// two energies must therefore agree. That agreement is exactly the property the interior-node fix has to
+// preserve for smooth regions (the fix changed only the sampling nodes, and any 4 distinct nodes are exact
+// for a cubic), so this is the regression guard that the fix left smooth-region smoothing untouched.
+double reference_smooth_tension_energy(const cal::BundleProblem& p, const Eigen::VectorXd& x, double sigma) {
+  const auto mods = p.curves[0].modules();
+  auto crv = curve::make_modular_curve<double>(mods);
+  crv.set_forwards(x);
+  const std::vector<double> bp = cal::detail::forward_pieces(mods);
+  const double s[4] = {0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0};
+  Eigen::Matrix4d V;
+  for (int m = 0; m < 4; ++m)
+    for (int c = 0; c < 4; ++c) V(m, c) = std::pow(s[m], c);
+  const Eigen::Matrix4d Vinv = V.inverse();
+  double e = 0.0;
+  for (int pc = 0; pc + 1 < static_cast<int>(bp.size()); ++pc) {
+    const double a = bp[pc], h = bp[pc + 1] - a;
+    if (h <= 1e-13) continue;
+    Eigen::Vector4d f;
+    for (int m = 0; m < 4; ++m) f[m] = crv.forward(a + s[m] * h);
+    const Eigen::Vector4d cc = Vinv * f;  // cubic coeffs c0..c3 in the normalised s
+    const double c1 = cc[1], c2 = cc[2], c3 = cc[3];
+    const double bend = (1.0 / (h * h * h)) * (4.0 * c2 * c2 + 12.0 * c2 * c3 + 12.0 * c3 * c3);
+    const double memb =
+        (1.0 / h) * (c1 * c1 + 2.0 * c1 * c2 + (4.0 / 3.0) * c2 * c2 + 2.0 * c1 * c3 + 3.0 * c2 * c3 +
+                     (9.0 / 5.0) * c3 * c3);
+    e += bend + sigma * sigma * memb;
+  }
+  return e;
+}
+
 }  // namespace
 
 // (A1) A Linear region whose knot forwards lie on the straight line f(t) = beta*t is AFFINE (f'==beta,
@@ -129,4 +163,66 @@ TEST(TensionRegularizer, TensionParameterDecomposesExactly) {
   const double w = 2.5;
   const double e_w = energy(cal::tension_energy_operator(p, w, 0.0, {0}), x);
   EXPECT_NEAR(e_w, w * w * e_bend, 1e-10 * w * w * e_bend) << "row weight scales energy as weight^2";
+}
+
+// (B1) THE DISCONTINUITY-PRESERVATION INVARIANT. A Flat (piecewise-constant, meeting-date front) region is
+// DISCONTINUOUS at its knots: on each open interval the forward is a pure CONSTANT, and the curve jumps by
+// the (deliberate) step size at every knot. The tension smoother MUST NEVER charge energy for those
+// explicit structural steps, whatever their size -- otherwise strong smoothing would erase the meeting-date
+// discontinuities. The interior sampling nodes {1/8,3/8,5/8,7/8} guarantee this: each node sits strictly
+// inside one constant segment, so the per-piece cubic fit reads a constant (c1=c2=c3=0) and the piece
+// contributes EXACTLY zero bending AND membrane energy. (The buggy left-breakpoint node s=0 read the
+// PREVIOUS segment across a knot -- because Flat is left-continuous -- so the fit saw a spurious steep ramp
+// and charged bending energy, collapsing the steps under strong smoothing.) Big, well-separated steps here
+// so the OLD behaviour would have charged a large energy; the invariant is that it is now zero.
+TEST(TensionRegularizer, FlatStepDiscontinuitiesHaveZeroTensionEnergy) {
+  const std::vector<double> knots{0.25, 0.5, 0.75, 1.0, 1.25};
+  const cal::BundleProblem p = one_region_problem(curve::Scheme::Flat, knots);
+  Eigen::VectorXd x(knots.size());
+  const double steps[] = {0.05, 0.02, 0.06, 0.01, 0.04};  // distinct, well-separated => large jumps
+  for (std::size_t i = 0; i < knots.size(); ++i) x[i] = steps[i];
+
+  // A generous scale for what "spurious energy" WOULD have looked like: a step of magnitude ~ds over an
+  // interval of width ~h contributes O((ds/h)^2 / h) if mistaken for a ramp -- here O(0.05^2 / 0.25^3) ~ 1.
+  // Assert the true energy is ~0 to a tolerance FAR below that, for both bending (sigma=0) and membrane.
+  const double scale = 1.0;
+  const auto mods = p.curves[0].modules();
+  const int nl = p.curves[0].n_interp_knots();
+  for (double sigma : {0.0, 1.0, 5.0}) {
+    // (i) directly on the stiffness K = K2 + sigma^2 K1: the flat forward's energy x^T K x must vanish.
+    const Eigen::MatrixXd K = cal::detail::curve_tension_stiffness(mods, nl, sigma);
+    const double eK = x.transpose() * K * x;
+    EXPECT_LT(std::abs(eK), 1e-12 * scale)
+        << "x^T K x for a stepped Flat forward must be ZERO (sigma=" << sigma << ")";
+    EXPECT_LT(K.cwiseAbs().maxCoeff(), 1e-12 * scale)
+        << "a Flat region's whole stiffness matrix must be ZERO (sigma=" << sigma << ")";
+
+    // (ii) through the assembled pseudo-residual operator (the form calibrate/streaming actually use).
+    const Eigen::MatrixXd R = cal::tension_energy_operator(p, /*weight=*/1.0, sigma, {0});
+    EXPECT_LT(energy(R, x), 1e-12 * scale)
+        << "operator energy for the stepped Flat front must be ZERO (sigma=" << sigma << ")";
+  }
+}
+
+// (B2) REGRESSION GUARD for the interior-node change on SMOOTH regions. Moving the sampling nodes from the
+// endpoints to the interior must not change the energy of a smooth (here NaturalCubic) forward one bit,
+// because both node sets recover a cubic piece exactly. Compare the operator (interior nodes) against an
+// independent endpoint-node reconstruction of the same closed-form energy: they must agree to roundoff for
+// bending (sigma=0) AND membrane (sigma>0). If a smooth-region energy ever shifted, the fix would NOT be
+// exact for cubics -- a red flag, not a re-baselining.
+TEST(TensionRegularizer, SmoothRegionTensionEnergyUnchangedByInteriorNodes) {
+  const std::vector<double> knots{0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0};
+  const cal::BundleProblem p = one_region_problem(curve::Scheme::NaturalCubic, knots);
+  Eigen::VectorXd x(knots.size());
+  const double xs[] = {0.030, 0.020, 0.028, 0.018, 0.026, 0.022, 0.031};  // wiggly => real curvature
+  for (std::size_t i = 0; i < knots.size(); ++i) x[i] = xs[i];
+
+  for (double sigma : {0.0, 1.0, 2.5}) {
+    const double e_op = energy(cal::tension_energy_operator(p, 1.0, sigma, {0}), x);
+    const double e_ref = reference_smooth_tension_energy(p, x, sigma);
+    ASSERT_GT(e_ref, 1e-6) << "the reference energy must be non-trivial (the curve is genuinely curved)";
+    EXPECT_NEAR(e_op, e_ref, 1e-9 * e_ref)
+        << "interior-node operator energy must match the endpoint-node reference for smooth cubics, sigma="
+        << sigma;
+  }
 }
