@@ -67,8 +67,8 @@ SmoothedProblem<Problem> smoothed(const Problem& p, double lambda) {
   std::vector<std::pair<int, int>> segs;
   int off = 0;
   for (const auto& c : p.curves) {
-    segs.push_back({off, c.n_knots()});
-    off += c.n_knots();
+    segs.push_back({off, c.n_interp_knots()});  // penalise the interpolation knots only, NOT turn δ's
+    off += c.n_knots();                          // but stride over the WHOLE state block (incl. δ's)
   }
   return SmoothedProblem<Problem>(p, lambda, std::move(segs));
 }
@@ -79,7 +79,7 @@ SmoothedProblem<Problem> smoothed(const Problem& p, double lambda, const std::ve
   std::vector<int> off(p.curves.size(), 0);
   for (std::size_t c = 1; c < p.curves.size(); ++c) off[c] = off[c - 1] + p.curves[c - 1].n_knots();
   std::vector<std::pair<int, int>> segs;
-  for (int c : curves) segs.push_back({off[c], p.curves[c].n_knots()});
+  for (int c : curves) segs.push_back({off[c], p.curves[c].n_interp_knots()});  // interp knots only (no δ)
   return SmoothedProblem<Problem>(p, lambda, std::move(segs));
 }
 
@@ -94,11 +94,11 @@ Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, cons
   for (std::size_t c = 1; c < p.curves.size(); ++c) off[c] = off[c - 1] + p.curves[c - 1].n_knots();
   int rows = 0;
   for (int c : curves)
-    if (p.curves[c].n_knots() > 2) rows += p.curves[c].n_knots() - 2;
+    if (p.curves[c].n_interp_knots() > 2) rows += p.curves[c].n_interp_knots() - 2;
   Eigen::MatrixXd R = Eigen::MatrixXd::Zero(rows, nk);
   int r = 0;
   for (int c : curves) {
-    const int o = off[c], n = p.curves[c].n_knots();
+    const int o = off[c], n = p.curves[c].n_interp_knots();  // curvature over interp knots only (no δ)
     for (int i = 1; i < n - 1; ++i) {
       R(r, o + i - 1) = lambda;
       R(r, o + i) = -2.0 * lambda;
@@ -237,7 +237,8 @@ Eigen::MatrixXd tension_energy_operator(const Problem& p, double weight, double 
 
   Eigen::MatrixXd K = Eigen::MatrixXd::Zero(nk, nk);
   for (int c : curves) {
-    const int o = off[c], nl = p.curves[c].n_knots();
+    const int nl = p.curves[c].n_interp_knots();  // tension energy is over the interp forward, not δ's
+    const int o = off[c];
     K.block(o, o, nl, nl) += detail::curve_tension_stiffness(p.curves[c].modules(), nl, sigma);
   }
   K = 0.5 * (K + K.transpose());  // kill any roundoff asymmetry before the self-adjoint solve

@@ -94,10 +94,21 @@ class CompiledCurveSet {
   // Log-DF weight rows of curve c at `times`: own knot weights in c's block, PLUS the base's log-DF
   // weights (recursively) if c is a spread curve. integral_spread(t) adds to integral_base(t), so the
   // total stays linear in the stacked x -- the whole reason a spread curve keeps the W-cache.
+  //
+  // A curve's state block is [ interpolation knots | one δ per turn ]. The interp knots take the
+  // region W-cache; each turn δ takes a closed-form `overlap` column (docs/turns-calibration.md §2):
+  // the log-DF integral gains Σⱼ δⱼ·overlap(tᵢ, turnⱼ), which is LINEAR in the δⱼ and needs no AAD. A
+  // spread/dependent curve observes the base's turns FOR FREE via the same base recursion below.
   Eigen::MatrixXd logdf_weight(int c, const std::vector<double>& times) const {
+    const int ni = specs_[c].n_interp_knots();
     Eigen::MatrixXd W = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
-    W.middleCols(knot_offset_[c], specs_[c].n_knots()) =
+    W.middleCols(knot_offset_[c], ni) =
         integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
+    for (int j = 0; j < static_cast<int>(specs_[c].turns.size()); ++j) {
+      const int col = knot_offset_[c] + ni + j;  // δⱼ sits after the interp knots in c's block
+      for (int i = 0; i < static_cast<int>(times.size()); ++i)
+        W(i, col) = turn_overlap(times[i], specs_[c].turns[j]);
+    }
     if (specs_[c].base >= 0) W += logdf_weight(specs_[c].base, times);
     return W;
   }

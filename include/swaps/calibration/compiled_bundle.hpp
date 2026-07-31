@@ -85,6 +85,10 @@ class CompiledBundleResidual {
       for (std::size_t j = 0; j < r_rows_.size(); ++j)
         out_[r_rows_[j].row] += r_rows_[j].weight * v[static_cast<int>(j)];
     }
+    // TURN rows (docs/turns-calibration.md): the model quote is the raw jump δ = x[state index]. This is
+    // a STATE-PIN, not a function of DF -- read it straight from x. Accumulate like every other row (a
+    // standalone turn is one entry, weight 1, on its own row).
+    for (const auto& t : turn_rows_) out_[t.row] += t.weight * x[t.state_index];
     // FX forward OUTRIGHT F = fx_spot · DF_num(T) / DF_den(T) (the model quote; its LOG-basis residual is
     // applied in residuals_vs). Just a DF ratio -- the two DFs were registered into W like any other.
     for (const auto& f : fx_rows_)
@@ -172,13 +176,30 @@ class CompiledBundleResidual {
       G(f.row, f.idx_den) += -1.0 / (DF[f.idx_den] * f.fx_time);
     }
     // Band chain rule: r = w(q)·(q-market) => dr/dx = (w + w'·(q-market))·dq/dx. Scale each banded row's
-    // dr/dDF (G) by that scalar before the W matmul (the matmul is linear, so scaling commutes).
+    // dr/dDF (G) by that scalar before the W matmul (the matmul is linear, so scaling commutes). Turn
+    // rows have a zero G row (no DF dependence), so scaling them here is a no-op -- their band factor is
+    // applied to the DIRECT ∂δ/∂x entry below instead.
     for (std::size_t k = 0; k < band_.size(); ++k) {
       const Band& b = band_[k];
       const std::pair<double, double> wd = band_weight_d(qb[k], b.lower, b.upper, b.decay);
       G.row(b.row) *= (wd.first + wd.second * (qb[k] - q[b.row]));  // (q_model - q), q = the live market
     }
-    return -((G * DF.asDiagonal()) * cs_.W());
+    Eigen::MatrixXd J = -((G * DF.asDiagonal()) * cs_.W());
+    // TURN rows: r = (banded) (δ − market) with δ = weight·x[state index] -- LINEAR in x, and independent
+    // of every DF, so its Jacobian is a single DIRECT entry ∂r/∂x[state index], not part of the W matmul.
+    // The band chain-rule factor (w + w'·(δ − market)) multiplies that entry (matches residuals_vs).
+    for (const auto& t : turn_rows_) {
+      double factor = t.weight;
+      for (const auto& b : band_)
+        if (b.row == t.row) {
+          const double qm = t.weight * x[t.state_index];  // the model quote for this row (== mr[t.row])
+          const std::pair<double, double> wd = band_weight_d(qm, b.lower, b.upper, b.decay);
+          factor *= (wd.first + wd.second * (qm - q[t.row]));
+          break;
+        }
+      J(t.row, t.state_index) += factor;
+    }
+    return J;
   }
 
  private:
@@ -254,6 +275,17 @@ class CompiledBundleResidual {
       r_rows_.push_back({row, weight});
       return;
     }
+    if (ins.quote == QuoteKind::TurnJump) {
+      // State-pin on turn δ. δ lives at the END of its curve's state block: global offset of the curve +
+      // its interpolation-knot count + the turn's index. No DF is touched -- model_rates/jacobian read x.
+      int off = 0;
+      for (int k = 0; k < ins.turn_curve; ++k) off += curves[k].n_knots();
+      const int state_index = off + curves[ins.turn_curve].n_interp_knots() + ins.turn_index;
+      if (ins.turn_index < 0 || ins.turn_index >= static_cast<int>(curves[ins.turn_curve].turns.size()))
+        throw std::invalid_argument("CompiledBundleResidual: TurnJump turn_index out of range");
+      turn_rows_.push_back({row, state_index, weight});
+      return;
+    }
     const bool spread = (ins.quote == QuoteKind::ParSpread);
     const FloatLeg& pos = spread ? ins.bench : ins.fwd;  // ParSpread: +bench; ParRate: +fwd
     gen_pos_.add(cs_, pos.forecast, pos.discount, pos.coupons);
@@ -280,6 +312,10 @@ class CompiledBundleResidual {
   // Affine in x (ln DF = −Wx), so it rides the W-cache with a constant Jacobian row -- no AAD needed.
   struct Fx { int row, idx_num, idx_den; double fx_spot, fx_time; };
   std::vector<Fx> fx_rows_;
+  // Turn state-pin rows: r = (banded) δ − market, δ = weight·x[state_index]. Linear in x, no DF -- the
+  // Jacobian is a direct unit entry (see jacobian_vs). Empty for a bundle with no turn instruments.
+  struct TurnRow { int row, state_index; double weight; };
+  std::vector<TurnRow> turn_rows_;
   // Bid/offer bands: a residual row whose value + Jacobian get the w(q) post-transform (see residuals /
   // jacobian). Empty for a plain bundle, so the fast path is untouched when no instrument is banded.
   struct Band { int row; double lower, upper, decay; };

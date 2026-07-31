@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -65,6 +67,11 @@ enum class QuoteKind {
                   // combo directly without pinning each leg's outright rate. Components are full nested
                   // Instruments, so portfolios compose. ONE residual, no knots (knots are in the curve
                   // spec). Not W-cacheable -> rides the AAD/templated path.
+  TurnJump,       // a TURN's jump δ (docs/turns-calibration.md). The model quote is the raw overlay state
+                  // variable δ of (turn_curve, turn_index) -- a STATE-PIN, LINEAR in x (Jacobian row is a
+                  // unit vector at δ's state index). Almost always BANDED (target/lower/upper): the band's
+                  // target regularises δ so it is always identifiable; bracketing futures then sharpen it.
+                  // It IS W-cacheable (linear, no DF), but its Jacobian entry is direct (∂δ/∂x), not via DF.
 };
 
 // Forward declarations for the recursive Portfolio components (each component is itself an Instrument).
@@ -120,6 +127,11 @@ struct Instrument {
   // currency forecast leg, fixed = the annuity — all discounted on the pinned (collateral) curve.
   FloatLeg mtm;
 
+  // TurnJump only: which turn this instrument pins. `turn_curve` is the curve carrying the turn and
+  // `turn_index` its position in that curve's `turns` list. The model quote is that turn's jump δ; the
+  // residual is (banded) δ − market, with `market` the target jump (rate units). See QuoteKind::TurnJump.
+  int turn_curve = 0, turn_index = 0;
+
   // The curve this instrument primarily PINS. Used by the staged solver to assign it to a dependency
   // block; FxForward pins its FOREIGN (fx_num) curve, every leg-based quote its fwd leg's forecast, a
   // Portfolio its first component's. Defined out-of-line (Portfolio dereferences the nested type).
@@ -135,10 +147,20 @@ struct WeightedInstrument {
 inline int Instrument::primary_curve() const {
   if (quote == QuoteKind::Rate) return forecast;
   if (quote == QuoteKind::FxForward) return fx_num;
+  if (quote == QuoteKind::TurnJump) return turn_curve;  // a turn pins the curve that carries it
   if (quote == QuoteKind::Portfolio)
     return combination.empty() ? 0 : combination.front().instrument.primary_curve();
   return fwd.forecast;
 }
+
+// Compile-time detection: does the curve object a CurveOf accessor returns expose turn_jump(int)? True
+// for the bundle's CurveHandle, false for a bare ModularCurve (single-curve CalibrationProblem, which
+// never carries a TurnJump instrument). Lets instrument_model_quote's TurnJump branch stay well-formed
+// for BOTH curve types via `if constexpr`.
+template <class C, class = void>
+struct has_turn_jump : std::false_type {};
+template <class C>
+struct has_turn_jump<C, std::void_t<decltype(std::declval<const C&>().turn_jump(0))>> : std::true_type {};
 
 // Bid/offer band weight for a model quote q (see the Instrument band fields). Returns 1 when there is no
 // band (upper <= lower). Otherwise w = decay + (1-decay)·(1 - exp(-(outside/s)^2)), where `outside` is
@@ -188,6 +210,16 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
     }
     case QuoteKind::Rate:
       return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + ins.convexity;
+    case QuoteKind::TurnJump: {
+      // The model quote is the raw turn jump δ, read straight off the (turned) curve handle. Linear in
+      // x: δ IS a state variable. Only the bundle's CurveHandle exposes turn_jump; a bare ModularCurve
+      // never carries a TurnJump instrument, so guard the call so BOTH curve types compile.
+      using CurveT = std::decay_t<decltype(C(ins.turn_curve))>;
+      if constexpr (has_turn_jump<CurveT>::value)
+        return C(ins.turn_curve).turn_jump(ins.turn_index);
+      else
+        throw std::logic_error("TurnJump instrument requires a turned bundle curve handle");
+    }
     case QuoteKind::ParSpread:
       return (pricing::float_leg_pv<Scalar>(ins.bench.coupons, C(ins.bench.forecast),
                                             C(ins.bench.discount)) -
