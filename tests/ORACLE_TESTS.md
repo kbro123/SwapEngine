@@ -47,6 +47,8 @@ because the engine reimplements what QuantLib already does — that duplication 
 | `multicurrency_test.cpp` | Cross-currency (FX forward, MtM basis) vs QuantLib. |
 | `conventions_test.cpp` | Market-conventions DB (`conventions.json`) vs QuantLib's own index conventions. |
 | `tension_regularizer_oracle_test.cpp` | Tension-energy regularizer drops the Jacobian condition number + stays first-order optimal on the QuantLib-built ill-conditioned EUR trio. |
+| `tension_oracle_test.cpp` | Tension-spline curve vs QuantLib term structure. |
+| `turns_oracle_test.cpp` | Turned curve (turn overlay) prices OIS identically to QuantLib; the δ shifts QuantLib DFs by exp(−δ·overlap). |
 
 Reference builders (`reference_curve.hpp`, `reference_bundle.hpp`, `reference_multicurrency.hpp`) build
 the QuantLib-consistent markets these tests calibrate to; they are part of the oracle surface.
