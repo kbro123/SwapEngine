@@ -211,8 +211,14 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
   for (int p = 0; p < P; ++p) {
     const double h = bp[p + 1] - bp[p];
     if (h <= 1e-13) continue;
-    // Cubic coeffs (in the normalised s) as linear functions of x: rows of G = Vinv*F are c0..c3.
-    const Eigen::MatrixXd G = Vinv * F[p];
+    // Cubic coeffs (in the normalised s) as linear functions of x: rows of G = Vinv*F are c0..c3. Subtract
+    // the piece's CONSTANT baseline (row 0) before the solve: the energy uses only c1..c3, which are
+    // invariant to a constant shift, but this keeps the (large) constant out of the fit so it is never
+    // amplified by the 1/h^3 / 1/h factors below. For a Flat piece F is bit-identical across nodes, so
+    // F - row0 == 0 EXACTLY => c1=c2=c3=0 EXACTLY and the energy is zero for ANY interval width (a very
+    // short interval would otherwise blow the Vandermonde-inverse roundoff up by 1/h^3). Smooth pieces are
+    // unchanged (the subtraction only shifts c0).
+    const Eigen::MatrixXd G = Vinv * (F[p].rowwise() - F[p].row(0));
     const Eigen::RowVectorXd g1 = G.row(1), g2 = G.row(2), g3 = G.row(3);
     // f(u) = c0 + c1 s + c2 s^2 + c3 s^3, s = u/h.  INT_0^h (f'')^2 du = (1/h^3)[4c2^2+12c2c3+12c3^2];
     // INT_0^h (f')^2 du = (1/h)[c1^2 + 2c1c2 + (4/3)c2^2 + 2c1c3 + 3c2c3 + (9/5)c3^2].  (see the note's

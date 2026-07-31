@@ -204,6 +204,32 @@ TEST(TensionRegularizer, FlatStepDiscontinuitiesHaveZeroTensionEnergy) {
   }
 }
 
+// (B1b) SHORT-INTERVAL edge case. The bending energy carries a 1/h^3 factor, so an intuition says a tiny
+// gap between two knots should blow up. It must NOT: the per-piece fit is in normalised s in [0,1]
+// (h-INDEPENDENT), and a Flat piece returns the BIT-IDENTICAL segment constant at every interior node, so
+// the cubic coefficients are EXACTLY zero and 0 * (1/h^3) = 0 for any h. Steps across a ~1-day and an
+// extreme ~1e-6y interval therefore still cost ZERO energy. (Sub-1e-13 gaps can't arise:
+// require_increasing_knots rejects duplicates and the operator skips pieces with h <= 1e-13.)
+TEST(TensionRegularizer, FlatStepZeroEnergyEvenForTinyIntervals) {
+  const std::vector<double> knots{0.25, 0.2527, 0.2527 + 1e-6, 0.75, 1.0};  // ~1-day then ~1e-6y gaps
+  const cal::BundleProblem p = one_region_problem(curve::Scheme::Flat, knots);
+  Eigen::VectorXd x(knots.size());
+  const double steps[] = {0.05, 0.02, 0.06, 0.01, 0.04};  // big jumps ACROSS the tiny intervals
+  for (std::size_t i = 0; i < knots.size(); ++i) x[i] = steps[i];
+  const auto mods = p.curves[0].modules();
+  const int nl = p.curves[0].n_interp_knots();
+  for (double sigma : {0.0, 1.0, 5.0}) {
+    const Eigen::MatrixXd K = cal::detail::curve_tension_stiffness(mods, nl, sigma);
+    EXPECT_LT(std::abs(double(x.transpose() * K * x)), 1e-12)
+        << "a stepped Flat front with TINY intervals must still cost ZERO energy (sigma=" << sigma << ")";
+    EXPECT_LT(K.cwiseAbs().maxCoeff(), 1e-12)
+        << "Flat stiffness must be ZERO regardless of interval width (sigma=" << sigma << ")";
+    const Eigen::MatrixXd R = cal::tension_energy_operator(p, /*weight=*/1.0, sigma, {0});
+    EXPECT_LT(energy(R, x), 1e-12)
+        << "operator energy must be ZERO for a stepped Flat front with tiny intervals (sigma=" << sigma << ")";
+  }
+}
+
 // (B2) REGRESSION GUARD for the interior-node change on SMOOTH regions. Moving the sampling nodes from the
 // endpoints to the interior must not change the energy of a smooth (here NaturalCubic) forward one bit,
 // because both node sets recover a cubic piece exactly. Compare the operator (interior nodes) against an
