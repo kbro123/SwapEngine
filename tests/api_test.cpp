@@ -208,6 +208,117 @@ TEST(BundleApi, StreamingTracksAMarketMove) {
   EXPECT_LT(maxr, 1e-9) << "streamed curve must reprice the moved market exactly";
 }
 
+namespace {
+
+// A synthetic single-coupon OIS par-rate swap to T (float leg telescopes to 1 − DF(T)); pins back knots.
+cal::Instrument turn_ois(double T) {
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::ParRate;
+  px::FloatCoupon fc;
+  fc.obs.sub_start = {0.0};
+  fc.obs.sub_end = {T};
+  fc.obs.tau_index = T;
+  fc.pay = T;
+  fc.tau_pay = T;
+  ins.fwd.coupons = {fc};
+  ins.fixed.coupons = {px::FixedCoupon{T, T, 1.0}};
+  return ins;
+}
+// A synthetic overnight future over [s,e] as a single-sub Rate instrument.
+cal::Instrument turn_fut(double s, double e) {
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::Rate;
+  ins.forecast = 0;
+  ins.obs.sub_start = {s};
+  ins.obs.sub_end = {e};
+  ins.obs.tau_index = e - s;
+  return ins;
+}
+
+// One outright curve carrying a single year-end turn + a banded TurnJump instrument, market generated
+// from a known x_true (incl. δ) so x_true is a stationary point.
+cal::BundleProblem build_turn_bundle(Eigen::VectorXd& x_true, int& delta_index) {
+  const double a = 0.98, b = 1.02, delta_true = 0.0030;
+  cal::BundleProblem p;
+  px::CurveStructure s;
+  s.meeting = {0.25, 0.5};
+  s.back = {1.0, 2.0, 3.0, 5.0};
+  s.turns = {{a, b}};
+  p.curves = {s};
+  delta_index = s.n_interp_knots();  // δ sits right after the 6 interp knots
+
+  // Spanning + non-spanning futures reconcile only via the turn; pillar OIS pins the smooth back.
+  p.instruments = {turn_fut(0.80, 0.95), turn_fut(0.95, 1.05), turn_fut(0.90, 1.10),
+                   turn_fut(1.05, 1.20), turn_ois(0.5),        turn_ois(1.0),
+                   turn_ois(2.0),        turn_ois(3.0),        turn_ois(5.0)};
+  cal::Instrument pin;
+  pin.quote = cal::QuoteKind::TurnJump;
+  pin.turn_curve = 0;
+  pin.turn_index = 0;
+  pin.market = delta_true;
+  pin.band_lower = delta_true - 0.001;
+  pin.band_upper = delta_true + 0.001;
+  pin.band_decay = 0.05;
+  p.instruments.push_back(pin);
+
+  x_true.resize(p.n_knots());
+  x_true << 0.030, 0.032, 0.035, 0.037, 0.039, 0.041, delta_true;
+
+  const auto C = cal::build_bundle_curves<double>(
+      p.curves, [&](int c, int i) { return x_true[p.offset(c) + i]; });
+  const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
+  for (auto& ins : p.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
+  return p;
+}
+
+}  // namespace
+
+TEST(BundleApi, TurnsJsonRoundTripPreservesStructureAndCalibrates) {
+  Eigen::VectorXd x_true;
+  int delta_index = 0;
+  const cal::BundleProblem p = build_turn_bundle(x_true, delta_index);
+
+  // Round-trip through the JSON contract.
+  const json::value doc = api::bundle_to_json(p);
+  const cal::BundleProblem q = api::bundle_from_json(doc);
+
+  // (1) The turn overlay survives: same knot count (6 interp + 1 δ) and the turn window round-trips.
+  ASSERT_EQ(q.n_curves(), 1);
+  ASSERT_EQ(q.n_knots(), p.n_knots());
+  ASSERT_EQ(q.n_knots(), 7);
+  ASSERT_EQ(q.curves[0].turns.size(), 1u);
+  EXPECT_EQ(q.curves[0].turns[0].start, p.curves[0].turns[0].start);
+  EXPECT_EQ(q.curves[0].turns[0].end, p.curves[0].turns[0].end);
+
+  // (2) The TurnJump instrument survives with all its fields.
+  const cal::Instrument& qp = q.instruments.back();
+  EXPECT_EQ(qp.quote, cal::QuoteKind::TurnJump);
+  EXPECT_EQ(qp.turn_curve, 0);
+  EXPECT_EQ(qp.turn_index, 0);
+  EXPECT_EQ(qp.market, p.instruments.back().market);
+  EXPECT_EQ(qp.band_lower, p.instruments.back().band_lower);
+  EXPECT_EQ(qp.band_upper, p.instruments.back().band_upper);
+  EXPECT_EQ(qp.band_decay, p.instruments.back().band_decay);
+
+  // (3) Bit-for-bit lossless: reprices identically at x_true.
+  const Eigen::VectorXd rp = p.residuals<double>(x_true);
+  const Eigen::VectorXd rq = q.residuals<double>(x_true);
+  EXPECT_EQ((rp - rq).cwiseAbs().maxCoeff(), 0.0) << "turn serialization must be bit-for-bit lossless";
+
+  // (4) flat_x0 seeds the δ overlay at 0 (no jump), not at the rate level.
+  const Eigen::VectorXd x0seed = api::flat_x0(q);
+  EXPECT_EQ(x0seed[delta_index], 0.0) << "turn δ must seed at 0, not the rate level";
+
+  // (5) Calibrates to first-order optimality off the JSON-reconstructed problem.
+  Eigen::VectorXd x0 = x_true;
+  x0.array() += 0.002;
+  x0[delta_index] = 0.0;  // start from no jump
+  api::BundleSession sess(q);
+  const cal::CalibrationResult& r = sess.calibrate(x0);
+  EXPECT_LT(r.stationarity, 1e-7) << "banded-turn bundle must reach ‖Jᵀr‖∞ ≈ 0";
+  EXPECT_NEAR(sess.x()[delta_index], x_true[delta_index], 5e-4) << "turn δ recovered near its target";
+}
+
 TEST(BundleApi, RunJsonEndToEnd) {
   Eigen::VectorXd x_true;
   const cal::BundleProblem p = build_bundle(x_true);

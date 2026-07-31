@@ -74,6 +74,7 @@ const char* quote_to_str(cal::QuoteKind q) {
     case cal::QuoteKind::FxForward: return "FxForward";
     case cal::QuoteKind::XccyMtmBasis: return "XccyMtmBasis";
     case cal::QuoteKind::Portfolio: return "Portfolio";
+    case cal::QuoteKind::TurnJump: return "TurnJump";
   }
   return "ParRate";
 }
@@ -83,6 +84,7 @@ cal::QuoteKind quote_from_str(const std::string& s) {
   if (s == "FxForward") return cal::QuoteKind::FxForward;
   if (s == "XccyMtmBasis") return cal::QuoteKind::XccyMtmBasis;
   if (s == "Portfolio") return cal::QuoteKind::Portfolio;
+  if (s == "TurnJump") return cal::QuoteKind::TurnJump;
   if (s == "ParRate") return cal::QuoteKind::ParRate;
   throw std::invalid_argument("unknown quote kind: " + s);
 }
@@ -189,6 +191,16 @@ cal::BundleCurveSpec spec_from(const json::object& o) {
       m.sigma = get_d(ro, "sigma", 0.0);  // tension hyperparameter (Scheme::Tension only); else ignored
       s.regions.push_back(std::move(m));
     }
+  // Calibration TURNS (docs/turns-calibration.md, Mode 2): an OPTIONAL array of overlay windows. Absent
+  // -> empty, byte-identical to a turn-free curve. Each δ appends one free state var after the interp knots.
+  if (o.contains("turns") && o.at("turns").is_array())
+    for (const auto& e : o.at("turns").as_array()) {
+      const auto& to = e.as_object();
+      px::Turn t;
+      t.start = get_d(to, "start", 0.0);
+      t.end = get_d(to, "end", 0.0);
+      s.turns.push_back(t);
+    }
   return s;
 }
 
@@ -274,6 +286,17 @@ json::object spec_to(const cal::BundleCurveSpec& s) {
     }
     o["regions"] = rs;
   }
+  // Emit turns ONLY when present, so a turn-free curve serializes byte-identically (mirrors `regions`).
+  if (!s.turns.empty()) {
+    json::array ts;
+    for (const auto& t : s.turns) {
+      json::object to;
+      to["start"] = t.start;
+      to["end"] = t.end;
+      ts.push_back(to);
+    }
+    o["turns"] = ts;
+  }
   return o;
 }
 
@@ -308,6 +331,8 @@ cal::Instrument instrument_from_json(const json::value& v) {
   ins.band_lower = get_d(o, "band_lower", 0.0);
   ins.band_upper = get_d(o, "band_upper", 0.0);
   ins.band_decay = get_d(o, "band_decay", 1.0);
+  ins.turn_curve = get_i(o, "turn_curve", 0);  // TurnJump only: (curve, index) of the pinned turn
+  ins.turn_index = get_i(o, "turn_index", 0);
   if (o.contains("combination"))  // Portfolio components (recursive)
     for (const auto& e : o.at("combination").as_array()) {
       const auto& c = e.as_object();
@@ -335,6 +360,8 @@ json::value instrument_to_json(const cal::Instrument& ins) {
   o["band_lower"] = ins.band_lower;
   o["band_upper"] = ins.band_upper;
   o["band_decay"] = ins.band_decay;
+  o["turn_curve"] = ins.turn_curve;  // TurnJump only: (curve, index) of the pinned turn
+  o["turn_index"] = ins.turn_index;
   if (!ins.combination.empty()) {
     json::array combo;
     for (const auto& c : ins.combination) {
@@ -374,7 +401,9 @@ Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
   int o = 0;
   for (const auto& c : prob.curves) {
     const double v = (c.base < 0) ? level : 0.0;  // outright at the level, spread at zero
-    for (int i = 0; i < c.n_knots(); ++i) x[o++] = v;
+    const int ni = c.n_interp_knots();            // interp knots first, then one δ per turn
+    // Interp knots seed at the level/zero; turn δ's are an overlay -> seed at 0 (no jump), NOT the level.
+    for (int i = 0; i < c.n_knots(); ++i) x[o++] = (i < ni) ? v : 0.0;
   }
   return x;
 }
