@@ -32,13 +32,13 @@ Eigen::VectorXd vals() {
 }
 Tension<double> makeT(double sigma, const Eigen::VectorXd& y, double v0 = kV0) {
   Tension<double> t(kKnots, sigma);
-  Boundary<double> in{kT0, v0, 0.0, kI0};
+  Boundary<double> in{kT0, v0, 0.0, kI0, /*has_predecessor=*/true};
   t.build(y, 0, static_cast<int>(y.size()), in);
   return t;
 }
 NaturalCubic<double> makeNC(const Eigen::VectorXd& y, double v0 = kV0) {
   NaturalCubic<double> c(kKnots);
-  Boundary<double> in{kT0, v0, 0.0, kI0};
+  Boundary<double> in{kT0, v0, 0.0, kI0, /*has_predecessor=*/true};
   c.build(y, 0, static_cast<int>(y.size()), in);
   return c;
 }

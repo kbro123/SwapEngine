@@ -27,7 +27,7 @@ void compare(const std::vector<double>& vals, const char* label) {
   Eigen::VectorXd v(static_cast<int>(vals.size()));
   for (int i = 0; i < v.size(); ++i) v[i] = vals[i];
   MonotoneCubic<double> mc(kBack);
-  mc.build(v, 0, static_cast<int>(v.size()), Boundary<double>{kT0, kV0, 0.0, kI0});
+  mc.build(v, 0, static_cast<int>(v.size()), Boundary<double>{kT0, kV0, 0.0, kI0, /*has_predecessor=*/true});
 
   std::vector<double> xs{kT0}, ys{kV0};
   for (double b : kBack) xs.push_back(b);

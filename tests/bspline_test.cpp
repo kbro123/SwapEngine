@@ -30,7 +30,7 @@ constexpr double kT0 = 1.0, kV0 = 0.032, kI0 = 0.05;
 
 BSpline<double> make(const Eigen::VectorXd& free_cp, double v0 = kV0) {
   BSpline<double> b(kKnots);
-  Boundary<double> in{kT0, v0, 0.0, kI0};
+  Boundary<double> in{kT0, v0, 0.0, kI0, /*has_predecessor=*/true};
   b.build(free_cp, 0, static_cast<int>(free_cp.size()), in);
   return b;
 }

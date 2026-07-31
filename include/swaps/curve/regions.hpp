@@ -43,6 +43,13 @@ struct Boundary {
   Scalar value{0.0};      // forward level at the boundary (C0 handoff)
   Scalar slope{0.0};      // forward slope (optional C1 handoff)
   Scalar integral{0.0};   // cumulative integral_0^time f
+  // FALSE only for the FIRST region of a curve (no predecessor): a LEADING region must NOT pin its start
+  // to this (phantom, zero) value and ramp up to its first knot -- it flat-extrapolates its first FREE
+  // knot value v1 = x[off] backwards, exactly mirroring how every scheme flat-extrapolates its LAST knot.
+  // TRUE for every following region: pin the leading value to `value` for a genuine C0 join (unchanged
+  // behaviour). Default false so the seed Boundary{} in set_forwards marks the first region leading; a
+  // directly-constructed join boundary (unit tests) must set this true. set_forwards sets it centrally.
+  bool has_predecessor = false;
 };
 
 // Piecewise-flat forward, breakpoints at the given times. f is constant on (t_{k-1}, t_k] and jumps
@@ -106,29 +113,38 @@ class Linear {
 
   template <class Vec>
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
-    t_.resize(n + 1);
-    y_.resize(n + 1);
-    t_[0] = in.time;
-    y_[0] = in.value;
-    for (int i = 0; i < n; ++i) {
-      t_[i + 1] = s_[i];
-      y_[i + 1] = x[off + i];
+    // LEADING (no predecessor): interpolate the n ACTUAL knots and flat-extrapolate the first value v1
+    // backwards (forward(t<t1)=v1), mirroring the far end -- NO phantom (0,0) join, NO ramp from zero.
+    // FOLLOWING: pin a leading node to the incoming boundary (in.time,in.value) for the C0 join (unchanged).
+    const bool lead = !in.has_predecessor;
+    const int N = lead ? n : n + 1;
+    t_.resize(N);
+    y_.resize(N);
+    I_.resize(N);
+    if (lead) {
+      for (int i = 0; i < n; ++i) { t_[i] = s_[i]; y_[i] = x[off + i]; }
+      I_[0] = in.integral + y_[0] * (t_[0] - in.time);  // flat pre-segment [in.time,t1] at v1
+    } else {
+      t_[0] = in.time;
+      y_[0] = in.value;
+      for (int i = 0; i < n; ++i) { t_[i + 1] = s_[i]; y_[i + 1] = x[off + i]; }
+      I_[0] = in.integral;
     }
-    I_.resize(n + 1);
-    I_[0] = in.integral;
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i + 1 < N; ++i) {
       const double h = t_[i + 1] - t_[i];
       I_[i + 1] = I_[i] + 0.5 * (y_[i] + y_[i + 1]) * h;  // trapezoid = exact for linear f
     }
   }
 
   Scalar forward(double t) const {
+    if (t <= t_.front()) return y_.front();  // flat pre-segment (leading) / clamp start (following: t=in.time)
     if (t >= t_.back()) return y_.back();
     const int i = seg(t);
     const double w = (t - t_[i]) / (t_[i + 1] - t_[i]);
     return y_[i] + (y_[i + 1] - y_[i]) * w;
   }
   Scalar integral(double t) const {
+    if (t <= t_.front()) return I_.front() - y_.front() * (t_.front() - t);  // flat pre-segment at v1
     if (t >= t_.back()) return I_.back() + y_.back() * (t - t_.back());
     const int i = seg(t);
     const double u = t - t_[i], h = t_[i + 1] - t_[i];
@@ -161,14 +177,18 @@ class NaturalCubic {
 
   template <class Vec>
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
-    const int N = n + 1;  // spline points: [in.time, s_...]
+    // LEADING: spline the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end); no
+    // phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 continuity (as before).
+    const bool lead = !in.has_predecessor;
+    const int N = lead ? n : n + 1;
     xs_.resize(N);
     ys_.resize(N);
-    xs_[0] = in.time;
-    ys_[0] = in.value;  // C0: leading value pinned to the incoming boundary
-    for (int i = 0; i < n; ++i) {
-      xs_[i + 1] = s_[i];
-      ys_[i + 1] = x[off + i];
+    if (lead) {
+      for (int i = 0; i < n; ++i) { xs_[i] = s_[i]; ys_[i] = x[off + i]; }
+    } else {
+      xs_[0] = in.time;
+      ys_[0] = in.value;  // C0: leading value pinned to the incoming boundary
+      for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
     }
 
     const int nseg = N - 1;
@@ -208,7 +228,7 @@ class NaturalCubic {
       d_[i] = (M[i + 1] - M[i]) / (6.0 * h[i]);
     }
     Is_.resize(N);
-    Is_[0] = in.integral;
+    Is_[0] = lead ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
     for (int i = 0; i < nseg; ++i) {
       const double u = h[i];
       Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
@@ -218,12 +238,14 @@ class NaturalCubic {
   }
 
   Scalar forward(double t) const {
-    if (t >= xs_.back()) return ys_.back();  // flat extrapolation
+    if (t <= xs_.front()) return ys_.front();  // flat pre-segment (leading) / clamp start (following)
+    if (t >= xs_.back()) return ys_.back();    // flat extrapolation
     const int i = seg(t);
     const double u = t - xs_[i];
     return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
   }
   Scalar integral(double t) const {
+    if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
     const int i = seg(t);
     const double u = t - xs_[i];
@@ -256,14 +278,18 @@ class Hermite {
 
   template <class Vec>
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
-    const int N = n + 1;  // points: [in.time, s_...]
+    // LEADING: Hermite over the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end);
+    // no phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 (unchanged).
+    const bool lead = !in.has_predecessor;
+    const int N = lead ? n : n + 1;
     xs_.resize(N);
     ys_.resize(N);
-    xs_[0] = in.time;
-    ys_[0] = in.value;
-    for (int i = 0; i < n; ++i) {
-      xs_[i + 1] = s_[i];
-      ys_[i + 1] = x[off + i];
+    if (lead) {
+      for (int i = 0; i < n; ++i) { xs_[i] = s_[i]; ys_[i] = x[off + i]; }
+    } else {
+      xs_[0] = in.time;
+      ys_[0] = in.value;
+      for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
     }
     const int nseg = N - 1;
     std::vector<double> h(nseg);
@@ -297,7 +323,7 @@ class Hermite {
       d_[i] = (m[i] + m[i + 1]) / (hi * hi) - 2.0 * sec[i] / (hi * hi);
     }
     Is_.resize(N);
-    Is_[0] = in.integral;
+    Is_[0] = lead ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
     for (int i = 0; i < nseg; ++i) {
       const double u = h[i];
       Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
@@ -306,12 +332,14 @@ class Hermite {
   }
 
   Scalar forward(double t) const {
+    if (t <= xs_.front()) return ys_.front();  // flat pre-segment (leading) / clamp start (following)
     if (t >= xs_.back()) return ys_.back();
     const int i = seg(t);
     const double u = t - xs_[i];
     return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
   }
   Scalar integral(double t) const {
+    if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
     const int i = seg(t);
     const double u = t - xs_[i];
@@ -356,15 +384,19 @@ class MonotoneCubic {
 
   template <class Vec>
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
-    const int N = n + 1;  // spline nodes: [in.time, s_...]; node 0 pinned to the boundary value (C0 join)
-    if (N < 2) throw std::invalid_argument("MonotoneCubic: needs >= 1 back knot");
+    // LEADING: filter+spline the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end);
+    // no phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join node for C0 (unchanged).
+    const bool lead = !in.has_predecessor;
+    const int N = lead ? n : n + 1;
+    if (N < 2) throw std::invalid_argument("MonotoneCubic: needs >= 2 nodes (>=1 back knot when following)");
     xs_.resize(N);
     ys_.resize(N);
-    xs_[0] = in.time;
-    ys_[0] = in.value;
-    for (int i = 0; i < n; ++i) {
-      xs_[i + 1] = s_[i];
-      ys_[i + 1] = x[off + i];
+    if (lead) {
+      for (int i = 0; i < n; ++i) { xs_[i] = s_[i]; ys_[i] = x[off + i]; }
+    } else {
+      xs_[0] = in.time;
+      ys_[0] = in.value;
+      for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
     }
     const int nseg = N - 1;
     std::vector<double> h(nseg);
@@ -407,7 +439,7 @@ class MonotoneCubic {
       d_[i] = (m[i] + m[i + 1]) / (hi * hi) - 2.0 * S[i] / (hi * hi);
     }
     Is_.resize(N);
-    Is_[0] = in.integral;
+    Is_[0] = lead ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
     for (int i = 0; i < nseg; ++i) {
       const double u = h[i];
       Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
@@ -416,12 +448,14 @@ class MonotoneCubic {
   }
 
   Scalar forward(double t) const {
+    if (t <= xs_.front()) return ys_.front();  // flat pre-segment (leading) / clamp start (following)
     if (t >= xs_.back()) return ys_.back();
     const int i = seg(t);
     const double u = t - xs_[i];
     return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
   }
   Scalar integral(double t) const {
+    if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
     const int i = seg(t);
     const double u = t - xs_[i];
@@ -533,7 +567,15 @@ class BSpline {
   template <class Vec>
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
     if (n < 3) throw std::invalid_argument("BSpline: needs >= 3 back knots for a cubic B-spline");
-    t0_ = in.time;
+    // LEADING (no predecessor): the pinned P_0 must NOT be the phantom zero join (which drags the clamped
+    // start value f(start)=cp_[0] to 0 and ramps the whole short end). Tie P_0 to the first FREE control
+    // point (cp_[0]=x[off]) so the clamp starts at a CALIBRATED value, and place the B-spline over [t1,te]
+    // with a genuinely FLAT pre-segment [in.time,t1] at that value -- symmetric with the far-end clamp.
+    // DOF-neutral: n_values() stays n (cp_[0] mirrors x[off], not a new variable).
+    // FOLLOWING: P_0 = in.value is the real C0 join; the pre-segment is zero-length (t0_==pre_t_). Unchanged.
+    const bool lead = !in.has_predecessor;
+    pre_t_ = in.time;                       // start of the flat pre-segment (== t0_ for a following region)
+    t0_ = lead ? s_.front() : in.time;      // clamped B-spline domain start
     I0_ = in.integral;
     const double te = s_.back();
     const int m = n + 1;  // control points: P_0 (pinned) + n free
@@ -542,8 +584,17 @@ class BSpline {
     for (int i = 0; i < 4; ++i) tau_[i] = t0_;
     for (int j = 1; j <= n - 3; ++j) tau_[3 + j] = t0_ + (te - t0_) * (static_cast<double>(j) / (n - 2));
     cp_.resize(m);
-    cp_[0] = in.value;  // C0 pin
+    cp_[0] = lead ? x[off] : in.value;  // leading: calibrated clamp start; following: C0 pin to the join
     for (int i = 0; i < n; ++i) cp_[i + 1] = x[off + i];
+    // A LEADING region receives a default Boundary whose value/integral carry an EMPTY AAD derivative,
+    // while the free control points carry width-m ones. de Boor (below) combines control points via raw
+    // expression-template adds that BYPASS Eigen's make_coherent, so mixing an empty derivative with a
+    // width-m one asserts (undefined behaviour under -DNDEBUG -> the "leading BSpline" crash). Coerce the
+    // pinned boundary to the free control points' width via `+= (x-x)` (a width-m zero): its in-place
+    // make_coherent fills zeros when leading, and is a value-preserving no-op that KEEPS the join's real
+    // sensitivities when this region FOLLOWS another. No-op for a plain double Scalar. (For leading, cp_[0]
+    // already == x[off] carries the right width; the coerce keeps I0_ coherent and is a harmless no-op there.)
+    { Scalar zero_w = x[off]; zero_w -= x[off]; cp_[0] += zero_w; I0_ += zero_w; }
     // Distinct breakpoints (t0, interior knots, te) for exact segment-wise integration.
     brk_.clear();
     brk_.push_back(t0_);
@@ -557,15 +608,18 @@ class BSpline {
 
   Scalar forward(double t) const {
     const double te = s_.back();
-    if (t <= t0_) return cp_.front();
-    if (t >= te) return deboor(te);  // flat extrapolation beyond the region
+    if (t <= t0_) return cp_.front();  // flat pre-segment (leading) / clamp start (following: t0_==in.time)
+    if (t >= te) return deboor(te);    // flat extrapolation beyond the region
     return deboor(t);
   }
   Scalar integral(double t) const {
-    if (t <= t0_) return I0_;
+    // Flat pre-segment [pre_t_,t0_] at level cp_.front(): zero-length for a following region (pre_t_==t0_),
+    // the calibrated flat short end for a leading one (pre_t_=in.time < t0_=t1).
+    if (t <= t0_) return I0_ + cp_.front() * (t - pre_t_);
     const double te = s_.back();
-    if (t >= te) return I0_ + region_int_ + deboor(te) * (t - te);
-    Scalar acc = I0_;  // I0_ carries the front's derivatives
+    const Scalar base = I0_ + cp_.front() * (t0_ - pre_t_);  // integral accumulated up to t0_
+    if (t >= te) return base + region_int_ + deboor(te) * (t - te);
+    Scalar acc = base;  // base carries the front's derivatives
     for (std::size_t k = 0; k + 1 < brk_.size(); ++k) {
       const double lo = brk_[k], hi = brk_[k + 1];
       if (t <= lo) break;
@@ -574,7 +628,10 @@ class BSpline {
     }
     return acc;
   }
-  Boundary<Scalar> out() const { return {s_.back(), deboor(s_.back()), Scalar(0.0), I0_ + region_int_}; }
+  Boundary<Scalar> out() const {
+    const Scalar base = I0_ + cp_.front() * (t0_ - pre_t_);  // include the flat pre-segment (leading)
+    return {s_.back(), deboor(s_.back()), Scalar(0.0), base + region_int_};
+  }
 
   // Second moment ∫_a^b f(u)^2 du over this region -- the convexity term of the moment scheme
   // (docs/bezier-and-moments.md Part B). QUADRATIC in the control points (not linear): a separate
@@ -642,7 +699,8 @@ class BSpline {
 
   std::vector<double> s_, tau_, brk_;
   std::vector<Scalar> cp_;
-  double t0_ = 0.0;
+  double t0_ = 0.0;    // clamped B-spline domain start (== first knot when leading, in.time when following)
+  double pre_t_ = 0.0;  // start of the flat pre-segment (in.time); == t0_ (zero-length) for a following region
   Scalar I0_{0.0}, region_int_{0.0};
 };
 
@@ -788,14 +846,18 @@ class Tension {
 
   template <class Vec>
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
-    const int N = n + 1;  // spline points: [in.time, s_...]; point 0 pinned to the boundary value (C0)
+    // LEADING: tension-spline the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end);
+    // no phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 (unchanged).
+    const bool lead = !in.has_predecessor;
+    const int N = lead ? n : n + 1;
     xs_.resize(N);
     ys_.resize(N);
-    xs_[0] = in.time;
-    ys_[0] = in.value;  // C0 join
-    for (int i = 0; i < n; ++i) {
-      xs_[i + 1] = s_[i];
-      ys_[i + 1] = x[off + i];
+    if (lead) {
+      for (int i = 0; i < n; ++i) { xs_[i] = s_[i]; ys_[i] = x[off + i]; }
+    } else {
+      xs_[0] = in.time;
+      ys_[0] = in.value;  // C0 join
+      for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
     }
     const int nseg = N - 1;
     h_.resize(nseg);
@@ -831,7 +893,7 @@ class Tension {
 
     // Cumulative integral at each knot: full-segment ∫ = (y_i+y_{i+1})h/2 + (z_i+z_{i+1})·Ψ(σ,h,h).
     Is_.resize(N);
-    Is_[0] = in.integral;
+    Is_[0] = lead ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
     for (int i = 0; i < nseg; ++i) {
       const double psih = tension_detail::Psi(sigma_, h_[i], h_[i]);
       Is_[i + 1] = Is_[i] + (ys_[i] + ys_[i + 1]) * (0.5 * h_[i]) + (z_[i] + z_[i + 1]) * psih;
@@ -843,7 +905,8 @@ class Tension {
   }
 
   Scalar forward(double t) const {
-    if (t >= xs_.back()) return ys_.back();  // flat extrapolation
+    if (t <= xs_.front()) return ys_.front();  // flat pre-segment (leading) / clamp start (following)
+    if (t >= xs_.back()) return ys_.back();    // flat extrapolation
     const int i = seg(t);
     const double h = h_[i], u = t - xs_[i];
     // f = y_i(h-u)/h + y_{i+1}u/h + z_i·Φ(σ,h,h-u) + z_{i+1}·Φ(σ,h,u)   (linear in y and z).
@@ -851,6 +914,7 @@ class Tension {
            z_[i] * tension_detail::Phi(sigma_, h, h - u) + z_[i + 1] * tension_detail::Phi(sigma_, h, u);
   }
   Scalar integral(double t) const {
+    if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
     const int i = seg(t);
     const double h = h_[i], u = t - xs_[i];

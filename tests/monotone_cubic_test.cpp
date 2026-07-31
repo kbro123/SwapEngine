@@ -32,7 +32,7 @@ constexpr double kT0 = 0.5, kV0 = 0.030, kI0 = 0.015;
 
 MonotoneCubic<double> make(const Eigen::VectorXd& vals, double v0 = kV0) {
   MonotoneCubic<double> mc(kKnots);
-  Boundary<double> in{kT0, v0, 0.0, kI0};
+  Boundary<double> in{kT0, v0, 0.0, kI0, /*has_predecessor=*/true};
   mc.build(vals, 0, static_cast<int>(vals.size()), in);
   return mc;
 }
@@ -69,7 +69,7 @@ TEST(MonotoneCubic, FilterKillsOvershootVsNaturalCubic) {
   v << 0.020, 0.020, 0.020, 0.060, 0.060, 0.060;
   swaps::curve::MonotoneCubic<double> mc(kKnots);
   swaps::curve::NaturalCubic<double> nc(kKnots);
-  const Boundary<double> in{kT0, 0.020, 0.0, kI0};  // v0 = first value -> globally non-decreasing data
+  const Boundary<double> in{kT0, 0.020, 0.0, kI0, /*has_predecessor=*/true};  // v0 = first value -> globally non-decreasing data
   mc.build(v, 0, 6, in);
   nc.build(v, 0, 6, in);
   std::vector<double> xs{kT0}, ys{0.020};

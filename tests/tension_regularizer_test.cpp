@@ -41,9 +41,12 @@ double energy(const Eigen::MatrixXd& R, const Eigen::VectorXd& x) { return (R * 
 
 }  // namespace
 
-// (A1) A Linear region whose knot forwards lie on the straight line f(t) = beta*t (through the origin,
-// which the C0 pin at t=0 makes exact) is a perfectly AFFINE forward: f'' == 0 and f' == beta. So the
-// bending operator must annihilate it and the tension operator's membrane term must return beta^2 * T.
+// (A1) A Linear region whose knot forwards lie on the straight line f(t) = beta*t is AFFINE (f'==beta,
+// f''==0) over the interpolated span [t1, t_last]. As the LEADING (only) region it FLAT-extrapolates its
+// first free value backwards, so f == beta*t1 (constant) on the pre-segment [0, t1] -- the corrected short
+// end (it no longer ramps from a phantom 0). So bending energy is still 0 (both flat and affine have
+// f''==0; the slope kink at t1 is a measure-zero set the operator skips), and the membrane term is
+// INT(f')^2 = beta^2 over [t1, t_last] only: beta^2 * (t_last - t1).
 TEST(TensionRegularizer, AffineForwardHasZeroBendingEnergyAndExactMembrane) {
   const std::vector<double> knots{1.0, 2.0, 3.0, 5.0, 7.0, 10.0};
   const cal::BundleProblem p = one_region_problem(curve::Scheme::Linear, knots);
@@ -51,14 +54,16 @@ TEST(TensionRegularizer, AffineForwardHasZeroBendingEnergyAndExactMembrane) {
   Eigen::VectorXd x(knots.size());
   for (std::size_t i = 0; i < knots.size(); ++i) x[i] = beta * knots[i];  // on the line f = beta*t
 
-  // sigma = 0 -> pure bending energy INT(f'')^2, which is exactly zero for an affine forward.
+  // sigma = 0 -> pure bending energy INT(f'')^2, which is exactly zero for a flat-then-affine forward.
   const Eigen::MatrixXd R_bend = cal::tension_energy_operator(p, /*weight=*/1.0, /*sigma=*/0.0, {0});
-  EXPECT_LT(energy(R_bend, x), 1e-18) << "affine forward carries no bending energy";
+  EXPECT_LT(energy(R_bend, x), 1e-18) << "flat pre-segment + affine span carry no bending energy";
 
-  // With sigma = 1 the added membrane term is INT(f')^2 = beta^2 * t_last (bending still 0).
+  // With sigma = 1 the added membrane term is INT(f')^2 = beta^2 over the affine span [t1, t_last]; the
+  // flat leading pre-segment [0, t1] has f'==0 and contributes nothing (bending still 0).
   const Eigen::MatrixXd R_full = cal::tension_energy_operator(p, /*weight=*/1.0, /*sigma=*/1.0, {0});
-  const double expect = beta * beta * knots.back();
-  EXPECT_NEAR(energy(R_full, x), expect, 1e-12 * expect) << "membrane energy = beta^2 * T (closed form)";
+  const double expect = beta * beta * (knots.back() - knots.front());
+  EXPECT_NEAR(energy(R_full, x), expect, 1e-12 * expect)
+      << "membrane energy = beta^2 * (t_last - t1): affine span only, flat leading pre-segment excluded";
 }
 
 // (A2) On a genuinely curved (Hermite cubic) forward the operator's bending energy x^T K2 x must equal

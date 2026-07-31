@@ -134,12 +134,13 @@ class ModularCurve {
     if (static_cast<int>(x.size()) != n_) throw std::invalid_argument("set_forwards: wrong size");
     buf_.resize(n_);  // contiguous scalar buffer so each region can index x[off+k]; reused across calls
     for (int i = 0; i < n_; ++i) buf_[i] = x[i];
-    Boundary<S> b{};
+    Boundary<S> b{};  // has_predecessor=false -> the FIRST region is LEADING (flat-extrapolates its 1st knot)
     int off = 0;
     for (auto& r : regions_) {
       r->build(buf_.data(), off, b);
       off += r->n_values();
       b = r->out();
+      b.has_predecessor = true;  // every region after the first FOLLOWS its predecessor (C0 join, unchanged)
     }
   }
 
