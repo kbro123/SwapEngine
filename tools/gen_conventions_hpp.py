@@ -59,7 +59,7 @@ def main():
         "  LegConv fixed, floating;",
         "};",
         "struct IndexConv {",
-        "  std::string_view id, currency, type, day_count, calendar;",
+        "  std::string_view id, currency, type, day_count, calendar, par_product;",
         "  int fixing_lag, publication_lag;",
         "};",
         "",
@@ -80,6 +80,7 @@ def main():
         i = indices[iid]
         lines.append("  {" + ", ".join([
             sv(iid), sv(i.get("currency")), sv(i.get("type")), sv(i.get("day_count")), sv(i.get("calendar")),
+            sv(i.get("par_product")),
             str(i.get("fixing_lag", -1)), str(i.get("publication_lag", -1)),
         ]) + "},")
     lines += ["}};", ""]

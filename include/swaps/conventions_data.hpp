@@ -18,7 +18,7 @@ struct ProductConv {
   LegConv fixed, floating;
 };
 struct IndexConv {
-  std::string_view id, currency, type, day_count, calendar;
+  std::string_view id, currency, type, day_count, calendar, par_product;
   int fixing_lag, publication_lag;
 };
 
@@ -38,11 +38,11 @@ inline constexpr std::array<ProductConv, 12> kProducts = {{
 }};
 
 inline constexpr std::array<IndexConv, 5> kIndices = {{
-  {"EUR-ESTR", "EUR", "overnight", "ACT/360", "EUR", -1, 1},
-  {"EUR-EURIBOR-3M", "EUR", "ibor", "ACT/360", "EUR", 2, -1},
-  {"EUR-EURIBOR-6M", "EUR", "ibor", "ACT/360", "EUR", 2, -1},
-  {"USD-FEDFUNDS", "USD", "overnight", "ACT/360", "USD-FED", -1, 1},
-  {"USD-SOFR", "USD", "overnight", "ACT/360", "USD-SOFR", -1, 1},
+  {"EUR-ESTR", "EUR", "overnight", "ACT/360", "EUR", "EUR-ESTR-OIS", -1, 1},
+  {"EUR-EURIBOR-3M", "EUR", "ibor", "ACT/360", "EUR", "EUR-EURIBOR-3M-IRS", 2, -1},
+  {"EUR-EURIBOR-6M", "EUR", "ibor", "ACT/360", "EUR", "EUR-EURIBOR-6M-IRS", 2, -1},
+  {"USD-FEDFUNDS", "USD", "overnight", "ACT/360", "USD-FED", "USD-FEDFUNDS-OIS", -1, 1},
+  {"USD-SOFR", "USD", "overnight", "ACT/360", "USD-SOFR", "USD-SOFR-OIS", -1, 1},
 }};
 
 inline std::optional<ProductConv> product(std::string_view id) {
