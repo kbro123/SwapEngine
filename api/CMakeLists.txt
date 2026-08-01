@@ -2,7 +2,7 @@
 # risk / stream). QuantLib-FREE (it consumes the generic instrument model), but needs the vendored
 # Boost headers for Boost.JSON.
 
-add_library(swaps_api STATIC bundle_api.cpp swaps_capi.cpp)
+add_library(swaps_api STATIC bundle_api.cpp compile.cpp swaps_capi.cpp)
 target_link_libraries(swaps_api PUBLIC swaps)
 target_include_directories(swaps_api PUBLIC ${SWAPS_THIRD_PARTY}/boost)
 target_compile_features(swaps_api PUBLIC cxx_std_20)
@@ -26,8 +26,12 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
   add_executable(swaps_api_tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_fixings_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_reprice_test.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_reprice_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_parity_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost)
+  # Golden compiler-parity data (server/compile.py output), committed under tests/golden/compile/.
+  target_compile_definitions(swaps_api_tests PRIVATE
+    SWAPS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/golden")
   gtest_discover_tests(swaps_api_tests)
 endif()

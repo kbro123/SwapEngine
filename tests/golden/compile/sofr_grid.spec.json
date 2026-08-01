@@ -1,0 +1,107 @@
+{
+  "curves": [
+    {
+      "currency": "USD",
+      "id": "sofr",
+      "index": "USD-SOFR",
+      "instruments": [
+        {
+          "accrual": "compounded",
+          "adds_knot": true,
+          "end": "2026-07-29",
+          "has_quote": true,
+          "id": "m1",
+          "knot_region": "front",
+          "quote_kind": "Rate",
+          "target": 4.3,
+          "type": "meeting",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "2026-09-16",
+          "id": "m2",
+          "knot_region": "front",
+          "type": "meeting"
+        },
+        {
+          "accrual": "averaged",
+          "adds_knot": true,
+          "end": "2026-11-01",
+          "has_quote": true,
+          "id": "f1",
+          "knot_region": "front",
+          "quote_kind": "Rate",
+          "start": "2026-10-01",
+          "target": 4.2,
+          "type": "fut1m",
+          "unit": "pct"
+        },
+        {
+          "accrual": "compounded",
+          "adds_knot": true,
+          "end": "H27",
+          "has_quote": true,
+          "id": "f3",
+          "knot_region": "front",
+          "quote_kind": "Rate",
+          "start": "Z26",
+          "target": 4.05,
+          "type": "fut3m",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "2y",
+          "float_freq": 1.0,
+          "has_quote": true,
+          "id": "s2",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 3.8,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "5y",
+          "has_quote": true,
+          "id": "s5",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 3.75,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "decay": 0.25,
+          "end": "10y",
+          "has_quote": true,
+          "id": "s10",
+          "knot_region": "back",
+          "lower": 3.83,
+          "quote_kind": "ParRate",
+          "target": 3.85,
+          "type": "swap",
+          "unit": "pct",
+          "upper": 3.87
+        },
+        {
+          "adds_knot": true,
+          "end": "30y",
+          "has_quote": true,
+          "id": "s30",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 4.0,
+          "type": "swap",
+          "unit": "pct"
+        }
+      ],
+      "name": "SOFR"
+    }
+  ],
+  "smoothness": "light",
+  "value_date": "2026-07-08"
+}

@@ -1,0 +1,117 @@
+{
+  "curves": [
+    {
+      "currency": "USD",
+      "id": "sofr",
+      "index": "USD-SOFR",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "end": "2y",
+          "has_quote": true,
+          "id": "s2",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 3.8,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "10y",
+          "has_quote": true,
+          "id": "s10",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 3.85,
+          "type": "swap",
+          "unit": "pct"
+        }
+      ],
+      "name": "SOFR"
+    },
+    {
+      "currency": "EUR",
+      "id": "estr",
+      "index": "EUR-ESTR",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "end": "2y",
+          "has_quote": true,
+          "id": "e2",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 2.4,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "10y",
+          "has_quote": true,
+          "id": "e10",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 2.6,
+          "type": "swap",
+          "unit": "pct"
+        }
+      ],
+      "name": "ESTR"
+    },
+    {
+      "base": "estr",
+      "currency": "EUR",
+      "id": "eurusd",
+      "index": "EUR-ESTR",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "end": "1y",
+          "fx_den": "sofr",
+          "fx_spot": 1.08,
+          "has_quote": true,
+          "id": "fx1",
+          "knot_region": "back",
+          "quote_kind": "FxForward",
+          "target": 1.085,
+          "type": "fxfwd",
+          "unit": "fx"
+        },
+        {
+          "adds_knot": true,
+          "bench": "estr",
+          "end": "5y",
+          "fx_den": "sofr",
+          "fx_spot": 1.08,
+          "has_quote": true,
+          "id": "xb5",
+          "knot_region": "back",
+          "quote_kind": "XccyMtmBasis",
+          "target": -14.0,
+          "type": "xccybasis",
+          "unit": "bp"
+        },
+        {
+          "adds_knot": true,
+          "bench": "estr",
+          "end": "10y",
+          "fx_den": "sofr",
+          "fx_spot": 1.08,
+          "has_quote": true,
+          "id": "xb10",
+          "knot_region": "back",
+          "quote_kind": "XccyMtmBasis",
+          "target": -18.0,
+          "type": "xccybasis",
+          "unit": "bp"
+        }
+      ],
+      "kind": "spread",
+      "name": "EUR/USD xccy"
+    }
+  ],
+  "smoothness": "light",
+  "value_date": "2026-07-08"
+}

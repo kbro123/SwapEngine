@@ -11,6 +11,7 @@
 
 #include <boost/json/src.hpp>  // header-only Boost.JSON, compiled in this TU only
 
+#include "swaps/api/compile.hpp"                   // compile_spec / compile_to_json (the 'compile' verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
@@ -755,6 +756,19 @@ std::string run_json(const std::string& request) {
   try {
     const json::value req = json::parse(request);
     const auto& o = req.as_object();
+
+    // Stateless COMPILE verb: a composer spec (curves + generic instrument rows + interpolation regions)
+    // -> the resolved bundle + streaming config, the C++ analog of server/compile.py's compile_spec. It
+    // PRODUCES a bundle rather than consuming one, so it is dispatched here before the 'bundle' requirement.
+    // Reachable by any host through the single swaps_run_json C ABI (Excel add-in, .NET, ctypes, web), so a
+    // client can build a bundle up from typed rows instead of pasting resolved JSON. `today` supplies the
+    // value date when the spec omits one.
+    if (o.contains("compile")) {
+      const std::string today = (o.contains("today") && o.at("today").is_string())
+                                    ? std::string(o.at("today").as_string().c_str()) : "";
+      return json::serialize(compile_to_json(compile_spec(o.at("compile"), today)));
+    }
+
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
     cal::BundleProblem prob = bundle_from_json(o.at("bundle"));

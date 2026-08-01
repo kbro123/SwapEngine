@@ -1,0 +1,103 @@
+{
+  "curves": [
+    {
+      "currency": "USD",
+      "id": "sofr",
+      "index": "USD-SOFR",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "end": "2026-09-16",
+          "id": "m1",
+          "region": "front",
+          "type": "meeting"
+        },
+        {
+          "date": "2026-12-31",
+          "decay": 0.5,
+          "has_quote": true,
+          "id": "t1",
+          "lower": -9.0,
+          "quote_kind": "TurnJump",
+          "target": -6.0,
+          "type": "turn",
+          "unit": "bp",
+          "upper": -3.0
+        },
+        {
+          "adds_knot": true,
+          "end": "2y",
+          "has_quote": true,
+          "id": "s2",
+          "quote_kind": "ParRate",
+          "region": "back",
+          "target": 3.8,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "5y",
+          "has_quote": true,
+          "id": "s5",
+          "quote_kind": "ParRate",
+          "region": "back",
+          "target": 3.75,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "10y",
+          "has_quote": true,
+          "id": "s10",
+          "quote_kind": "ParRate",
+          "region": "back",
+          "target": 3.85,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "components": [
+            {
+              "end": "5y",
+              "weight": -1.0
+            },
+            {
+              "end": "7y",
+              "weight": 2.0
+            },
+            {
+              "end": "10y",
+              "weight": -1.0
+            }
+          ],
+          "drift": 0.1,
+          "id": "fly",
+          "knots": [
+            {
+              "end": "7y",
+              "region": "back"
+            }
+          ],
+          "target": 1.5,
+          "type": "portfolio"
+        }
+      ],
+      "name": "SOFR",
+      "regions": [
+        {
+          "id": "front",
+          "policy": "Flat"
+        },
+        {
+          "id": "back",
+          "policy": "Tension",
+          "sigma": 0.5
+        }
+      ]
+    }
+  ],
+  "smoothness": "light",
+  "value_date": "2026-07-08"
+}

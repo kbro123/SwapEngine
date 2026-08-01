@@ -1,0 +1,93 @@
+{
+  "curves": [
+    {
+      "currency": "USD",
+      "id": "sofr",
+      "index": "USD-SOFR",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "end": "2y",
+          "has_quote": true,
+          "id": "s2",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 3.8,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "5y",
+          "has_quote": true,
+          "id": "s5",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 3.75,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "10y",
+          "has_quote": true,
+          "id": "s10",
+          "knot_region": "back",
+          "quote_kind": "ParRate",
+          "target": 3.85,
+          "type": "swap",
+          "unit": "pct"
+        }
+      ],
+      "name": "SOFR"
+    },
+    {
+      "base": "sofr",
+      "currency": "USD",
+      "id": "ff",
+      "index": "USD-FEDFUNDS",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "bench": "sofr",
+          "end": "2y",
+          "has_quote": true,
+          "id": "b2",
+          "knot_region": "back",
+          "quote_kind": "ParSpread",
+          "target": -8.0,
+          "type": "basis",
+          "unit": "bp"
+        },
+        {
+          "adds_knot": true,
+          "bench": "sofr",
+          "end": "5y",
+          "has_quote": true,
+          "id": "b5",
+          "knot_region": "back",
+          "quote_kind": "ParSpread",
+          "target": -9.0,
+          "type": "basis",
+          "unit": "bp"
+        },
+        {
+          "adds_knot": true,
+          "bench": "sofr",
+          "end": "10y",
+          "has_quote": true,
+          "id": "b10",
+          "knot_region": "back",
+          "quote_kind": "ParSpread",
+          "target": -10.5,
+          "type": "basis",
+          "unit": "bp"
+        }
+      ],
+      "kind": "spread",
+      "name": "FedFunds"
+    }
+  ],
+  "smoothness": "light",
+  "value_date": "2026-07-08"
+}
