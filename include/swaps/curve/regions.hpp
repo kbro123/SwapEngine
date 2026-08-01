@@ -579,10 +579,23 @@ class BSpline {
     I0_ = in.integral;
     const double te = s_.back();
     const int m = n + 1;  // control points: P_0 (pinned) + n free
-    // Clamped cubic knot vector: 4x t0, (n-3) uniform interior, 4x te  (length m+4 = n+5).
+    // Clamped cubic knot vector: 4x t0, (n-3) DATA-ADAPTED interior, 4x te  (length m+4 = n+5).
+    // The interior knots are the de Boor AVERAGES of the control-point parameter SITES, not a uniform
+    // grid over [t0,te]. Uniform interior ignores where the data actually is: with a dense front strip
+    // (3M futures) and a sparse long end (annual swaps) the first uniform breakpoint lands far out, so
+    // the whole near-join span is ONE stiff cubic Bezier that cannot leave the pinned P_0 (the front
+    // level) promptly -- a spurious FLAT LIP just past the join. Averaging places breakpoints where the
+    // knots are, so the basis is dense where the data is dense and the curve follows it from the join.
+    // Sites: P_0 sits at t0 (the join for a following region, the first knot for a leading one); the n
+    // free control points sit at the region's knots s_. Standard clamped-cubic averaging (de Boor,
+    // Schoenberg-Whitney => invertible collocation): tau_[3+j] = mean(u[j],u[j+1],u[j+2]). Strictly
+    // increasing in (t0,te) because s_ is strictly increasing and t0 <= s_[0].
     tau_.assign(m + 4, te);
     for (int i = 0; i < 4; ++i) tau_[i] = t0_;
-    for (int j = 1; j <= n - 3; ++j) tau_[3 + j] = t0_ + (te - t0_) * (static_cast<double>(j) / (n - 2));
+    std::vector<double> u(m);
+    u[0] = t0_;
+    for (int i = 0; i < n; ++i) u[i + 1] = s_[i];
+    for (int j = 1; j <= n - 3; ++j) tau_[3 + j] = (u[j] + u[j + 1] + u[j + 2]) / 3.0;
     cp_.resize(m);
     cp_[0] = lead ? x[off] : in.value;  // leading: calibrated clamp start; following: C0 pin to the join
     for (int i = 0; i < n; ++i) cp_[i + 1] = x[off + i];
