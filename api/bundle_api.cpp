@@ -572,8 +572,13 @@ double BundleSession::residual(const cal::Instrument& ins) const {
   return cal::instrument_residual<double>(ins, curve_of);
 }
 
+Eigen::MatrixXd BundleSession::jacobian(const RegSpec& reg) const {
+  (void)reg;  // J = dq/dx is independent of any regulariser (reg only enters M through RᵀR); see header.
+  return cal::aad_jacobian(prob_, x_);  // n_res x n_knots: rows = instruments, cols = knots
+}
+
 Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
-  const Eigen::MatrixXd J = cal::aad_jacobian(prob_, x_);  // n_res x n_knots
+  const Eigen::MatrixXd J = jacobian(reg);                 // n_res x n_knots (shared with jacobian(), no desync)
   Eigen::MatrixXd A = J.transpose() * J;                   // n_knots x n_knots
   if (reg.on()) {
     const Eigen::MatrixXd R = reg.tension
@@ -618,6 +623,45 @@ PortfolioReprice BundleSession::price_portfolio(const pf::MultiCurveBook& book) 
 
 PortfolioReprice BundleSession::price_portfolio_json(const std::string& book_json) const {
   return price_portfolio(book_from_json(json::parse(book_json)));
+}
+
+PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book) const {
+  PortfolioRisk out;
+  out.n = static_cast<int>(book.positions.size());
+  const int nk = prob_.n_knots();
+  const int nr = prob_.n_residuals();
+  if (out.n == 0) {  // empty book: nothing to reprice or risk
+    out.curve_grad = Eigen::VectorXd::Zero(nk);
+    out.ladder = Eigen::VectorXd::Zero(nr);
+    last_risk_us_ = 0.0;
+    return out;
+  }
+
+  // The risk operator M = dx/dq (n_knots x n_res). Its FORMATION (the calibration-Jacobian solve) is book-
+  // INDEPENDENT, so it sits OUTSIDE the engine clock, mirroring how price_portfolio times only the book pass.
+  const Eigen::MatrixXd M = risk_operator();
+
+  // ---- ENGINE-STAMPED risk pass: the AAD reprice (dP/dx) + the M multiply -------------------------------
+  // Seed x as vector-duals, reprice the book once with Scalar = ad::Dual, and read the FULL derivative
+  // vector curve_grad = dP/dx (the exact gradient the PV01 pass sums). Then ladder = curve_grad^T · M, i.e.
+  // ladder[i] = Σⱼ curve_grad[j]·M[j,i] = dP/dq_i — the portfolio's delta in calibration instrument i.
+  const auto t0 = std::chrono::steady_clock::now();
+  const Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd = ad::seed(x_);
+  const auto Cad = cal::build_bundle_curves<ad::Dual>(
+      prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
+  const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::Dual>& { return *Cad[i]; };
+  const ad::Dual npv_ad = book.value<ad::Dual>(curve_ad);
+  out.npv = npv_ad.value();
+  out.curve_grad = (npv_ad.derivatives().size() == nk) ? Eigen::VectorXd(npv_ad.derivatives())
+                                                       : Eigen::VectorXd(Eigen::VectorXd::Zero(nk));
+  out.ladder = M.transpose() * out.curve_grad;  // (n_res x n_knots)·(n_knots) = length n_res
+  last_risk_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+  out.risk_us = last_risk_us_;
+  return out;
+}
+
+PortfolioRisk BundleSession::price_portfolio_risk_json(const std::string& book_json) const {
+  return price_portfolio_risk(book_from_json(json::parse(book_json)));
 }
 
 void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {

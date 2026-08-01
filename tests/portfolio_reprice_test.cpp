@@ -144,6 +144,96 @@ double par_rate_of(const pf::MultiCurveBook::Position& p,
          px::annuity<double>(p.fixed_coupons, *C[p.fixed_curve]);
 }
 
+// ---- helpers for the RISK-TRANSFORMATION primitives (jacobian / price_portfolio_risk) --------------
+
+// The SAME state x_true both A and B calibrate to, so a portfolio's curve gradient g = dP/dx is identical
+// across the two bundles (the whole point of the cross-bundle transform: same curves, different quotes).
+void fill_x_true(Eigen::VectorXd& x) {
+  x.resize(3 * kNk);
+  for (int i = 0; i < kNk; ++i) {
+    x[i] = 0.030 + 0.0010 * i;            // curve 0 ~3%
+    x[kNk + i] = 0.033 + 0.0012 * i;      // curve 1 ~3.3% (forecast above discount)
+    x[2 * kNk + i] = 0.020 + 0.0008 * i;  // curve 2 ~2% (foreign)
+  }
+}
+
+// Coupon legs at an arbitrary step (1.0 = annual, 0.5 = semi-annual) so two bundles can quote the SAME
+// curves with genuinely DIFFERENT instruments (different cashflow schedules => different Jacobian rows).
+std::vector<px::FloatCoupon> float_leg(double T, double step) {
+  std::vector<px::FloatCoupon> v;
+  double prev = 0.0;
+  for (double t = step; t <= T + 1e-9; t += step) { v.push_back(ois_coupon(prev, t)); prev = t; }
+  return v;
+}
+std::vector<px::FixedCoupon> fixed_leg(double T, double step) {
+  std::vector<px::FixedCoupon> v;
+  double prev = 0.0;
+  for (double t = step; t <= T + 1e-9; t += step) { v.push_back(fixed_coupon(prev, t)); prev = t; }
+  return v;
+}
+cal::Instrument par_swap_step(double T, int fc, int dc, double step) {
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::ParRate;
+  ins.fwd.forecast = fc;
+  ins.fwd.discount = dc;
+  ins.fwd.coupons = float_leg(T, step);
+  ins.fixed.discount = dc;
+  ins.fixed.coupons = fixed_leg(T, step);
+  return ins;
+}
+
+// The same 3-curve topology as build_bundle, but the swaps are quoted at `step` frequency and the whole
+// bundle is made self-consistent at the SUPPLIED x_true. So build_bundle_freq(x, 1.0) and (x, 0.5)
+// calibrate to the IDENTICAL curves through different instrument sets — the A/B pair the transform needs.
+cal::BundleProblem build_bundle_freq(const Eigen::VectorXd& x_true, double step) {
+  cal::BundleProblem p;
+  p.curves.push_back({kMeeting, kBack, -1, 0});
+  p.curves.push_back({kMeeting, kBack, -1, 0});
+  p.curves.push_back({kMeeting, kBack, -1, 1});
+  p.instruments.push_back(front_rate(0.0, 0.5, 0));
+  for (double T : kSwapT) p.instruments.push_back(par_swap_step(T, 0, 0, step));
+  p.instruments.push_back(front_rate(0.0, 0.5, 1));
+  for (double T : kSwapT) p.instruments.push_back(par_swap_step(T, 1, 0, step));
+  p.instruments.push_back(front_rate(0.0, 0.5, 2));
+  for (double T : kSwapT) p.instruments.push_back(par_swap_step(T, 2, 2, step));
+  const auto C = cal::build_bundle_curves<double>(
+      p.curves, [&](int c, int i) { return x_true[p.offset(c) + i]; });
+  const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
+  for (auto& ins : p.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
+  return p;
+}
+
+// Full model-quote vector q(x) of a bundle's instruments (for the finite-difference Jacobian check).
+Eigen::VectorXd model_quotes_at(const cal::BundleProblem& prob, const Eigen::VectorXd& x) {
+  const auto C = cal::build_bundle_curves<double>(
+      prob.curves, [&](int c, int i) { return x[prob.offset(c) + i]; });
+  const auto cof = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
+  Eigen::VectorXd q(prob.instruments.size());
+  for (int i = 0; i < static_cast<int>(prob.instruments.size()); ++i)
+    q[i] = cal::instrument_model_quote<double>(prob.instruments[i], cof);
+  return q;
+}
+
+// A small multi-curve + xccy book that touches ALL THREE curves, so its curve gradient g = dP/dx and its
+// delta ladder have nonzero mass on every curve's instruments.
+pf::MultiCurveBook risk_book() {
+  pf::MultiCurveBook book;
+  book.positions.push_back(swap_position(10.0, /*fc=*/1, /*dc=*/0, /*rate=*/0.030, /*notional=*/1e7));
+  book.positions.push_back(swap_position(5.0, /*fc=*/0, /*dc=*/0, /*rate=*/0.028, /*notional=*/-2e7));
+  // xccy leg touching curve 2 (+ fx_spot), so the ladder has curve-2 sensitivity.
+  pf::MultiCurveBook::Position xp;
+  xp.kind = pf::MultiCurveBook::Kind::Xccy;
+  xp.notional = 3e7;
+  xp.float_coupons = annual_float(5.0);
+  xp.fwd_curve = 0; xp.disc_curve = 0;
+  xp.mtm_coupons = annual_float(5.0);
+  for (auto& c : xp.mtm_coupons) c.spread = 0.005;
+  xp.mtm_fwd_curve = 2; xp.mtm_disc_curve = 2; xp.mtm_reset_num = 2; xp.mtm_reset_den = 0;
+  xp.fx_spot = 1.10;
+  book.positions.push_back(xp);
+  return book;
+}
+
 }  // namespace
 
 // (a) at-par swap => NPV ~ 0, and (b) off-par sign + exact scale.
@@ -318,4 +408,161 @@ TEST(PortfolioReprice, BookJsonMatchesStruct) {
   const api::PortfolioReprice r = sess.price_portfolio_json(doc);
   EXPECT_EQ(r.n, 1);
   EXPECT_NEAR(r.npv, want, 1e-6 * (std::abs(want) + 1.0)) << "the JSON book path must match the struct path";
+}
+
+// =================================================================================================
+// RISK-TRANSFORMATION primitives: jacobian() (J = dq/dx), price_portfolio_risk() (npv, curve_grad = dP/dx,
+// ladder = dP/dq), and the cross-bundle transform assembled from J and M = risk_operator().
+// =================================================================================================
+
+// The calibration Jacobian J(i,j) = d(model_quote_i)/dx_j must match a central finite difference. For the
+// linear ParRate/Rate instruments the calibration residual is q − market, so d(residual)/dx == dq/dx.
+TEST(PortfolioRisk, JacobianMatchesFiniteDifference) {
+  Eigen::VectorXd x_true;
+  api::BundleSession sess(build_bundle(x_true));
+  sess.calibrate(x_true);
+  const cal::BundleProblem& prob = sess.problem();
+  const Eigen::VectorXd x = sess.x();
+
+  const Eigen::MatrixXd J = sess.jacobian();  // n_res x n_knots
+  ASSERT_EQ(J.rows(), prob.n_residuals());
+  ASSERT_EQ(J.cols(), prob.n_knots());
+
+  const double h = 1e-6;
+  for (int j = 0; j < prob.n_knots(); ++j) {
+    Eigen::VectorXd xp = x, xm = x;
+    xp[j] += h; xm[j] -= h;
+    const Eigen::VectorXd fd = (model_quotes_at(prob, xp) - model_quotes_at(prob, xm)) / (2 * h);
+    for (int i = 0; i < prob.n_residuals(); ++i)
+      EXPECT_NEAR(J(i, j), fd[i], 1e-6 * std::abs(fd[i]) + 1e-9)
+          << "J(" << i << "," << j << ") must equal the central-difference dq/dx";
+  }
+}
+
+// The native delta ladder equals curve_grad^T · M, AND satisfies PnL invariance: for any state move dx with
+// its induced quote move dq = J·dx, dot(ladder, dq) == dot(curve_grad, dx).
+TEST(PortfolioRisk, NativeLadderEqualsGradTimesM) {
+  Eigen::VectorXd x_true;
+  fill_x_true(x_true);
+  api::BundleSession sess(build_bundle_freq(x_true, 1.0));
+  sess.calibrate(x_true);
+
+  const pf::MultiCurveBook book = risk_book();
+  const api::PortfolioRisk risk = sess.price_portfolio_risk(book);
+  const Eigen::MatrixXd M = sess.risk_operator();       // n_knots x n_res
+  const Eigen::MatrixXd J = sess.jacobian();            // n_res x n_knots
+
+  ASSERT_EQ(risk.curve_grad.size(), sess.problem().n_knots());
+  ASSERT_EQ(risk.ladder.size(), sess.problem().n_residuals());
+
+  // ladder == curve_grad^T · M  (i.e. M^T · curve_grad), the exact definition.
+  const Eigen::VectorXd want = M.transpose() * risk.curve_grad;
+  EXPECT_LT((risk.ladder - want).cwiseAbs().maxCoeff(), 1e-8 * (want.cwiseAbs().maxCoeff() + 1.0));
+
+  // PnL invariance: dot(ladder, dq) == dot(curve_grad, dx) for a consistent perturbation dq = J·dx.
+  Eigen::VectorXd dx(sess.problem().n_knots());
+  for (int i = 0; i < dx.size(); ++i) dx[i] = 1e-4 * std::sin(0.7 * i + 1.0);  // arbitrary small move
+  const Eigen::VectorXd dq = J * dx;
+  const double lhs = risk.ladder.dot(dq), rhs = risk.curve_grad.dot(dx);
+  EXPECT_NEAR(lhs, rhs, 1e-8 * (std::abs(rhs) + 1.0)) << "delta·dq must equal grad·dx (PnL invariance)";
+
+  // Sanity: the NPV agrees with price_portfolio, and the ladder is nontrivial on every curve.
+  EXPECT_NEAR(risk.npv, sess.price_portfolio(book).npv, 1e-6 * (std::abs(risk.npv) + 1.0));
+  EXPECT_GT(risk.ladder.cwiseAbs().maxCoeff(), 0.0);
+}
+
+// THE KEY TEST: transform a risk ladder from bundle A's instruments to bundle B's via T = J_A · M_B.
+// A and B calibrate the SAME curves (same x_true) with DIFFERENT instruments (annual vs semi-annual swaps),
+// so g = dP/dx is shared and delta_B_transform = delta_A · (J_A · M_B) must recover delta_B_native = g · M_B.
+TEST(PortfolioRisk, CrossBundleLadderTransform) {
+  Eigen::VectorXd x_true;
+  fill_x_true(x_true);
+  api::BundleSession A(build_bundle_freq(x_true, 1.0));   // annual-swap quotes
+  api::BundleSession B(build_bundle_freq(x_true, 0.5));   // semi-annual-swap quotes, SAME curves
+  A.calibrate(x_true);
+  B.calibrate(x_true);
+  // Both must land on the shared state (else "same curves" is false and the transform is meaningless).
+  ASSERT_LT((A.x() - x_true).cwiseAbs().maxCoeff(), 1e-9);
+  ASSERT_LT((B.x() - x_true).cwiseAbs().maxCoeff(), 1e-9);
+
+  const pf::MultiCurveBook book = risk_book();
+  const api::PortfolioRisk rA = A.price_portfolio_risk(book);
+  const api::PortfolioRisk rB = B.price_portfolio_risk(book);
+  // g = dP/dx is identical across the two bundles (same curves, same book).
+  ASSERT_LT((rA.curve_grad - rB.curve_grad).cwiseAbs().maxCoeff(), 1e-8);
+
+  const Eigen::VectorXd g = rA.curve_grad;
+  const Eigen::MatrixXd J_A = A.jacobian();          // n_res_A x n_knots
+  const Eigen::MatrixXd M_A = A.risk_operator();     // n_knots x n_res_A
+  const Eigen::MatrixXd M_B = B.risk_operator();     // n_knots x n_res_B
+
+  const Eigen::VectorXd delta_A = rA.ladder;         // == M_A^T g
+  const Eigen::VectorXd delta_B_native = rB.ladder;  // == M_B^T g
+
+  // Cross-bundle transform: T = J_A · M_B (n_res_A x n_res_B); delta_B_transform = delta_A · T = T^T delta_A.
+  const Eigen::MatrixXd T = J_A * M_B;
+  const Eigen::VectorXd delta_B_transform = T.transpose() * delta_A;
+
+  const double scaleB = delta_B_native.cwiseAbs().maxCoeff() + 1.0;
+  const double abs_err = (delta_B_transform - delta_B_native).cwiseAbs().maxCoeff();
+  EXPECT_LT(abs_err, 1e-6 * scaleB)
+      << "A->B transformed ladder must match B's native ladder (max abs err " << abs_err << ")";
+
+  // Self-transform A->A: delta_A · (J_A · M_A) must return delta_A.
+  const Eigen::MatrixXd T_AA = J_A * M_A;
+  const Eigen::VectorXd delta_A_self = T_AA.transpose() * delta_A;
+  EXPECT_LT((delta_A_self - delta_A).cwiseAbs().maxCoeff(),
+            1e-8 * (delta_A.cwiseAbs().maxCoeff() + 1.0))
+      << "self-transform A->A must be the identity on the native ladder";
+
+  // Recover the curve gradient from the native ladder: g == delta_A · J_A.
+  const Eigen::VectorXd g_recovered = J_A.transpose() * delta_A;
+  EXPECT_LT((g_recovered - g).cwiseAbs().maxCoeff(), 1e-8 * (g.cwiseAbs().maxCoeff() + 1.0))
+      << "delta_A · J_A must recover the curve gradient g = dP/dx";
+}
+
+// risk_us is engine-stamped positive, deterministic, and mirrored in last_risk_us().
+TEST(PortfolioRisk, RiskIsTimedAndDeterministic) {
+  Eigen::VectorXd x_true;
+  api::BundleSession sess(build_bundle(x_true));
+  sess.calibrate(x_true);
+
+  const pf::MultiCurveBook book = risk_book();
+  const api::PortfolioRisk r1 = sess.price_portfolio_risk(book);
+  const api::PortfolioRisk r2 = sess.price_portfolio_risk(book);
+  EXPECT_EQ(r1.n, static_cast<int>(book.positions.size()));
+  EXPECT_GT(r1.risk_us, 0.0) << "the engine must stamp a positive risk time";
+  EXPECT_GT(sess.last_risk_us(), 0.0);
+  // The numeric result is deterministic across calls (only the timing varies).
+  EXPECT_EQ(r1.npv, r2.npv);
+  EXPECT_EQ(r1.curve_grad, r2.curve_grad);
+  EXPECT_EQ(r1.ladder, r2.ladder);
+}
+
+// The JSON risk path matches the struct path (same book_from_json schema as price_portfolio_json).
+TEST(PortfolioRisk, RiskJsonMatchesStruct) {
+  Eigen::VectorXd x_true;
+  api::BundleSession sess(build_bundle(x_true));
+  sess.calibrate(x_true);
+
+  auto p = swap_position(5.0, /*fc=*/1, /*dc=*/0, /*rate=*/0.03, /*notional=*/1e7);
+  const api::PortfolioRisk want = sess.price_portfolio_risk(pf::MultiCurveBook{{p}});
+
+  json::array coupons, fixed;
+  for (const auto& c : p.float_coupons) {
+    json::object obs{{"sub_start", json::array{c.obs.sub_start[0]}}, {"sub_end", json::array{c.obs.sub_end[0]}},
+                     {"tau_index", c.obs.tau_index}};
+    coupons.push_back(json::object{{"obs", obs}, {"pay", c.pay}, {"tau_pay", c.tau_pay}});
+  }
+  for (const auto& c : p.fixed_coupons) fixed.push_back(json::object{{"pay", c.pay}, {"tau", c.tau}});
+  json::object pos{{"kind", "swap"}, {"notional", p.notional}, {"fixed_rate", p.fixed_rate},
+                   {"fwd_curve", p.fwd_curve}, {"disc_curve", p.disc_curve}, {"fixed_curve", p.fixed_curve},
+                   {"float_coupons", coupons}, {"fixed_coupons", fixed}};
+  const std::string doc = json::serialize(json::value(json::object{{"positions", json::array{pos}}}));
+
+  const api::PortfolioRisk got = sess.price_portfolio_risk_json(doc);
+  EXPECT_EQ(got.n, 1);
+  EXPECT_NEAR(got.npv, want.npv, 1e-6 * (std::abs(want.npv) + 1.0));
+  EXPECT_LT((got.ladder - want.ladder).cwiseAbs().maxCoeff(),
+            1e-8 * (want.ladder.cwiseAbs().maxCoeff() + 1.0));
 }

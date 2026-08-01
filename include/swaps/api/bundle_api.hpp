@@ -71,6 +71,23 @@ struct PortfolioReprice {
   int n = 0;             // number of positions priced
 };
 
+// Result of expressing a portfolio's risk in the bundle's CALIBRATION INSTRUMENTS (BundleSession::
+// price_portfolio_risk). `curve_grad` is the portfolio NPV gradient wrt the fitted STATE (knot forwards),
+// dP/dx, from one forward-AAD pass. `ladder` is that same risk expressed per calibration instrument:
+// dP/dq = curve_grad^T · M where M = risk_operator() = dx/dq, so ladder[i] = Σⱼ curve_grad[j]·M[j,i] is the
+// portfolio's delta to a unit move in instrument i's model quote (a full analytic delta ladder, no bumping).
+// This is the primitive a Python layer combines across two sessions to TRANSFORM a risk ladder from one
+// bundle's instruments to another's: T = J_A · M_B, delta_B = delta_A · T (see jacobian() / risk_operator()).
+// `risk_us` is the ENGINE-measured wall time of the AAD reprice + the M multiply only (a steady_clock pair,
+// the exact analogue of price_us / last_solve_us), also cached in last_risk_us().
+struct PortfolioRisk {
+  double npv = 0.0;                  // book NPV off the calibrated curves (== price_portfolio().npv)
+  Eigen::VectorXd curve_grad;        // dP/dx, length n_knots (AAD gradient wrt the fitted state)
+  Eigen::VectorXd ladder;            // dP/dq = curve_grad^T · M, length n_residuals (native delta ladder)
+  double risk_us = 0.0;              // engine time of the AAD reprice + M multiply, microseconds
+  int n = 0;                         // number of positions
+};
+
 // ---- JSON <-> engine object graph (definitions in bundle_api.cpp) --------------------------------
 // Every field is optional on parse and defaults to the struct default, so a minimal document is valid.
 cal::BundleProblem bundle_from_json(const boost::json::value& v);
@@ -138,6 +155,15 @@ class BundleSession {
   double model_quote(const cal::Instrument& ins) const;
   double residual(const cal::Instrument& ins) const;
 
+  // The calibration Jacobian J = dq/dx (n_residuals x n_knots): ROWS are calibration instruments, COLUMNS
+  // are the fitted knot forwards, so J(i,j) = ∂(model quote of instrument i)/∂x_j. This is the SAME J that
+  // risk_operator() builds M from (risk_operator() calls this, so the two can never desync). One forward-AAD
+  // pass over the stacked residual (residual = q − market for the linear ParRate/ParSpread/Rate instruments,
+  // so d(residual)/dx == dq/dx). A Python layer transforms a risk ladder from bundle A to bundle B via
+  // T = J_A · M_B (n_res_A x n_res_B), delta_B = delta_A · T. `reg` is accepted for signature symmetry with
+  // risk_operator() but does not affect J (a regulariser changes M through RᵀR, never the quote Jacobian).
+  Eigen::MatrixXd jacobian(const RegSpec& reg = {}) const;
+
   // The analytic risk operator M = dx/dq = (JᵀJ + RᵀR)⁻¹ Jᵀ  (n_knots x n_residuals). Left-multiply a
   // portfolio's d(NPV)/dx (one AAD pass) by M for a full analytic delta ladder, no bumping (CLAUDE.md #4).
   Eigen::MatrixXd risk_operator(const RegSpec& reg = {}) const;
@@ -152,6 +178,15 @@ class BundleSession {
   PortfolioReprice price_portfolio(const swaps::portfolio::MultiCurveBook& book) const;
   // Convenience for a language binding: parse a book JSON document (schema on book_from_json) and reprice.
   PortfolioReprice price_portfolio_json(const std::string& book_json) const;
+
+  // Express a book's risk in THIS bundle's calibration instruments: one forward-AAD pass gives the NPV and
+  // its state gradient curve_grad = dP/dx, then ladder = curve_grad^T · M (M = risk_operator()) is the delta
+  // per calibration quote — ladder[i] = Σⱼ curve_grad[j]·M[j,i]. The AAD reprice + the M multiply are ENGINE-
+  // timed into risk_us (also last_risk_us()); the M FORMATION (the calibration Jacobian solve, book-
+  // independent) is outside the clock, mirroring how price_portfolio times only the book-dependent pass.
+  PortfolioRisk price_portfolio_risk(const swaps::portfolio::MultiCurveBook& book) const;
+  // Convenience for a language binding: parse a book JSON document (same schema as book_from_json) and risk it.
+  PortfolioRisk price_portfolio_risk_json(const std::string& book_json) const;
 
   // ---- streaming (any bundle with a constant W: hard, banded, portfolio, or mixed FX/MtM) ---------
   // Anchor a StreamingCalibrator at the current x; each stream_update(q) re-solves to the exact curve
@@ -170,6 +205,7 @@ class BundleSession {
   // (no marshalling). Callers should report these instead of timing across a language boundary.
   double last_solve_us() const { return last_solve_us_; }        // most recent solve, any path (µs)
   double last_price_us() const { return last_price_us_; }        // most recent price_portfolio pricing pass (µs)
+  double last_risk_us() const { return last_risk_us_; }          // most recent price_portfolio_risk pass (µs)
   // Running mean of stream_update solve times since the last start_streaming(); 0 before the first tick.
   double stream_avg_us() const { return stream_ticks_ ? stream_sum_us_ / stream_ticks_ : 0.0; }
   long stream_ticks() const { return stream_ticks_; }            // stream_update calls since start_streaming
@@ -221,6 +257,8 @@ class BundleSession {
   double last_solve_us_ = 0;
   // Pricing-time telemetry, stamped by the (const) price_portfolio; mutable so the query stays const.
   mutable double last_price_us_ = 0;
+  // Risk-time telemetry, stamped by the (const) price_portfolio_risk; mutable so the query stays const.
+  mutable double last_risk_us_ = 0;
   double stream_sum_us_ = 0;   // sum of stream_update solve times since start_streaming()
   long stream_ticks_ = 0;      // count of those ticks
   int last_newton_steps_ = 0;
