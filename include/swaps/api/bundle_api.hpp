@@ -180,13 +180,39 @@ class BundleSession {
   PortfolioReprice price_portfolio_json(const std::string& book_json) const;
 
   // Express a book's risk in THIS bundle's calibration instruments: one forward-AAD pass gives the NPV and
-  // its state gradient curve_grad = dP/dx, then ladder = curve_grad^T · M (M = risk_operator()) is the delta
-  // per calibration quote — ladder[i] = Σⱼ curve_grad[j]·M[j,i]. The AAD reprice + the M multiply are ENGINE-
-  // timed into risk_us (also last_risk_us()); the M FORMATION (the calibration Jacobian solve, book-
+  // its state gradient curve_grad = dP/dx, then ladder = curve_grad^T · M (M = risk_operator(reg)) is the
+  // delta per calibration quote — ladder[i] = Σⱼ curve_grad[j]·M[j,i]. The AAD reprice + the M multiply are
+  // ENGINE-timed into risk_us (also last_risk_us()); the M FORMATION (the calibration Jacobian solve, book-
   // independent) is outside the clock, mirroring how price_portfolio times only the book-dependent pass.
-  PortfolioRisk price_portfolio_risk(const swaps::portfolio::MultiCurveBook& book) const;
+  // `reg` regularises the RISK OPERATOR (independently of the calibration reg): with a curvature/tension
+  // penalty it damps the alternating-sign "fan-out" of a delta ladder over collinear instruments into a
+  // localized key-rate hedge. Because R annihilates constant+linear forward moves (regularize.hpp), the
+  // TOTAL (parallel) DV01 is preserved exactly — only the ladder's SHAPE is stabilised. Default {} = raw M.
+  PortfolioRisk price_portfolio_risk(const swaps::portfolio::MultiCurveBook& book, const RegSpec& reg = {}) const;
   // Convenience for a language binding: parse a book JSON document (same schema as book_from_json) and risk it.
-  PortfolioRisk price_portfolio_risk_json(const std::string& book_json) const;
+  PortfolioRisk price_portfolio_risk_json(const std::string& book_json, const RegSpec& reg = {}) const;
+
+  // ---- cross-bundle risk transform (the "risk reprojection" / adaptor Jacobian) --------------------
+  // Express one bundle's risk in ANOTHER's instruments -- e.g. remap a 23-knot build's ladder onto a
+  // 10-tenor reporting grid. The invariant is the CURVE; instruments are coordinates on it. Analytic, one
+  // forward-AAD pass -- NO bumping, NO re-calibration loop (this replaces the Python finite-difference adaptor).
+  //
+  // cross_jacobian(source) = dq_source/dx_this  (n_res_source x n_knots_this): each source instrument's model
+  // quote priced on THIS bundle's curve, differentiated wrt this bundle's knots. REQUIRES the two bundles to
+  // share a curve SET (same currencies / outright-or-spread, same order) so source's curve-index references
+  // are valid here -- checked by same_curve_set(); a mismatch throws.
+  Eigen::MatrixXd cross_jacobian(const cal::BundleProblem& source) const;
+  // T = cross_jacobian(source) · risk_operator(reg)  (n_res_source x n_res_this): a ladder in `source`'s
+  // instruments maps to THIS bundle's by delta_this = delta_source · T. Matched states -> the exact
+  // J_source · M_this; a finer `source` -> the least-squares projection onto this bundle's pillars (total
+  // DV01 preserved, reg's null space excludes level shifts). Book-INDEPENDENT: build once, apply by matvec.
+  Eigen::MatrixXd transform_matrix(const cal::BundleProblem& source, const RegSpec& reg = {}) const;
+  // JSON conveniences for a language binding: parse a source bundle document (same schema as the ctor).
+  Eigen::MatrixXd cross_jacobian_json(const std::string& source_bundle_json) const;
+  Eigen::MatrixXd transform_matrix_json(const std::string& source_bundle_json, const RegSpec& reg = {}) const;
+  // True iff `source` shares this bundle's curve set (count + per-curve currency + outright/spread), so a
+  // book/ladder in one is meaningful in the other. transform_matrix()/cross_jacobian() throw when false.
+  bool same_curve_set(const cal::BundleProblem& source) const;
 
   // ---- streaming (any bundle with a constant W: hard, banded, portfolio, or mixed FX/MtM) ---------
   // Anchor a StreamingCalibrator at the current x; each stream_update(q) re-solves to the exact curve

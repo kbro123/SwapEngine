@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/api/capi.h"
 
 namespace cal = swaps::calibration;
 namespace px = swaps::pricing;
@@ -521,6 +522,86 @@ TEST(PortfolioRisk, CrossBundleLadderTransform) {
       << "delta_A · J_A must recover the curve gradient g = dP/dx";
 }
 
+// NATIVE cross-bundle transform: B.transform_matrix(A.problem()) == the manual J_A · M_B, and applying it
+// to A's ladder recovers B's native ladder. cross_jacobian(A) prices A's instruments on B's curve and (since
+// A and B share x_true) equals A's own Jacobian. The JSON convenience matches the struct path, and the
+// same_curve_set guard rejects an incompatible bundle.
+TEST(PortfolioRisk, NativeTransformMatrixMatchesManualAndNative) {
+  Eigen::VectorXd x_true;
+  fill_x_true(x_true);
+  api::BundleSession A(build_bundle_freq(x_true, 1.0));
+  api::BundleSession B(build_bundle_freq(x_true, 0.5));
+  A.calibrate(x_true);
+  B.calibrate(x_true);
+  const pf::MultiCurveBook book = risk_book();
+  const Eigen::VectorXd delta_A = A.price_portfolio_risk(book).ladder;
+  const Eigen::VectorXd delta_B_native = B.price_portfolio_risk(book).ladder;
+
+  // Native analytic transform T = cross_jacobian_B(A) · M_B (n_res_A x n_res_B).
+  const Eigen::MatrixXd T = B.transform_matrix(A.problem());
+  ASSERT_EQ(T.rows(), A.problem().n_residuals());
+  ASSERT_EQ(T.cols(), B.problem().n_residuals());
+  const Eigen::MatrixXd T_manual = A.jacobian() * B.risk_operator();  // states coincide -> cross_jac == J_A
+  EXPECT_LT((T - T_manual).cwiseAbs().maxCoeff(), 1e-9 * (T_manual.cwiseAbs().maxCoeff() + 1.0))
+      << "native transform_matrix must equal the manual J_A · M_B";
+
+  const Eigen::VectorXd delta_B_transform = T.transpose() * delta_A;
+  EXPECT_LT((delta_B_transform - delta_B_native).cwiseAbs().maxCoeff(),
+            1e-6 * (delta_B_native.cwiseAbs().maxCoeff() + 1.0))
+      << "delta_A · T must reproduce B's native ladder";
+
+  // cross_jacobian on the shared state equals A's own calibration Jacobian.
+  const Eigen::MatrixXd Jx = B.cross_jacobian(A.problem());
+  EXPECT_LT((Jx - A.jacobian()).cwiseAbs().maxCoeff(), 1e-9 * (A.jacobian().cwiseAbs().maxCoeff() + 1.0));
+
+  // JSON convenience matches the struct path.
+  const std::string a_json = json::serialize(api::bundle_to_json(A.problem()));
+  const Eigen::MatrixXd Tj = B.transform_matrix_json(a_json);
+  EXPECT_LT((Tj - T).cwiseAbs().maxCoeff(), 1e-12) << "transform_matrix_json must match the struct overload";
+
+  // same_curve_set guard: a bundle with a different curve count is rejected (and cross_jacobian throws).
+  cal::BundleProblem other = build_bundle_freq(x_true, 1.0);
+  other.curves.pop_back();
+  EXPECT_FALSE(B.same_curve_set(other));
+  EXPECT_THROW(B.cross_jacobian(other), std::invalid_argument);
+}
+
+// REGULARIZED risk ladder: price_portfolio_risk(book, reg) damps the ladder's alternating-sign fan-out into a
+// stabilised (localised) key-rate hedge, while preserving the parallel P&L EXACTLY. Proof of the latter: for a
+// state move dx in R's null space (a constant/parallel forward shift, R·dx = 0), (JᵀJ + RᵀR)⁻¹JᵀJ·dx = dx, so
+// delta_reg·(J·dx) == g·dx regardless of lambda -- the smoother never biases DV01, only the ladder's shape.
+TEST(PortfolioRisk, RegularizedLadderPreservesParallelPnLAndDampsShape) {
+  Eigen::VectorXd x_true;
+  fill_x_true(x_true);
+  api::BundleSession sess(build_bundle_freq(x_true, 1.0));
+  sess.calibrate(x_true);
+  const cal::BundleProblem& prob = sess.problem();
+  const pf::MultiCurveBook book = risk_book();
+
+  api::RegSpec reg;
+  reg.lambda = 1e-3;
+  reg.tension = false;  // discrete second-difference curvature penalty (the classic key-rate stabiliser)
+  for (int c = 0; c < prob.n_curves(); ++c) reg.curves.push_back(c);
+
+  const api::PortfolioRisk r0 = sess.price_portfolio_risk(book);        // raw M
+  const api::PortfolioRisk rR = sess.price_portfolio_risk(book, reg);   // regularised M
+  const Eigen::VectorXd g = r0.curve_grad;
+  const Eigen::MatrixXd J = sess.jacobian();
+
+  // reg changed the ladder's shape (it is a genuinely different, damped ladder).
+  EXPECT_GT((rR.ladder - r0.ladder).cwiseAbs().maxCoeff(), 1e-6 * (r0.ladder.cwiseAbs().maxCoeff() + 1.0))
+      << "a nonzero risk regulariser must change the ladder";
+
+  // Parallel-shift P&L is preserved EXACTLY by the regularised ladder (DV01 unbiased by the smoother).
+  const Eigen::VectorXd ones = Eigen::VectorXd::Ones(prob.n_knots());
+  const Eigen::VectorXd dq = J * ones;
+  const double pnl_true = g.dot(ones);
+  EXPECT_NEAR(rR.ladder.dot(dq), pnl_true, 1e-8 * (std::abs(pnl_true) + 1.0))
+      << "regularised ladder must preserve the parallel-shift P&L";
+  EXPECT_NEAR(r0.ladder.dot(dq), pnl_true, 1e-8 * (std::abs(pnl_true) + 1.0))
+      << "raw ladder preserves it too (sanity)";
+}
+
 // risk_us is engine-stamped positive, deterministic, and mirrored in last_risk_us().
 TEST(PortfolioRisk, RiskIsTimedAndDeterministic) {
   Eigen::VectorXd x_true;
@@ -565,4 +646,53 @@ TEST(PortfolioRisk, RiskJsonMatchesStruct) {
   EXPECT_NEAR(got.npv, want.npv, 1e-6 * (std::abs(want.npv) + 1.0));
   EXPECT_LT((got.ladder - want.ladder).cwiseAbs().maxCoeff(),
             1e-8 * (want.ladder.cwiseAbs().maxCoeff() + 1.0));
+}
+
+// The C ABI (capi.h swaps_run_json) drives calibrate + portfolio_risk + cross-bundle transform end to end
+// through the JSON seam -- the exact path an Excel/.NET/ctypes host would take, no C++ Session object.
+TEST(CApi, RunJsonPortfolioRiskAndTransform) {
+  Eigen::VectorXd x_true;
+  fill_x_true(x_true);
+  const cal::BundleProblem A = build_bundle_freq(x_true, 1.0);  // primary (target) bundle
+  const cal::BundleProblem B = build_bundle_freq(x_true, 0.5);  // source bundle (same curves)
+
+  auto p = swap_position(5.0, /*fc=*/1, /*dc=*/0, /*rate=*/0.03, /*notional=*/1e7);
+  json::array coupons, fixed;
+  for (const auto& c : p.float_coupons) {
+    json::object obs{{"sub_start", json::array{c.obs.sub_start[0]}}, {"sub_end", json::array{c.obs.sub_end[0]}},
+                     {"tau_index", c.obs.tau_index}};
+    coupons.push_back(json::object{{"obs", obs}, {"pay", c.pay}, {"tau_pay", c.tau_pay}});
+  }
+  for (const auto& c : p.fixed_coupons) fixed.push_back(json::object{{"pay", c.pay}, {"tau", c.tau}});
+  json::object pos{{"kind", "swap"}, {"notional", p.notional}, {"fixed_rate", p.fixed_rate},
+                   {"fwd_curve", p.fwd_curve}, {"disc_curve", p.disc_curve}, {"fixed_curve", p.fixed_curve},
+                   {"float_coupons", coupons}, {"fixed_coupons", fixed}};
+  json::object book{{"positions", json::array{pos}}};
+
+  json::array x0;
+  for (int i = 0; i < x_true.size(); ++i) x0.push_back(x_true[i]);
+  json::object req{{"bundle", api::bundle_to_json(A)},
+                   {"x0", x0},
+                   {"portfolio_risk", book},
+                   {"transform", json::object{{"source_bundle", api::bundle_to_json(B)}}}};
+  const std::string reqs = json::serialize(json::value(std::move(req)));
+
+  const char* resp = swaps_run_json(reqs.c_str());
+  ASSERT_NE(resp, nullptr);
+  const json::value rv = json::parse(resp);
+  swaps_string_free(resp);
+  const auto& ro = rv.as_object();
+  ASSERT_FALSE(ro.contains("error")) << json::serialize(rv);
+
+  ASSERT_TRUE(ro.contains("portfolio_risk"));
+  const auto& pr = ro.at("portfolio_risk").as_object();
+  EXPECT_EQ(pr.at("n").as_int64(), 1);
+  EXPECT_EQ(pr.at("ladder").as_array().size(), static_cast<std::size_t>(A.n_residuals()));
+
+  ASSERT_TRUE(ro.contains("transform"));
+  const auto& T = ro.at("transform").as_array();
+  EXPECT_EQ(T.size(), static_cast<std::size_t>(B.n_residuals()));                    // rows = source residuals
+  EXPECT_EQ(T.at(0).as_array().size(), static_cast<std::size_t>(A.n_residuals()));   // cols = this residuals
+
+  EXPECT_EQ(swaps_run_json(nullptr), nullptr);  // the one non-JSON contract: null in -> null out
 }

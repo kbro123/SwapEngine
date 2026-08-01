@@ -625,7 +625,7 @@ PortfolioReprice BundleSession::price_portfolio_json(const std::string& book_jso
   return price_portfolio(book_from_json(json::parse(book_json)));
 }
 
-PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book) const {
+PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book, const RegSpec& reg) const {
   PortfolioRisk out;
   out.n = static_cast<int>(book.positions.size());
   const int nk = prob_.n_knots();
@@ -639,7 +639,9 @@ PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book
 
   // The risk operator M = dx/dq (n_knots x n_res). Its FORMATION (the calibration-Jacobian solve) is book-
   // INDEPENDENT, so it sits OUTSIDE the engine clock, mirroring how price_portfolio times only the book pass.
-  const Eigen::MatrixXd M = risk_operator();
+  // `reg` regularises M: a curvature/tension penalty damps the ladder's fan-out into a local key-rate hedge
+  // while preserving total DV01 (R annihilates level+linear moves). Default reg={} -> the raw operator.
+  const Eigen::MatrixXd M = risk_operator(reg);
 
   // ---- ENGINE-STAMPED risk pass: the AAD reprice (dP/dx) + the M multiply -------------------------------
   // Seed x as vector-duals, reprice the book once with Scalar = ad::Dual, and read the FULL derivative
@@ -660,8 +662,52 @@ PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book
   return out;
 }
 
-PortfolioRisk BundleSession::price_portfolio_risk_json(const std::string& book_json) const {
-  return price_portfolio_risk(book_from_json(json::parse(book_json)));
+PortfolioRisk BundleSession::price_portfolio_risk_json(const std::string& book_json, const RegSpec& reg) const {
+  return price_portfolio_risk(book_from_json(json::parse(book_json)), reg);
+}
+
+bool BundleSession::same_curve_set(const cal::BundleProblem& source) const {
+  if (source.curves.size() != prob_.curves.size()) return false;
+  for (std::size_t c = 0; c < prob_.curves.size(); ++c) {
+    if (source.curves[c].currency != prob_.curves[c].currency) return false;
+    if ((source.curves[c].base < 0) != (prob_.curves[c].base < 0)) return false;  // outright vs spread
+  }
+  return true;
+}
+
+Eigen::MatrixXd BundleSession::cross_jacobian(const cal::BundleProblem& source) const {
+  if (!same_curve_set(source))
+    throw std::invalid_argument(
+        "cross_jacobian: the source bundle must share this bundle's curve set (same currencies / "
+        "outright-or-spread, same order) so its instruments price on this bundle's curves.");
+  const int nr = source.n_residuals();  // rows: source instruments (== source ladder order)
+  const int nk = prob_.n_knots();       // cols: THIS bundle's fitted knots
+  // Seed THIS bundle's state as vector-duals and build its curves once; then price each SOURCE instrument's
+  // model quote on those curves and read d(quote)/dx_this straight off the derivative vector (forward-AAD).
+  const Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd = ad::seed(x_);
+  const auto Cad = cal::build_bundle_curves<ad::Dual>(
+      prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
+  const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::Dual>& { return *Cad[i]; };
+  Eigen::MatrixXd J(nr, nk);
+  for (int i = 0; i < nr; ++i) {
+    const ad::Dual q = cal::instrument_model_quote<ad::Dual>(source.instruments[i], curve_ad);
+    if (q.derivatives().size() == nk) J.row(i) = q.derivatives().transpose();
+    else J.row(i).setZero();  // a quote that doesn't touch the curve carries an empty derivative -> zero row
+  }
+  return J;
+}
+
+Eigen::MatrixXd BundleSession::transform_matrix(const cal::BundleProblem& source, const RegSpec& reg) const {
+  return cross_jacobian(source) * risk_operator(reg);  // (nr_src x nk)·(nk x nr_this) = nr_src x nr_this
+}
+
+Eigen::MatrixXd BundleSession::cross_jacobian_json(const std::string& source_bundle_json) const {
+  return cross_jacobian(bundle_from_json(json::parse(source_bundle_json)));
+}
+
+Eigen::MatrixXd BundleSession::transform_matrix_json(const std::string& source_bundle_json,
+                                                     const RegSpec& reg) const {
+  return transform_matrix(bundle_from_json(json::parse(source_bundle_json)), reg);
 }
 
 void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
@@ -783,6 +829,36 @@ std::string run_json(const std::string& request) {
         rows.push_back(row);
       }
       out["risk_operator"] = rows;
+    }
+
+    // Book pricing / risk / cross-bundle transform through the JSON seam, so every risk operation is reachable
+    // by any client (web, Excel add-in, .NET, CLI) without the C++ Session object.
+    if (o.contains("portfolio")) {
+      const PortfolioReprice pr = sess.price_portfolio(book_from_json(o.at("portfolio")));
+      out["portfolio"] = json::object{{"npv", pr.npv}, {"pv01", pr.pv01}, {"price_us", pr.price_us}, {"n", pr.n}};
+    }
+
+    if (o.contains("portfolio_risk")) {
+      // The delta ladder dP/dq, regularised by the top-level `regularize` (damps the fan-out; DV01 preserved).
+      const PortfolioRisk pr = sess.price_portfolio_risk(book_from_json(o.at("portfolio_risk")), reg);
+      out["portfolio_risk"] = json::object{{"npv", pr.npv}, {"curve_grad", da(pr.curve_grad)},
+                                           {"ladder", da(pr.ladder)}, {"risk_us", pr.risk_us}, {"n", pr.n}};
+    }
+
+    if (o.contains("transform")) {
+      // Remap a ladder from a SOURCE bundle's instruments into THIS bundle's, via the adaptor Jacobian
+      // T = cross_jacobian(source)·risk_operator(reg). Returns T (n_res_source x n_res_this); the caller
+      // applies delta_this = delta_source · T. Reuses the top-level `regularize`.
+      const auto& t = o.at("transform").as_object();
+      if (!t.contains("source_bundle")) return err("'transform' requires a 'source_bundle' object");
+      const Eigen::MatrixXd Tm = sess.transform_matrix(bundle_from_json(t.at("source_bundle")), reg);
+      json::array rows;
+      for (int i = 0; i < Tm.rows(); ++i) {
+        json::array row;
+        for (int j = 0; j < Tm.cols(); ++j) row.push_back(Tm(i, j));
+        rows.push_back(row);
+      }
+      out["transform"] = rows;
     }
 
     return json::serialize(json::value(std::move(out)));
