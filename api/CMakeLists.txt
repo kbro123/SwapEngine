@@ -11,6 +11,16 @@ target_compile_features(swaps_api PUBLIC cxx_std_20)
 add_executable(swaps_api_cli swaps_api_cli.cpp)
 target_link_libraries(swaps_api_cli PRIVATE swaps_api)
 
+# C-ABI SHARED library: the single symbol (swaps_run_json, capi.h) a NON-C++ host loads -- an Excel XLL,
+# a .NET P/Invoke wrapper, or Python ctypes. All the risk machinery lives behind the JSON seam it forwards
+# to. Optional (SWAPS_BUILD_CAPI_SHARED, default ON); it links the same swaps_api the pybind module uses.
+option(SWAPS_BUILD_CAPI_SHARED "Build the C-ABI shared library (libswaps_capi) for non-C++ hosts" ON)
+if(SWAPS_BUILD_CAPI_SHARED)
+  add_library(swaps_capi_shared SHARED swaps_capi.cpp)
+  target_link_libraries(swaps_capi_shared PRIVATE swaps_api)
+  set_target_properties(swaps_capi_shared PROPERTIES OUTPUT_NAME swaps_capi)
+endif()
+
 # Self-contained round-trip test (no QuantLib): hand-built bundle -> JSON -> back -> calibrate.
 if(SWAPS_BUILD_TESTS AND GTest_FOUND)
   add_executable(swaps_api_tests
