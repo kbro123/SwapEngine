@@ -76,6 +76,19 @@ else
 fi
 rm -f "${_conv_tmp}"
 
+# ---- API-descriptor sync guard: run_json's generated dispatch must match api/api_surface.py ----------
+echo ">> api-dispatch sync guard"
+pass_disp="PASS"
+_disp_tmp="$(mktemp)"
+if python3 "${ROOT}/tools/gen_dispatch.py" --stdout > "${_disp_tmp}" 2>/dev/null \
+   && diff -q "${_disp_tmp}" "${ROOT}/api/run_json_dispatch.gen.inc" >/dev/null; then
+  pass_disp="PASS"
+else
+  echo "   api/run_json_dispatch.gen.inc is STALE — run: python3 tools/gen_dispatch.py"
+  pass_disp="FAIL"; rc=1
+fi
+rm -f "${_disp_tmp}"
+
 # ---- Correctness gate -------------------------------------------------------
 if [ "${BENCH_ONLY}" -eq 0 ]; then
   echo ">> correctness gate (ctest)"
@@ -110,6 +123,7 @@ echo ""
 echo "========== VERIFY SUMMARY =========="
 printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
 printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
+printf "  %-20s %s\n" "api-dispatch sync:" "${pass_disp}"
 printf "  %-20s %s\n" "correctness gate:" "${pass_correctness}"
 printf "  %-20s %s\n" "performance gate:" "${pass_perf}"
 echo "===================================="

@@ -820,46 +820,11 @@ std::string run_json(const std::string& request) {
       out["priced"] = parr;
     }
 
-    if (o.contains("risk") && o.at("risk").as_bool()) {
-      const Eigen::MatrixXd M = sess.risk_operator(reg);
-      json::array rows;
-      for (int i = 0; i < M.rows(); ++i) {
-        json::array row;
-        for (int j = 0; j < M.cols(); ++j) row.push_back(M(i, j));
-        rows.push_back(row);
-      }
-      out["risk_operator"] = rows;
-    }
-
-    // Book pricing / risk / cross-bundle transform through the JSON seam, so every risk operation is reachable
-    // by any client (web, Excel add-in, .NET, CLI) without the C++ Session object.
-    if (o.contains("portfolio")) {
-      const PortfolioReprice pr = sess.price_portfolio(book_from_json(o.at("portfolio")));
-      out["portfolio"] = json::object{{"npv", pr.npv}, {"pv01", pr.pv01}, {"price_us", pr.price_us}, {"n", pr.n}};
-    }
-
-    if (o.contains("portfolio_risk")) {
-      // The delta ladder dP/dq, regularised by the top-level `regularize` (damps the fan-out; DV01 preserved).
-      const PortfolioRisk pr = sess.price_portfolio_risk(book_from_json(o.at("portfolio_risk")), reg);
-      out["portfolio_risk"] = json::object{{"npv", pr.npv}, {"curve_grad", da(pr.curve_grad)},
-                                           {"ladder", da(pr.ladder)}, {"risk_us", pr.risk_us}, {"n", pr.n}};
-    }
-
-    if (o.contains("transform")) {
-      // Remap a ladder from a SOURCE bundle's instruments into THIS bundle's, via the adaptor Jacobian
-      // T = cross_jacobian(source)·risk_operator(reg). Returns T (n_res_source x n_res_this); the caller
-      // applies delta_this = delta_source · T. Reuses the top-level `regularize`.
-      const auto& t = o.at("transform").as_object();
-      if (!t.contains("source_bundle")) return err("'transform' requires a 'source_bundle' object");
-      const Eigen::MatrixXd Tm = sess.transform_matrix(bundle_from_json(t.at("source_bundle")), reg);
-      json::array rows;
-      for (int i = 0; i < Tm.rows(); ++i) {
-        json::array row;
-        for (int j = 0; j < Tm.cols(); ++j) row.push_back(Tm(i, j));
-        rows.push_back(row);
-      }
-      out["transform"] = rows;
-    }
+    // Book pricing / risk / cross-bundle transform through the JSON seam (portfolio / portfolio_risk / risk /
+    // transform), so every risk operation is reachable by any client (web, Excel add-in, .NET, CLI) without
+    // the C++ Session object. These arms are GENERATED from api/api_surface.py by tools/gen_dispatch.py — the
+    // SAME descriptor the pybind + Excel bindings come from — so the stateless seam can't drift from them.
+#include "run_json_dispatch.gen.inc"
 
     return json::serialize(json::value(std::move(out)));
   } catch (const std::exception& ex) {
