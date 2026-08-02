@@ -12,6 +12,7 @@
 #include <boost/json/src.hpp>  // header-only Boost.JSON, compiled in this TU only
 
 #include "swaps/api/compile.hpp"                   // compile_spec / compile_to_json (the 'compile' verb)
+#include "swaps/api/generate_risk.hpp"             // generate_risk_json (the 'generate_risk' verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
@@ -768,6 +769,11 @@ std::string run_json(const std::string& request) {
                                     ? std::string(o.at("today").as_string().c_str()) : "";
       return json::serialize(compile_to_json(compile_spec(o.at("compile"), today)));
     }
+
+    // Stateless GENERATE_RISK verb: one book + N bundles -> N internally-consistent risk ladders, all off
+    // bundles[0]'s DFs (later bundles re-leveled onto the anchor, under-determined ones rank-completed by
+    // self-quoted pillars). Like `compile`, it produces rather than consumes a bundle, so dispatch it here.
+    if (o.contains("generate_risk")) return generate_risk_json(request);
 
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
