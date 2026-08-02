@@ -22,6 +22,7 @@ add_executable(swaps_tests
   build_calendar_test.cpp
   build_instruments_test.cpp
   vol_bachelier_test.cpp
+  vol_sabr_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
 target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
