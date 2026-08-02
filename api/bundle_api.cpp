@@ -13,6 +13,7 @@
 
 #include "swaps/api/compile.hpp"                   // compile_spec / compile_to_json (the 'compile' verb)
 #include "swaps/api/generate_risk.hpp"             // generate_risk_json (the 'generate_risk' verb)
+#include "swaps/api/options.hpp"                   // swaption_json (the 'swaption' verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
@@ -774,6 +775,9 @@ std::string run_json(const std::string& request) {
     // bundles[0]'s DFs (later bundles re-leveled onto the anchor, under-determined ones rank-completed by
     // self-quoted pillars). Like `compile`, it produces rather than consumes a bundle, so dispatch it here.
     if (o.contains("generate_risk")) return generate_risk_json(request);
+
+    // Stateless SWAPTION verb: price European swaptions off a calibrated curve (Bachelier / SABR).
+    if (o.contains("swaption")) return swaption_json(request);
 
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
