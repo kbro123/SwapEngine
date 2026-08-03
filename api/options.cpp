@@ -71,9 +71,15 @@ std::string swaption_json(const std::string& request) {
 
       // Underlying forward-starting swap: option expires at `expiry`, swap starts spot after expiry, annual
       // fixed leg to `tenor`.
-      const b::Date expiry_date = b::resolve(expiry, vd);
+      if (expiry.empty() || tenor.empty())
+        throw std::invalid_argument("swaption: each trade needs a non-empty 'expiry' and 'tenor'");
+      const b::Date expiry_date = b::resolve(expiry, vd);  // throws on an unrecognized expiry token
       const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
-      const int n = std::max(1, static_cast<int>(std::lround(conventions::period_years(tenor))));
+      const double tenor_years = conventions::period_years(tenor);  // 0 for an unrecognized token
+      if (!(tenor_years > 0.0))
+        throw std::invalid_argument("swaption: unrecognized or non-positive tenor '" + tenor +
+                                    "' (use e.g. 2Y, 5Y, 10Y)");
+      const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
       std::vector<double> pay_time, tau;
       b::Date prev = swap_start;
       for (int i = 1; i <= n; ++i) {
