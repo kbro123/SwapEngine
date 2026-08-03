@@ -60,6 +60,16 @@ inline S bachelier_delta(const S& fwd, const S& strike, const S& vol, double exp
   return annuity * sgn * normal_cdf(d);
 }
 
+// d2V/dF2 (gamma). Symmetric in payer/receiver: A·φ(d)/(σ√T).
+template <class S>
+inline S bachelier_gamma(const S& fwd, const S& strike, const S& vol, double expiry, const S& annuity) {
+  using std::sqrt;
+  const S stddev = vol * S(sqrt(expiry));
+  if (stddev <= S(0.0)) return S(0.0);
+  const S d = (fwd - strike) / stddev;
+  return annuity * normal_pdf(d) / stddev;
+}
+
 // Invert price -> normal vol (double). Price is strictly increasing in vol above intrinsic. A plain Newton
 // from the ATM seed escapes the basin for deep-OTM strikes (tiny vega), so this is a SAFEGUARDED
 // Newton-bisection: keep a [lo,hi] bracket, take the Newton step when it stays inside, bisect otherwise.

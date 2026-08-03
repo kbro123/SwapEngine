@@ -88,6 +88,33 @@ struct PortfolioRisk {
   int n = 0;                         // number of positions
 };
 
+// Result of a batched swaption VOL CUBE reprice off the calibrated curve (BundleSession::price_vol_cube_json).
+// Flat SoA (parallel arrays), so the whole expiry x tenor x strike surface reprices into reused buffers on the
+// engine hot path — the options analogue of price_portfolio. The curve-dependent part (per-cell forward /
+// annuity / expiry) is computed once from a SINGLE curve sample over the union of all schedule times; every
+// strike is then a pure Bachelier/SABR evaluation in C++. `price_us` is the ENGINE-measured pricing time (a
+// steady_clock pair around the reprice only, no JSON/marshalling), the exact analogue of price_us/last_solve_us.
+// Per-cell arrays have length n_cells; per-point arrays have length n_points, and point i belongs to the cell
+// index point_cell[i]. All arrays are double (int-valued ones like point_cell/payer carry whole numbers) so the
+// one STRUCT marshaller (VEC) covers every field.
+struct VolCube {
+  std::vector<double> cell_forward;        // per cell: forward swap rate off the calibrated curve
+  std::vector<double> cell_annuity;        // per cell: Σ τ_i·DF_i (the numeraire)
+  std::vector<double> cell_expiry_years;   // per cell: option expiry in curve time (ACT/365F)
+  std::vector<double> point_cell;          // per point: which cell (index into the per-cell arrays)
+  std::vector<double> strike;              // per point: absolute strike (rate)
+  std::vector<double> moneyness_bp;        // per point: (strike − forward) in bp
+  std::vector<double> normal_vol;          // per point: Bachelier normal vol used (SABR at the strike, or flat)
+  std::vector<double> price;               // per point: swaption price (annuity units)
+  std::vector<double> vega;                // per point: dV/dσ
+  std::vector<double> delta;               // per point: dV/dF
+  std::vector<double> gamma;               // per point: d²V/dF²
+  std::vector<double> payer;               // per point: 1 payer, 0 receiver
+  double price_us = 0.0;                   // pure engine pricing time of the cube, microseconds
+  int n_cells = 0;
+  int n_points = 0;
+};
+
 // ---- JSON <-> engine object graph (definitions in bundle_api.cpp) --------------------------------
 // Every field is optional on parse and defaults to the struct default, so a minimal document is valid.
 cal::BundleProblem bundle_from_json(const boost::json::value& v);
@@ -178,6 +205,16 @@ class BundleSession {
   PortfolioReprice price_portfolio(const swaps::portfolio::MultiCurveBook& book) const;
   // Convenience for a language binding: parse a book JSON document (schema on book_from_json) and reprice.
   PortfolioReprice price_portfolio_json(const std::string& book_json) const;
+
+  // ---- batched swaption VOL CUBE reprice off the calibrated curve (the options hot path) ----------
+  // Price a whole expiry x tenor x strike surface off the CURRENTLY CALIBRATED curve in one pass. The spec
+  // JSON is {value_date, currency?, index?, curve?, cells:[{expiry, tenor, sabr?{alpha,rho,nu} | normal_vol?,
+  // strikes?:[abs...], moneyness_bp?:[offsets...], atm?:bool, payer?:bool}]}. Curve-dependent work (each
+  // cell's forward/annuity) is done once from a SINGLE sample() over the union of all schedule times; every
+  // strike is then a pure Bachelier/SABR eval. Strikes default to OTM (payer above the forward, receiver
+  // below) unless `payer` is set. Reuses the calibrated/streaming session, so a live vol surface reprices with
+  // no recalibration — the options analogue of price_portfolio. Result is flat SoA + engine-stamped price_us.
+  VolCube price_vol_cube_json(const std::string& spec_json) const;
 
   // Express a book's risk in THIS bundle's calibration instruments: one forward-AAD pass gives the NPV and
   // its state gradient curve_grad = dP/dx, then ladder = curve_grad^T · M (M = risk_operator(reg)) is the

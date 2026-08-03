@@ -4,6 +4,10 @@
       const PortfolioReprice r = sess.price_portfolio(book_from_json(o.at("portfolio")));
       out["portfolio"] = json::object{{"npv", r.npv}, {"pv01", r.pv01}, {"price_us", r.price_us}, {"n", r.n}};
     }
+    if (o.contains("vol_cube")) {
+      const VolCube r = sess.price_vol_cube_json(json::serialize(o.at("vol_cube")));
+      out["vol_cube"] = json::object{{"cell_forward", da(r.cell_forward)}, {"cell_annuity", da(r.cell_annuity)}, {"cell_expiry_years", da(r.cell_expiry_years)}, {"point_cell", da(r.point_cell)}, {"strike", da(r.strike)}, {"moneyness_bp", da(r.moneyness_bp)}, {"normal_vol", da(r.normal_vol)}, {"price", da(r.price)}, {"vega", da(r.vega)}, {"delta", da(r.delta)}, {"gamma", da(r.gamma)}, {"payer", da(r.payer)}, {"price_us", r.price_us}, {"n_cells", r.n_cells}, {"n_points", r.n_points}};
+    }
     if (o.contains("portfolio_risk")) {
       const PortfolioRisk r = sess.price_portfolio_risk(book_from_json(o.at("portfolio_risk")), reg);
       out["portfolio_risk"] = json::object{{"npv", r.npv}, {"curve_grad", da(r.curve_grad)}, {"ladder", da(r.ladder)}, {"risk_us", r.risk_us}, {"n", r.n}};

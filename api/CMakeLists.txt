@@ -27,11 +27,14 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_fixings_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_reprice_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/vol_cube_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_parity_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost)
-  # Golden compiler-parity data (server/compile.py output), committed under tests/golden/compile/.
+  # Golden compiler-parity data (server/compile.py output), committed under tests/golden/compile/; and the
+  # SOFR bundle fixture the vol-cube test calibrates against (also used by bench/vol_cube_bench).
   target_compile_definitions(swaps_api_tests PRIVATE
-    SWAPS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/golden")
+    SWAPS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/golden"
+    SOFR_BUNDLE_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../bench/fixtures/sofr_bundle.json")
   gtest_discover_tests(swaps_api_tests)
 endif()

@@ -29,6 +29,12 @@ STRUCTS = {
     "PortfolioReprice": [("npv", "SCALAR"), ("pv01", "SCALAR"), ("price_us", "SCALAR"), ("n", "INT")],
     "PortfolioRisk": [("npv", "SCALAR"), ("curve_grad", "VEC"), ("ladder", "VEC"),
                       ("risk_us", "SCALAR"), ("n", "INT")],
+    # Batched swaption vol cube (flat SoA): per-cell forward/annuity/expiry + per-point strike/vol/price/greeks.
+    # All arrays are VEC(double) so one marshaller covers every field; point i belongs to cell point_cell[i].
+    "VolCube": [("cell_forward", "VEC"), ("cell_annuity", "VEC"), ("cell_expiry_years", "VEC"),
+                ("point_cell", "VEC"), ("strike", "VEC"), ("moneyness_bp", "VEC"), ("normal_vol", "VEC"),
+                ("price", "VEC"), ("vega", "VEC"), ("delta", "VEC"), ("gamma", "VEC"), ("payer", "VEC"),
+                ("price_us", "SCALAR"), ("n_cells", "INT"), ("n_points", "INT")],
 }
 
 # Session constructor.
@@ -51,6 +57,13 @@ METHODS = [
     {"name": "price_portfolio_risk", "cpp": "price_portfolio_risk_json",
      "args": [("book_json", "STR"), ("reg", "REG")], "ret": "STRUCT:PortfolioRisk", "verb": "portfolio_risk",
      "doc": "Book risk -> {npv, curve_grad=dP/dx, ladder=dP/dq, risk_us, n}. reg smooths the RISK operator."},
+    {"name": "price_vol_cube", "cpp": "price_vol_cube_json", "args": [("cube_json", "STR")],
+     "ret": "STRUCT:VolCube", "verb": "vol_cube",
+     "doc": ("Batched swaption vol cube off the calibrated curve: {value_date, index?, cells:[{expiry, tenor, "
+             "sabr?|normal_vol?, strikes?|moneyness_bp?|atm?, payer?}]} -> flat SoA {cell_forward, cell_annuity, "
+             "cell_expiry_years, point_cell, strike, moneyness_bp, normal_vol, price, vega, delta, gamma, payer, "
+             "price_us, n_cells, n_points}. Reuses the calibrated/streaming session (reprice a live surface with "
+             "no recalibration).")},
     {"name": "jacobian", "cpp": "jacobian", "args": [], "ret": "MATRIX", "verb": None,
      "doc": "Calibration Jacobian J = dq/dx (n_res x n_knots)."},
     {"name": "risk_operator", "cpp": "risk_operator", "args": [("reg", "REG")], "ret": "MATRIX", "verb": "risk",
@@ -134,11 +147,15 @@ FREE = [
 #   "book"          book_from_json(o.at(key))                      -> the call's first arg
 #   "source_bundle" bundle_from_json(o.at(key).at("source_bundle"))-> the call's first arg
 # `reg`=True appends the top-level RegSpec; `ret` drives the response serialization (STRUCT:* field list or a
-# MATRIX of nested arrays). The always-on stages (bundle/x0/regularize/calibrate/x) and the irregular `price`
-# and `sample_times` arms stay hand-written in bundle_api.cpp — their shapes are bespoke.
+# MATRIX of nested arrays). `payload` "json" passes the serialized sub-object string to a *_json method (for
+# ops that parse their own bespoke sub-schema, e.g. the vol cube). The always-on stages
+# (bundle/x0/regularize/calibrate/x) and the irregular `price` and `sample_times` arms stay hand-written in
+# bundle_api.cpp — their shapes are bespoke.
 RUN_JSON = [
     {"key": "portfolio", "resp": "portfolio", "cpp": "price_portfolio", "payload": "book", "reg": False,
      "ret": "STRUCT:PortfolioReprice"},
+    {"key": "vol_cube", "resp": "vol_cube", "cpp": "price_vol_cube_json", "payload": "json", "reg": False,
+     "ret": "STRUCT:VolCube"},
     {"key": "portfolio_risk", "resp": "portfolio_risk", "cpp": "price_portfolio_risk", "payload": "book",
      "reg": True, "ret": "STRUCT:PortfolioRisk"},
     {"key": "risk", "resp": "risk_operator", "cpp": "risk_operator", "payload": "bool", "reg": True,

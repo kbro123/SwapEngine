@@ -60,6 +60,10 @@ def gen():
                        f'      if (!t.contains("source_bundle")) return err("\'{key}\' requires a '
                        f'\'source_bundle\' object");\n')
             arg = 'bundle_from_json(t.at("source_bundle"))'
+        elif j["payload"] == "json":
+            # Pass the serialized sub-object to a *_json method that parses its own bespoke sub-schema.
+            out.append(f'    if (o.contains("{key}")) {{\n')
+            arg = f'json::serialize(o.at("{key}"))'
         else:
             raise SystemExit(f"unknown payload {j['payload']}")
         if ret == "MATRIX":

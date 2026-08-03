@@ -19,6 +19,13 @@ target_link_libraries(bundle_scale_bench PRIVATE swaps benchmark::benchmark_main
 add_executable(portfolio_parallel_bench portfolio_parallel_bench.cpp)
 target_link_libraries(portfolio_parallel_bench PRIVATE swaps benchmark::benchmark_main)
 
+# Swaption vol-cube reprice: warm (streaming, no recalibration) vs cold (one-shot verb). Ours-only probe;
+# links swaps_api for BundleSession + bundle_from_json, reads the SOFR bundle fixture by compiled-in path.
+add_executable(vol_cube_bench vol_cube_bench.cpp)
+target_link_libraries(vol_cube_bench PRIVATE swaps swaps_api benchmark::benchmark_main)
+target_compile_definitions(vol_cube_bench PRIVATE
+  SOFR_BUNDLE_JSON="${CMAKE_SOURCE_DIR}/bench/fixtures/sofr_bundle.json")
+
 
 # AAD vs bump / calibration benchmarks (link the QuantLib oracle for problem setup).
 if(TARGET quantlib_oracle)
