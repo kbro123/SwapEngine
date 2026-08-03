@@ -59,6 +59,7 @@ if(TARGET quantlib_oracle)
     bundle_test.cpp
     compiled_residual_test.cpp
     bspline_oracle_test.cpp
+    vol_bachelier_ql_oracle.cpp
     monotone_cubic_oracle_test.cpp
     rfr_coupon_oracle_test.cpp
     ois_weekend_test.cpp
