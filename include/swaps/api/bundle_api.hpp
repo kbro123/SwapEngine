@@ -21,6 +21,8 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <boost/json/fwd.hpp>
@@ -113,6 +115,17 @@ struct VolCube {
   double price_us = 0.0;                   // pure engine pricing time of the cube, microseconds
   int n_cells = 0;
   int n_points = 0;
+};
+
+// One swaption cell's CURVE-INDEPENDENT schedule in curve time (ACT/365F): the option expiry, the underlying
+// swap start, and its annual fixed pay times + accruals. Building this walks the calendar (business-day
+// adjustment / holidays) for every pay date, which is the same for every reprice — so price_vol_cube_json
+// memoizes it per (value_date, currency, index, curve, expiry, tenor). See BundleSession::vol_sched_cache_.
+struct SwaptionSchedule {
+  double t_start = 0.0;
+  double t_expiry = 0.0;
+  std::vector<double> pay_time;
+  std::vector<double> tau;
 };
 
 // ---- JSON <-> engine object graph (definitions in bundle_api.cpp) --------------------------------
@@ -327,6 +340,15 @@ class BundleSession {
   int last_newton_steps_ = 0;
   int last_refreshes_ = 0;
   double last_drift_ = 0;
+
+  // ---- vol-cube reprice caches (populated by the const price_vol_cube_json; mutable so it stays const) ----
+  // The swaption schedules are CURVE-INDEPENDENT, so they are built once per cell and reused across reprices
+  // (killing the per-call calendar walk). The per-cell (forward, annuity) depend only on the curve state x,
+  // so they are cached against the x they were computed at and reused while x is unchanged (a vol-only reprice
+  // — e.g. a SABR-slider tick — then needs NO curve sample, just the Bachelier pass). Cleared when x moves.
+  mutable std::unordered_map<std::string, SwaptionSchedule> vol_sched_cache_;
+  mutable std::unordered_map<std::string, std::pair<double, double>> vol_fa_cache_;  // cell key -> (fwd, annuity)
+  mutable Eigen::VectorXd vol_fa_x_;  // the x for which vol_fa_cache_ is valid (empty => invalid)
 };
 
 // One-shot stateless JSON dispatcher for a web call. Request:

@@ -161,66 +161,95 @@ VolCube BundleSession::price_vol_cube_json(const std::string& spec_json) const {
 
   const auto clock0 = std::chrono::steady_clock::now();
 
-  // Per-cell schedule (curve-dependent times), collecting the union of all sample times for one sample() call.
-  struct CellSched {
-    double t_start = 0.0, t_expiry = 0.0;
-    std::vector<double> pay_time, tau;
-  };
-  std::vector<CellSched> sched;
-  sched.reserve(cells.size());
-  std::vector<double> all_times;
-  for (const auto& ce : cells) {
-    const json::object& c = ce.as_object();
+  // ---- (1) resolve each cell's schedule, MEMOIZED per cell (curve-independent — the calendar walk is the
+  // dominant per-call cost, and it is identical for every reprice). Key by the fields that determine it.
+  std::vector<const SwaptionSchedule*> sched(cells.size(), nullptr);
+  std::vector<std::string> keys(cells.size());
+  for (std::size_t ci = 0; ci < cells.size(); ++ci) {
+    const json::object& c = cells[ci].as_object();
     const std::string expiry = js(c, "expiry"), tenor = js(c, "tenor");
     if (expiry.empty() || tenor.empty())
       throw std::invalid_argument("vol_cube: each cell needs a non-empty 'expiry' and 'tenor'");
-    const b::Date expiry_date = b::resolve(expiry, vd);
-    const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
-    const double tenor_years = conventions::period_years(tenor);
-    if (!(tenor_years > 0.0))
-      throw std::invalid_argument("vol_cube: unrecognized or non-positive tenor '" + tenor +
-                                  "' (use e.g. 2Y, 5Y, 10Y)");
-    const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
-    CellSched cs;
-    cs.t_start = b::curve_time(vd, swap_start);
-    cs.t_expiry = b::curve_time(vd, expiry_date);
-    b::Date prev = swap_start;
-    for (int i = 1; i <= n; ++i) {
-      const b::Date pay = b::adjust(conv.calendar, swap_start.plus_months(12 * i), conv.bdc);
-      cs.tau.push_back(b::year_frac(conv.fixed_dc, prev, pay));
-      cs.pay_time.push_back(b::curve_time(vd, pay));
-      prev = pay;
+    std::string key = vd_iso;
+    key += '|'; key += currency; key += '|'; key += index; key += '|';
+    key += std::to_string(curve); key += '|'; key += expiry; key += '|'; key += tenor;
+    auto it = vol_sched_cache_.find(key);
+    if (it == vol_sched_cache_.end()) {
+      const b::Date expiry_date = b::resolve(expiry, vd);
+      const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
+      const double tenor_years = conventions::period_years(tenor);
+      if (!(tenor_years > 0.0))
+        throw std::invalid_argument("vol_cube: unrecognized or non-positive tenor '" + tenor +
+                                    "' (use e.g. 2Y, 5Y, 10Y)");
+      const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
+      SwaptionSchedule ss;
+      ss.t_start = b::curve_time(vd, swap_start);
+      ss.t_expiry = b::curve_time(vd, expiry_date);
+      b::Date prev = swap_start;
+      for (int i = 1; i <= n; ++i) {
+        const b::Date pay = b::adjust(conv.calendar, swap_start.plus_months(12 * i), conv.bdc);
+        ss.tau.push_back(b::year_frac(conv.fixed_dc, prev, pay));
+        ss.pay_time.push_back(b::curve_time(vd, pay));
+        prev = pay;
+      }
+      it = vol_sched_cache_.emplace(key, std::move(ss)).first;
     }
-    all_times.push_back(cs.t_start);
-    all_times.insert(all_times.end(), cs.pay_time.begin(), cs.pay_time.end());
-    sched.push_back(std::move(cs));
+    sched[ci] = &it->second;
+    keys[ci] = std::move(key);
   }
 
-  // ONE curve sample over the union of every cell's schedule times -> DF by time (the batched curve read).
-  std::sort(all_times.begin(), all_times.end());
-  all_times.erase(std::unique(all_times.begin(), all_times.end()), all_times.end());
-  const std::vector<CurveSample> cs_all = this->sample(all_times);
-  if (curve < 0 || curve >= static_cast<int>(cs_all.size()))
-    throw std::invalid_argument("vol_cube: curve index out of range");
-  const CurveSample& csamp = cs_all[static_cast<std::size_t>(curve)];
-  std::map<double, double> df_by_time;
-  for (std::size_t i = 0; i < csamp.t.size(); ++i) df_by_time[csamp.t[i]] = csamp.discount[i];
-  const auto df_at = [&](double t) -> double {
-    const auto it = df_by_time.find(t);
-    if (it == df_by_time.end()) throw std::runtime_error("vol_cube: internal sample-time lookup failed");
-    return it->second;
-  };
+  // ---- (2) forward/annuity per cell, cached against the curve state x. If x is unchanged since the cache was
+  // built (a vol-only reprice — e.g. a SABR-slider tick), reuse it and DO NOT sample the curve at all. When x
+  // moved (or a cell is new), sample once over just the missing cells' times.
+  const Eigen::VectorXd& xnow = this->x();
+  const bool fa_valid = vol_fa_x_.size() == xnow.size() && xnow.size() > 0 &&
+                        (vol_fa_x_.array() == xnow.array()).all();
+  if (!fa_valid) {
+    vol_fa_cache_.clear();
+    vol_fa_x_ = xnow;
+  }
+  std::vector<double> need_times;
+  for (std::size_t ci = 0; ci < cells.size(); ++ci)
+    if (vol_fa_cache_.find(keys[ci]) == vol_fa_cache_.end()) {
+      need_times.push_back(sched[ci]->t_start);
+      need_times.insert(need_times.end(), sched[ci]->pay_time.begin(), sched[ci]->pay_time.end());
+    }
+  if (!need_times.empty()) {
+    std::sort(need_times.begin(), need_times.end());
+    need_times.erase(std::unique(need_times.begin(), need_times.end()), need_times.end());
+    const std::vector<CurveSample> cs_all = this->sample(need_times);
+    if (curve < 0 || curve >= static_cast<int>(cs_all.size()))
+      throw std::invalid_argument("vol_cube: curve index out of range");
+    const CurveSample& csamp = cs_all[static_cast<std::size_t>(curve)];
+    std::map<double, double> df_by_time;
+    for (std::size_t i = 0; i < csamp.t.size(); ++i) df_by_time[csamp.t[i]] = csamp.discount[i];
+    const auto df_at = [&](double t) -> double {
+      const auto itf = df_by_time.find(t);
+      if (itf == df_by_time.end()) throw std::runtime_error("vol_cube: internal sample-time lookup failed");
+      return itf->second;
+    };
+    for (std::size_t ci = 0; ci < cells.size(); ++ci) {
+      if (vol_fa_cache_.find(keys[ci]) != vol_fa_cache_.end()) continue;
+      const SwaptionSchedule& s = *sched[ci];
+      std::vector<double> df_pay;
+      df_pay.reserve(s.pay_time.size());
+      for (double t : s.pay_time) df_pay.push_back(df_at(t));
+      const v::ForwardSwap fs = v::forward_swap(df_at(s.t_start), df_pay.back(), df_pay, s.tau);
+      vol_fa_cache_.emplace(keys[ci], std::make_pair(fs.rate, fs.annuity));
+    }
+  }
 
-  // Price every cell x strike into the flat SoA result.
+  // ---- (3) price every cell x strike into the flat SoA result (pure Bachelier/SABR off the cached fwd/annuity).
   VolCube out;
   out.n_cells = static_cast<int>(cells.size());
+  out.cell_forward.reserve(cells.size());
+  out.cell_annuity.reserve(cells.size());
+  out.cell_expiry_years.reserve(cells.size());
   for (std::size_t ci = 0; ci < cells.size(); ++ci) {
     const json::object& c = cells[ci].as_object();
-    const CellSched& s = sched[ci];
-    std::vector<double> df_pay;
-    df_pay.reserve(s.pay_time.size());
-    for (double t : s.pay_time) df_pay.push_back(df_at(t));
-    const v::ForwardSwap fs = v::forward_swap(df_at(s.t_start), df_pay.back(), df_pay, s.tau);
+    const SwaptionSchedule& s = *sched[ci];
+    const std::pair<double, double>& fa = vol_fa_cache_.at(keys[ci]);
+    const v::ForwardSwap fs{fa.first, fa.second};
     out.cell_forward.push_back(fs.rate);
     out.cell_annuity.push_back(fs.annuity);
     out.cell_expiry_years.push_back(s.t_expiry);

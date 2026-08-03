@@ -29,6 +29,14 @@ target_compile_definitions(vol_cube_bench PRIVATE
 
 # AAD vs bump / calibration benchmarks (link the QuantLib oracle for problem setup).
 if(TARGET quantlib_oracle)
+  # Swaption vol-surface reprice: ours (batched SoA) vs QuantLib's per-cell analytic path. QuantLib-paired
+  # speedup metric (vol_cube_warm); links swaps_api for BundleSession + the SOFR bundle fixture.
+  add_executable(vol_cube_ql_bench vol_cube_ql_bench.cpp)
+  target_link_libraries(vol_cube_ql_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(vol_cube_ql_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+  target_compile_definitions(vol_cube_ql_bench PRIVATE
+    SOFR_BUNDLE_JSON="${CMAKE_SOURCE_DIR}/bench/fixtures/sofr_bundle.json")
+
   add_executable(calibration_bench calibration_bench.cpp)
   target_link_libraries(calibration_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(calibration_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)

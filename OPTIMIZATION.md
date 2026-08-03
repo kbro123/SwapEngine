@@ -145,6 +145,21 @@ So it was **redone in C++** as the options analogue of `price_portfolio`:
   `tools/check_perf.py` as an **ours-only self-regression metric** (a swaption reprice has no expensive
   QuantLib baseline the way risk-bumping does, so it gates on its own committed `ours_ns`, not a speedup floor).
 
+**A QuantLib head-to-head that caught a real bug (`bench/vol_cube_ql_bench.cpp`).** Pairing the surface
+reprice against QuantLib's own analytic path (its `DiscountCurve` + `bachelierBlackFormula`, schedules
+precomputed) exposed that `price_vol_cube_json` was **rebuilding every cell's date schedule on every call** —
+the calendar/holiday walk for ~190 pay dates, identical for each reprice. Result: **490µs vs QuantLib's 10µs,
+~40× SLOWER**. The measurement discipline paid off exactly as intended — a "faster than before" story hid a
+gross inefficiency the oracle-paired bench surfaced. Fix (the W-cache idea applied *within* the reprice):
+memoize the curve-independent schedule per cell, and cache `(forward, annuity)` against the curve state `x`
+so a vol-only reprice (SABR-slider tick) samples nothing — just the Bachelier pass. **490µs → ~38µs (flat) /
+~50µs (SABR), a 12–15× fix.** Honest standing after it: through the **JSON verb interface** we are still
+~4–5× QuantLib's native loop (~14µs of the residual is parsing the cube-spec JSON, which QuantLib's in-process
+C++ never pays; the rest is JSON field access + SoA build). The pricing *kernel* is at parity (the oracle
+proves it to 1e-12); closing the system gap to *beat* QuantLib needs a **native (non-JSON) streaming reprice
+path** (a stateful `VolSurface` that resolves cells + schedules once and reprices from native buffers) — the
+next step. Lesson re-learned: benchmark against an independent reference, not just against your own past self.
+
 The next surface is the **batched vol cube across many curves** and the future **Monte-Carlo** path, where the
 same ideas map directly:
 - **Analytic AAD → reverse-mode AAD tape** for MC Greeks (many inputs → one price, ≤4× one price): the

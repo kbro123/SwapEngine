@@ -121,12 +121,12 @@
         },
         "vol_cube_warm": {
           "quantlib_ns": null,
-          "ours_ns": 573719,
+          "ours_ns": 50093,
           "speedup": null
         },
         "vol_cube_cold": {
           "quantlib_ns": null,
-          "ours_ns": 2304828,
+          "ours_ns": 1932766,
           "speedup": null
         }
       }
