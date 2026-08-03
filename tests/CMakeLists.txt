@@ -45,6 +45,7 @@ gtest_discover_tests(swaps_allocfree_tests)
 # SEPARATE binary so the engine's own gate (swaps_tests) never links QuantLib.
 if(TARGET quantlib_oracle)
   add_executable(swaps_oracle_tests
+    ql_test_isolation.cpp
     convexity_test.cpp
     pricing_test.cpp
     generic_cashflow_test.cpp
