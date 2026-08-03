@@ -119,12 +119,24 @@ FX + MtM cross-currency streaming: **~130µs → ~13µs per tick** once fully W-
 
 ---
 
-## Applying this to the OPTIONS pricing path (next)
+## Applying this to the OPTIONS pricing path
 
-The analytic layer (Bachelier/SABR/swaption/CMS) is already cheap per-call; the wins there are **avoiding
-redundant calibration** (a smile/grid should calibrate the curve *once* and reuse the session, not per
-strike/cell) and **batching** a whole vol cube through one compiled sample. The big surface is the future
-**Monte-Carlo** path, where the same ideas map directly:
+**Analytic layer — done (web `/options` smile + ATM grid).** The per-call analytic math (Bachelier/SABR/
+swaption/CMS) was already cheap; the cost was **redundant calibration**. Each page paint calibrated the curve
+*four* times — smile and grid each made a probe call (read the forward) then a pricing call. But a swaption
+cell's `(forward, annuity, expiry_years)` depends only on the **curve**, and the vol + price are a *pure*
+function of them — the W-cache split exactly. The fix (web `perf(options): calibrate once…`):
+- **Precompute the curve-dependent part once** — cache `(forward, annuity, expiry_years)` per
+  `(spec, index, currency, expiry, tenor)`; only a new cell or a changed curve hits the engine, batched into
+  one verb call. The route primes the whole page (smile cell + 16 grid cells) in a **single** `swaption` call.
+- **Reprice the vol-dependent part in-process** — a pure-Python Bachelier + Hagan β=0 SABR, verified
+  bit-identical to the engine's `vol/*.hpp` (max |Δvol|,|Δprice| ~1e-17 across a full smile + 4×4 grid).
+- **Result:** smile 7.9→5.0 ms, grid 9.6→5.2 ms; full page first-paint ~16 ms (4 calibrations) → **6.9 ms**
+  (1 verb call); a **SABR-slider move on the same curve ~16 ms → 0.23 ms (~70×)** — zero engine calls, the
+  moneyness slice reprices in pure Python. Same split the streaming W-cache uses: freeze the curve, tick the vol.
+
+The next surface is the **batched vol cube** (one compiled sample for a whole expiry×tenor×strike grid) and
+the future **Monte-Carlo** path, where the same ideas map directly:
 - **Analytic AAD → reverse-mode AAD tape** for MC Greeks (many inputs → one price, ≤4× one price): the
   templated-Scalar discipline is *identical*, the mode flips from forward to adjoint.
 - **W-cache/precompute → path pre-computation**: Sobol + Brownian-bridge factors, model `evolve`
