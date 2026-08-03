@@ -57,6 +57,37 @@ std::string cube_json() {
   return s;
 }
 
+// The same 17-cell SABR surface as a NATIVE VolCubeSpec (no JSON in the hot path).
+api::VolCubeSpec cube_spec() {
+  api::VolCubeSpec s;
+  s.value_date = "2026-07-08";
+  s.index = "USD-SOFR";
+  api::VolCubeCell smile;
+  smile.expiry = "1Y";
+  smile.tenor = "5Y";
+  smile.has_sabr = true;
+  smile.sabr_alpha = 0.009;
+  smile.sabr_rho = -0.25;
+  smile.sabr_nu = 0.45;
+  for (int bp = -150; bp <= 150; bp += 15) smile.moneyness_bp.push_back(bp);
+  s.cells.push_back(std::move(smile));
+  const char* exps[] = {"1Y", "2Y", "5Y", "10Y"};
+  const char* tens[] = {"2Y", "5Y", "10Y", "30Y"};
+  for (const char* e : exps)
+    for (const char* t : tens) {
+      api::VolCubeCell c;
+      c.expiry = e;
+      c.tenor = t;
+      c.has_sabr = true;
+      c.sabr_alpha = 0.009;
+      c.sabr_rho = -0.25;
+      c.sabr_nu = 0.45;
+      c.atm = true;
+      s.cells.push_back(std::move(c));
+    }
+  return s;
+}
+
 api::RegSpec sofr_reg() {
   api::RegSpec reg;
   reg.tension = true;
@@ -73,12 +104,12 @@ api::BundleSession calibrated_session() {
 
 }  // namespace
 
-// Warm: reprice the whole cube off a fixed calibrated session (the streaming / slider-move hot path).
+// Warm: reprice the whole cube off a fixed calibrated session (the streaming / slider-move hot path), native.
 static void BM_VolCube_Warm(benchmark::State& state) {
   const api::BundleSession sess = calibrated_session();
-  const std::string cube = cube_json();
+  const api::VolCubeSpec spec = cube_spec();
   for (auto _ : state) {
-    api::VolCube r = sess.price_vol_cube_json(cube);
+    api::VolCube r = sess.price_vol_cube(spec);
     benchmark::DoNotOptimize(r.price.data());
   }
 }
@@ -87,12 +118,12 @@ BENCHMARK(BM_VolCube_Warm);
 // Cold: build the session, calibrate, price the cube (the one-shot verb / Excel call).
 static void BM_VolCube_Cold(benchmark::State& state) {
   const std::string js = bundle_json();
-  const std::string cube = cube_json();
+  const api::VolCubeSpec spec = cube_spec();
   const api::RegSpec reg = sofr_reg();
   for (auto _ : state) {
     api::BundleSession sess(api::bundle_from_json(boost::json::parse(js)));
     sess.calibrate(api::flat_x0(sess.problem()), reg);
-    api::VolCube r = sess.price_vol_cube_json(cube);
+    api::VolCube r = sess.price_vol_cube(spec);
     benchmark::DoNotOptimize(r.price.data());
   }
 }

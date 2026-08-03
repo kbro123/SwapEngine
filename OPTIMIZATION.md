@@ -150,15 +150,24 @@ reprice against QuantLib's own analytic path (its `DiscountCurve` + `bachelierBl
 precomputed) exposed that `price_vol_cube_json` was **rebuilding every cell's date schedule on every call** —
 the calendar/holiday walk for ~190 pay dates, identical for each reprice. Result: **490µs vs QuantLib's 10µs,
 ~40× SLOWER**. The measurement discipline paid off exactly as intended — a "faster than before" story hid a
-gross inefficiency the oracle-paired bench surfaced. Fix (the W-cache idea applied *within* the reprice):
-memoize the curve-independent schedule per cell, and cache `(forward, annuity)` against the curve state `x`
-so a vol-only reprice (SABR-slider tick) samples nothing — just the Bachelier pass. **490µs → ~38µs (flat) /
-~50µs (SABR), a 12–15× fix.** Honest standing after it: through the **JSON verb interface** we are still
-~4–5× QuantLib's native loop (~14µs of the residual is parsing the cube-spec JSON, which QuantLib's in-process
-C++ never pays; the rest is JSON field access + SoA build). The pricing *kernel* is at parity (the oracle
-proves it to 1e-12); closing the system gap to *beat* QuantLib needs a **native (non-JSON) streaming reprice
-path** (a stateful `VolSurface` that resolves cells + schedules once and reprices from native buffers) — the
-next step. Lesson re-learned: benchmark against an independent reference, not just against your own past self.
+gross inefficiency the oracle-paired bench surfaced. Two fixes, in order:
+1. **The W-cache idea applied *within* the reprice** — memoize the curve-independent schedule per cell, and
+   cache `(forward, annuity)` against the curve state `x` so a vol-only reprice (SABR-slider tick) samples
+   nothing, just the Bachelier pass. **490µs → ~50µs.**
+2. **A native (non-JSON) entry point.** The residual was an interface artifact: `vol_cube` had *only* a
+   `price_vol_cube_json` method, so parse + compute were fused and the bench measured our JSON marshalling
+   against QuantLib's native loop. Split it — `price_vol_cube(const VolCubeSpec&)` does the pure compute,
+   `price_vol_cube_json` is a thin parse-then-call wrapper (matching `price_portfolio` / `price_portfolio_json`)
+   — and reserve the SoA output. The bench now calls the native method: **~11µs.**
+
+**Result: at parity with QuantLib.** Native surface reprice **~10.8µs (flat) / ~11.3µs (SABR) vs QuantLib's
+~10.1µs** — and ours *builds the full 12-array Greeks SoA* (price + delta/vega/gamma + metadata for 37 points)
+that QuantLib's loop doesn't even store, so on equal work we are at least even. The pricing kernel is
+QuantLib-exact (the oracle proves it to 1e-12); the batched-reprice throughput now matches it too. The whole
+arc: **574µs → 11µs (~50×)**. Lessons re-learned: benchmark against an independent reference, not just your
+own past self — and give every op a native entry point, never route a performance test through a serialization
+layer. (The JSON verb still exists for the web/Excel seam; it now costs ~14µs of parse on top of the ~11µs
+compute — fine for a web request, and off the hot path for native/bench callers.)
 
 The next surface is the **batched vol cube across many curves** and the future **Monte-Carlo** path, where the
 same ideas map directly:

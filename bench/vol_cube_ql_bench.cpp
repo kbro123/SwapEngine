@@ -69,6 +69,32 @@ std::string cube_json() {
   return s;
 }
 
+// The SAME 37-point surface as a NATIVE VolCubeSpec (no JSON) — what the perf bench actually prices, so we
+// compare our compute to QuantLib's compute, not our JSON marshalling to QuantLib's compute.
+api::VolCubeSpec make_spec() {
+  api::VolCubeSpec s;
+  s.value_date = "2026-07-08";
+  s.index = "USD-SOFR";
+  s.currency = "USD";
+  s.curve = 0;
+  api::VolCubeCell smile;
+  smile.expiry = "1Y";
+  smile.tenor = "5Y";
+  smile.normal_vol = kVol;
+  for (int bp = -150; bp <= 150; bp += 15) smile.moneyness_bp.push_back(bp);
+  s.cells.push_back(std::move(smile));
+  for (const char* e : kExp)
+    for (const char* t : kTen) {
+      api::VolCubeCell c;
+      c.expiry = e;
+      c.tenor = t;
+      c.normal_vol = kVol;
+      c.atm = true;
+      s.cells.push_back(std::move(c));
+    }
+  return s;
+}
+
 api::BundleSession calibrated_session() {
   api::BundleSession sess(api::bundle_from_json(boost::json::parse(bundle_json())));
   api::RegSpec reg;
@@ -134,12 +160,13 @@ std::vector<QLCell> ql_cells() {
 
 }  // namespace
 
-// Ours: the whole surface off one batched curve sample + SoA reprice (includes the JSON parse — conservative).
+// Ours: the whole surface off one batched curve sample + SoA reprice, via the NATIVE entry point (no JSON) —
+// the fair native-vs-native comparison against QuantLib's native loop.
 static void BM_VolSurface_Ours(benchmark::State& state) {
   const api::BundleSession sess = calibrated_session();
-  const std::string cube = cube_json();
+  const api::VolCubeSpec spec = make_spec();
   for (auto _ : state) {
-    api::VolCube r = sess.price_vol_cube_json(cube);
+    api::VolCube r = sess.price_vol_cube(spec);
     benchmark::DoNotOptimize(r.price.data());
   }
 }

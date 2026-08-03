@@ -117,6 +117,30 @@ struct VolCube {
   int n_points = 0;
 };
 
+// Native input for the vol cube (the C++ analogue of the JSON `vol_cube` document) — so callers and benchmarks
+// build a surface as typed structs, no JSON in the hot path. sabr wins over normal_vol when has_sabr; strikes
+// combine absolute `strikes` + `moneyness_bp` offsets from the forward + `atm`; `payer` is honoured only when
+// `payer_set`, else the OTM convention (payer above the forward) is used.
+struct VolCubeCell {
+  std::string expiry;
+  std::string tenor;
+  bool has_sabr = false;
+  double sabr_alpha = 0.0, sabr_rho = 0.0, sabr_nu = 0.0;
+  double normal_vol = 0.0;
+  bool payer_set = false;
+  bool payer = true;
+  std::vector<double> strikes;       // absolute strike rates
+  std::vector<double> moneyness_bp;  // strikes at forward + bp/1e4
+  bool atm = false;                  // include the ATM strike (forward)
+};
+struct VolCubeSpec {
+  std::string value_date;
+  std::string currency = "USD";
+  std::string index = "USD-SOFR";
+  int curve = 0;
+  std::vector<VolCubeCell> cells;
+};
+
 // One swaption cell's CURVE-INDEPENDENT schedule in curve time (ACT/365F): the option expiry, the underlying
 // swap start, and its annual fixed pay times + accruals. Building this walks the calendar (business-day
 // adjustment / holidays) for every pay date, which is the same for every reprice — so price_vol_cube_json
@@ -227,6 +251,9 @@ class BundleSession {
   // strike is then a pure Bachelier/SABR eval. Strikes default to OTM (payer above the forward, receiver
   // below) unless `payer` is set. Reuses the calibrated/streaming session, so a live vol surface reprices with
   // no recalibration — the options analogue of price_portfolio. Result is flat SoA + engine-stamped price_us.
+  // `price_vol_cube` is the NATIVE entry point (typed VolCubeSpec, no JSON — what benchmarks and native clients
+  // call); `price_vol_cube_json` is the thin parse-then-call wrapper for the run_json / pybind seam.
+  VolCube price_vol_cube(const VolCubeSpec& spec) const;
   VolCube price_vol_cube_json(const std::string& spec_json) const;
 
   // Express a book's risk in THIS bundle's calibration instruments: one forward-AAD pass gives the NPV and
