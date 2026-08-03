@@ -23,11 +23,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 # metric key -> (benchmark executable, QuantLib BM name, our BM name)
+# A QuantLib BM name of None marks an OURS-ONLY metric: there is no "faster than QuantLib" story (e.g. a
+# swaption reprice has no expensive QL baseline the way risk-bumping does), so it is gated on SELF-REGRESSION
+# vs its own committed baseline only — no speedup floor. Its threshold block omits min_speedup_vs_quantlib.
 METRICS = {
     "curve_build":         ("curve_build_bench", "BM_CurveBuild_QuantLib",   "BM_CurveBuild_Ours"),
     "risk_full_jacobian":  ("risk_bench",        "BM_Risk_QuantLib_Bump",    "BM_Risk_Ours_Analytic"),
     "portfolio_analytics": ("portfolio_bench",   "BM_Portfolio_QuantLib",    "BM_Portfolio_Ours"),
     "warm_recalibration":  ("warm_bench",        "BM_WarmRecal_QuantLib",    "BM_WarmRecal_Ours"),
+    "vol_cube_warm":       ("vol_cube_bench",    None,                       "BM_VolCube_Warm"),
+    "vol_cube_cold":       ("vol_cube_bench",    None,                       "BM_VolCube_Cold"),
 }
 UNIT_NS = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
 
@@ -61,9 +66,15 @@ def measure(build, min_time, reps):
     result = {}
     for key, (exe, ql_name, ours_name) in METRICS.items():
         t = run_bench(build, exe, min_time, reps)
-        if ql_name not in t or ours_name not in t:
+        if ours_name not in t:
+            raise KeyError(f"{exe}: expected {ours_name}, got {list(t)}")
+        ours = t[ours_name]
+        if ql_name is None:  # ours-only: self-regression gated, no speedup
+            result[key] = {"quantlib_ns": None, "ours_ns": round(ours), "speedup": None}
+            continue
+        if ql_name not in t:
             raise KeyError(f"{exe}: expected {ql_name} and {ours_name}, got {list(t)}")
-        ql, ours = t[ql_name], t[ours_name]
+        ql = t[ql_name]
         result[key] = {"quantlib_ns": round(ql), "ours_ns": round(ours), "speedup": round(ql / ours, 2)}
     return result
 
@@ -127,10 +138,10 @@ def main():
     warned = False
     for key_m, mv in meas.items():
         t = thr[key_m]
-        need = t["min_speedup_vs_quantlib"]
+        need = t.get("min_speedup_vs_quantlib")  # None for ours-only (self-regression gated) metrics
         max_regr = t["max_self_regression"]
         base_ours = committed.get(key_m, {}).get("ours_ns")
-        speed_ok = mv["speedup"] >= need
+        speed_ok = (mv["speedup"] is None) or (need is None) or (mv["speedup"] >= need)
         regr = (mv["ours_ns"] / base_ours) if base_ours else float("nan")
         gross_regr = base_ours is not None and regr > GROSS
         row_ok = speed_ok and not gross_regr
@@ -144,7 +155,9 @@ def main():
             warned = True
         else:
             flag = "PASS"
-        print(f"  {key_m:<22}{mv['speedup']:>8.2f}x{need:>7.1f}x{mv['ours_ns']:>13,}"
+        sp = "     —  " if mv["speedup"] is None else f"{mv['speedup']:>8.2f}x"
+        nd = "     — " if need is None else f"{need:>7.1f}x"
+        print(f"  {key_m:<22}{sp}{nd}{mv['ours_ns']:>13,}"
               f"{(base_ours or 0):>13,}{regr:>6.2f}x  {flag}")
     if warned:
         print(f"  (warn: ours_ns above baseline*max_self_regression -- likely machine load; "
