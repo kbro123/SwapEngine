@@ -1,0 +1,136 @@
+# OPTIMIZATION.md — how the swap engine got fast (and the playbook for doing it again)
+
+The clean record of the SwapEngine calibration/streaming optimization journey: the techniques, the commits,
+the results, and the repeatable **method**. Read `ARCHITECTURE.md` first for the object graph; this is the
+performance layer on top of it. When we optimize the **options** pricing path, this is the template.
+
+---
+
+## The problem
+
+Calibrate a multi-curve bundle (N curves, tens of knots) to market quotes, then **re-calibrate to a live
+drifting market every tick** at microsecond latency for streaming. Two regimes with different bottlenecks:
+
+- **Cold calibrate** — solve `x` from scratch (Levenberg–Marquardt). Cost = iterations × (residual + Jacobian).
+- **Warm stream** — re-solve as the market drifts a little each tick. Cost is dominated by *avoiding* the
+  expensive parts (curve rebuild, Jacobian factorization) that barely change tick to tick.
+
+## The measurement discipline (do this first, always)
+
+You cannot optimize what you do not measure, and a "faster" change that trips the oracle is a regression.
+
+- **Perf gate** (`tools/verify.sh` → `bench/`): four benchmarks — `curve_build`, `risk_full_jacobian`,
+  `portfolio_analytics`, `warm_recalibration` — each with a `need>=` speedup floor and a `regr` factor vs a
+  recorded baseline, gated on a **CPU fingerprint** (so baselines are comparable). Runs on every change.
+- **Engine-stamped timing** (`379ed54`): the session stamps `last_solve_us` + a streaming running average
+  *inside* the engine, around the pure compute — so we measure the kernel, not Python/marshalling overhead.
+- **A/B across the commit arc via git worktrees** (`tools/…` bench driver): run one fixed driver over a
+  range of commits in parallel worktrees to pin *which commit* moved tick-time.
+- **Correctness is the gate**: every perf change is proven against the QuantLib oracle in a *separate* test
+  binary. `-fno-math-errno`/`noalias` etc. are only taken where they're oracle-safe.
+
+Rule of thumb learned the hard way: **the benchmarks are load-sensitive** — re-run on a quiet machine before
+trusting a `regr` reading; concurrent builds/agents inflate it by 10–20%.
+
+---
+
+## The techniques (grouped by the idea behind them)
+
+### 1. Don't recompute what's constant — the **W-cache** (the single biggest win)
+For a **linear-map** curve, the log-discount is an affine function of the knot forwards: `DF = exp(−W·x)`,
+where `W` is a constant weight matrix. Precompute `W` once; then every calibration iteration and every
+streaming tick is a cheap `W·x` + `exp`, with an **analytic Jacobian** that falls straight out — no curve
+rebuild, no autodiff sweep. This is the "compiled" fast path and the reason streaming is µs.
+- `integral_weight_matrix` / `bspline_collocation` build `W`.
+- **Generic any-region W-cache** (`f225b8e`): extended from the shipped Flat+Hermite to *any* linear region
+  scheme (Linear/NaturalCubic/Hermite/BSpline/Tension, `bb6f64b`) — only the value-dependent MonotoneCubic
+  falls off it.
+- **Memoize DF, dedup the Jacobian gather, reuse scratch** (`c19e8ec`); **fused fast path for the plain OIS
+  coupon** (`cda378b`).
+
+### 2. Use the right derivative tool — **analytic AAD, never bumping**
+The engine is templated on `Scalar`, so the *same* kernel prices with `double` and yields the exact Jacobian
+`J = dq/dx` with `Scalar = ad::Dual` (Eigen `AutoDiffScalar`) in **one** differentiated pass. Finite-difference
+bumping (O(n_knots) re-prices) is never used for calibration or risk.
+- **Two-tier residual engine** (`residual_engine<Problem>` trait): compile-time pick between the compiled
+  W-cache path (linear) and the AAD tier (non-linear / regularized).
+- **Analytic risk operator** `M = (JᵀJ + RᵀR)⁻¹Jᵀ` and analytic `cross_jacobian`/`transform_matrix`
+  (`6b3e073`): risk ladders and cross-bundle transforms with **no bumping** — one AAD pass + linear algebra.
+
+### 3. Streaming — don't redo per-tick work that barely changed
+- **Frozen-Newton streaming** (`e68aa13`, `7eaf904`): re-solve each tick with a *frozen* Jacobian/factorization
+  and Newton steps, instead of a full recalibrate. Banded (soft-least-squares) and mixed FX/MtM bundles
+  stream this way. A `start_streaming` **step-tolerance knob** (`453aeed`) trades accuracy for speed.
+- **Speculative background Jacobian** (`497d105`): recompute the Jacobian on a background thread so the
+  refresh-tick latency spike is hidden from the hot path.
+- **Reuse curve objects across ticks** (`e3afebf`): the topology is fixed, so `BundleCurveSet` holds the
+  `double` + `Dual` handles once and overwrites knot forwards **in place** (`CurveHandle::set_forwards`) —
+  zero per-tick handle/curve allocation.
+- **Vectorized discount cache** for the FX/MtM streaming block (`72e38ce`) — **~3× tick**.
+- **Fold the smoothness regulariser into the streaming operator** (`b786868`).
+
+### 4. Bring the exotics onto the fast path (don't let one trade drop the book to AAD)
+- **Hybrid residual engine** (`dc9b64a`): cacheable rows on the W-cache **plus** a **width-reduced AAD block**
+  for only the non-cacheable rows. The AAD block seeds only the knots those instruments *touch* (dynamic-width
+  `AutoDiffScalar` shrinks every gradient).
+- **W-cache the FX forward** (`ba07fbf`, affine residual) and the **MtM xccy basis** (`44dc0e1`, par funding
+  leg → ParSpread quotient), and **Portfolios of W-cacheable components** (`2955a57`). Result: a standard
+  FX+MtM cross-currency book is now *fully* W-cacheable — the AAD block is empty, **~13µs/tick vs ~130µs**.
+
+### 5. Low-level: allocation-free, vectorized, parallel
+- **Allocation-free reprice/streaming loop** (`2596233`, proven by `alloc_free_test` compiling Eigen with
+  `EIGEN_RUNTIME_NO_MALLOC`) — pre-sized workspace, zero heap in the loop.
+- **Hand-written auto-vectorized gather loops** in the compiled kernel (`0e0572b`); **SoA batched portfolio
+  analytics** (`simd::packet_size`, `compiled_book.hpp`).
+- **AVX2 (256-bit) default over AVX-512** on Intel + rebaseline (`2981c6d`) — AVX-512 down-clocking lost.
+- **`-fno-math-errno` + `noalias` the DF-refresh GEMV** (`ba2bf1d`), oracle-safe.
+- **Persistent thread pool** for parallel calibrate + reprice (`20aff72`); **lock-free async pricer/calibrator
+  split** for the live feed (`665f936`).
+
+---
+
+## Results (perf gate, current baseline)
+
+| benchmark | speedup vs naive | notable |
+|---|---|---|
+| `curve_build` | ~30× | cold calibrate |
+| `risk_full_jacobian` | ~36× | analytic vs bump |
+| `portfolio_analytics` | ~279× | SoA + SIMD batched reprice |
+| `warm_recalibration` | ~60× | frozen-Newton streaming |
+
+FX + MtM cross-currency streaming: **~130µs → ~13µs per tick** once fully W-cacheable.
+
+---
+
+## The playbook (the repeatable method)
+
+1. **Measure first** — engine-stamp the real cost; find the dominant term (build vs Jacobian vs solve vs
+   reprice). Profile, don't guess. A/B across commits if a regression appeared.
+2. **Classify the cost, then apply the matching tool:**
+   - *Recomputing something constant?* → **precompute/compile it** (W-cache, memoize, fuse).
+   - *Bumping for derivatives?* → **analytic AAD** (templated Scalar) or the **implicit-function theorem**
+     for solver sensitivities (don't differentiate the solver).
+   - *Re-factorizing every tick?* → **freeze** (frozen-Newton) + refresh in the background.
+   - *Allocating / not vectorizing in the loop?* → **alloc-free workspace + SoA + SIMD**, reuse objects.
+   - *One exotic dropping the whole book off the fast path?* → **hybrid**: keep the bulk compiled, isolate the
+     exotic in a width-reduced block.
+3. **Gate it** — prove correctness against the oracle, then lock the speedup with a perf-gate baseline so it
+   can't silently regress.
+
+---
+
+## Applying this to the OPTIONS pricing path (next)
+
+The analytic layer (Bachelier/SABR/swaption/CMS) is already cheap per-call; the wins there are **avoiding
+redundant calibration** (a smile/grid should calibrate the curve *once* and reuse the session, not per
+strike/cell) and **batching** a whole vol cube through one compiled sample. The big surface is the future
+**Monte-Carlo** path, where the same ideas map directly:
+- **Analytic AAD → reverse-mode AAD tape** for MC Greeks (many inputs → one price, ≤4× one price): the
+  templated-Scalar discipline is *identical*, the mode flips from forward to adjoint.
+- **W-cache/precompute → path pre-computation**: Sobol + Brownian-bridge factors, model `evolve`
+  coefficients, and the discount/numeraire curve are constant across paths — compute once.
+- **Frozen-Newton/refresh → freeze the LSM exercise boundary** (envelope theorem) for first-order Greeks.
+- **Alloc-free + SoA + SIMD + thread pool → the path loop verbatim** (per-path record→backprop→wipe tape,
+  thread-local buffers on the existing `ThreadPool`, SoA path batching, checkpointing at observation dates).
+- **Perf gate → add options benchmarks** (a swaption reprice, a vol-cube build, an MC price+Greeks) with
+  baselines, same discipline.

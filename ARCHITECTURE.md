@@ -175,3 +175,5 @@ Lives in `tests/`, never in `include/`: `spread_reference.hpp` (`swaps::testing:
 `SpreadCalibrationProblem` — the fixed-base spread path, used only by `spread_test.cpp`; production spreads
 calibrate jointly via `SpreadHandle`), and the `reference_*.hpp` QuantLib market builders. See
 `tests/ORACLE_TESTS.md` for the oracle-test policy.
+
+> **Performance:** see [`OPTIMIZATION.md`](OPTIMIZATION.md) for how the calibration/streaming path was made fast (the W-cache, hybrid AAD, frozen-Newton streaming, alloc-free/SIMD hot path) and the repeatable optimization playbook.
