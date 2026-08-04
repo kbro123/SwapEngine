@@ -60,6 +60,31 @@ TEST(SabrCalib, FitsNonSabrStripWithinTolerance) {
   EXPECT_LT(r.rms, 5e-4);  // within ~5bp rms of an imperfect market strip
 }
 
+TEST(VolRisk, VannaVolgaMatchFiniteDiff) {
+  const double F = 0.032, K = 0.030, T = 2.0, A = 4.3, vol = 0.0090, h = 1e-7;
+  // vanna = d(vega)/dF
+  const double vanna_fd = (v::bachelier_vega<double>(F + h, K, vol, T, A) -
+                           v::bachelier_vega<double>(F - h, K, vol, T, A)) / (2 * h);
+  EXPECT_NEAR(v::bachelier_vanna<double>(F, K, vol, T, A), vanna_fd, 1e-4 * std::abs(vanna_fd) + 1e-6);
+  // volga = d(vega)/dσ
+  const double volga_fd = (v::bachelier_vega<double>(F, K, vol + h, T, A) -
+                           v::bachelier_vega<double>(F, K, vol - h, T, A)) / (2 * h);
+  EXPECT_NEAR(v::bachelier_volga<double>(F, K, vol, T, A), volga_fd, 1e-4 * std::abs(volga_fd) + 1e-6);
+  // vanna/volga vanish at zero vol (pure intrinsic).
+  EXPECT_EQ(v::bachelier_vanna<double>(F, K, 0.0, T, A), 0.0);
+  EXPECT_EQ(v::bachelier_volga<double>(F, K, 0.0, T, A), 0.0);
+}
+
+TEST(VolRisk, SabrGradientMatchesFiniteDiff) {
+  const double F = 0.032, K = 0.028, T = 3.0, h = 1e-7;
+  const v::SabrParams p{0.0090, -0.30, 0.45};
+  const v::SabrVolGrad g = v::sabr_vol_gradient(F, K, T, p);
+  const auto vol = [&](v::SabrParams q) { return v::sabr_normal_vol(F, K, T, q); };
+  EXPECT_NEAR(g.d_alpha, (vol({p.alpha + h, p.rho, p.nu}) - vol({p.alpha - h, p.rho, p.nu})) / (2 * h), 1e-4);
+  EXPECT_NEAR(g.d_rho, (vol({p.alpha, p.rho + h, p.nu}) - vol({p.alpha, p.rho - h, p.nu})) / (2 * h), 1e-6);
+  EXPECT_NEAR(g.d_nu, (vol({p.alpha, p.rho, p.nu + h}) - vol({p.alpha, p.rho, p.nu - h})) / (2 * h), 1e-6);
+}
+
 TEST(SabrCalib, ArbitrageGate) {
   const double F = 0.030, T = 1.0;
   // A benign SABR smile is arbitrage-free — its butterfly stays >= -tol across the quoted range (only FD noise

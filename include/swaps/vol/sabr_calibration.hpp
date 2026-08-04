@@ -101,6 +101,26 @@ inline SabrCalibResult sabr_calibrate(double forward, double expiry, const std::
   return out;
 }
 
+// The SABR smile's sensitivity to its own parameters at one strike: d(vol)/d(alpha, rho, nu) — the level,
+// SKEW and vol-of-vol/CURVATURE risk of a fitted smile — in one analytic AAD pass (no bumping). Multiply each
+// by the Bachelier vega for the price sensitivity to that parameter (the natural risk representation for a
+// SABR-marked book: hedge/attribute by alpha/rho/nu rather than by strike-by-strike vega).
+struct SabrVolGrad {
+  double d_alpha = 0.0;  // d(vol)/d(alpha)  — level
+  double d_rho = 0.0;    // d(vol)/d(rho)    — skew
+  double d_nu = 0.0;     // d(vol)/d(nu)     — curvature (vol-of-vol)
+};
+inline SabrVolGrad sabr_vol_gradient(double forward, double strike, double expiry, const SabrParams& p) {
+  ad::Dual a, r, n, F, K;
+  a.value() = p.alpha; a.derivatives() = Eigen::VectorXd::Unit(3, 0);
+  r.value() = p.rho;   r.derivatives() = Eigen::VectorXd::Unit(3, 1);
+  n.value() = p.nu;    n.derivatives() = Eigen::VectorXd::Unit(3, 2);
+  F.value() = forward; F.derivatives() = Eigen::VectorXd::Zero(3);
+  K.value() = strike;  K.derivatives() = Eigen::VectorXd::Zero(3);
+  const ad::Dual v = sabr_normal_vol<ad::Dual>(F, K, expiry, a, r, n);
+  return {v.derivatives()[0], v.derivatives()[1], v.derivatives()[2]};
+}
+
 // Minimum discrete second derivative of a call-price ladder on an EVEN strike grid of step dk. The risk-neutral
 // density is d^2C/dK^2, so this is the density proxy; < 0 anywhere is a butterfly arbitrage. This is the
 // general detector — it takes any call ladder, so it guards a FITTED/interpolated smile (Phase A §1.2), not

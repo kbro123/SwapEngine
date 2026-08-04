@@ -60,6 +60,26 @@ inline S bachelier_delta(const S& fwd, const S& strike, const S& vol, double exp
   return annuity * sgn * normal_cdf(d);
 }
 
+// Vanna = d(vega)/dF = d2V/(dF dσ). Symmetric in payer/receiver: −A·d·φ(d)/σ.
+template <class S>
+inline S bachelier_vanna(const S& fwd, const S& strike, const S& vol, double expiry, const S& annuity) {
+  using std::sqrt;
+  const S stddev = vol * S(sqrt(expiry));
+  if (stddev <= S(0.0)) return S(0.0);
+  const S d = (fwd - strike) / stddev;
+  return -annuity * d * normal_pdf(d) / vol;
+}
+
+// Volga (vomma) = d(vega)/dσ = d2V/dσ2. Symmetric: A·√T·d²·φ(d)/σ.
+template <class S>
+inline S bachelier_volga(const S& fwd, const S& strike, const S& vol, double expiry, const S& annuity) {
+  using std::sqrt;
+  const S stddev = vol * S(sqrt(expiry));
+  if (stddev <= S(0.0)) return S(0.0);
+  const S d = (fwd - strike) / stddev;
+  return annuity * S(sqrt(expiry)) * d * d * normal_pdf(d) / vol;
+}
+
 // d2V/dF2 (gamma). Symmetric in payer/receiver: A·φ(d)/(σ√T).
 template <class S>
 inline S bachelier_gamma(const S& fwd, const S& strike, const S& vol, double expiry, const S& annuity) {
