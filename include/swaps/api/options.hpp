@@ -9,4 +9,9 @@ namespace swaps::api {
 // payer?, normal_vol?|sabr?}]}} -> {"trades":[{forward,annuity,price,normal_vol,atm_normal_vol,vega,delta,...}]}.
 std::string swaption_json(const std::string& request);
 
+// Stateless SABR strip calibration (no bundle). request = {"sabr_calibrate": {forward, expiry, strikes:[...],
+// market_vols:[...], guess?:{alpha,rho,nu}, arb_lo?, arb_hi?}} -> {alpha, rho, nu, rms, iterations, converged,
+// arbitrage_free}. Units are the model's decimals (forward/strikes absolute rates, vols normal/absolute).
+std::string sabr_calibrate_json(const std::string& request);
+
 }  // namespace swaps::api

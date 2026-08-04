@@ -779,6 +779,9 @@ std::string run_json(const std::string& request) {
     // Stateless SWAPTION verb: price European swaptions off a calibrated curve (Bachelier / SABR).
     if (o.contains("swaption")) return swaption_json(request);
 
+    // Stateless SABR strip calibration (no bundle): fit (alpha,rho,nu) to a market vol strip.
+    if (o.contains("sabr_calibrate")) return sabr_calibrate_json(request);
+
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
     cal::BundleProblem prob = bundle_from_json(o.at("bundle"));

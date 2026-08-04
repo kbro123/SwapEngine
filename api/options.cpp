@@ -20,6 +20,7 @@
 #include "swaps/build/schedule.hpp"
 #include "swaps/conventions_data.hpp"
 #include "swaps/vol/bachelier.hpp"
+#include "swaps/vol/sabr_calibration.hpp"
 #include "swaps/vol/swaption.hpp"
 
 namespace swaps::api {
@@ -135,6 +136,44 @@ std::string swaption_json(const std::string& request) {
   }
   json::object out;
   out["trades"] = std::move(out_trades);
+  return json::serialize(json::value(std::move(out)));
+}
+
+// Stateless SABR strip calibration verb (see options.hpp). No bundle: fit (alpha,rho,nu) to (strikes,
+// market_vols) at (forward, expiry) via vol/sabr_calibration.hpp, and report the arbitrage-free status.
+std::string sabr_calibrate_json(const std::string& request) {
+  const json::value req = json::parse(request);
+  const json::object& top = req.as_object();
+  const json::object& o = top.contains("sabr_calibrate") ? top.at("sabr_calibrate").as_object() : top;
+
+  const double forward = jd(o, "forward", 0.0);
+  const double expiry = jd(o, "expiry", 0.0);
+  if (!(expiry > 0.0)) throw std::invalid_argument("sabr_calibrate: 'expiry' must be positive");
+  std::vector<double> strikes, mvols;
+  if (o.contains("strikes") && o.at("strikes").is_array())
+    for (const auto& k : o.at("strikes").as_array()) strikes.push_back(k.to_number<double>());
+  if (o.contains("market_vols") && o.at("market_vols").is_array())
+    for (const auto& v : o.at("market_vols").as_array()) mvols.push_back(v.to_number<double>());
+  if (strikes.empty() || strikes.size() != mvols.size())
+    throw std::invalid_argument("sabr_calibrate: 'strikes' and 'market_vols' must be non-empty, equal length");
+
+  v::SabrParams guess;
+  if (o.contains("guess") && o.at("guess").is_object()) {
+    const auto& g = o.at("guess").as_object();
+    guess = v::SabrParams{jd(g, "alpha", 0.0), jd(g, "rho", 0.0), jd(g, "nu", 0.0)};
+  }
+  const v::SabrCalibResult r = v::sabr_calibrate(forward, expiry, strikes, mvols, guess);
+  const double lo = jd(o, "arb_lo", strikes.front());
+  const double hi = jd(o, "arb_hi", strikes.back());
+
+  json::object out;
+  out["alpha"] = r.params.alpha;
+  out["rho"] = r.params.rho;
+  out["nu"] = r.params.nu;
+  out["rms"] = r.rms;
+  out["iterations"] = r.iterations;
+  out["converged"] = r.converged;
+  out["arbitrage_free"] = v::sabr_arbitrage_free(forward, expiry, r.params, lo, hi);
   return json::serialize(json::value(std::move(out)));
 }
 
