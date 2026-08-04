@@ -169,6 +169,14 @@ own past self — and give every op a native entry point, never route a performa
 layer. (The JSON verb still exists for the web/Excel seam; it now costs ~14µs of parse on top of the ~11µs
 compute — fine for a web request, and off the hot path for native/bench callers.)
 
+**Desk-scale portfolio** (`bench/swaption_portfolio_bench.cpp`, ours-vs-QuantLib scaling probe): a random book
+of thousands of swaptions across the standard grid prices at **~2M swaptions/sec, at parity-to-slightly-ahead
+of QuantLib's lean per-instrument loop** (~1.1–1.17×, 2k→32k) — *and* ours builds the full Greeks SoA for every
+trade that QuantLib's scalar-accumulate loop doesn't. The per-cell forward/annuity cache dedups by node (N
+positions across ~81 grid nodes → 81 forward/annuity builds), so the edge is largest on small books and
+converges as the N Bachelier evals + SoA writes dominate. Confirms desk-scale robustness; the >QuantLib win
+here is bounded by the same analytic-math ceiling as the surface reprice.
+
 The next surface is the **batched vol cube across many curves** and the future **Monte-Carlo** path, where the
 same ideas map directly:
 - **Analytic AAD → reverse-mode AAD tape** for MC Greeks (many inputs → one price, ≤4× one price): the

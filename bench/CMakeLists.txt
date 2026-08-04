@@ -37,6 +37,12 @@ if(TARGET quantlib_oracle)
   target_compile_definitions(vol_cube_ql_bench PRIVATE
     SOFR_BUNDLE_JSON="${CMAKE_SOURCE_DIR}/bench/fixtures/sofr_bundle.json")
 
+  # Desk-scale swaption portfolio (thousands of random swaptions), ours vs QuantLib, swept over book size.
+  add_executable(swaption_portfolio_bench swaption_portfolio_bench.cpp)
+  target_link_libraries(swaption_portfolio_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark_main)
+  target_compile_definitions(swaption_portfolio_bench PRIVATE
+    SOFR_BUNDLE_JSON="${CMAKE_SOURCE_DIR}/bench/fixtures/sofr_bundle.json")
+
   add_executable(calibration_bench calibration_bench.cpp)
   target_link_libraries(calibration_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(calibration_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
