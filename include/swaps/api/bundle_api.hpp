@@ -388,10 +388,14 @@ class BundleSession {
 // (a SABR-slider tick) mutate `cells()` in place and call `reprice()` — no schedule rebuild, no resample.
 class VolSurface {
  public:
-  VolSurface(const BundleSession& sess, const VolCubeSpec& spec);
-  const VolCube& reprice() const;              // sample iff x moved, then price into the reused VolCube
+  explicit VolSurface(const VolCubeSpec& spec);   // resolve schedules + pre-index + pre-size (curve-independent)
+  const VolCube& reprice(const BundleSession& sess) const;  // sample iff x moved, then price into reused VolCube
+  // Overwrite every cell's SABR (alpha per cell, rho/nu shared) — the streaming update for a live surface (a
+  // level/skew slider) without touching the schedules. alpha.size() must equal n_cells.
+  void set_sabr(const std::vector<double>& alpha, double rho, double nu);
   std::vector<VolCubeCell>& cells() { return defs_; }        // mutate vols/strikes in place, then reprice()
   const std::vector<VolCubeCell>& cells() const { return defs_; }
+  int n_cells() const { return static_cast<int>(defs_.size()); }
   int n_points() const { return n_points_; }
 
  private:
@@ -402,7 +406,6 @@ class VolSurface {
     std::vector<std::size_t> pay_idx;
     int point_offset = 0;              // first output-point index for this cell
   };
-  const BundleSession& sess_;
   int curve_ = 0;
   int n_points_ = 0;
   std::vector<Cell> cells_;                   // resolved schedules (built once)
@@ -412,6 +415,10 @@ class VolSurface {
   mutable Eigen::VectorXd fa_x_;              // the x fwd_/annuity_ were computed at
   mutable VolCube out_;                       // pre-sized, reused across reprices
 };
+
+// Parse a `vol_cube` JSON document into the native VolCubeSpec (used by the JSON verb and to build a VolSurface
+// from a spec string in the binding). Definition in api/options.cpp.
+VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json);
 
 // One-shot stateless JSON dispatcher for a web call. Request:
 //   { "bundle": {...},                         (required) the BundleProblem object graph

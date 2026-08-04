@@ -177,9 +177,9 @@ BENCHMARK(BM_VolSurface_Ours);
 // streaming hot path and the fair native-vs-native surface reprice; it should beat QuantLib's native loop.
 static void BM_VolSurface_Ours_Compiled(benchmark::State& state) {
   const api::BundleSession sess = calibrated_session();
-  const api::VolSurface surf(sess, make_spec());
+  const api::VolSurface surf(make_spec());
   for (auto _ : state) {
-    const api::VolCube& r = surf.reprice();
+    const api::VolCube& r = surf.reprice(sess);
     benchmark::DoNotOptimize(r.price.data());
   }
 }

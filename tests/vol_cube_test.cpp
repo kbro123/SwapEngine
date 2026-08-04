@@ -113,8 +113,8 @@ TEST(VolCube, VolSurfaceMatchesPriceVolCube) {
     spec.cells.push_back(c);
   }
   const api::VolCube ref = sess.price_vol_cube(spec);
-  api::VolSurface surf(sess, spec);
-  const api::VolCube& got = surf.reprice();
+  api::VolSurface surf(spec);
+  const api::VolCube& got = surf.reprice(sess);
   ASSERT_EQ(got.n_points, ref.n_points);
   ASSERT_EQ(got.n_cells, ref.n_cells);
   for (int i = 0; i < ref.n_points; ++i) {
@@ -125,7 +125,7 @@ TEST(VolCube, VolSurfaceMatchesPriceVolCube) {
     EXPECT_NEAR(got.delta[i], ref.delta[i], 1e-14) << "pt " << i;
   }
   // A second reprice (warm, x unchanged) is bit-identical.
-  const api::VolCube& got2 = surf.reprice();
+  const api::VolCube& got2 = surf.reprice(sess);
   for (int i = 0; i < ref.n_points; ++i) EXPECT_EQ(got2.price[i], got.price[i]);
 }
 

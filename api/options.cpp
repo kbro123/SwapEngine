@@ -326,8 +326,7 @@ VolCube BundleSession::price_vol_cube_json(const std::string& spec_json) const {
 }
 
 // ---- VolSurface: resolve schedules once, pre-index into one sample grid, pre-size the SoA output ----------
-VolSurface::VolSurface(const BundleSession& sess, const VolCubeSpec& spec)
-    : sess_(sess), curve_(spec.curve), defs_(spec.cells) {
+VolSurface::VolSurface(const VolCubeSpec& spec) : curve_(spec.curve), defs_(spec.cells) {
   const b::Date vd = b::Date::from_iso(spec.value_date);
   const b::SwapConv conv = b::swap_conv(spec.currency, 1.0, spec.index);
 
@@ -395,14 +394,25 @@ VolSurface::VolSurface(const BundleSession& sess, const VolCubeSpec& spec)
   for (std::size_t ci = 0; ci < cells_.size(); ++ci) out_.cell_expiry_years[ci] = cells_[ci].t_expiry;
 }
 
-const VolCube& VolSurface::reprice() const {
+void VolSurface::set_sabr(const std::vector<double>& alpha, double rho, double nu) {
+  if (alpha.size() != defs_.size())
+    throw std::invalid_argument("vol_surface: set_sabr alpha length must equal n_cells");
+  for (std::size_t ci = 0; ci < defs_.size(); ++ci) {
+    defs_[ci].has_sabr = true;
+    defs_[ci].sabr_alpha = alpha[ci];
+    defs_[ci].sabr_rho = rho;
+    defs_[ci].sabr_nu = nu;
+  }
+}
+
+const VolCube& VolSurface::reprice(const BundleSession& sess) const {
   const auto clock0 = std::chrono::steady_clock::now();
 
   // Curve-dependent part: refresh per-cell forward/annuity only when x moved (a vol-only tick samples nothing).
-  const Eigen::VectorXd& xnow = sess_.x();
+  const Eigen::VectorXd& xnow = sess.x();
   const bool fa_valid = fa_x_.size() == xnow.size() && xnow.size() > 0 && (fa_x_.array() == xnow.array()).all();
   if (!fa_valid) {
-    const std::vector<CurveSample> cs = sess_.sample(union_times_);
+    const std::vector<CurveSample> cs = sess.sample(union_times_);
     if (curve_ < 0 || curve_ >= static_cast<int>(cs.size()))
       throw std::invalid_argument("vol_surface: curve index out of range");
     const std::vector<double>& disc = cs[static_cast<std::size_t>(curve_)].discount;
