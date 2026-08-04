@@ -325,4 +325,130 @@ VolCube BundleSession::price_vol_cube_json(const std::string& spec_json) const {
   return price_vol_cube(vol_cube_spec_from_json(spec_json));
 }
 
+// ---- VolSurface: resolve schedules once, pre-index into one sample grid, pre-size the SoA output ----------
+VolSurface::VolSurface(const BundleSession& sess, const VolCubeSpec& spec)
+    : sess_(sess), curve_(spec.curve), defs_(spec.cells) {
+  const b::Date vd = b::Date::from_iso(spec.value_date);
+  const b::SwapConv conv = b::swap_conv(spec.currency, 1.0, spec.index);
+
+  // (1) resolve each cell's schedule (the calendar walk — ONCE) and collect the union of all schedule times.
+  std::vector<double> times;
+  std::vector<std::pair<double, std::vector<double>>> raw;  // (t_start, pay_times) per cell, indexed below
+  cells_.reserve(spec.cells.size());
+  raw.reserve(spec.cells.size());
+  for (const VolCubeCell& c : spec.cells) {
+    if (c.expiry.empty() || c.tenor.empty())
+      throw std::invalid_argument("vol_surface: each cell needs a non-empty 'expiry' and 'tenor'");
+    const b::Date expiry_date = b::resolve(c.expiry, vd);
+    const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
+    const double tenor_years = conventions::period_years(c.tenor);
+    if (!(tenor_years > 0.0))
+      throw std::invalid_argument("vol_surface: unrecognized or non-positive tenor '" + c.tenor + "'");
+    const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
+    Cell cell;
+    cell.t_expiry = b::curve_time(vd, expiry_date);
+    const double t_start = b::curve_time(vd, swap_start);
+    std::vector<double> pay_time;
+    b::Date prev = swap_start;
+    for (int i = 1; i <= n; ++i) {
+      const b::Date pay = b::adjust(conv.calendar, swap_start.plus_months(12 * i), conv.bdc);
+      cell.tau.push_back(b::year_frac(conv.fixed_dc, prev, pay));
+      pay_time.push_back(b::curve_time(vd, pay));
+      prev = pay;
+    }
+    times.push_back(t_start);
+    times.insert(times.end(), pay_time.begin(), pay_time.end());
+    cells_.push_back(std::move(cell));
+    raw.emplace_back(t_start, std::move(pay_time));
+  }
+
+  // (2) the one sample grid, and (3) pre-index each cell's start/pay into it + assign output offsets + pre-size.
+  std::sort(times.begin(), times.end());
+  times.erase(std::unique(times.begin(), times.end()), times.end());
+  union_times_ = std::move(times);
+  const auto idx_of = [&](double t) {
+    return static_cast<std::size_t>(std::lower_bound(union_times_.begin(), union_times_.end(), t) -
+                                    union_times_.begin());
+  };
+  int pt = 0;
+  for (std::size_t ci = 0; ci < cells_.size(); ++ci) {
+    cells_[ci].start_idx = idx_of(raw[ci].first);
+    cells_[ci].pay_idx.reserve(raw[ci].second.size());
+    for (double t : raw[ci].second) cells_[ci].pay_idx.push_back(idx_of(t));
+    cells_[ci].point_offset = pt;
+    const VolCubeCell& d = defs_[ci];
+    std::size_t k = d.strikes.size() + d.moneyness_bp.size() + (d.atm ? 1 : 0);
+    if (k == 0) k = 1;  // default ATM
+    pt += static_cast<int>(k);
+  }
+  n_points_ = pt;
+  out_.n_cells = static_cast<int>(cells_.size());
+  out_.n_points = n_points_;
+  out_.cell_forward.resize(cells_.size());
+  out_.cell_annuity.resize(cells_.size());
+  out_.cell_expiry_years.resize(cells_.size());
+  for (std::vector<double>* col : {&out_.point_cell, &out_.strike, &out_.moneyness_bp, &out_.normal_vol,
+                                   &out_.price, &out_.vega, &out_.delta, &out_.gamma, &out_.payer})
+    col->resize(n_points_);
+  fwd_.assign(cells_.size(), 0.0);
+  annuity_.assign(cells_.size(), 0.0);
+  for (std::size_t ci = 0; ci < cells_.size(); ++ci) out_.cell_expiry_years[ci] = cells_[ci].t_expiry;
+}
+
+const VolCube& VolSurface::reprice() const {
+  const auto clock0 = std::chrono::steady_clock::now();
+
+  // Curve-dependent part: refresh per-cell forward/annuity only when x moved (a vol-only tick samples nothing).
+  const Eigen::VectorXd& xnow = sess_.x();
+  const bool fa_valid = fa_x_.size() == xnow.size() && xnow.size() > 0 && (fa_x_.array() == xnow.array()).all();
+  if (!fa_valid) {
+    const std::vector<CurveSample> cs = sess_.sample(union_times_);
+    if (curve_ < 0 || curve_ >= static_cast<int>(cs.size()))
+      throw std::invalid_argument("vol_surface: curve index out of range");
+    const std::vector<double>& disc = cs[static_cast<std::size_t>(curve_)].discount;
+    std::vector<double> df_pay;
+    for (std::size_t ci = 0; ci < cells_.size(); ++ci) {
+      const Cell& c = cells_[ci];
+      df_pay.clear();
+      for (std::size_t j : c.pay_idx) df_pay.push_back(disc[j]);
+      const v::ForwardSwap fs = v::forward_swap(disc[c.start_idx], df_pay.back(), df_pay, c.tau);
+      fwd_[ci] = fs.rate;
+      annuity_[ci] = fs.annuity;
+    }
+    fa_x_ = xnow;
+  }
+
+  // Vol-dependent part: pure Bachelier/SABR into the pre-sized, index-addressed buffers (no allocation).
+  for (std::size_t ci = 0; ci < cells_.size(); ++ci) {
+    const Cell& c = cells_[ci];
+    const VolCubeCell& d = defs_[ci];
+    const double F = fwd_[ci], A = annuity_[ci], T = c.t_expiry;
+    out_.cell_forward[ci] = F;
+    out_.cell_annuity[ci] = A;
+    const v::SabrParams sp{d.sabr_alpha, d.sabr_rho, d.sabr_nu};
+    int k = c.point_offset;
+    const auto price_one = [&](double strike) {
+      const bool payer = d.payer_set ? d.payer : (strike >= F);
+      const v::Payoff cp = payer ? v::Payoff::Payer : v::Payoff::Receiver;
+      const double vol = d.has_sabr ? v::sabr_normal_vol(F, strike, T, sp) : d.normal_vol;
+      out_.point_cell[k] = static_cast<double>(ci);
+      out_.strike[k] = strike;
+      out_.moneyness_bp[k] = (strike - F) * 1e4;
+      out_.normal_vol[k] = vol;
+      out_.price[k] = v::swaption_price(F, A, strike, vol, T, cp);
+      out_.vega[k] = v::bachelier_vega<double>(F, strike, vol, T, A);
+      out_.delta[k] = v::bachelier_delta<double>(F, strike, vol, T, A, cp);
+      out_.gamma[k] = v::bachelier_gamma<double>(F, strike, vol, T, A);
+      out_.payer[k] = payer ? 1.0 : 0.0;
+      ++k;
+    };
+    bool any = false;
+    for (double s : d.strikes) { price_one(s); any = true; }
+    for (double m : d.moneyness_bp) { price_one(F + m / 1e4); any = true; }
+    if (d.atm || !any) price_one(F);
+  }
+  out_.price_us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - clock0).count();
+  return out_;
+}
+
 }  // namespace swaps::api

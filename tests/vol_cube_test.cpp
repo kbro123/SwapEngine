@@ -89,6 +89,46 @@ TEST(VolCube, AtmClosedFormAndParity) {
   EXPECT_NEAR(pk.price[0] - pk.price[1], pk.cell_annuity[0] * (pk.cell_forward[0] - pk.strike[0]), 1e-12);
 }
 
+TEST(VolCube, VolSurfaceMatchesPriceVolCube) {
+  const api::BundleSession sess = sofr_session();
+  api::VolCubeSpec spec;
+  spec.value_date = VD;
+  spec.index = "USD-SOFR";
+  {
+    api::VolCubeCell c;
+    c.expiry = "1Y"; c.tenor = "5Y"; c.has_sabr = true;
+    c.sabr_alpha = 0.009; c.sabr_rho = -0.25; c.sabr_nu = 0.45;
+    c.moneyness_bp = {-50, 0, 50};
+    spec.cells.push_back(c);
+  }
+  {
+    api::VolCubeCell c;
+    c.expiry = "5Y"; c.tenor = "10Y"; c.normal_vol = 0.0095; c.atm = true;
+    spec.cells.push_back(c);
+  }
+  {
+    api::VolCubeCell c;
+    c.expiry = "2Y"; c.tenor = "2Y"; c.normal_vol = 0.008;
+    c.strikes = {0.03, 0.035}; c.payer_set = true; c.payer = false;
+    spec.cells.push_back(c);
+  }
+  const api::VolCube ref = sess.price_vol_cube(spec);
+  api::VolSurface surf(sess, spec);
+  const api::VolCube& got = surf.reprice();
+  ASSERT_EQ(got.n_points, ref.n_points);
+  ASSERT_EQ(got.n_cells, ref.n_cells);
+  for (int i = 0; i < ref.n_points; ++i) {
+    EXPECT_NEAR(got.strike[i], ref.strike[i], 1e-14) << "pt " << i;
+    EXPECT_NEAR(got.normal_vol[i], ref.normal_vol[i], 1e-14) << "pt " << i;
+    EXPECT_NEAR(got.price[i], ref.price[i], 1e-14) << "pt " << i;
+    EXPECT_NEAR(got.vega[i], ref.vega[i], 1e-14) << "pt " << i;
+    EXPECT_NEAR(got.delta[i], ref.delta[i], 1e-14) << "pt " << i;
+  }
+  // A second reprice (warm, x unchanged) is bit-identical.
+  const api::VolCube& got2 = surf.reprice();
+  for (int i = 0; i < ref.n_points; ++i) EXPECT_EQ(got2.price[i], got.price[i]);
+}
+
 TEST(VolCube, SabrNuZeroIsFlatAndGreeksSane) {
   const api::BundleSession sess = sofr_session();
   const api::VolCube c = sess.price_vol_cube_json(

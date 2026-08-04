@@ -175,7 +175,18 @@ that QuantLib's loop doesn't even store, so on equal work we are at least even. 
 QuantLib-exact (the oracle proves it to 1e-12); the batched-reprice throughput now matches it too. The whole
 arc: **574µs → 11µs (~50×)**. Lessons re-learned: benchmark against an independent reference, not just your
 own past self — and give every op a native entry point, never route a performance test through a serialization
-layer. (The JSON verb still exists for the web/Excel seam; it now costs ~14µs of parse on top of the ~11µs
+layer.
+
+**Compiled `VolSurface` — now clearly FASTER than QuantLib.** `price_vol_cube` re-resolves the cell set from a
+fresh spec on every call (string cache-keys, output (re)sizing). The stateful `VolSurface` (`api::VolSurface`)
+resolves a FIXED cell set's schedules ONCE, pre-indexes each cell's start/pay into a single sample grid, and
+pre-sizes the flat SoA — so `reprice()` is a pure Bachelier/SABR pass writing into reused, index-addressed
+buffers (a vol-only tick samples nothing). **2.3µs vs QuantLib's 10.4µs — ~4.5× faster**, bit-identical to
+`price_vol_cube` (gated by `tests/vol_cube_test.cpp`). This is the streaming hot path (a live surface / a fixed
+swaption book repriced every tick); the SIMD strike loop (a vectorized `erf` over each cell's strikes) is a
+further lever we did NOT need to pass QuantLib. Summary across all reference points: **VolSurface 2.3µs
+(compiled) / price_vol_cube 10.7µs (per-call) vs QuantLib 10.4µs (lean) / 3231µs (idiomatic objects)** — we
+beat QuantLib's tightest loop by ~4.5× and its idiomatic path by ~1400×. (The JSON verb still exists for the web/Excel seam; it now costs ~14µs of parse on top of the ~11µs
 compute — fine for a web request, and off the hot path for native/bench callers.)
 
 **Desk-scale portfolio** (`bench/swaption_portfolio_bench.cpp`, ours-vs-QuantLib scaling probe): a random book

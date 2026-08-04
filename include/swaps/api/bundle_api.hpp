@@ -378,6 +378,41 @@ class BundleSession {
   mutable Eigen::VectorXd vol_fa_x_;  // the x for which vol_fa_cache_ is valid (empty => invalid)
 };
 
+// A COMPILED vol surface: resolve a FIXED set of swaption cells' schedules ONCE (the calendar walk), pre-index
+// them into a single sample grid, and pre-size the flat SoA output — then `reprice()` off the current curve
+// with zero per-call schedule/key/allocation work: one curve sample (only when x moved), then a pure
+// Bachelier/SABR pass writing straight into reused, index-addressed buffers. The stateful streaming analog of
+// BundleSession::price_vol_cube for a live surface / a fixed swaption book repriced every tick — this is what
+// beats QuantLib's native loop (price_vol_cube trades some of that away for a fresh spec on every call). The
+// referenced session must outlive the surface. Not thread-safe (reuses one output buffer). To move the vols
+// (a SABR-slider tick) mutate `cells()` in place and call `reprice()` — no schedule rebuild, no resample.
+class VolSurface {
+ public:
+  VolSurface(const BundleSession& sess, const VolCubeSpec& spec);
+  const VolCube& reprice() const;              // sample iff x moved, then price into the reused VolCube
+  std::vector<VolCubeCell>& cells() { return defs_; }        // mutate vols/strikes in place, then reprice()
+  const std::vector<VolCubeCell>& cells() const { return defs_; }
+  int n_points() const { return n_points_; }
+
+ private:
+  struct Cell {
+    double t_expiry = 0.0;
+    std::vector<double> tau;
+    std::size_t start_idx = 0;         // index into union_times_ / the sampled discount vector
+    std::vector<std::size_t> pay_idx;
+    int point_offset = 0;              // first output-point index for this cell
+  };
+  const BundleSession& sess_;
+  int curve_ = 0;
+  int n_points_ = 0;
+  std::vector<Cell> cells_;                   // resolved schedules (built once)
+  std::vector<VolCubeCell> defs_;             // per-cell vol model + strike specs (mutable between reprices)
+  std::vector<double> union_times_;           // the one sample grid (sorted, unique)
+  mutable std::vector<double> fwd_, annuity_; // per-cell curve-dependent, refreshed when x moves
+  mutable Eigen::VectorXd fa_x_;              // the x fwd_/annuity_ were computed at
+  mutable VolCube out_;                       // pre-sized, reused across reprices
+};
+
 // One-shot stateless JSON dispatcher for a web call. Request:
 //   { "bundle": {...},                         (required) the BundleProblem object graph
 //     "x0": [...],                             (optional) start; else a flat guess

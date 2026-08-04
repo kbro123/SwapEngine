@@ -172,6 +172,19 @@ static void BM_VolSurface_Ours(benchmark::State& state) {
 }
 BENCHMARK(BM_VolSurface_Ours);
 
+// Ours COMPILED: a stateful VolSurface — schedules resolved + pre-indexed once, output pre-sized — so reprice()
+// is a pure Bachelier/SABR pass into reused, index-addressed buffers (no per-call keys/allocation). This is the
+// streaming hot path and the fair native-vs-native surface reprice; it should beat QuantLib's native loop.
+static void BM_VolSurface_Ours_Compiled(benchmark::State& state) {
+  const api::BundleSession sess = calibrated_session();
+  const api::VolSurface surf(sess, make_spec());
+  for (auto _ : state) {
+    const api::VolCube& r = surf.reprice();
+    benchmark::DoNotOptimize(r.price.data());
+  }
+}
+BENCHMARK(BM_VolSurface_Ours_Compiled);
+
 // QuantLib: the standard analytic path — per-cell term-structure discount lookups + bachelierBlackFormula.
 static void BM_VolSurface_QuantLib(benchmark::State& state) {
   const api::BundleSession sess = calibrated_session();
