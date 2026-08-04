@@ -198,6 +198,47 @@ static void BM_VolSurface_QuantLib(benchmark::State& state) {
 }
 BENCHMARK(BM_VolSurface_QuantLib);
 
+// QuantLib the way most users actually price a swaption surface: its INSTRUMENT machinery — MakeVanillaSwap +
+// Swaption + BachelierSwaptionEngine + .NPV() per point, with the schedule build, observer graph and engine
+// dispatch that entails. This is the apples-to-apples for our swap-side wins (portfolio_analytics beats QL's
+// per-object path ~279x); it shows the object-construction overhead our batched SoA path avoids. (The lean
+// bachelierBlackFormula arm above is the other bound — QL's tightest possible analytic loop.)
+static void BM_VolSurface_QuantLib_Objects(benchmark::State& state) {
+  const api::BundleSession sess = calibrated_session();
+  const auto curve = ql_curve_from(sess);
+  const QL::Handle<QL::YieldTermStructure> h(curve);
+  const auto index = QL::ext::make_shared<QL::Euribor6M>(h);
+  const QL::Date ref(8, QL::July, 2026);
+  struct Obj {
+    QL::Date exp;
+    QL::Period ten;
+    QL::Rate strike;
+    QL::Swap::Type type;
+  };
+  std::vector<Obj> objs;
+  for (int bp = -150; bp <= 150; bp += 15)
+    objs.push_back({ref + QL::Period(1, QL::Years), QL::Period(5, QL::Years), 0.03 + bp / 1e4,
+                    bp >= 0 ? QL::Swap::Payer : QL::Swap::Receiver});
+  const int expY[] = {1, 2, 5, 10}, tenY[] = {2, 5, 10, 30};
+  for (int e : expY)
+    for (int t : tenY)
+      objs.push_back({ref + QL::Period(e, QL::Years), QL::Period(t, QL::Years), 0.03, QL::Swap::Payer});
+
+  for (auto _ : state) {
+    double sink = 0.0;
+    for (const Obj& o : objs) {
+      const QL::ext::shared_ptr<QL::VanillaSwap> swap =
+          QL::MakeVanillaSwap(o.ten, index, o.strike).withEffectiveDate(o.exp).withType(o.type);
+      const auto exercise = QL::ext::make_shared<QL::EuropeanExercise>(o.exp);
+      QL::Swaption swaption(swap, exercise);
+      swaption.setPricingEngine(QL::ext::make_shared<QL::BachelierSwaptionEngine>(h, kVol));
+      sink += swaption.NPV();
+    }
+    benchmark::DoNotOptimize(sink);
+  }
+}
+BENCHMARK(BM_VolSurface_QuantLib_Objects);
+
 // How much of "ours" is just parsing the cube-spec JSON string each call (the string-interface marshalling
 // cost QuantLib's native loop never pays) — the residual after the schedule/forward caches.
 static void BM_VolSurface_ParseOnly(benchmark::State& state) {

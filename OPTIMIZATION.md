@@ -160,6 +160,15 @@ gross inefficiency the oracle-paired bench surfaced. Two fixes, in order:
    `price_vol_cube_json` is a thin parse-then-call wrapper (matching `price_portfolio` / `price_portfolio_json`)
    — and reserve the SoA output. The bench now calls the native method: **~11µs.**
 
+**Two reference points, both honest.** Against QuantLib's LEANEST possible analytic loop (hand-rolled
+`bachelierBlackFormula` + raw discount lookups) we are **at parity** — that loop is as tight as our kernel and
+there is no algorithmic gap on a closed form. Against QuantLib's IDIOMATIC path — the way most users actually
+price a surface, `MakeVanillaSwap` + `Swaption` + `BachelierSwaptionEngine` + `.NPV()` per point — we are
+**~300× faster** (10.7µs vs 3.23ms for the 37-point surface, `BM_VolSurface_QuantLib_Objects`), the same win
+as the swap-side `portfolio_analytics` (279×): our batched SoA path skips the per-instrument object graph,
+schedule rebuild, observer notifications and engine dispatch. So the fair summary is *parity with QuantLib's
+tightest code, ~300× over its idiomatic code.*
+
 **Result: at parity with QuantLib.** Native surface reprice **~10.8µs (flat) / ~11.3µs (SABR) vs QuantLib's
 ~10.1µs** — and ours *builds the full 12-array Greeks SoA* (price + delta/vega/gamma + metadata for 37 points)
 that QuantLib's loop doesn't even store, so on equal work we are at least even. The pricing kernel is
