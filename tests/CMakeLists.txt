@@ -23,6 +23,7 @@ add_executable(swaps_tests
   build_instruments_test.cpp
   vol_bachelier_test.cpp
   vol_sabr_test.cpp
+  vol_sabr_calibration_test.cpp
   vol_swaption_test.cpp
   vol_cms_test.cpp
 )
