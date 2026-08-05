@@ -8,6 +8,7 @@ add_executable(swaps_tests
   smoke_test.cpp
   multi_region_test.cpp
   region_combinatorial_test.cpp
+  weekend_rollout_test.cpp
   bspline_test.cpp
   monotone_cubic_test.cpp
   live_curve_test.cpp
