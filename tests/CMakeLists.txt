@@ -24,6 +24,7 @@ add_executable(swaps_tests
   vol_bachelier_test.cpp
   vol_sabr_test.cpp
   vol_sabr_calibration_test.cpp
+  vol_cap_stripping_test.cpp
   vol_swaption_test.cpp
   vol_cms_test.cpp
 )
