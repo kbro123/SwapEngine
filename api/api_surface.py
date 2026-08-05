@@ -33,7 +33,8 @@ STRUCTS = {
     # All arrays are VEC(double) so one marshaller covers every field; point i belongs to cell point_cell[i].
     "VolCube": [("cell_forward", "VEC"), ("cell_annuity", "VEC"), ("cell_expiry_years", "VEC"),
                 ("point_cell", "VEC"), ("strike", "VEC"), ("moneyness_bp", "VEC"), ("normal_vol", "VEC"),
-                ("price", "VEC"), ("vega", "VEC"), ("delta", "VEC"), ("gamma", "VEC"), ("payer", "VEC"),
+                ("price", "VEC"), ("vega", "VEC"), ("delta", "VEC"), ("gamma", "VEC"), ("vanna", "VEC"),
+                ("volga", "VEC"), ("payer", "VEC"),
                 ("price_us", "SCALAR"), ("n_cells", "INT"), ("n_points", "INT")],
 }
 

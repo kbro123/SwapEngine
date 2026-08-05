@@ -319,7 +319,8 @@ VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
     npts += (k == 0) ? 1 : k;
   }
   for (std::vector<double>* col : {&out.point_cell, &out.strike, &out.moneyness_bp, &out.normal_vol,
-                                   &out.price, &out.vega, &out.delta, &out.gamma, &out.payer})
+                                   &out.price, &out.vega, &out.delta, &out.gamma, &out.vanna, &out.volga,
+                                   &out.payer})
     col->reserve(npts);
   for (std::size_t ci = 0; ci < cells.size(); ++ci) {
     const VolCubeCell& c = cells[ci];
@@ -351,6 +352,8 @@ VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
       out.vega.push_back(v::bachelier_vega<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
       out.delta.push_back(v::bachelier_delta<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity, cp));
       out.gamma.push_back(v::bachelier_gamma<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
+      out.vanna.push_back(v::bachelier_vanna<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
+      out.volga.push_back(v::bachelier_volga<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
       out.payer.push_back(payer ? 1.0 : 0.0);
     }
   }
@@ -426,7 +429,8 @@ VolSurface::VolSurface(const VolCubeSpec& spec) : curve_(spec.curve), defs_(spec
   out_.cell_annuity.resize(cells_.size());
   out_.cell_expiry_years.resize(cells_.size());
   for (std::vector<double>* col : {&out_.point_cell, &out_.strike, &out_.moneyness_bp, &out_.normal_vol,
-                                   &out_.price, &out_.vega, &out_.delta, &out_.gamma, &out_.payer})
+                                   &out_.price, &out_.vega, &out_.delta, &out_.gamma, &out_.vanna, &out_.volga,
+                                   &out_.payer})
     col->resize(n_points_);
   fwd_.assign(cells_.size(), 0.0);
   annuity_.assign(cells_.size(), 0.0);
@@ -488,6 +492,8 @@ const VolCube& VolSurface::reprice(const BundleSession& sess) const {
       out_.vega[k] = v::bachelier_vega<double>(F, strike, vol, T, A);
       out_.delta[k] = v::bachelier_delta<double>(F, strike, vol, T, A, cp);
       out_.gamma[k] = v::bachelier_gamma<double>(F, strike, vol, T, A);
+      out_.vanna[k] = v::bachelier_vanna<double>(F, strike, vol, T, A);
+      out_.volga[k] = v::bachelier_volga<double>(F, strike, vol, T, A);
       out_.payer[k] = payer ? 1.0 : 0.0;
       ++k;
     };

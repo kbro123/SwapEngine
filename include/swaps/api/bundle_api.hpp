@@ -111,6 +111,8 @@ struct VolCube {
   std::vector<double> vega;                // per point: dV/dσ
   std::vector<double> delta;               // per point: dV/dF
   std::vector<double> gamma;               // per point: d²V/dF²
+  std::vector<double> vanna;               // per point: d²V/(dF dσ)
+  std::vector<double> volga;               // per point: d²V/dσ²
   std::vector<double> payer;               // per point: 1 payer, 0 receiver
   double price_us = 0.0;                   // pure engine pricing time of the cube, microseconds
   int n_cells = 0;
