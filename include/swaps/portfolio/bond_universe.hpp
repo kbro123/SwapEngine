@@ -27,11 +27,27 @@
 namespace swaps::portfolio {
 
 // -------------------------------------------------------------------------------------------------
-// YIELD-SPACE universe: batched price<->yield/duration/convexity, curve-free.
+// YIELD-SPACE universe: batched price<->yield/duration/convexity, curve-free — the price↔YTM sweep.
 // -------------------------------------------------------------------------------------------------
-// The street data of B bonds is padded to K = max cashflow count. Padding entries have amount 0 and
-// exponent 0: base^0·0 = 0 and their derivative weights (exponent/f, exponent(exponent+1)) are 0, so a
-// padded lane contributes nothing to price OR its derivatives — no explicit mask needed (§5 no-remainder).
+// The "W-cache" for yield-to-maturity. YTM pricing has no shared curve — every bond carries its OWN yield
+// y_b — so the classic DF = exp(-Wx) over one knot vector does NOT apply. But the SAME structure-only
+// precompute + vectorized hot loop pattern does, and there is a bigger lever unique to YTM:
+//
+//   P(y) = Σ_i CF_i·(1+y/f)^{−E_i} = v^w · Σ_i CF_i·v^i     with  v = 1/(1+y/f),  E_i = w + i
+//
+// For a REGULAR bond the exponents are the arithmetic sequence E_i = w + i (w = fraction of the current
+// coupon period remaining at settlement), so the powers are GEOMETRIC: the whole price is v^w times a
+// POLYNOMIAL in v. That polynomial (and its first two derivatives, for yield-solve/duration/convexity) is
+// evaluated by HORNER — pure FMAs, NO per-cashflow transcendental — with a single pow(v,w) per bond. So a
+// per-Newton-iteration sweep is O(cashflows) fused-multiply-adds + O(bonds) pows, not O(cashflows) exps.
+// The structure-only cache is the coefficient matrix A_ (amounts at integer powers), the offset w_ and f_
+// — built once, independent of y (exactly the W-cache spirit: structure once, cheap reprice).
+//
+// The powers are geometric ONLY when every E_i = w + integer (no odd coupon breaking the grid). A builder
+// bond is always regular; an externally-supplied irregular YieldBond falls back to the general exp path
+// (CF_i·exp(−E_i·ln base) per cashflow), which is still correct, just without the FMA fast path. Padding
+// lanes carry amount 0 and are self-annihilating in BOTH paths (Horner: a 0 leading coefficient; exp: 0·…)
+// — no scalar remainder path (§5).
 class BondUniverse {
  public:
   void set(const std::vector<pricing::YieldBond>& bonds) {
@@ -42,19 +58,27 @@ class BondUniverse {
     A_.setZero(B, K);
     freq_.resize(B);
     accrued_.resize(B);
+    w_.setZero(B);
+    regular_ = true;
     for (int b = 0; b < B; ++b) {
       freq_[b] = bonds[b].freq;
       accrued_[b] = bonds[b].accrued;
-      for (int k = 0; k < static_cast<int>(bonds[b].flows.size()); ++k) {
-        E_(b, k) = bonds[b].flows[k].exponent;
-        A_(b, k) = bonds[b].flows[k].amount;
+      const auto& fl = bonds[b].flows;
+      const double w0 = fl.empty() ? 0.0 : fl[0].exponent;  // E_0 = w
+      w_[b] = w0;
+      for (int k = 0; k < static_cast<int>(fl.size()); ++k) {
+        E_(b, k) = fl[k].exponent;
+        A_(b, k) = fl[k].amount;
+        // Regular iff E_k == w + k (integer-spaced from a common offset) for every flow of every bond.
+        if (std::abs(fl[k].exponent - (w0 + double(k))) > 1e-9) regular_ = false;
       }
     }
   }
 
   int size() const { return static_cast<int>(freq_.size()); }
+  bool is_regular() const { return regular_; }  // true => the Horner (FMA) fast path is in use
 
-  // Per-bond DIRTY price at per-bond yields `y` (B-vector). One SIMD sweep per cashflow column.
+  // Per-bond DIRTY price at per-bond yields `y` (B-vector).
   const Eigen::VectorXd& dirty_prices(const Eigen::VectorXd& y) const {
     value_pass(y, /*want_deriv=*/false);
     return dirty_;
@@ -90,15 +114,49 @@ class BondUniverse {
   }
 
  private:
-  // Fills dirty_ (and d1_/d2_ when want_deriv) for per-bond yields `y`. base = 1 + y/f (per bond); each
-  // cashflow column contributes CF·base^{−E}, computed as CF·exp(−E·ln base) so the whole column is one
-  // vectorized transcendental sweep over the B lanes.
+  // Fills dirty_ (and, when want_deriv, d1_ = dP/dy and d2_ = d²P/dy²) at per-bond yields `y`.
   void value_pass(const Eigen::VectorXd& y, bool want_deriv) const {
-    const int B = static_cast<int>(y.size()), K = static_cast<int>(E_.cols());
+    if (regular_) horner_pass(y, want_deriv);
+    else exp_pass(y, want_deriv);
+  }
+
+  // FAST PATH. P = v^w·Q(v), Q(v) = Σ_k A_{·k}·v^k. Horner accumulates Q, Q', Q'' across the B lanes in
+  // one FMA sweep per cashflow column (no transcendental); the single pow(v,w) per bond and the chain
+  // rule v→y then give dirty/d1/d2. v = 1/(1+y/f), v' = −v²/f, v'' = 2v³/f².
+  void horner_pass(const Eigen::VectorXd& y, bool want_deriv) const {
+    const int K = static_cast<int>(A_.cols());
+    const Eigen::ArrayXd v = 1.0 / (1.0 + y.array() / freq_.array());
+    q_.setZero(v.size()); d_.setZero(v.size()); e_.setZero(v.size());
+    for (int k = K - 1; k >= 0; --k) {
+      // synthetic-differentiation Horner: q→Q, d→Q', e→Q''/2 (update e, then d, then q — order matters).
+      if (want_deriv) {
+        e_ = e_ * v + d_;
+        d_ = d_ * v + q_;
+      }
+      q_ = q_ * v + A_.col(k).array();
+    }
+    const Eigen::ArrayXd vw = v.pow(w_.array());  // one transcendental per bond (fractional current period)
+    dirty_ = (vw * q_).matrix();
+    if (!want_deriv) return;
+    const Eigen::ArrayXd Qp = d_, Qpp = 2.0 * e_;
+    const Eigen::ArrayXd w = w_.array();
+    // P_v = v^w(w·Q/v + Q');  P_vv = v^w(w(w−1)Q/v² + 2w·Q'/v + Q'').
+    const Eigen::ArrayXd Pv = vw * (w * q_ / v + Qp);
+    const Eigen::ArrayXd Pvv = vw * (w * (w - 1.0) * q_ / (v * v) + 2.0 * w * Qp / v + Qpp);
+    const Eigen::ArrayXd vp = -(v * v) / freq_.array();          // dv/dy
+    const Eigen::ArrayXd vpp = 2.0 * (v * v * v) / (freq_.array() * freq_.array());  // d²v/dy²
+    d1_ = (Pv * vp).matrix();
+    d2_ = (Pvv * vp * vp + Pv * vpp).matrix();
+  }
+
+  // GENERAL PATH (irregular schedules). Per cashflow column: CF·base^{−E}, base = 1 + y/f, one vectorized
+  // exp over the B lanes; derivatives via the exact per-cashflow y-partials.
+  void exp_pass(const Eigen::VectorXd& y, bool want_deriv) const {
+    const int K = static_cast<int>(E_.cols());
     const Eigen::ArrayXd base = 1.0 + y.array() / freq_.array();
     const Eigen::ArrayXd lnbase = base.log();
-    dirty_.setZero(B);
-    if (want_deriv) { d1_.setZero(B); d2_.setZero(B); }
+    dirty_.setZero(y.size());
+    if (want_deriv) { d1_.setZero(y.size()); d2_.setZero(y.size()); }
     for (int k = 0; k < K; ++k) {
       const Eigen::ArrayXd Ek = E_.col(k).array();
       const Eigen::ArrayXd p = A_.col(k).array() * (-Ek * lnbase).exp();  // CF·base^{−E}
@@ -110,10 +168,13 @@ class BondUniverse {
     }
   }
 
-  Eigen::MatrixXd E_, A_;             // B×K padded exponents / amounts
+  Eigen::MatrixXd E_, A_;             // B×K padded exponents / amounts (A_ = the coupon-polynomial coeffs)
   Eigen::ArrayXd freq_;               // per-bond compounding freq (used in array math)
   Eigen::VectorXd accrued_;           // per-bond accrued (used in price vector arithmetic)
+  Eigen::ArrayXd w_;                  // per-bond current-period fraction w = E_0 (the v^w offset)
+  bool regular_ = true;               // all E_i = w + integer => Horner fast path applies
   mutable Eigen::VectorXd y_, dirty_, d1_, d2_;  // reusable scratch
+  mutable Eigen::ArrayXd q_, d_, e_;             // Horner accumulators (Q, Q', Q''/2)
 };
 
 // -------------------------------------------------------------------------------------------------

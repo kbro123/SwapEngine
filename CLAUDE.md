@@ -852,11 +852,17 @@ delete those, they enforce the rule. Two honest residues:
         `E_i = w + i` (ACT/ACT ISMA), which reproduces QuantLib's chained per-period discounting EXACTLY, so
         price/yield/accrued/`bond_risk` (modified & Macaulay duration, convexity) are penny-perfect vs
         `QuantLib::BondFunctions`.
-      - **Universe sweep** (`portfolio/bond_universe.hpp`): `BondUniverse` stacks the street data into padded
-        Eigen matrices and solves EVERY bond's yield in ONE batched Newton (a few iterations, one SIMD sweep
-        per compounding period; padded lanes are self-annihilating, no remainder path) — the bond analogue of
-        the swap `CompiledPortfolio`. `CompiledBondBook` is the curve-space book: build W once, reprice
-        PV/dirty/clean + per-bond z-spread with no per-bond QuantLib pricing.
+      - **Universe sweep** (`portfolio/bond_universe.hpp`): `BondUniverse` is the price↔YTM cache. YTM has
+        NO shared curve (each bond its own y), so `DF=exp(-Wx)` doesn't apply directly — but for a REGULAR
+        bond the exponents are arithmetic (`E_i=w+i`), so `P=v^w·Σ CF_i v^i` is `v^w` × a coupon POLYNOMIAL
+        in `v=1/(1+y/f)`. The cache is the coefficient matrix + `w` + `f` (structure-only); the hot loop is
+        HORNER — `Q,Q',Q''` in one FMA sweep per cashflow column (synthetic differentiation), then one
+        `pow(v,w)` per bond + chain rule — so a batched-Newton iteration is O(cashflows) FMAs + O(bonds) pows,
+        NOT O(cashflows) transcendentals, and still exact/penny-perfect. `yields_from_clean` solves the whole
+        universe in ONE batched Newton (converged bonds self-arrest, no masking). Irregular schedules fall
+        back to a general per-cashflow `exp` path (`is_regular()` gates it). `CompiledBondBook` is the
+        curve-space counterpart: build W once, reprice PV/dirty/clean + per-bond z-spread off `DF=exp(-Wx)`
+        (z-spread/asset-swap/relative-value), no per-bond QuantLib pricing.
       - **Construction** (`build/bond.hpp`): `fixed_rate_bond`/`us_treasury` build both representations from
         bond terms; ACT/ACT ISDA (`year_frac`) + ACT/ACT ICMA (`act_act_icma`) added to `build/day_count.hpp`.
       **PENDING (next):** bond asset swaps (par-par ASW spread reusing the swap float leg + the bond fixed

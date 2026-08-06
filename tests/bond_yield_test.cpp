@@ -76,6 +76,7 @@ TEST(BondYield, UniverseBatchedEqualsScalar) {
   }
   pf::BondUniverse bu;
   bu.set(univ);
+  EXPECT_TRUE(bu.is_regular());  // builder bonds are regular => the Horner (FMA) fast path is exercised
   Eigen::VectorXd yv(univ.size()), cl(univ.size());
   for (std::size_t i = 0; i < univ.size(); ++i) {
     yv[i] = ys[i];
