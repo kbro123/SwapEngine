@@ -150,6 +150,36 @@ TEST(BondAccrued, StandaloneRecomputesForRolledSettlement) {
   EXPECT_GT(a2, b.accrued);
 }
 
+TEST(BondWhenIssued, NewIssueAndReopening) {
+  // WI new issue: settles on the dated date with a SHORT first coupon => ZERO accrued, still regular.
+  const bld::Date dated = bld::Date::ymd(2024, 6, 15), fcpn = bld::Date::ymd(2024, 11, 15),
+                 mat = bld::Date::ymd(2034, 11, 15);
+  const double coupon = 0.045;
+  const bld::BuiltBond wi = bld::us_treasury_wi(bld::Date::ymd(2024, 6, 14), dated, fcpn, mat, coupon);
+  EXPECT_NEAR(wi.accrued, 0.0, 1e-15);
+  pf::BondUniverse bu;
+  bu.set({wi.yield});
+  EXPECT_TRUE(bu.is_regular());  // short first coupon changes only the first coefficient, not the spacing
+  // price/yield still round-trips.
+  const double y = 0.047, clean = px::bond_clean_from_yield(wi.yield, y);
+  EXPECT_NEAR(px::bond_yield_from_clean(wi.yield, clean), y, 1e-12);
+
+  // WI reopening: settle inside the first period => accrued from the ORIGINAL dated date, > 0.
+  const bld::Date reopen = bld::Date::ymd(2024, 8, 15);
+  const bld::BuiltBond ro =
+      bld::when_issued_bond(bld::Date::ymd(2024, 8, 14), dated, fcpn, mat, coupon, 2, reopen);
+  const double E = double(fcpn - bld::Date::ymd(2024, 5, 15));
+  EXPECT_NEAR(ro.accrued, (coupon / 2.0) * double(reopen - dated) / E, 1e-13);
+  EXPECT_GT(ro.accrued, 0.0);
+}
+
+TEST(BondWhenIssued, RejectsLongFirstCouponForNow) {
+  // A LONG first coupon (dated before the prior quasi-coupon date) is a documented follow-up, rejected.
+  EXPECT_THROW(bld::us_treasury_wi(bld::Date::ymd(2024, 1, 10), bld::Date::ymd(2024, 1, 10),
+                                   bld::Date::ymd(2024, 11, 15), bld::Date::ymd(2034, 11, 15), 0.04),
+               std::invalid_argument);
+}
+
 TEST(BondCurve, PvDirtyAndZSpread) {
   const bld::BuiltBond b = make_bond(2039, 0.05);
   FlatCurve c{0.04};

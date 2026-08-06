@@ -140,6 +140,80 @@ inline BuiltBond us_treasury(const Date& value_date, const Date& settle, const D
   return fixed_rate_bond(FixedBondTerms{value_date, settle, issue, maturity, coupon, /*freq=*/2});
 }
 
+// =================================================================================================
+// WHEN-ISSUED (WI) / odd-first-period bonds — the subtly-different yield path.
+// =================================================================================================
+// A WI treasury trades before issue for settlement ON the issue (dated) date, and its FIRST coupon period
+// is frequently irregular. Two subtleties vs a seasoned bond, both centred on the first period:
+//   1. Settlement == the dated date, so a NEW issue has ZERO accrued (a REOPENING settles later within the
+//      first period and carries accrued from the ORIGINAL dated date — same formula, settle > dated).
+//   2. A SHORT first coupon: when first_coupon − dated is less than a full period, the first coupon is
+//      PRORATED to the actual days — interest = (coupon/f)·(first_coupon − dated)/E, E the full quasi-coupon
+//      period [first_coupon − period, first_coupon] (31 CFR 356 App B / Treasury "daily interest decimal").
+//
+// This is the 31 CFR Part 356 Appendix B convention (Rateslib's calc_mode "ust_31bii" reprices its
+// examples). Crucially it stays on the FAST Horner path: the discount exponents are still w0 + integer
+// (w0 = (first_coupon − settle)/E), so only the FIRST coefficient (coupon·s) and the accrued differ — the
+// geometric structure is intact, so BondUniverse::is_regular() is still true.
+//
+// SCOPE: regular + SHORT first coupon (dated within the current quasi-coupon period). A LONG first coupon
+// (dated BEFORE the prior quasi-coupon date, so the first payment spans >1 quasi-period) is rejected — it
+// needs the App B quasi-period sum and is the documented follow-up.
+inline BuiltBond when_issued_bond(const Date& value_date, const Date& dated, const Date& first_coupon,
+                                  const Date& maturity, double coupon, int freq, const Date& settle) {
+  if (freq <= 0 || 12 % freq != 0) throw std::invalid_argument("bond freq must divide 12");
+  const int step_m = 12 / freq;
+  if (first_coupon <= dated) throw std::invalid_argument("first_coupon must be after the dated date");
+  if (settle < dated) throw std::invalid_argument("settlement before the dated date");
+  if (!(settle < first_coupon))
+    throw std::invalid_argument("settlement on/after first coupon: use fixed_rate_bond (regular regime)");
+  const Date quasi_prev = first_coupon.plus_months(-step_m);  // start of the first coupon's quasi-period
+  if (dated < quasi_prev)
+    throw std::invalid_argument("long first coupon (dated before prior quasi-coupon) not yet supported");
+
+  const double E = double(first_coupon - quasi_prev);     // full quasi-coupon period length (days)
+  const double s = double(first_coupon - dated) / E;      // short coupon factor (<=1; ==1 for regular)
+  const double a = double(settle - dated) / E;            // accrued fraction (0 at issue for a new issue)
+  const double w0 = double(first_coupon - settle) / E;    // discount exponent to the first coupon (= s − a)
+  const double cpn = coupon / double(freq);
+
+  std::vector<Date> cd;  // coupon dates: first_coupon, +period, ..., maturity
+  for (Date d = first_coupon; d <= maturity; d = d.plus_months(step_m)) cd.push_back(d);
+  if (cd.empty() || cd.back() != maturity)
+    throw std::invalid_argument("first_coupon and maturity are not on a common frequency grid");
+  const int N = static_cast<int>(cd.size());
+
+  BuiltBond out;
+  out.accrued = cpn * a;
+  out.prev_coupon = dated;  // the first period's accrual start (for a rolled-settlement accrued recompute)
+  out.next_coupon = first_coupon;
+  out.coupon_per_period = cpn;
+
+  out.curve.settle = curve_time(value_date, settle);
+  out.curve.accrued = out.accrued;
+  out.yield.freq = double(freq);
+  out.yield.accrued = out.accrued;
+  for (int j = 0; j < N; ++j) {
+    const double amt = (j == 0 ? cpn * s : cpn) + (j + 1 == N ? 1.0 : 0.0);  // first coupon prorated by s
+    px::BondCashflow cf;
+    cf.pay = curve_time(value_date, cd[j]);
+    cf.amount = amt;
+    out.curve.flows.push_back(cf);
+    px::YieldFlow yf;
+    yf.exponent = w0 + double(j);  // integer-spaced from w0 => stays on the Horner fast path
+    yf.amount = amt;
+    out.yield.flows.push_back(yf);
+  }
+  return out;
+}
+
+// Convenience: a when-issued US Treasury settling on its issue (dated) date (semiannual). New issue =>
+// zero accrued; pass an explicit `settle` (via when_issued_bond) for a reopening within the first period.
+inline BuiltBond us_treasury_wi(const Date& value_date, const Date& dated, const Date& first_coupon,
+                                const Date& maturity, double coupon) {
+  return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, /*freq=*/2, /*settle=*/dated);
+}
+
 }  // namespace swaps::build
 
 #endif  // SWAPS_BUILD_BOND_HPP

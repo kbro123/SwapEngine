@@ -129,7 +129,43 @@ pins, to `tests/tolerances.hpp`:
 The QL-free `tests/bond_yield_test.cpp` proves the internal invariants (round-trip, duration/convexity vs
 finite difference, batched == scalar, curve PV/z-spread consistency) with no oracle.
 
-## 5. Next: bond asset swaps
+### Cross-validation beyond QuantLib
+
+A single oracle can hide a *shared* convention assumption, so the bond math is also checked against
+independent references (`tests/bond_reference_test.cpp`, QL-free; harness in `tools/bond_reference/`):
+
+| Reference | Role | Independence |
+|-----------|------|--------------|
+| **Excel / OpenFormula `PRICE`/`YIELD`** (basis 1 = Act/Act) | reimplemented from its published formula — a *different algebra* than our Horner kernel — and checked to 1e-12 | high (different lineage, same convention) |
+| **31 CFR Part 356 Appendix B** | the **official** US Treasury formula (regular + short-first / when-issued), reimplemented | authoritative — it *defines* the convention |
+| **[Rateslib](https://rateslib.com)** `calc_mode="ust_31bii"` / `"us_gb"` | `ust_31bii` reprices the CFR App B examples and is Bloomberg-aligned; `tools/bond_reference/gen_golden.py` emits a golden CSV that `BondReference.ExternalGoldenIfPresent` pins (skips if absent) | high (independent lib) |
+| **FinancePy** | alternative golden source (swap into `gen_golden.py`) | high |
+| **Bloomberg YAS / Tradeweb** | market truth for a specific CUSIP — manual spot-checks into the golden CSV | gold standard |
+
+See `tools/bond_reference/README.md` for how to generate the external golden.
+
+## 5. When-issued (WI) — the subtly-different yield path
+
+A when-issued treasury trades before issue, for settlement ON the issue (dated) date, and its FIRST coupon
+period is frequently irregular. Two subtleties, both in the first period, make the yield calc differ from a
+seasoned bond (`build::when_issued_bond` / `us_treasury_wi`, following **31 CFR Part 356 Appendix B** —
+Rateslib's `ust_31bii`):
+
+1. **Issue-date settlement.** A NEW issue settles on the dated date, so accrued is exactly **zero**. A
+   **reopening** settles later within the first period and carries accrued from the *original* dated date —
+   the same formula with `settle > dated`.
+2. **Short first coupon.** When `first_coupon − dated` is less than a full period, the first coupon is
+   **prorated** to the actual days: `coupon/f · (first_coupon − dated)/E` (`E` = the full quasi-coupon
+   period `[first_coupon − period, first_coupon]`) — the Treasury "daily interest decimal".
+
+Crucially this **stays on the fast Horner path**: the discount exponents are still `w0 + integer`
+(`w0 = (first_coupon − settle)/E`), so only the *first coefficient* (`coupon·s`) and the accrued differ —
+the geometric structure is intact and `BondUniverse::is_regular()` stays true. A **long** first coupon
+(dated before the prior quasi-coupon date, so the first payment spans >1 quasi-period) needs the App B
+quasi-period sum and is rejected for now (documented follow-up). Gated by `BondWhenIssued.*`
+(`bond_yield_test.cpp`) and `BondReference.CfrAppendixBShortFirstCoupon`.
+
+## 6. Next: bond asset swaps
 
 A **par-par asset swap** is the engine's existing machinery with a bond leg:
 - The investor pays par (1.0), receives the bond (worth its market dirty price `P`), pays the bond's fixed
@@ -142,7 +178,7 @@ This reuses `float_leg_pv` / `annuity` (`cashflows.hpp`) and the curve-space bon
 primitive. Planned as `build/asset_swap.hpp` (construction) + a `ParSpread`-style residual/quote so a book
 of asset swaps calibrates/reprices on the same W-cache, plus a JSON/`BundleSession` verb.
 
-## 6. Extending to other bond types (no layer change)
+## 7. Extending to other bond types (no layer change)
 
 Only a **builder** is added; the kernel and sweep are untouched:
 - **Gilt / Bund / corporate** — different frequency, calendar, day count, ex-dividend rules → new builder
