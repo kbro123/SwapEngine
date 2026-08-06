@@ -78,13 +78,26 @@ class BondUniverse {
   int size() const { return static_cast<int>(freq_.size()); }
   bool is_regular() const { return regular_; }  // true => the Horner (FMA) fast path is in use
 
-  // Per-bond DIRTY price at per-bond yields `y` (B-vector).
+  // Per-bond accrued interest at settlement (per unit notional). FAST by construction: accrued is a pure
+  // schedule quantity (coupon·day-fraction), independent of yield/price, so it is computed ONCE per bond
+  // at build (build/bond.hpp) and cached — reading it back for the whole universe is O(1), no recompute.
+  // Returns a const ref to the cached vector (no allocation). It is what converts clean<->dirty in BOTH
+  // directions (yields_from_clean adds it; clean_prices subtracts it).
+  const Eigen::VectorXd& accrued() const { return accrued_; }
+
+  // REVERSE direction (yield -> price), fast. Per-bond DIRTY price at per-bond yields `y` (B-vector) via
+  // the value-only Horner pass (no derivatives). Const ref into reusable scratch — allocation-free per
+  // call, so re-marking a universe as yields move never touches the allocator.
   const Eigen::VectorXd& dirty_prices(const Eigen::VectorXd& y) const {
     value_pass(y, /*want_deriv=*/false);
     return dirty_;
   }
-  Eigen::VectorXd clean_prices(const Eigen::VectorXd& y) const {
-    return dirty_prices(y) - accrued_;
+  // Per-bond CLEAN price = dirty - accrued. Also allocation-free (writes into `clean_` scratch): the
+  // Horner value pass fills dirty_, then one vectorized subtract of the cached accrued.
+  const Eigen::VectorXd& clean_prices(const Eigen::VectorXd& y) const {
+    value_pass(y, /*want_deriv=*/false);
+    clean_.noalias() = dirty_ - accrued_;
+    return clean_;
   }
 
   // Per-bond street yields from per-bond CLEAN prices — a BATCHED Newton on the dirty price. Every bond
@@ -173,8 +186,8 @@ class BondUniverse {
   Eigen::VectorXd accrued_;           // per-bond accrued (used in price vector arithmetic)
   Eigen::ArrayXd w_;                  // per-bond current-period fraction w = E_0 (the v^w offset)
   bool regular_ = true;               // all E_i = w + integer => Horner fast path applies
-  mutable Eigen::VectorXd y_, dirty_, d1_, d2_;  // reusable scratch
-  mutable Eigen::ArrayXd q_, d_, e_;             // Horner accumulators (Q, Q', Q''/2)
+  mutable Eigen::VectorXd y_, dirty_, clean_, d1_, d2_;  // reusable scratch
+  mutable Eigen::ArrayXd q_, d_, e_;                     // Horner accumulators (Q, Q', Q''/2)
 };
 
 // -------------------------------------------------------------------------------------------------

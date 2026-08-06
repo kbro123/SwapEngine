@@ -92,6 +92,18 @@ falls back to the general per-cashflow `exp` path — still correct, just withou
 lanes are self-annihilating in both paths (Horner: a zero leading coefficient), so there is no scalar
 remainder path (§5).
 
+**Both directions are fast, and accrued is decoupled.** The reverse (`yield → clean/dirty price`,
+`dirty_prices`/`clean_prices`) is the SAME Horner cache run value-only (no derivatives), returning a const
+ref into reusable scratch — allocation-free, so re-marking a universe as yields move never touches the
+allocator. **Accrued** is a pure schedule quantity (`coupon_per_period × ACT/ACT-ICMA day fraction`) with
+no dependence on yield/price/curve, so it is computed ONCE per bond at build (`build::accrued_interest`,
+the single definition) and cached; `BondUniverse::accrued()` returns it in O(1), and it is what converts
+clean↔dirty in both directions (add it going clean→yield, subtract it going yield→clean). Because accrued
+and the street offset `w` are both linear in the settlement date within a coupon period — and the Horner
+coefficients don't move — accrued (and a full reprice) recomputes O(1) for a **rolled settlement** via
+`accrued_interest(coupon, freq, prev, next, settle')` off the cached `BuiltBond` period bounds, with no
+rebuild (a coupon-date crossing changes the cashflow set and does need a rebuild).
+
 **`CompiledBondBook` (curve space).** The curve-discounting counterpart: registers every bond's cashflow +
 settlement times on one self-discounting `CurveStructure`, builds the genuine `W` once, and reprices
 PV/dirty/clean + per-bond z-spread off `DF = exp(-Wx)` — the bond analogue of `CompiledPortfolio`, used
