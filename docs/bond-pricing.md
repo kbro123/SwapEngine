@@ -57,19 +57,46 @@ bond-yield discounting (its per-period chained discount factors multiply to `bas
 All penny-perfect vs `QuantLib::BondFunctions::{cleanPrice,dirtyPrice,yield,duration,convexity}`
 (`BondOracle.YieldSpaceMatchesBondFunctions`).
 
-## 3. The universe sweep (the headline)
+## 3. The universe sweep — and what the "W-cache" is for price↔YTM
 
-`portfolio/bond_universe.hpp`:
+`portfolio/bond_universe.hpp`. **The dominant workflow is price↔yield-to-maturity, so the sweep is built
+around it.** Two facts shape the design:
 
-- **`BondUniverse` (yield space).** Stack `B` bonds' street data into padded `B×K` matrices (`E`, `A`).
-  Price/yield/duration/convexity are then a per-column SIMD sweep over the `B` lanes, and
-  **`yields_from_clean` is a BATCHED Newton across the whole universe at once** — every bond steps
-  together; a converged bond has ~0 residual so its step is ~0 (no masking). Padded lanes carry amount 0
-  and exponent 0, which are self-annihilating in both the price and its derivatives, so there is no scalar
-  remainder path (§5). This replaces a per-bond `BondFunctions::yield` loop.
-- **`CompiledBondBook` (curve space).** Registers every bond's cashflow + settlement times on one
-  self-discounting `CurveStructure`, builds `W` once, and reprices PV/dirty/clean + per-bond z-spread off
-  `DF = exp(-Wx)` — the bond analogue of `CompiledPortfolio`.
+**(i) YTM has no shared curve, but fits the same `exp`-of-a-linear-form shape.** Every bond carries its
+*own* yield `y_b`, so the calibration W-cache (`DF = exp(-Wx)` over ONE knot vector `x`) does not apply
+directly. But rewrite `P(y) = Σ CF_i·(1+y/f)^{−E_i} = Σ CF_i·exp(−E_i·r)` with `r ≡ ln(1+y/f)`: that is
+`exp(−E·r)` — the W-cache shape, where each bond is its own *one-knot flat curve in period-time*, `E_i` is
+the structure-only "W" (schedule-dependent, never `y`-dependent, built once), and `r` is a per-bond free
+scalar. So the cache = `(amounts, exponents, bond→cashflow map)`, and a reprice is `exp` + reduce.
+
+**(ii) The real lever unique to YTM: the powers are geometric → a coupon POLYNOMIAL evaluated by Horner.**
+For a regular bond `E_i = w + i` (`w` = fraction of the current coupon period left at settlement), so
+`v^{E_i} = v^w·v^i` and
+
+```
+P(y) = v^w · Σ_i CF_i·v^i = v^w · Q(v),   v = 1/(1+y/f)
+```
+
+`Q(v)` is a polynomial in `v`. `BondUniverse` caches the coefficient matrix `A` (amounts at integer
+powers), the offset `w` and `f` — structure only — and the hot loop is **Horner**: `Q`, `Q'`, `Q''`
+accumulate across the `B` lanes with one FMA per cashflow column (synthetic differentiation), then a single
+`pow(v,w)` per bond and the chain rule `v→y` give price, `dP/dy`, `d²P/dy²`. So a Newton iteration costs
+**O(cashflows) fused-multiply-adds + O(bonds) pows**, not O(cashflows) transcendentals. `yields_from_clean`
+is then a BATCHED Newton across the whole universe (every bond steps together; a converged bond's step is
+~0 — no masking), replacing a per-bond `BondFunctions::yield` loop. It is exact (polynomial arithmetic
+equals `Σ CF·v^E` to machine precision), so still penny-perfect vs QuantLib.
+
+The powers are geometric only when every `E_i = w + integer` (no odd coupon breaking the grid). A *builder*
+bond is always regular (`BondUniverse::is_regular()` is true); an externally-supplied irregular schedule
+falls back to the general per-cashflow `exp` path — still correct, just without the FMA fast path. Padded
+lanes are self-annihilating in both paths (Horner: a zero leading coefficient), so there is no scalar
+remainder path (§5).
+
+**`CompiledBondBook` (curve space).** The curve-discounting counterpart: registers every bond's cashflow +
+settlement times on one self-discounting `CurveStructure`, builds the genuine `W` once, and reprices
+PV/dirty/clean + per-bond z-spread off `DF = exp(-Wx)` — the bond analogue of `CompiledPortfolio`, used
+when a bond is priced off a *discount curve* (z-spread, asset-swap, cross-bond relative value) rather than
+its own yield.
 
 Both are allocation-light on the hot path (reusable scratch), matching the engine's real-time discipline.
 
