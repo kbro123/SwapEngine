@@ -21,6 +21,7 @@ add_executable(swaps_tests
   turns_test.cpp
   build_calendar_test.cpp
   build_instruments_test.cpp
+  bond_yield_test.cpp
   vol_bachelier_test.cpp
   vol_sabr_test.cpp
   vol_sabr_calibration_test.cpp
@@ -51,6 +52,7 @@ if(TARGET quantlib_oracle)
     ql_test_isolation.cpp
     convexity_test.cpp
     pricing_test.cpp
+    bond_oracle_test.cpp
     generic_cashflow_test.cpp
     extract_test.cpp
     calibration_test.cpp
