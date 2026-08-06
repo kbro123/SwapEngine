@@ -839,3 +839,28 @@ delete those, they enforce the rule. Two honest residues:
       Also not done: a `scheme` selector on the problem structs so a real Bundle/CalibrationProblem *selects*
       B-spline or the new MonotoneCubic (the W-cache supports the linear ones; only the standalone
       `BSplineProblem`/`MonotoneCubicProblem` tests exercise a non-default scheme today).
+- [ ] **Stage 6 — bonds & bond asset swaps — FOUNDATION DONE (bond pricing + universe sweep); ASSET SWAPS PENDING.**
+      Branch `claude/bond-pricing-asset-swaps-j3hkb8`. Design `docs/bond-pricing.md`. A bond is DATA (dated
+      cashflows + a small yield convention), NOT a subclass — "US Treasury" is field values a builder fills
+      in (semiannual, ACT/ACT ICMA, street f=2), never a type in engine code (§0/§1). **DONE & self-check
+      green (QL-free `tests/bond_yield_test.cpp`; QL oracle `tests/bond_oracle_test.cpp` written, runs under
+      the gate on a QL-built host):**
+      - **Two pricing modes, both native shapes** (`pricing/bond.hpp`, templated on Scalar):
+        (A) CURVE space — `bond_dirty_price = Σ amount·DF(pay)/DF(settle)`, LINEAR in `DF = exp(-Wx)`, so a
+        universe rides the SAME W-cache as calibration/the swap book; `bond_z_spread` is a per-bond Newton
+        against those DFs. (B) YIELD/street space — `dirty(y) = Σ CF·(1+y/f)^{−E}` with cumulative exponent
+        `E_i = w + i` (ACT/ACT ISMA), which reproduces QuantLib's chained per-period discounting EXACTLY, so
+        price/yield/accrued/`bond_risk` (modified & Macaulay duration, convexity) are penny-perfect vs
+        `QuantLib::BondFunctions`.
+      - **Universe sweep** (`portfolio/bond_universe.hpp`): `BondUniverse` stacks the street data into padded
+        Eigen matrices and solves EVERY bond's yield in ONE batched Newton (a few iterations, one SIMD sweep
+        per compounding period; padded lanes are self-annihilating, no remainder path) — the bond analogue of
+        the swap `CompiledPortfolio`. `CompiledBondBook` is the curve-space book: build W once, reprice
+        PV/dirty/clean + per-bond z-spread with no per-bond QuantLib pricing.
+      - **Construction** (`build/bond.hpp`): `fixed_rate_bond`/`us_treasury` build both representations from
+        bond terms; ACT/ACT ISDA (`year_frac`) + ACT/ACT ICMA (`act_act_icma`) added to `build/day_count.hpp`.
+      **PENDING (next):** bond asset swaps (par-par ASW spread reusing the swap float leg + the bond fixed
+      leg — the engine's `ParSpread` quote referencing a bond leg and a market dirty price); a `bond`/
+      `bond_universe` verb on the JSON/`BundleSession` API seam; a QL-linked sweep benchmark
+      (`BondUniverse`/`CompiledBondBook` vs a per-bond `QuantLib::Bond` loop); non-treasury bond types
+      (Gilt/Bund/corporate/FRN) as new builders filling the SAME structs.
