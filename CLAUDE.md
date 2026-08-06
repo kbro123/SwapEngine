@@ -871,6 +871,18 @@ delete those, they enforce the rule. Two honest residues:
         (z-spread/asset-swap/relative-value), no per-bond QuantLib pricing.
       - **Construction** (`build/bond.hpp`): `fixed_rate_bond`/`us_treasury` build both representations from
         bond terms; ACT/ACT ISDA (`year_frac`) + ACT/ACT ICMA (`act_act_icma`) added to `build/day_count.hpp`.
+      - **When-issued (WI)** (`when_issued_bond`/`us_treasury_wi`, 31 CFR Part 356 App B / Rateslib
+        `ust_31bii`): settle on the dated date (new issue => ZERO accrued; a reopening settles later within
+        the first period => accrued from the ORIGINAL dated date), with a SHORT first coupon PRORATED to
+        actual days (`coupon/f·(first_coupon−dated)/E`). Stays on the Horner fast path — the short coupon only
+        changes the first coefficient, not the exponent spacing, so `is_regular()` holds. Long first coupon
+        (spans >1 quasi-period) is rejected (follow-up). Gated by `BondWhenIssued.*`.
+      - **Cross-validation beyond QuantLib** (`tests/bond_reference_test.cpp`, QL-free; `tools/bond_reference/`):
+        Excel/OpenFormula PRICE/YIELD (reimplemented — different algebra than Horner) and 31 CFR App B
+        short-first (reimplemented) are checked in-code to 1e-12; an OPTIONAL external golden from
+        **Rateslib** (`ust_31bii`, Bloomberg-aligned) via `gen_golden.py` is pinned by
+        `BondReference.ExternalGoldenIfPresent` (skips if absent). A single oracle can hide a shared
+        convention assumption, so bond math is checked against QuantLib AND these.
       **PENDING (next):** bond asset swaps (par-par ASW spread reusing the swap float leg + the bond fixed
       leg — the engine's `ParSpread` quote referencing a bond leg and a market dirty price); a `bond`/
       `bond_universe` verb on the JSON/`BundleSession` API seam; a QL-linked sweep benchmark
