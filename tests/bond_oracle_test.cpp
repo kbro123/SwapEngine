@@ -151,6 +151,15 @@ TEST(BondOracle, UniverseSweepMatchesBondFunctions) {
                                              settles[i]);
     EXPECT_TRUE(close(y_ours[i], y_ql, swaps::tol::curve_rel)) << "bond " << i;
   }
+
+  // REVERSE (yield -> clean, batched) and ACCRUED vs QuantLib, bond-for-bond.
+  const Eigen::VectorXd clean_ours = bu.clean_prices(y_ours);  // must reproduce the input clean prices
+  const Eigen::VectorXd accr = bu.accrued();
+  for (std::size_t i = 0; i < univ.size(); ++i) {
+    EXPECT_TRUE(close(clean_ours[i] * 100.0, targets_clean[i], swaps::tol::curve_rel)) << "clean " << i;
+    EXPECT_TRUE(close(accr[i] * 100.0, qls[i]->accruedAmount(settles[i]), swaps::tol::curve_rel))
+        << "accrued " << i;
+  }
 }
 
 }  // namespace

@@ -859,9 +859,15 @@ delete those, they enforce the rule. Two honest residues:
         HORNER — `Q,Q',Q''` in one FMA sweep per cashflow column (synthetic differentiation), then one
         `pow(v,w)` per bond + chain rule — so a batched-Newton iteration is O(cashflows) FMAs + O(bonds) pows,
         NOT O(cashflows) transcendentals, and still exact/penny-perfect. `yields_from_clean` solves the whole
-        universe in ONE batched Newton (converged bonds self-arrest, no masking). Irregular schedules fall
-        back to a general per-cashflow `exp` path (`is_regular()` gates it). `CompiledBondBook` is the
-        curve-space counterpart: build W once, reprice PV/dirty/clean + per-bond z-spread off `DF=exp(-Wx)`
+        universe in ONE batched Newton (converged bonds self-arrest, no masking); the REVERSE `dirty_prices`/
+        `clean_prices` (yield→price) is the same cache run value-only, allocation-free (const-ref scratch), so
+        re-marking a universe as yields move never allocates. ACCRUED is a pure schedule quantity
+        (coupon·day-fraction, no yield/price/curve), computed once at build (`build::accrued_interest`, the one
+        definition) and cached — `BondUniverse::accrued()` is O(1) and converts clean↔dirty both ways; it (and
+        `w`) are linear in settlement, so a rolled settlement recomputes O(1) off the cached `BuiltBond` period
+        bounds, no rebuild (a coupon crossing does need one). Irregular schedules fall back to a general
+        per-cashflow `exp` path (`is_regular()` gates it). `CompiledBondBook` is the curve-space counterpart:
+        build W once, reprice PV/dirty/clean + per-bond z-spread off `DF=exp(-Wx)`
         (z-spread/asset-swap/relative-value), no per-bond QuantLib pricing.
       - **Construction** (`build/bond.hpp`): `fixed_rate_bond`/`us_treasury` build both representations from
         bond terms; ACT/ACT ISDA (`year_frac`) + ACT/ACT ICMA (`act_act_icma`) added to `build/day_count.hpp`.

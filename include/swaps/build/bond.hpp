@@ -42,7 +42,23 @@ struct BuiltBond {
   px::Bond curve;        // curve-space: cashflows in curve time + settle time + accrued
   px::YieldBond yield;   // street-space: cumulative exponents + amounts + accrued
   double accrued = 0.0;  // accrued interest at settlement, per unit notional
+  // Current coupon period + per-period coupon, so a caller can recompute accrued (and the street offset
+  // w = (next-settle)/(next-prev)) for a DIFFERENT settlement date via accrued_interest() below — O(1),
+  // no rebuild — as long as settlement stays within [prev_coupon, next_coupon] (a coupon-date crossing
+  // changes the cashflow set and needs a rebuild).
+  Date prev_coupon, next_coupon;
+  double coupon_per_period = 0.0;
 };
+
+// FAST standalone accrued interest (per unit notional), ACT/ACT ICMA: coupon-per-period times the elapsed
+// fraction of the current coupon period. A pure schedule quantity — no yield, no price, no curve — so it
+// is O(1) and vectorizes trivially over a universe (and over a rolling settlement date). This is the ONE
+// definition of accrued; fixed_rate_bond() calls it so the built value and any re-evaluation agree.
+inline double accrued_interest(double coupon, int freq, const Date& prev_coupon, const Date& next_coupon,
+                               const Date& settle) {
+  const double c = coupon / double(freq);
+  return c * double(settle - prev_coupon) / double(next_coupon - prev_coupon);
+}
 
 // Semiannual (freq) coupon dates strictly in (issue, maturity], ascending, stepping BACKWARD from
 // maturity so the regular cycle is anchored at maturity (the market convention). `ref_start` returns the
@@ -86,11 +102,13 @@ inline BuiltBond fixed_rate_bond(const FixedBondTerms& t) {
 
   const double period_days = double(next - prev);
   const double w = double(next - t.settle) / period_days;        // fraction of current period remaining
-  const double frac_accrued = double(t.settle - prev) / period_days;
   const double cpn_amt = t.coupon / double(t.freq);              // coupon per unit notional per period
 
   BuiltBond out;
-  out.accrued = cpn_amt * frac_accrued;
+  out.accrued = accrued_interest(t.coupon, t.freq, prev, next, t.settle);
+  out.prev_coupon = prev;
+  out.next_coupon = next;
+  out.coupon_per_period = cpn_amt;
 
   // Curve-space cashflows: every coupon from `cur` onward at its curve time; redemption 1.0 at maturity.
   out.curve.settle = curve_time(t.value_date, t.settle);

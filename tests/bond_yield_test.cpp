@@ -97,6 +97,59 @@ TEST(BondYield, UniverseBatchedEqualsScalar) {
   }
 }
 
+TEST(BondYield, ReverseYieldToCleanAndAccrued) {
+  // The REVERSE direction (yield -> clean price) and accrued must both be fast batched ops.
+  std::vector<px::YieldBond> univ;
+  std::vector<double> built_accrued, ys;
+  for (int i = 0; i < 120; ++i) {
+    const bld::BuiltBond bi = make_bond(2028 + i % 20, 0.02 + 0.0004 * i);
+    univ.push_back(bi.yield);
+    built_accrued.push_back(bi.accrued);
+    ys.push_back(0.025 + 0.0004 * i);
+  }
+  pf::BondUniverse bu;
+  bu.set(univ);
+  Eigen::VectorXd yv(univ.size());
+  for (std::size_t i = 0; i < univ.size(); ++i) yv[i] = ys[i];
+
+  // accrued() is the structure-cached vector: equals the builder value bond-for-bond, O(1), no recompute.
+  const Eigen::VectorXd accr = bu.accrued();
+  for (std::size_t i = 0; i < univ.size(); ++i) EXPECT_NEAR(accr[i], built_accrued[i], 1e-15);
+
+  // yield -> clean (batched) equals the scalar kernel, and clean == dirty - accrued elementwise.
+  const Eigen::VectorXd clean = bu.clean_prices(yv);
+  const Eigen::VectorXd dirty = bu.dirty_prices(yv);
+  for (std::size_t i = 0; i < univ.size(); ++i) {
+    EXPECT_NEAR(clean[i], px::bond_clean_from_yield(univ[i], ys[i]), 1e-13);
+    EXPECT_NEAR(clean[i], dirty[i] - accr[i], 1e-15);
+  }
+  // Full round trip: yields -> clean -> yields recovers the input.
+  const Eigen::VectorXd y_back = bu.yields_from_clean(clean);
+  for (std::size_t i = 0; i < univ.size(); ++i) EXPECT_NEAR(y_back[i], ys[i], 1e-11);
+}
+
+TEST(BondAccrued, StandaloneRecomputesForRolledSettlement) {
+  // Accrued is a pure schedule quantity, so it recomputes O(1) for any settlement in the current period
+  // via accrued_interest() — no rebuild. Rolling settlement forward increases accrued linearly.
+  bld::FixedBondTerms t;
+  t.value_date = bld::Date::ymd(2024, 1, 15);
+  t.settle = bld::Date::ymd(2024, 1, 16);
+  t.issue = bld::Date::ymd(2019, 8, 15);
+  t.maturity = bld::Date::ymd(2034, 2, 15);
+  t.coupon = 0.05;
+  t.freq = 2;
+  const bld::BuiltBond b = bld::fixed_rate_bond(t);
+  // Recompute accrued at the build settlement from the cached period == the built value.
+  EXPECT_NEAR(bld::accrued_interest(t.coupon, t.freq, b.prev_coupon, b.next_coupon, t.settle), b.accrued,
+              1e-15);
+  // Roll settlement +10 days (still inside the period): accrued grows by 10 days of coupon.
+  const bld::Date s2 = t.settle.plus_days(10);
+  const double a2 = bld::accrued_interest(t.coupon, t.freq, b.prev_coupon, b.next_coupon, s2);
+  const double period_days = double(b.next_coupon - b.prev_coupon);
+  EXPECT_NEAR(a2 - b.accrued, b.coupon_per_period * 10.0 / period_days, 1e-15);
+  EXPECT_GT(a2, b.accrued);
+}
+
 TEST(BondCurve, PvDirtyAndZSpread) {
   const bld::BuiltBond b = make_bond(2039, 0.05);
   FlatCurve c{0.04};
