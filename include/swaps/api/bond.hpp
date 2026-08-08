@@ -14,4 +14,10 @@ namespace swaps::api {
 // stubs throw for now — the kernel is ready, the builder is the follow-up).
 std::string bonds_json(const std::string& request);
 
+// Stateless asset-swap verb (curve-space): par asset-swap spread(s) for bonds off a CALIBRATED bundle.
+// request = {"asset_swap": {value_date, bundle, currency?, index?, curve?, bonds:[{issue, settle, maturity,
+// coupon, freq?, clean?|dirty?}]}} -> SoA {asw_spread(decimal), clean_curve, dirty_curve, annuity, accrued,
+// n}. Par-par when no price is given; proceeds spread when clean/dirty is supplied.
+std::string asset_swap_json(const std::string& request);
+
 }  // namespace swaps::api

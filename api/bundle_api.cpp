@@ -787,6 +787,9 @@ std::string run_json(const std::string& request) {
     // convexity) for a list of fixed-rate bonds.
     if (o.contains("bonds")) return bonds_json(request);
 
+    // Stateless ASSET_SWAP verb: par asset-swap spread(s) for bonds off a calibrated bundle (curve-space).
+    if (o.contains("asset_swap")) return asset_swap_json(request);
+
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
     cal::BundleProblem prob = bundle_from_json(o.at("bundle"));
