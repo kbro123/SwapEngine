@@ -1,3 +1,5 @@
+// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // QuantLib CORRECTNESS ORACLE for the Bachelier (normal) options kernel (vol/bachelier.hpp) — the layer the
 // swaption vol_cube prices with. Proves our closed forms EQUAL QuantLib's, across a strike/vol/expiry grid:
 //   * price  vs QuantLib::bachelierBlackFormula                         (exact, ~1e-12)

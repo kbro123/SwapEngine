@@ -50,6 +50,9 @@ because the engine reimplements what QuantLib already does — that duplication 
 | `tension_regularizer_oracle_test.cpp` | Tension-energy regularizer drops the Jacobian condition number + stays first-order optimal on the QuantLib-built ill-conditioned EUR trio. |
 | `tension_oracle_test.cpp` | Tension-spline curve vs QuantLib term structure. |
 | `turns_oracle_test.cpp` | Turned curve (turn overlay) prices OIS identically to QuantLib; the δ shifts QuantLib DFs by exp(−δ·overlap). |
+| `vol_bachelier_ql_oracle.cpp` | Bachelier (normal) option kernel — price/greeks/implied-vol equal QuantLib across a strike/vol/expiry grid. |
+| `vol_cms_replication_oracle.cpp` | Hagan static-replication CMS — the standard-model G matches QuantLib `GFunctionStandard` exactly; the replicated convexity tracks `NumericHaganPricer`. |
+| `bond_oracle_test.cpp` | Bond pricing (street + curve) — clean/dirty/YTM/duration/convexity/z-spread + universe sweep vs QuantLib `BondFunctions`/`DiscountingBondEngine`/`ZeroSpreadedTermStructure`. |
 
 Reference builders (`reference_curve.hpp`, `reference_bundle.hpp`, `reference_multicurrency.hpp`) build
 the QuantLib-consistent markets these tests calibrate to; they are part of the oracle surface.

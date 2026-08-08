@@ -61,7 +61,7 @@ TEST(BondYield, DurationConvexityVsFiniteDifference) {
   const double Pm = px::bond_dirty_from_yield(b.yield, y - h);
   const px::BondRisk r = px::bond_risk(b.yield, y);
   EXPECT_NEAR(r.modified_duration, -(Pp - Pm) / (2 * h) / P, 1e-6);
-  EXPECT_NEAR(r.convexity, (Pp - 2 * P + Pm) / (h * h) / P, 1e-4);
+  EXPECT_NEAR(r.convexity, (Pp - 2 * P + Pm) / (h * h) / P, 1e-3 * r.convexity);  // 2nd-order FD is roundoff-limited (~eps/h^2); relative sanity bound (QL oracle pins the exact value)
   // Macaulay = Modified * (1 + y/f).
   EXPECT_NEAR(r.macaulay_duration, r.modified_duration * (1.0 + y / b.yield.freq), 1e-14);
 }
@@ -93,7 +93,7 @@ TEST(BondYield, UniverseBatchedEqualsScalar) {
     EXPECT_NEAR(dv[i], px::bond_dirty_from_yield(univ[i], ys[i]), 1e-13);
     const px::BondRisk r = px::bond_risk(univ[i], ys[i]);
     EXPECT_NEAR(md[i], r.modified_duration, 1e-13);
-    EXPECT_NEAR(cx[i], r.convexity, 1e-13);
+    EXPECT_NEAR(cx[i], r.convexity, 1e-12 * std::abs(r.convexity));  // batched Horner vs scalar exp reassociate differently across platforms (FMA); relative bound
   }
 }
 

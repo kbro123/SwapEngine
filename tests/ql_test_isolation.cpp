@@ -1,3 +1,5 @@
+// @oracle-test (support fixture) — clears QuantLib's process-global IndexManager fixing histories
+// between oracle tests so the single-process swaps_oracle_tests binary is order-independent. DO NOT DELETE.
 // Per-test isolation of QuantLib's PROCESS-GLOBAL state for the single-process oracle binary.
 //
 // QuantLib keeps index fixing histories in a global singleton (IndexManager). A test that seeds SOFR/OIS
