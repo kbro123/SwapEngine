@@ -14,6 +14,7 @@
 #include "swaps/api/compile.hpp"                   // compile_spec / compile_to_json (the 'compile' verb)
 #include "swaps/api/generate_risk.hpp"             // generate_risk_json (the 'generate_risk' verb)
 #include "swaps/api/options.hpp"                   // swaption_json (the 'swaption' verb)
+#include "swaps/api/bond.hpp"                       // bonds_json (the 'bonds' verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
@@ -781,6 +782,10 @@ std::string run_json(const std::string& request) {
 
     // Stateless SABR strip calibration (no bundle): fit (alpha,rho,nu) to a market vol strip.
     if (o.contains("sabr_calibrate")) return sabr_calibrate_json(request);
+
+    // Stateless BONDS verb (no bundle): street/yield-space bond math (price<->yield, accrued, duration,
+    // convexity) for a list of fixed-rate bonds.
+    if (o.contains("bonds")) return bonds_json(request);
 
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
