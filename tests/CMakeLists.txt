@@ -54,6 +54,7 @@ if(TARGET quantlib_oracle)
     convexity_test.cpp
     pricing_test.cpp
     bond_oracle_test.cpp
+    bond_asset_swap_oracle.cpp
     generic_cashflow_test.cpp
     extract_test.cpp
     calibration_test.cpp

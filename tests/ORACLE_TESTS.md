@@ -28,6 +28,7 @@ because the engine reimplements what QuantLib already does — that duplication 
 |------|------------------------|
 | `pricing_test.cpp` | Core discounting / coupon PV off our curve as a `YieldTermStructure`. |
 | `bond_oracle_test.cpp` | Bond price/yield/accrued/duration/convexity vs `BondFunctions`; curve dirty/clean vs `DiscountingBondEngine`; z-spread vs `ZeroSpreadedTermStructure`; batched universe yield sweep vs `BondFunctions::yield`. |
+| `bond_asset_swap_oracle.cpp` | Par-par asset-swap spread vs QuantLib `AssetSwap::fairSpread` on the same curve + matched float schedule. |
 | `generic_cashflow_test.cpp` | The generic FloatCoupon/FixedCoupon model reprices legacy shapes exactly. |
 | `convexity_test.cpp` | Futures convexity adjustment. |
 | `extract_test.cpp` | QuantLib → plain-data schedule/coupon extraction round-trips. |
