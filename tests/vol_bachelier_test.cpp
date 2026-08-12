@@ -75,3 +75,26 @@ TEST(Bachelier, ImpliedVolRoundTrip) {
     }
   }
 }
+
+// R1 hot-path: the one-pass bachelier_greeks() must equal the six individual analytics EXACTLY (it just
+// shares sqrt/d/pdf/cdf). Pins the streaming/cube optimization to the oracle-validated closed forms.
+TEST(Bachelier, GreeksOnePassMatchesIndividual) {
+  const double A = 4.25;
+  for (double F : {-0.002, 0.0, 0.015, 0.03, 0.06}) {
+    for (double K : {F - 0.02, F - 0.005, F, F + 0.005, F + 0.02}) {
+      for (double vol : {0.0020, 0.0075, 0.015}) {
+        for (double T : {0.08, 1.0, 5.0, 10.0}) {
+          for (auto cp : {v::Payoff::Payer, v::Payoff::Receiver}) {
+            const v::BachelierGreeks<double> g = v::bachelier_greeks<double>(F, K, vol, T, A, cp);
+            EXPECT_NEAR(g.price, v::bachelier_price<double>(F, K, vol, T, A, cp), 1e-15) << "price";
+            EXPECT_NEAR(g.vega, v::bachelier_vega<double>(F, K, vol, T, A), 1e-15) << "vega";
+            EXPECT_NEAR(g.delta, v::bachelier_delta<double>(F, K, vol, T, A, cp), 1e-15) << "delta";
+            EXPECT_NEAR(g.gamma, v::bachelier_gamma<double>(F, K, vol, T, A), 1e-15) << "gamma";
+            EXPECT_NEAR(g.vanna, v::bachelier_vanna<double>(F, K, vol, T, A), 1e-15) << "vanna";
+            EXPECT_NEAR(g.volga, v::bachelier_volga<double>(F, K, vol, T, A), 1e-15) << "volga";
+          }
+        }
+      }
+    }
+  }
+}

@@ -90,6 +90,41 @@ inline S bachelier_gamma(const S& fwd, const S& strike, const S& vol, double exp
   return annuity * normal_pdf(d) / stddev;
 }
 
+// ALL SIX Greeks in ONE pass — the streaming / vol-cube hot path (hot-path design R1). Each analytic above
+// independently recomputes sqrt(expiry), stddev, d, and normal_pdf/cdf; a full-Greek point therefore pays
+// ~6 sqrt + 5 exp + 2 erfc. Computing the shared context ONCE here collapses that to 1 sqrt + 1 exp (φ) +
+// 1 erfc (Φ) — everything else is algebra. Values are IDENTICAL to the individual functions (pinned by a
+// consistency test). φ(d) is even so pdf(unsigned d) serves every symmetric Greek; Φ uses the signed d.
+template <class S>
+struct BachelierGreeks {
+  S price, vega, delta, gamma, vanna, volga;
+};
+
+template <class S>
+inline BachelierGreeks<S> bachelier_greeks(const S& fwd, const S& strike, const S& vol, double expiry,
+                                           const S& annuity, Payoff cp) {
+  using std::sqrt;
+  const S sgn(payoff_sign(cp));
+  const S sqrtT(sqrt(expiry));
+  const S stddev = vol * sqrtT;
+  if (stddev <= S(0.0)) {  // zero vol / zero expiry -> discounted intrinsic; the Greeks vanish
+    const S intr = sgn * (fwd - strike);
+    return {annuity * (intr > S(0.0) ? intr : S(0.0)), S(0.0),
+            annuity * ((intr > S(0.0)) ? sgn : S(0.0)), S(0.0), S(0.0), S(0.0)};
+  }
+  const S du = (fwd - strike) / stddev;   // unsigned d (vega/gamma/vanna/volga use this)
+  const S phi = normal_pdf(du);           // even in d -> phi(du) == phi(sgn·du); ONE exp
+  const S Phi = normal_cdf(sgn * du);     // signed d (price/delta); ONE erfc
+  BachelierGreeks<S> g;
+  g.price = annuity * (sgn * (fwd - strike) * Phi + stddev * phi);
+  g.vega = annuity * sqrtT * phi;
+  g.delta = annuity * sgn * Phi;
+  g.gamma = annuity * phi / stddev;
+  g.vanna = -annuity * du * phi / vol;
+  g.volga = annuity * sqrtT * du * du * phi / vol;
+  return g;
+}
+
 // Invert price -> normal vol (double). Price is strictly increasing in vol above intrinsic. A plain Newton
 // from the ATM seed escapes the basin for deep-OTM strikes (tiny vega), so this is a SAFEGUARDED
 // Newton-bisection: keep a [lo,hi] bracket, take the Newton step when it stays inside, bisect otherwise.

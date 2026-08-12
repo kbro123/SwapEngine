@@ -348,12 +348,14 @@ VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
       out.strike.push_back(strike);
       out.moneyness_bp.push_back((strike - fs.rate) * 1e4);
       out.normal_vol.push_back(vol);
-      out.price.push_back(v::swaption_price(fs.rate, fs.annuity, strike, vol, s.t_expiry, cp));
-      out.vega.push_back(v::bachelier_vega<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
-      out.delta.push_back(v::bachelier_delta<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity, cp));
-      out.gamma.push_back(v::bachelier_gamma<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
-      out.vanna.push_back(v::bachelier_vanna<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
-      out.volga.push_back(v::bachelier_volga<double>(fs.rate, strike, vol, s.t_expiry, fs.annuity));
+      const v::BachelierGreeks<double> g = v::bachelier_greeks<double>(fs.rate, strike, vol, s.t_expiry,
+                                                                       fs.annuity, cp);  // R1: one pass
+      out.price.push_back(g.price);
+      out.vega.push_back(g.vega);
+      out.delta.push_back(g.delta);
+      out.gamma.push_back(g.gamma);
+      out.vanna.push_back(g.vanna);
+      out.volga.push_back(g.volga);
       out.payer.push_back(payer ? 1.0 : 0.0);
     }
   }
@@ -488,12 +490,13 @@ const VolCube& VolSurface::reprice(const BundleSession& sess) const {
       out_.strike[k] = strike;
       out_.moneyness_bp[k] = (strike - F) * 1e4;
       out_.normal_vol[k] = vol;
-      out_.price[k] = v::swaption_price(F, A, strike, vol, T, cp);
-      out_.vega[k] = v::bachelier_vega<double>(F, strike, vol, T, A);
-      out_.delta[k] = v::bachelier_delta<double>(F, strike, vol, T, A, cp);
-      out_.gamma[k] = v::bachelier_gamma<double>(F, strike, vol, T, A);
-      out_.vanna[k] = v::bachelier_vanna<double>(F, strike, vol, T, A);
-      out_.volga[k] = v::bachelier_volga<double>(F, strike, vol, T, A);
+      const v::BachelierGreeks<double> g = v::bachelier_greeks<double>(F, strike, vol, T, A, cp);  // R1: one pass
+      out_.price[k] = g.price;
+      out_.vega[k] = g.vega;
+      out_.delta[k] = g.delta;
+      out_.gamma[k] = g.gamma;
+      out_.vanna[k] = g.vanna;
+      out_.volga[k] = g.volga;
       out_.payer[k] = payer ? 1.0 : 0.0;
       ++k;
     };
