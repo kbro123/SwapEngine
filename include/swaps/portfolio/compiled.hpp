@@ -55,12 +55,29 @@ class CompiledPortfolio {
 
   double total_npv(const Eigen::VectorXd& x) const { return npv(x).sum(); }
 
+  // BATCHED reprice over a grid of curve-states X (n_knots x n_states) -> per-swap NPVs (n_swaps x n_states)
+  // — the MC-exposure kernel (hot-path design R3+R12). One W·X GEMM discounts every state at once; the cheap
+  // sparse coupon/annuity reduce runs per state into the reused single-state scratch. Column j is bit-
+  // identical to npv(X.col(j)) — the SAME kernel, so an arbitrary SIMULATED x just works (no calibration).
+  const Eigen::MatrixXd& npv_grid(const Eigen::MatrixXd& X) const {
+    cs_.df_into(X, dfg_);  // one GEMM: DF grid = exp(-W·X)
+    npvg_.resize(n_swaps(), X.cols());
+    for (Eigen::Index j = 0; j < X.cols(); ++j) {
+      df_ = dfg_.col(j);  // reuse the single-state DF scratch (contiguous for the gather loops)
+      npvg_.col(j) = (notional_.array() *
+                      (float_.pv(df_).array() - fixed_rate_.array() * fixed_.annuity(df_).array()))
+                         .matrix();
+    }
+    return npvg_;
+  }
+
  private:
   pricing::CompiledCurveSet cs_;
   pricing::BundleFloatBatch float_;
   pricing::BundleFixedLegs fixed_;
   Eigen::VectorXd fixed_rate_, notional_;
-  mutable Eigen::VectorXd df_, npv_;  // reusable per-reprice scratch
+  mutable Eigen::VectorXd df_, npv_;      // reusable per-reprice scratch
+  mutable Eigen::MatrixXd dfg_, npvg_;    // reusable DF/NPV grids for npv_grid
 };
 
 }  // namespace swaps::portfolio

@@ -86,6 +86,14 @@ class CompiledCurveSet {
     out.noalias() = W_ * x;
     out = (-out.array()).exp();
   }
+  // BATCHED DF (hot-path design R12): a MATRIX of curve-states X (n_knots x n_states) -> DF grid
+  // (n_times x n_states) = exp(-W_all·X), one GEMM + one vectorized exp. This is the exposure/MC lever:
+  // repricing 10k paths x 100 nodes shares ONE W·X matmul instead of N_states separate matvecs. Column j is
+  // bit-identical to df_into(X.col(j), .). Alloc-free after the first sizing of `out`.
+  void df_into(const Eigen::MatrixXd& X, Eigen::MatrixXd& out) const {
+    out.noalias() = W_ * X;
+    out = (-out.array()).exp();
+  }
   const Eigen::MatrixXd& W() const { return W_; }
   int n_times() const { return static_cast<int>(pts_.size()); }
   int n_knots() const { return n_knots_; }

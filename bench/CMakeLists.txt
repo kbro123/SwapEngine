@@ -19,6 +19,9 @@ target_link_libraries(bundle_scale_bench PRIVATE swaps benchmark::benchmark_main
 add_executable(portfolio_parallel_bench portfolio_parallel_bench.cpp)
 target_link_libraries(portfolio_parallel_bench PRIVATE swaps benchmark::benchmark_main)
 
+add_executable(exposure_grid_bench exposure_grid_bench.cpp)
+target_link_libraries(exposure_grid_bench PRIVATE swaps benchmark::benchmark_main)
+
 # Swaption vol-cube reprice: warm (streaming, no recalibration) vs cold (one-shot verb). Ours-only probe;
 # links swaps_api for BundleSession + bundle_from_json, reads the SOFR bundle fixture by compiled-in path.
 add_executable(vol_cube_bench vol_cube_bench.cpp)
