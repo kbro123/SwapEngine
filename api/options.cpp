@@ -289,12 +289,13 @@ VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
     if (spec.curve < 0 || spec.curve >= static_cast<int>(cs_all.size()))
       throw std::invalid_argument("vol_cube: curve index out of range");
     const CurveSample& csamp = cs_all[static_cast<std::size_t>(spec.curve)];
-    std::map<double, double> df_by_time;
-    for (std::size_t i = 0; i < csamp.t.size(); ++i) df_by_time[csamp.t[i]] = csamp.discount[i];
+    // R2: csamp.t is the sorted/uniqued need_times, and every lookup hits an exact member — so a std::map
+    // (tree alloc + pointer-chasing per node) is pure churn. Binary-search the contiguous sorted vector.
     const auto df_at = [&](double t) -> double {
-      const auto itf = df_by_time.find(t);
-      if (itf == df_by_time.end()) throw std::runtime_error("vol_cube: internal sample-time lookup failed");
-      return itf->second;
+      const auto it = std::lower_bound(csamp.t.begin(), csamp.t.end(), t);
+      if (it == csamp.t.end() || *it != t)
+        throw std::runtime_error("vol_cube: internal sample-time lookup failed");
+      return csamp.discount[static_cast<std::size_t>(it - csamp.t.begin())];
     };
     for (std::size_t ci = 0; ci < cells.size(); ++ci) {
       if (vol_fa_cache_.find(keys[ci]) != vol_fa_cache_.end()) continue;
