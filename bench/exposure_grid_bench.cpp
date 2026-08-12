@@ -16,8 +16,10 @@
 
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/portfolio.hpp"
+#include "swaps/xva/exposure.hpp"
 
 namespace pf = swaps::portfolio;
+namespace xva = swaps::xva;
 
 namespace {
 const std::vector<double> kMeeting{0.5};
@@ -86,5 +88,48 @@ static void BM_ExposureGrid(benchmark::State& state) {
   state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(n_states));  // node-reprices/sec
 }
 BENCHMARK(BM_ExposureGrid)->Arg(10000)->Arg(100000)->Unit(benchmark::kMillisecond);
+
+// End-to-end EPE/ENE/PFE profile: a Gaussian curve-state proxy grid (node-major; node 0 = today so every path
+// shares x_cal and the profile there is deterministic) -> npv_grid -> exposure_profile. Measures the full
+// exposure-sim wall-clock (reprice + net + per-node reduce) — the number a desk quotes for a nightly/intraday
+// counterparty run. n_paths x n_nodes states; column (path p, node j) at j*n_paths + p.
+static Eigen::MatrixXd profile_grid(int n_paths, int n_nodes, const std::vector<double>& t) {
+  const int nk = static_cast<int>(kMeeting.size() + kBack.size());
+  const Eigen::VectorXd x_cal = x_calibrated();
+  Eigen::MatrixXd X(nk, n_paths * n_nodes);
+  std::mt19937 rng(0x5E0Fu);
+  std::normal_distribution<double> z(0.0, 1.0);
+  const double sigma = 0.010;  // 100 bp/yr curve-state vol (illustrative; not a calibrated LGM)
+  for (int j = 0; j < n_nodes; ++j) {
+    const double sd = sigma * std::sqrt(t[j]);  // Brownian: node 0 (t=0) -> sd 0 -> deterministic
+    for (int p = 0; p < n_paths; ++p)
+      for (int i = 0; i < nk; ++i) X(i, j * n_paths + p) = x_cal[i] + (sd > 0.0 ? sd * z(rng) : 0.0);
+  }
+  return X;
+}
+
+static void BM_ExposureProfile(benchmark::State& state) {
+  const int n_paths = 1000, n_nodes = 100;
+  std::vector<double> t(n_nodes);
+  for (int j = 0; j < n_nodes; ++j) t[j] = 30.0 * j / (n_nodes - 1);  // 0..30y horizon
+  const pf::CompiledPortfolio book(kMeeting, kBack, make_book(50));
+  const Eigen::MatrixXd X = profile_grid(n_paths, n_nodes, t);
+
+  // Validate: node 0 is today (deterministic), so EPE(0) == max(book MtM at x_cal, 0), PFE(0) == that MtM.
+  const double mtm = book.total_npv(x_calibrated());
+  const xva::ExposureProfile chk = xva::exposure_profile(book.npv_grid(X), n_paths, n_nodes, t);
+  const double scale = std::max(1.0, std::abs(mtm));
+  if (std::abs(chk.epe[0] - std::max(mtm, 0.0)) > 1e-9 * scale ||
+      std::abs(chk.pfe[0] - mtm) > 1e-9 * scale) {
+    state.SkipWithError("exposure profile node-0 != deterministic MtM");
+    return;
+  }
+  for (auto _ : state) {
+    const xva::ExposureProfile pr = xva::exposure_profile(book.npv_grid(X), n_paths, n_nodes, t);
+    benchmark::DoNotOptimize(pr.epe.data());
+  }
+  state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(n_paths) * n_nodes);
+}
+BENCHMARK(BM_ExposureProfile)->Unit(benchmark::kMillisecond);
 
 BENCHMARK_MAIN();
