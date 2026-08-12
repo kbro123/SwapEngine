@@ -22,6 +22,10 @@ target_link_libraries(portfolio_parallel_bench PRIVATE swaps benchmark::benchmar
 add_executable(exposure_grid_bench exposure_grid_bench.cpp)
 target_link_libraries(exposure_grid_bench PRIVATE swaps benchmark::benchmark_main)
 
+# CMS static-replication hot path: Hagan G-derivative fan + Bachelier smile integrand (ours-only, R7).
+add_executable(cms_replication_bench cms_replication_bench.cpp)
+target_link_libraries(cms_replication_bench PRIVATE swaps benchmark::benchmark_main)
+
 # Swaption vol-cube reprice: warm (streaming, no recalibration) vs cold (one-shot verb). Ours-only probe;
 # links swaps_api for BundleSession + bundle_from_json, reads the SOFR bundle fixture by compiled-in path.
 add_executable(vol_cube_bench vol_cube_bench.cpp)

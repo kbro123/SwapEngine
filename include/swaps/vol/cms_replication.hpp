@@ -25,28 +25,39 @@ struct GFunctionStandard {
     const double N = n(), a = 1.0 + x / q;
     return x / std::pow(a, delta) / (1.0 - 1.0 / std::pow(a, N));
   }
+  // G' and G''. Every power in the closed forms shares the base a = 1 + x/q, so we evaluate a^N and a^delta
+  // ONCE and derive the rest (a^(N-1)=aN/a, a^(N-delta-1)=aN/(aD·a), a^(2N-delta-2)=aN²/(aD·a²), …) by cheap
+  // mul/div — two std::pow per call instead of the ~4/~12 the term-by-term forms issued. Algebraically
+  // identical (oracle: G' 1e-9, G'' 1e-7 vs QuantLib GFunctionStandard), so only the pow count changes.
   double d1(double x) const {
-    const double N = n(), a = 1.0 + x / q, AA = a - delta / q * x;
-    const double B = std::pow(a, N - delta - 1.0) / (std::pow(a, N) - 1.0);
-    const double sec = (N * x * std::pow(a, N - 1.0)) /
-                       (q * std::pow(a, delta) * (std::pow(a, N) - 1.0) * (std::pow(a, N) - 1.0));
-    return AA * B - sec;
+    double g1, g2;
+    derivs(x, g1, g2);
+    return g1;
   }
   double d2(double x) const {
-    const double N = n(), a = 1.0 + x / q, AA = a - delta / q * x, A1 = (1.0 - delta) / q;
-    const double B = std::pow(a, N - delta - 1.0) / (std::pow(a, N) - 1.0);
-    const double Num = (1.0 + delta - N) * std::pow(a, N - delta - 2.0) -
-                       (1.0 + delta) * std::pow(a, 2.0 * N - delta - 2.0);
-    const double Den = (std::pow(a, N) - 1.0) * (std::pow(a, N) - 1.0);
-    const double B1 = Num / (q * Den);
-    const double C = x / std::pow(a, delta);
-    const double C1 =
-        (std::pow(a, delta) - delta / q * x * std::pow(a, delta - 1.0)) / std::pow(a, 2.0 * delta);
-    const double D = std::pow(a, N - 1.0) / ((std::pow(a, N) - 1.0) * (std::pow(a, N) - 1.0));
-    const double D1 = ((N - 1.0) * std::pow(a, N - 2.0) * (std::pow(a, N) - 1.0) -
-                       2.0 * N * std::pow(a, 2.0 * (N - 1.0))) /
-                      (q * (std::pow(a, N) - 1.0) * (std::pow(a, N) - 1.0) * (std::pow(a, N) - 1.0));
-    return A1 * B + AA * B1 - N / q * (C1 * D + C * D1);
+    double g1, g2;
+    derivs(x, g1, g2);
+    return g2;
+  }
+  // Both derivatives in one pass (the CMS Simpson integrand needs both at each node): amortises a^N and
+  // a^delta across G' and G'' — two std::pow per node instead of four.
+  void derivs(double x, double& g1, double& g2) const {
+    const double N = n(), a = 1.0 + x / q;
+    const double aN = std::pow(a, N), aD = std::pow(a, delta);
+    const double a2 = a * a, AA = a - delta / q * x, dm = aN - 1.0, dm2 = dm * dm;
+    const double B = (aN / (aD * a)) / dm;                       // a^(N-delta-1) / (a^N - 1)
+    // G'
+    const double sec = (N * x * (aN / a)) / (q * aD * dm2);      // N x a^(N-1) / (q a^delta (a^N-1)^2)
+    g1 = AA * B - sec;
+    // G''
+    const double A1 = (1.0 - delta) / q;
+    const double Num = ((1.0 + delta - N) * aN - (1.0 + delta) * aN * aN) / (aD * a2);
+    const double B1 = Num / (q * dm2);
+    const double C = x / aD;
+    const double C1 = (1.0 - delta / q * x / a) / aD;            // (a^d - (d/q)x a^(d-1)) / a^(2d)
+    const double D = (aN / a) / dm2;                             // a^(N-1) / (a^N-1)^2
+    const double D1 = (aN / a2) * ((N - 1.0) * dm - 2.0 * N * aN) / (q * dm2 * dm);
+    g2 = A1 * B + AA * B1 - N / q * (C1 * D + C * D1);
   }
 };
 
@@ -65,7 +76,11 @@ inline double cms_replicated_forward(double forward, double expiry, const GFunct
   // the pole and its result there is quadrature-node-dependent; we stay on the well-posed side.)
   const double hi = forward + n_std * atm_sd;
   const double lo = std::max(forward - n_std * atm_sd, lo_frac * forward);
-  const auto Fpp = [&](double x) { return (2.0 * G.d1(x) + (x - forward) * G.d2(x)) / G0; };
+  const auto Fpp = [&](double x) {
+    double g1, g2;
+    G.derivs(x, g1, g2);  // one shared a^N/a^delta pass instead of separate d1(x)/d2(x)
+    return (2.0 * g1 + (x - forward) * g2) / G0;
+  };
   const auto simpson = [&](double a, double b, Payoff cp) {
     const int m = steps % 2 ? steps + 1 : steps;  // even for Simpson
     const double h = (b - a) / m;
