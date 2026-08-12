@@ -17,6 +17,7 @@
 #include "swaps/api/bond.hpp"                       // bonds_json (the 'bonds' verb)
 #include "swaps/api/exposure.hpp"                   // exposure_json (the 'exposure' verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
+#include <type_traits>
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
 
@@ -616,13 +617,17 @@ PortfolioReprice BundleSession::price_portfolio(const pf::MultiCurveBook& book) 
   // straight off the derivative vector. PV01 = 1bp · Σⱼ ∂NPV/∂xⱼ = the book's NPV change for a +1bp
   // PARALLEL shift of every fitted knot forward -- no bump-and-reprice. (Left-multiplying this same
   // gradient by risk_operator() would instead give the full per-quote delta ladder, CLAUDE.md #4.)
-  const int nk = prob_.n_knots();
-  const Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd = ad::seed(x_);
-  const auto Cad = cal::build_bundle_curves<ad::Dual>(
-      prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
-  const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::Dual>& { return *Cad[i]; };
-  const ad::Dual npv_ad = book.value<ad::Dual>(curve_ad);
-  out.pv01 = npv_ad.derivatives().size() ? 1e-4 * npv_ad.derivatives().sum() : 0.0;
+  // R11: pooled (heap-free) forward AAD for a narrow bundle, heap Dual beyond MaxW.
+  auto pv01_pass = [&](const auto& xd) {
+    using S = typename std::decay_t<decltype(xd)>::Scalar;
+    const auto Cad = cal::build_bundle_curves<S>(
+        prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
+    const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<S>& { return *Cad[i]; };
+    const S npv_ad = book.value<S>(curve_ad);
+    out.pv01 = npv_ad.derivatives().size() ? 1e-4 * npv_ad.derivatives().sum() : 0.0;
+  };
+  if (prob_.n_knots() <= ad::kPooledMaxW) pv01_pass(ad::seed_pooled<ad::kPooledMaxW>(x_));
+  else pv01_pass(ad::seed(x_));
   return out;
 }
 
@@ -653,14 +658,19 @@ PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book
   // vector curve_grad = dP/dx (the exact gradient the PV01 pass sums). Then ladder = curve_grad^T · M, i.e.
   // ladder[i] = Σⱼ curve_grad[j]·M[j,i] = dP/dq_i — the portfolio's delta in calibration instrument i.
   const auto t0 = std::chrono::steady_clock::now();
-  const Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd = ad::seed(x_);
-  const auto Cad = cal::build_bundle_curves<ad::Dual>(
-      prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
-  const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::Dual>& { return *Cad[i]; };
-  const ad::Dual npv_ad = book.value<ad::Dual>(curve_ad);
-  out.npv = npv_ad.value();
-  out.curve_grad = (npv_ad.derivatives().size() == nk) ? Eigen::VectorXd(npv_ad.derivatives())
-                                                       : Eigen::VectorXd(Eigen::VectorXd::Zero(nk));
+  // R11: pooled (heap-free) forward AAD for a narrow bundle, heap Dual beyond MaxW.
+  auto grad_pass = [&](const auto& xd) {
+    using S = typename std::decay_t<decltype(xd)>::Scalar;
+    const auto Cad = cal::build_bundle_curves<S>(
+        prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
+    const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<S>& { return *Cad[i]; };
+    const S npv_ad = book.value<S>(curve_ad);
+    out.npv = npv_ad.value();
+    out.curve_grad = (npv_ad.derivatives().size() == nk) ? Eigen::VectorXd(npv_ad.derivatives())
+                                                         : Eigen::VectorXd(Eigen::VectorXd::Zero(nk));
+  };
+  if (nk <= ad::kPooledMaxW) grad_pass(ad::seed_pooled<ad::kPooledMaxW>(x_));
+  else grad_pass(ad::seed(x_));
   out.ladder = M.transpose() * out.curve_grad;  // (n_res x n_knots)·(n_knots) = length n_res
   last_risk_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
   out.risk_us = last_risk_us_;

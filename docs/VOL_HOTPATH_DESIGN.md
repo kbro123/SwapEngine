@@ -41,7 +41,7 @@ matvec. Every linear scheme (Flat/Linear/Hermite/BSpline/Tension) gets the `W_al
 | R2 | `price_vol_cube` per-tick `std::map`+string keys (`options.cpp:242-244,292`) | route cube reprice through `VolSurface` SoA; re-point `price_vol_cube_json` |
 | R3 | DF re-integrated per cashflow via region-walk (`bundle_api.cpp:606-609`) | `DF=exp(-W_all·x)` one matvec; pricing+exposure share the sample |
 | R4 | J rebuilt 2–3× on same `x` (`generate_risk.cpp:105-107`) | memoize J on session keyed by `x_` (J is reg-independent) |
-| R5 | book repriced as Dual 2–3× for NPV/PV01/ladder (`bundle_api.cpp:609,619-624,655-663`) | value+all sensitivities in ONE sweep |
+| R5 | book repriced as Dual 2–3× for NPV/PV01/ladder (`bundle_api.cpp:609,619-624,655-663`) | value+all sensitivities in ONE sweep. **DONE:** `price_portfolio_risk` already does one Dual sweep (npv+curve_grad+ladder); its AAD book reprice + `bucketed_delta`'s reprice + `aad_jacobian` now all ride R11's `DualPooled` (heap-free, width-guarded). `BM_Risk_Ours_Analytic` 434→86µs (**5.0×**). |
 | R6 | ladder materializes full M via explicit inverse (`bundle_api.cpp:593-594`) | lean IFT: `a=JtJ.ldlt().solve(dnpv_dx); ladder=J*a` (`risk.hpp:37-38`) |
 | R7 | CMS Simpson `pow` bloat + `std::function` (`cms_replication.hpp:26-76`) | cache `a,aN,aD` per node; template `vol_at` to inline SABR |
 | R8 | SABR vol recomputed per strike; ATM via full smile (`options.cpp:115`) | `sabr_node()` memoizes F/T part; closed-form ATM |

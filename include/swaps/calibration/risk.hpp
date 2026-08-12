@@ -20,16 +20,28 @@
 
 namespace swaps::calibration {
 
+// One AAD pass for d(NPV)/dx off the calibration curve, in a caller-chosen forward-AAD scalar.
+template <class Scalar, class Portfolio>
+inline Eigen::VectorXd book_curve_grad(const CalibrationProblem& prob, const Eigen::VectorXd& x,
+                                       const Portfolio& pf,
+                                       const Eigen::Matrix<Scalar, Eigen::Dynamic, 1>& seeded) {
+  auto c = curve::make_modular_curve<Scalar>(curve::flat_hermite(prob.meeting_times, prob.back_times));
+  c.set_forwards(seeded);
+  const Scalar pv = pf.template npv<Scalar>(c);
+  return Eigen::VectorXd(pv.derivatives());  // length n_knots (empty for a curve-independent book)
+}
+
 // d(NPV)/dq_j for every market quote j, at the calibrated x. `pf` must expose
 //   template <class Scalar, class Curve> Scalar npv(const Curve&) const.
 template <class Portfolio>
 Eigen::VectorXd bucketed_delta(const CalibrationProblem& prob, const Eigen::VectorXd& x,
                                const Portfolio& pf) {
-  // d(NPV)/dx via one AAD pass, off the calibration curve.
-  auto c = curve::make_modular_curve<ad::Dual>(curve::flat_hermite(prob.meeting_times, prob.back_times));
-  c.set_forwards(ad::seed(x));
-  const ad::Dual pv = pf.template npv<ad::Dual>(c);
-  const Eigen::VectorXd dnpv_dx = pv.derivatives();
+  // d(NPV)/dx via one AAD pass — R11 pooled (heap-free) for a narrow problem, heap Dual beyond.
+  const Eigen::VectorXd dnpv_dx =
+      prob.n_knots() <= ad::kPooledMaxW
+          ? book_curve_grad<ad::DualPooled<ad::kPooledMaxW>>(prob, x, pf,
+                                                             ad::seed_pooled<ad::kPooledMaxW>(x))
+          : book_curve_grad<ad::Dual>(prob, x, pf, ad::seed(x));
 
   // J = dr/dx (analytic), then chain through the IFT.
   const Eigen::MatrixXd J = aad_jacobian(prob, x);      // n_resid x n_knots
