@@ -15,6 +15,7 @@
 #include "swaps/api/generate_risk.hpp"             // generate_risk_json (the 'generate_risk' verb)
 #include "swaps/api/options.hpp"                   // swaption_json (the 'swaption' verb)
 #include "swaps/api/bond.hpp"                       // bonds_json (the 'bonds' verb)
+#include "swaps/api/exposure.hpp"                   // exposure_json (the 'exposure' verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
@@ -789,6 +790,9 @@ std::string run_json(const std::string& request) {
 
     // Stateless ASSET_SWAP verb: par asset-swap spread(s) for bonds off a calibrated bundle (curve-space).
     if (o.contains("asset_swap")) return asset_swap_json(request);
+
+    // Stateless EXPOSURE verb: EPE/ENE/PFE counterparty-exposure profile for a swap book off a calibrated curve.
+    if (o.contains("exposure")) return exposure_json(request);
 
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 

@@ -2,7 +2,7 @@
 # risk / stream). QuantLib-FREE (it consumes the generic instrument model), but needs the vendored
 # Boost headers for Boost.JSON.
 
-add_library(swaps_api STATIC bundle_api.cpp compile.cpp generate_risk.cpp options.cpp bond.cpp swaps_capi.cpp)
+add_library(swaps_api STATIC bundle_api.cpp compile.cpp generate_risk.cpp options.cpp bond.cpp exposure.cpp swaps_capi.cpp)
 target_link_libraries(swaps_api PUBLIC swaps)
 target_include_directories(swaps_api PUBLIC ${SWAPS_THIRD_PARTY}/boost)
 target_compile_features(swaps_api PUBLIC cxx_std_20)
