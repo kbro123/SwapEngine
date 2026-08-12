@@ -35,6 +35,12 @@
 
 namespace swaps::pricing {
 
+// Row-major dense matrix: storing the batched DF grid row-major makes DFg.row(t) — one registered time
+// across ALL curve-states — a CONTIGUOUS span, which is what lets the batched leg reduce gather a coupon's
+// pay/start/end rows with unit-stride (SIMD-friendly) loads. Only the batched MC-exposure grid path uses
+// it; calibration and single-state pricing stay on Eigen's default column-major VectorXd/MatrixXd.
+using RowMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+
 // CurveStructure (the per-curve topology) is shared with the calibration layer -- see curve_spec.hpp.
 
 // DF_all = exp(-W_all x) over every (curve, time) registered, concatenated into one global vector.
@@ -91,6 +97,18 @@ class CompiledCurveSet {
   // repricing 10k paths x 100 nodes shares ONE W·X matmul instead of N_states separate matvecs. Column j is
   // bit-identical to df_into(X.col(j), .). Alloc-free after the first sizing of `out`.
   void df_into(const Eigen::MatrixXd& X, Eigen::MatrixXd& out) const {
+    out.noalias() = W_ * X;
+    out = (-out.array()).exp();
+  }
+  // ROW-MAJOR batched DF grid (design R12 coupon-batch): the SAME exp(-W_all·X) as the column-major
+  // overload above (column j bit-identical to df_into(X.col(j),·)), but stored ROW-MAJOR so that each
+  // DFg.row(t) is contiguous. The per-coupon row gathers in BundleFloatBatch::pv_grid /
+  // BundleFixedLegs::annuity_grid then run unit-stride across states instead of striding a column-major
+  // grid by n_times. Calibration NEVER calls this — its df_into(VectorXd/MatrixXd) overloads are UNCHANGED.
+  // Alloc-free after `out` is first sized. X is an Eigen::Ref so a column-BLOCK of a larger state grid
+  // (X.middleCols(j0, bw)) can be discounted without copying — the batched exposure loop tiles the states
+  // so the DF/coupon working set stays cache-resident.
+  void df_into(const Eigen::Ref<const Eigen::MatrixXd>& X, RowMatrixXd& out) const {
     out.noalias() = W_ * X;
     out = (-out.array()).exp();
   }
@@ -285,6 +303,43 @@ struct BundleFloatBatch {
     return pv_res_;
   }
 
+  // --- BATCHED pricing over a curve-state GRID (MC-exposure hot path, design R12 coupon-batch) --------
+  // True iff this batch is the STANDARD shape (one unit-weight sub-period per coupon, no spread / nothing
+  // realized / tau_pay==tau_index) — the only shape the batched grid reduce below handles. On that shape
+  // sub-period i IS coupon i, so subS/subE index by coupon directly. Non-standard batches fall back to the
+  // per-column pv() loop (the gather INDICES are still state-invariant, but konst/k/weights re-enter).
+  bool std_shape() const { return sub_is_identity && cpn_is_plain; }
+
+  // Per-instrument leg PV for a WHOLE grid of curve-states at once. DFg is the ROW-MAJOR DF grid
+  // (n_times x n_states) from CompiledCurveSet::df_into. The coupon gather INDICES (pay/subS/subE/inst)
+  // are state-invariant — only the DF VALUES change across states — so per coupon we gather its three rows
+  // ONCE and let Eigen fuse divide/subtract/multiply across ALL states in a vectorized row op, then
+  // ACCUMULATE it straight into its owning instrument's PV row (coupons of one instrument are a contiguous
+  // block, so R_cpn is just a segment-sum):
+  //     pv_grid.row(inst[i]) += DFg.row(pay[i]) ⊙ (DFg.row(subS[i]) ⊘ DFg.row(subE[i]) − 1)
+  // Fusing the reduction into the gather avoids materializing the big n_cpn × n_states coupon grid and the
+  // SpMM over it — pv_grid_ is only n_inst × n_states (stays cache-hot). Column j is == pv(DFg.col(j)) to
+  // rounding. Const ref into per-batch scratch (valid until the next call on THIS batch); alloc-free after
+  // warmup. STANDARD shape only — assert-guarded.
+  const RowMatrixXd& pv_grid(const RowMatrixXd& DFg) const {
+    assert(std_shape() && "pv_grid(): non-standard shape — caller must use the per-column pv() fallback");
+    assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv_grid() needs pay dates: this is a futures batch");
+    // The per-coupon denominator DF[subE] takes only n_times DISTINCT values, but there are n_cpn ≫ n_times
+    // coupons — so invert the DF grid ONCE per tile (n_times reciprocals per state) and turn each coupon's
+    // expensive divide into a cheap multiply (n_cpn mults per state). Bit-identical to DF[s]/DF[e] only up
+    // to reciprocal rounding — a/b vs a·(1/b) differ by ≤1 ULP, far inside the col-0 rel-1e-9 check.
+    inv_dfg_ = DFg.array().inverse();
+    pv_grid_.setZero(n_inst, DFg.cols());
+    const int* __restrict p = pay.data();
+    const int* __restrict ss = subS.data();
+    const int* __restrict se = subE.data();
+    const int* __restrict in = inst.data();
+    for (int i = 0; i < n_cpn_; ++i)
+      pv_grid_.row(in[i]).array() +=
+          DFg.row(p[i]).array() * (DFg.row(ss[i]).array() * inv_dfg_.row(se[i]).array() - 1.0);
+    return pv_grid_;
+  }
+
   // Per-instrument (per-future) rate = (num + realized)*inv_tau + convexity. Const ref into scratch.
   const Eigen::VectorXd& rate(const Eigen::VectorXd& DF) const {
     if (sub_is_identity) {
@@ -394,6 +449,9 @@ struct BundleFloatBatch {
   // Each returns a const ref into these; because gen_pos_/gen_neg_ are distinct batch objects, two
   // results (one per batch) are simultaneously live in model_rates without aliasing.
   mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_;
+  // Batched-grid scratch (pv_grid): pv_grid_ is n_inst x n_states (coupons accumulated straight into their
+  // instrument row); inv_dfg_ is the per-tile reciprocal DF grid (n_times x n_states). Sized on first use.
+  mutable RowMatrixXd pv_grid_, inv_dfg_;
 };
 
 // Fixed-leg annuities of N instruments discounting curve `dc`: ann = sum(tau*DF[pay]).
@@ -434,6 +492,20 @@ struct BundleFixedLegs {
     ann_res_.noalias() = R * disc_;
     return ann_res_;
   }
+  // BATCHED annuity over a curve-state GRID (MC-exposure hot path, design R12 coupon-batch). DFg is the
+  // ROW-MAJOR DF grid (n_times x n_states). The pay INDICES are state-invariant; only DF values change, so
+  // gather each coupon's pay row ONCE, scale by tau across all states, and ACCUMULATE straight into its
+  // instrument's annuity row:  ann_grid.row(inst[i]) += tau[i]·DFg.row(pay[i]). Column j equals
+  // annuity(DFg.col(j)) to GEMM rounding. Const ref into per-batch scratch; alloc-free after warmup.
+  const RowMatrixXd& annuity_grid(const RowMatrixXd& DFg) const {
+    const int n = static_cast<int>(pay.size());
+    ann_grid_.setZero(n_inst, DFg.cols());  // accumulate coupons straight into their instrument row (R is
+    const int* __restrict p = pay.data();   // a segment-sum: one instrument's coupons are contiguous), so
+    const int* __restrict in = inst.data(); // no n_cpn × n_states disc grid and no SpMM — ann_grid_ stays
+    const double* __restrict t = tau.data();// cache-hot at n_inst × n_states.
+    for (int i = 0; i < n; ++i) ann_grid_.row(in[i]).array() += t[i] * DFg.row(p[i]).array();
+    return ann_grid_;
+  }
   // d(annuity)/dDF[pay_i] = tau_i, accumulated into rows [row0, row0+n_inst).
   void d_annuity(Eigen::MatrixXd& d, int row0) const {
     for (int i = 0; i < static_cast<int>(pay.size()); ++i) d(row0 + inst[i], pay[i]) += tau[i];
@@ -443,6 +515,7 @@ struct BundleFixedLegs {
   std::vector<int> p_, row_;
   std::vector<double> t_;
   mutable Eigen::VectorXd disc_, ann_res_;  // per-batch reusable scratch for annuity()
+  mutable RowMatrixXd ann_grid_;  // reusable scratch for annuity_grid()
 };
 
 }  // namespace swaps::pricing
