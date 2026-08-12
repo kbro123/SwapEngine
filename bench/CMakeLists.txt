@@ -26,6 +26,10 @@ target_link_libraries(exposure_grid_bench PRIVATE swaps benchmark::benchmark_mai
 add_executable(cms_replication_bench cms_replication_bench.cpp)
 target_link_libraries(cms_replication_bench PRIVATE swaps benchmark::benchmark_main)
 
+# Caplet-vol stripping: full cap-curve bootstrap (ours-only, R9 O(n^2)->O(n) prefix).
+add_executable(cap_stripping_bench cap_stripping_bench.cpp)
+target_link_libraries(cap_stripping_bench PRIVATE swaps benchmark::benchmark_main)
+
 # Swaption vol-cube reprice: warm (streaming, no recalibration) vs cold (one-shot verb). Ours-only probe;
 # links swaps_api for BundleSession + bundle_from_json, reads the SOFR bundle fixture by compiled-in path.
 add_executable(vol_cube_bench vol_cube_bench.cpp)

@@ -79,15 +79,15 @@ inline std::vector<double> strip_caplet_vols(const std::vector<CapletLeg>& legs,
     throw std::invalid_argument("strip_caplet_vols: cap_last_leg and cap_flat_vols length mismatch");
   std::vector<double> vols(legs.size(), 0.0);
   int prev = 0;
+  double fixed = 0.0;  // running PV of the already-stripped prefix [0..prev-1] — accumulated, not re-summed
   for (std::size_t j = 0; j < cap_last_leg.size(); ++j) {
     const int e = cap_last_leg[j];
     if (e < prev || e >= static_cast<int>(legs.size()))
       throw std::invalid_argument("strip_caplet_vols: cap_last_leg must be increasing and in range");
-    // Target = the whole cap [0..e] at its flat vol; the [0..prev-1] part is already stripped.
-    const std::vector<CapletLeg> whole(legs.begin(), legs.begin() + (e + 1));
-    const double target = cap_price_flat(whole, strike, cap_flat_vols[j], cp);
-    double fixed = 0.0;
-    for (int i = 0; i < prev; ++i) fixed += caplet_price(legs[i], strike, vols[i], cp);
+    // Target = the whole cap [0..e] priced at its flat vol (summed in place — no per-bucket vector copy).
+    // The [0..prev-1] part is already stripped, so its PV is carried in `fixed` (O(1)) instead of re-summed.
+    double target = 0.0;
+    for (int i = 0; i <= e; ++i) target += caplet_price(legs[i], strike, cap_flat_vols[j], cp);
     // Solve the bucket vol v so sum_{prev..e} caplet(v) = target - fixed (monotone increasing in v).
     const double residual = target - fixed;
     const auto bucket = [&](double v) {
@@ -103,7 +103,9 @@ inline std::vector<double> strip_caplet_vols(const std::vector<CapletLeg>& legs,
       (bucket(mid) < residual ? lo : hi) = mid;
     }
     const double v = 0.5 * (lo + hi);
-    for (int i = prev; i <= e; ++i) vols[i] = v;
+    // Set this bucket's vols AND fold its PV into the running prefix (same caplet(v) evals the old re-sum
+    // would repeat next iteration — so `fixed` stays byte-for-byte Σ_{0..prev-1} caplet(stripped_i)).
+    for (int i = prev; i <= e; ++i) { vols[i] = v; fixed += caplet_price(legs[i], strike, v, cp); }
     prev = e + 1;
   }
   return vols;
