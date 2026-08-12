@@ -47,7 +47,7 @@ matvec. Every linear scheme (Flat/Linear/Hermite/BSpline/Tension) gets the `W_al
 | R8 | SABR vol recomputed per strike; ATM via full smile (`options.cpp:115`) | `sabr_node()` memoizes F/T part; closed-form ATM |
 | R9 | `strip_caplet_vols` O(n²) (`cap_stripping.hpp:87-95`) | carry prefix PV as running sum → O(n) |
 | R10 | `sabr_calibrate` evals strip 2× / iter (`sabr_calibration.hpp:57,72,86`) | recover RMS from AAD residual pass |
-| R11 | per-op Dual gradient heap-allocs (`aad_block.hpp:16-18`) | pooled fixed-width Dual → allocation-FREE (also what the reverse tape wants) |
+| R11 | per-op Dual gradient heap-allocs (`aad_block.hpp:16-18`) | pooled fixed-width Dual → allocation-FREE (also what the reverse tape wants). **DONE (general path):** `ad::DualPooled<MaxW>` (dynamic-length gradient stored in-object, capacity MaxW=48; empty-gradient semantics identical to `Dual` so no garbage, bit-for-bit oracle-green); `aad_jacobian` uses it for n_knots≤48, heap `Dual` fallback beyond. `BM_Single_JacAAD` 246→47µs (**5.2×**). Still TODO: retype the `AadBlock` width-reduced hybrid path (`xd_`/`ducurves_`) onto `DualPooled`. |
 | R12 | exposure would re-derive `W_all` per path | derive once; whole grid = one `W_all·X` matmul; node-aging via live-flow union / zero-amount masking |
 
 ## 3. Ranked performance backlog

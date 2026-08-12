@@ -11,9 +11,11 @@
 
 namespace swaps::calibration {
 
-template <class Problem>
-Eigen::MatrixXd aad_jacobian(const Problem& prob, const Eigen::VectorXd& x) {
-  const auto rd = prob.template residuals<ad::Dual>(ad::seed(x));
+// Scatter one differentiated residual pass (whatever the seed's Scalar) into J. `Seeded` is the seeded
+// knot vector (Dual or DualPooled); the residual gradients are size m for curve-dependent rows.
+template <class Scalar, class Problem, class Seeded>
+inline Eigen::MatrixXd aad_jacobian_with(const Problem& prob, const Seeded& xd) {
+  const auto rd = prob.template residuals<Scalar>(xd);
   const int n = prob.n_residuals(), m = prob.n_knots();
   Eigen::MatrixXd J(n, m);
   for (int i = 0; i < n; ++i) {
@@ -24,6 +26,15 @@ Eigen::MatrixXd aad_jacobian(const Problem& prob, const Eigen::VectorXd& x) {
       J.row(i).setZero();
   }
   return J;
+}
+
+template <class Problem>
+Eigen::MatrixXd aad_jacobian(const Problem& prob, const Eigen::VectorXd& x) {
+  // R11: for a narrow problem the pooled dual keeps the whole sweep off the heap (bit-identical to the
+  // `Dual` path); a wider bundle falls back to the heap `Dual`.
+  if (prob.n_knots() <= ad::kPooledMaxW)
+    return aad_jacobian_with<ad::DualPooled<ad::kPooledMaxW>>(prob, ad::seed_pooled<ad::kPooledMaxW>(x));
+  return aad_jacobian_with<ad::Dual>(prob, ad::seed(x));
 }
 
 }  // namespace swaps::calibration
