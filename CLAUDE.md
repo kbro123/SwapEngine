@@ -305,11 +305,15 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   (AVX-512 / AVX2 / AVX / NEON / SSE2) — it sets `SWAPS_ARCH_FLAGS` (`-march=native`), `SWAPS_ISA_NAME`,
   and `SWAPS_EIGEN_DEFINES` (`EIGEN_ENABLE_AVX512` here); `SWAPS_ENABLE_AVX512` is ON when detected. See
   the no-hard-coded-width rule in §5. The project builds optimally on any host.
-- **macOS 14.7.3 Sonoma (Darwin 23.6.0).**
+- **macOS 26.5 (Darwin 25.6.0)** — upgraded from 14.7.3 Sonoma; see the toolchain note below.
 - **Perf baselines are per machine-fingerprint** (`baselines/baselines.json`, keyed by cpu+isa+compiler):
-  this box is fingerprint **`a8c9a844826e`** (Xeon W-3223 / AVX-512 / clang 16), re-baselined 2026-07-18;
-  the old MacBook Pro (`52e94be82bc4`, AVX2 / clang 14) is retained but never compared against. `check_perf.py`
-  refuses to compare across fingerprints, so a machine switch can't manufacture a fake speedup.
+  this box is now fingerprint **`86d5211c2c03`** (Xeon W-3223 / AVX-512 / **Apple clang 21**), baselined
+  2026-08-29. The OS/CLT upgrade changed the compiler string, hence the key: the previous entry for this
+  same machine, **`a8c9a844826e`** (clang 16, baselined 2026-07-18), and the old MacBook Pro
+  (`52e94be82bc4`, AVX2 / clang 14) are retained but never compared against. `check_perf.py` refuses to
+  compare across fingerprints, so a machine or toolchain switch can't manufacture a fake speedup — it is
+  why the clang-21 capture had to redo every metric. (`risk_full_jacobian` reads 183x there vs 34.9x under
+  `a8c9a844826e` because of the R5/R11 pooled-AAD commits landed in between, NOT the toolchain.)
 - **Cap build parallelism at the physical-core count** (8 here). `bootstrap_deps.sh` / `verify.sh` cap via
   `SWAPS_BUILD_JOBS`. History (old 4-core/16 GB box): 10 concurrent clang processes exhausted memory and
   tripped an **APFS kernel panic** (`OSMetaClassBase::_RESERVEDOSMetaClassBase6`, panicking task `clang`)
@@ -317,11 +321,18 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
 - **Never run benchmarks while anything else is compiling.** Perf numbers taken under load are garbage.
 - **Do not use Homebrew for project dependencies** (Tier-3 on this OS → source builds, drags in
   `go`/`rust`/`llvm`). Vendor deps into `third_party/` instead.
-- Toolchain: **Apple clang 16 via Command Line Tools 16.2** (`xcode-select -p` →
+- Toolchain: **Apple clang 21 via Command Line Tools 26.x** (`xcode-select -p` →
   `/Library/Developer/CommandLineTools`; no full Xcode installed). C++20 (`-std=c++20`) requires clang 15+.
-  Under CLT 16.x, **libc++ lives in the SDK, not the toolchain** — a missing
+  **libc++ lives in the SDK, not the toolchain** — a missing
   `/Library/Developer/CommandLineTools/usr/include/c++` directory is NORMAL, and plain `-std=c++20` builds
   resolve libc++ from the active SDK (`xcrun --show-sdk-path`) with no extra flags.
+  ⚠️ **After an OS upgrade, DELETE AND RECONFIGURE `build/`.** CMake caches the absolute `-isysroot` path;
+  the upgrade removed `MacOSX15.2.sdk` and every compile failed `'stdexcept' file not found` with a
+  `no such sysroot directory` warning. `rm -rf build && cmake -S . -B build …` fixes it. The vendored
+  QuantLib/gtest/benchmark `.a`s built under clang 16 link fine against clang 21 (libc++ ABI is stable) —
+  no `bootstrap_deps.sh` re-run was needed. The old **macOS 14.5-SDK `CPLUS_INCLUDE_PATH` workaround for
+  QuantLib's `std::format` ADL collision is GONE and no longer needed**: that SDK no longer exists on this
+  box, and QuantLib 1.35 + clang 21 build clean without it.
   ⚠️ **Historical gotcha (fixed 2026-07-26):** a corrupted/partial CLT install had left an *empty-but-
   present* `usr/include/c++/v1` stub dir (just a `__cxx_version` file) that **shadowed** the SDK's copy, so
   every compile failed `'cstddef' file not found` and clang never fell back. **Fix that worked:** a clean
@@ -839,8 +850,8 @@ delete those, they enforce the rule. Two honest residues:
       Also not done: a `scheme` selector on the problem structs so a real Bundle/CalibrationProblem *selects*
       B-spline or the new MonotoneCubic (the W-cache supports the linear ones; only the standalone
       `BSplineProblem`/`MonotoneCubicProblem` tests exercise a non-default scheme today).
-- [ ] **Stage 6 — bonds & bond asset swaps — FOUNDATION DONE (bond pricing + universe sweep); ASSET SWAPS PENDING.**
-      Branch `claude/bond-pricing-asset-swaps-j3hkb8`. Design `docs/bond-pricing.md`. A bond is DATA (dated
+- [x] **Stage 6 — bonds & bond asset swaps — DONE (pricing + universe sweep + asset swaps + API verbs + perf gate).**
+      Merged to `main`. Design `docs/bond-pricing.md`. A bond is DATA (dated
       cashflows + a small yield convention), NOT a subclass — "US Treasury" is field values a builder fills
       in (semiannual, ACT/ACT ICMA, street f=2), never a type in engine code (§0/§1). **DONE & self-check
       green (QL-free `tests/bond_yield_test.cpp`; QL oracle `tests/bond_oracle_test.cpp` written, runs under
@@ -871,20 +882,54 @@ delete those, they enforce the rule. Two honest residues:
         (z-spread/asset-swap/relative-value), no per-bond QuantLib pricing.
       - **Construction** (`build/bond.hpp`): `fixed_rate_bond`/`us_treasury` build both representations from
         bond terms; ACT/ACT ISDA (`year_frac`) + ACT/ACT ICMA (`act_act_icma`) added to `build/day_count.hpp`.
-      - **When-issued (WI)** (`when_issued_bond`/`us_treasury_wi`, 31 CFR Part 356 App B / Rateslib
-        `ust_31bii`): settle on the dated date (new issue => ZERO accrued; a reopening settles later within
+      - **When-issued (WI)** (`when_issued_bond`/`us_treasury_wi`): settle on the dated date (new issue => ZERO accrued; a reopening settles later within
         the first period => accrued from the ORIGINAL dated date), with a SHORT first coupon PRORATED to
         actual days (`coupon/f·(first_coupon−dated)/E`). Stays on the Horner fast path — the short coupon only
         changes the first coefficient, not the exponent spacing, so `is_regular()` holds. Long first coupon
-        (spans >1 quasi-period) is rejected (follow-up). Gated by `BondWhenIssued.*`.
+        (spans >1 quasi-period) is rejected (follow-up). Gated by `BondWhenIssued.*`. **The PRORATION is
+        31 CFR Part 356 App B; the DISCOUNTING is NOT** — see the convention note below.
+      - **STREET vs TREASURY (31 CFR App B) discounting — a real convention gap, now pinned.** Both agree on
+        the cashflows, on accrued and on the whole coupon polynomial `Q(v)`; they differ ONLY in the
+        FRACTIONAL first period: ours is `dirty = Q(v)·v^w` (COMPOUND — the US street convention, what
+        QuantLib `BondFunctions`/`Compounded` and Rateslib `us_gb` give), while App B is
+        `dirty = Q(v)/(1+w·y/f)` (SIMPLE — Rateslib `ust_31bii` = `us_gb_tsy`). The regulation is uniform:
+        every sub-case in App B Section II (regular/short/long first period + the three reopened cases) is
+        written `P[1 + (r/s)(i/2)] = …`, never a compound `(1+i/2)^(r/s)`. The exact identity is
+        `dirty_AppB = dirty_street·(1+y/f)^w/(1+w·y/f)` — **~7e-6 of price (~0.7 bp)** on a 6y note at 2%, so
+        the two are NOT interchangeable. **We implement STREET only.** This was invisible until the Rateslib
+        golden was actually generated (2026-08-29): the old `CfrAppendixBShortFirstCoupon` "reimplementation"
+        reimplemented `v^w` and compared it to our `v^w` — a TAUTOLOGY that could not fail. Both tests now
+        pin the relationship explicitly. A Treasury-convention mode on `YieldBond` is a follow-up (cheap —
+        only the `pow(v,w)` factor changes, Horner intact — but it needs an explicit mode flag).
       - **Cross-validation beyond QuantLib** (`tests/bond_reference_test.cpp`, QL-free; `tools/bond_reference/`):
-        Excel/OpenFormula PRICE/YIELD (reimplemented — different algebra than Horner) and 31 CFR App B
-        short-first (reimplemented) are checked in-code to 1e-12; an OPTIONAL external golden from
-        **Rateslib** (`ust_31bii`, Bloomberg-aligned) via `gen_golden.py` is pinned by
-        `BondReference.ExternalGoldenIfPresent` (skips if absent). A single oracle can hide a shared
-        convention assumption, so bond math is checked against QuantLib AND these.
-      **PENDING (next):** bond asset swaps (par-par ASW spread reusing the swap float leg + the bond fixed
-      leg — the engine's `ParSpread` quote referencing a bond leg and a market dirty price); a `bond`/
-      `bond_universe` verb on the JSON/`BundleSession` API seam; a QL-linked sweep benchmark
-      (`BondUniverse`/`CompiledBondBook` vs a per-bond `QuantLib::Bond` loop); non-treasury bond types
-      (Gilt/Bund/corporate/FRN) as new builders filling the SAME structs.
+        Excel/OpenFormula PRICE/YIELD (reimplemented — different algebra than Horner) is checked in-code to
+        1e-12, and the 31 CFR App B reimplementation now pins the coupon polynomial exactly AND the
+        street↔Treasury factor above. `gen_golden.py` emits an external **Rateslib** golden in BOTH modes
+        (`mode` column): `us_gb` asserted EQUAL to 1e-9, `ust_31bii` asserted equal after the convention
+        factor — so `BondReference.ExternalGoldenIfPresent` would catch drift in EITHER convention. It still
+        skips if the CSV is absent. **Rateslib is source-available, NOT open-source** (an earlier note here
+        and in `gen_golden.py` said "MIT" — wrong): without a registered licence, use is non-commercial only
+        (<https://rateslib.com/licence>). Generating or committing that golden is a use of it; the QuantLib
+        oracle + the two QL-free reimplementations need no third-party code. A single oracle can hide a
+        shared convention assumption — which is exactly what happened here.
+      - **Asset swaps + API verbs — DONE.** Par-par ASW spread vs a `QuantLib::AssetSwap::fairSpread` oracle
+        (`tests/bond_asset_swap_oracle.cpp`, 5e-5); the stateless street-space `bonds` run_json verb; the
+        curve-space `asset_swap` verb off a bundle.
+      - **PERF GATE — DONE** (`bench/bond_sweep_bench.cpp`, metrics `bond_sweep` + `bond_book`). 5,000
+        seasoned treasuries off the SAME QuantLib/compiler/flags. Ours 3.51 ms vs `BondFunctions::yield`
+        bond-for-bond 2,500 ms = **712×**; curve-space book 414 µs vs a per-bond `DiscountingBondEngine`
+        loop 27.9 ms = **67×**. **Never quote the 712× alone:** measured with a counting solver in the same
+        `CashFlows::yield<Solver>` template, ONE bond costs 34 npv + 29 duration = **63 leg walks**, because
+        `IrrFinder::derivative` returns `modifiedDuration = −P′/P` where the objective needs `−P′ = P·modDur`
+        — in the 100-face basis QuantLib normalizes to, that is a ~99× under-scaled Newton step and the
+        safeguarded solver mostly bisects. `BM_BondSweep_QuantLibTuned` re-runs the SAME QuantLib pricing
+        from a correctly-scaled Newton (~4 iterations): 459 ms, i.e. **125×** — the honest kernel-vs-kernel
+        number, and the `bond_sweep` threshold (50×) sits below BOTH. A leg walk is ~11 µs / 45 cashflows,
+        ~215 ns of the ~245 ns per cashflow being `ActualActual(ISMA)::yearFraction`; we bake that structure
+        into the exponents once. The fixture ABORTS unless both paths agree (1.0e-14 on yields, 5.9e-15 rel
+        on curve prices) so a mis-set-up universe cannot quote a speedup. Size sweep (opt-in
+        `SWAPS_BOND_SCALE=1`): no small-universe crossover — 680/600/736/738 ns per bond at 100/1k/5k/10k
+        vs a flat ~500 µs per bond.
+      **PENDING (next):** curve-space key-rate DV01 beyond PV; a Treasury (App B) discounting mode; long-
+      first-coupon when-issued; non-treasury bond types (Gilt/Bund/corporate/FRN) as new builders filling
+      the SAME structs.

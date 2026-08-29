@@ -151,8 +151,14 @@ inline BuiltBond us_treasury(const Date& value_date, const Date& settle, const D
 //      PRORATED to the actual days — interest = (coupon/f)·(first_coupon − dated)/E, E the full quasi-coupon
 //      period [first_coupon − period, first_coupon] (31 CFR 356 App B / Treasury "daily interest decimal").
 //
-// This is the 31 CFR Part 356 Appendix B convention (Rateslib's calc_mode "ust_31bii" reprices its
-// examples). Crucially it stays on the FAST Horner path: the discount exponents are still w0 + integer
+// The PRORATION is 31 CFR Part 356 App B; the DISCOUNTING here is NOT. App B writes every one of its
+// sub-cases as "P[1 + (r/s)(i/2)] = ..." -- SIMPLE interest over the fractional period -- whereas this
+// builder (like the rest of the kernel, like QuantLib's BondFunctions/Compounded, and like Rateslib's
+// "us_gb") discounts it by the COMPOUND factor v^{w0}: the US STREET convention. The two are related
+// exactly by dirty_AppB = dirty_street*(1+y/f)^{w0}/(1+w0*y/f) -- ~7e-6 of price (~0.7 bp) on a 6y note at
+// 2%, so they are not interchangeable. A Treasury-convention mode is a documented follow-up; see the
+// header note in tests/bond_reference_test.cpp, which pins the relationship against the regulation and
+// against Rateslib "ust_31bii". Crucially this stays on the FAST Horner path: the discount exponents are still w0 + integer
 // (w0 = (first_coupon − settle)/E), so only the FIRST coefficient (coupon·s) and the accrued differ — the
 // geometric structure is intact, so BondUniverse::is_regular() is still true.
 //

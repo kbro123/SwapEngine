@@ -137,19 +137,97 @@ independent references (`tests/bond_reference_test.cpp`, QL-free; harness in `to
 | Reference | Role | Independence |
 |-----------|------|--------------|
 | **Excel / OpenFormula `PRICE`/`YIELD`** (basis 1 = Act/Act) | reimplemented from its published formula — a *different algebra* than our Horner kernel — and checked to 1e-12 | high (different lineage, same convention) |
-| **31 CFR Part 356 Appendix B** | the **official** US Treasury formula (regular + short-first / when-issued), reimplemented | authoritative — it *defines* the convention |
-| **[Rateslib](https://rateslib.com)** `calc_mode="ust_31bii"` / `"us_gb"` | `ust_31bii` reprices the CFR App B examples and is Bloomberg-aligned; `tools/bond_reference/gen_golden.py` emits a golden CSV that `BondReference.ExternalGoldenIfPresent` pins (skips if absent) | high (independent lib) |
+| **31 CFR Part 356 Appendix B** | the **official** US Treasury formula, reimplemented from the regulation. It is a **different convention** from ours (see below), so the test pins the exact relationship, not equality | authoritative — it *defines* the Treasury convention |
+| **[Rateslib](https://rateslib.com)** `calc_mode="us_gb"` **and** `"ust_31bii"` | `us_gb` is the street convention we implement (asserted EQUAL, 1e-9); `ust_31bii` is App B (asserted equal after the exact convention factor). `tools/bond_reference/gen_golden.py` emits both into a golden CSV that `BondReference.ExternalGoldenIfPresent` pins (skips if absent). **Rateslib is source-available, not open-source — non-commercial use only without a licence** | high (independent lib) |
 | **FinancePy** | alternative golden source (swap into `gen_golden.py`) | high |
 | **Bloomberg YAS / Tradeweb** | market truth for a specific CUSIP — manual spot-checks into the golden CSV | gold standard |
 
 See `tools/bond_reference/README.md` for how to generate the external golden.
 
+### Street vs Treasury (31 CFR App B) discounting — the one convention difference
+
+Both conventions agree on the cashflows, on accrued, and on the entire coupon polynomial
+`Q(v) = Σ CF_k·v^k`. They differ ONLY in how the **fractional first period `w`** is discounted:
+
+| | formula | who |
+|---|---|---|
+| **STREET** | `dirty = Q(v)·v^w` (compound) | **ours**, QuantLib `BondFunctions` with `Compounded`, Rateslib `us_gb` |
+| **TREASURY / 31 CFR App B** | `dirty = Q(v)/(1 + w·y/f)` (simple) | Rateslib `ust_31bii` = `us_gb_tsy`; Bloomberg's Treasury method |
+
+The regulation is uniform on this — Appendix B Section II writes *every* sub-case (regular first period,
+short first, long first, and the three reopened cases) as `P[1 + (r/s)(i/2)] = …`, never as a compound
+`(1+i/2)^(r/s)`. The exact identity between them is
+
+```
+dirty_AppB = dirty_street · (1 + y/f)^w / (1 + w·y/f)
+```
+
+On a 6y note at `y = 2%` with `w = 30/184` that is ~7e-6 of price (**~0.7 bp**) — well above every
+tolerance in this repo, so the two are **not** interchangeable.
+
+**We implement STREET only.** This was found by generating the Rateslib golden (which the earlier
+`gen_golden.py` produced under `ust_31bii`) and watching it disagree; the older
+`BondReference.CfrAppendixBShortFirstCoupon` could not have caught it, because it reimplemented `v^w` and
+compared that to our `v^w` — a tautology. Both tests now pin the relationship explicitly.
+
+**Follow-up (not done):** a Treasury-convention mode on `YieldBond`. It is cheap and stays on the Horner
+fast path — only the single `pow(v,w)` factor is replaced by `1/(1+w·y/f)`, and the derivatives follow —
+but it changes the meaning of `bond_dirty_from_yield`, so it wants an explicit mode flag rather than a
+silent switch.
+
+## 4b. Measured, not asserted — the perf gate
+
+Until 2026-08-29 nothing in this repo had ever *timed* the bond kernel against any external library; the
+"without a per-bond QuantLib pricing loop" framing above was design intent that read like a result. It is
+now a gated measurement: `bench/bond_sweep_bench.cpp`, 5,000 seasoned semiannual treasuries, built from the
+**same** QuantLib with the same compiler and flags (CLAUDE.md §3 perf-gate integrity), wired into
+`check_perf.py` + `baselines/baselines.json` as `bond_sweep` and `bond_book`. Fingerprint `86d5211c2c03`
+(Xeon W-3223, Apple clang 21):
+
+| metric | ours | QuantLib | speedup |
+|---|---|---|---|
+| `bond_sweep` — price→YTM over the universe | **3.51 ms** (`BondUniverse::yields_from_clean`) | 2,500 ms (`BondFunctions::yield` bond-for-bond) | **712×** |
+| — vs the *harder* baseline (see below) | 3.67 ms | 459 ms (`BM_BondSweep_QuantLibTuned`) | **125×** |
+| `bond_book` — curve-space dirty prices | **414 µs** (`CompiledBondBook::dirty_prices`) | 27.9 ms (per-bond `Bond::dirtyPrice()` off a `DiscountingBondEngine`, handle relinked so no cached NPV) | **67×** |
+
+**The 712× is not all vectorization, and must never be quoted alone.** Measured by substituting a counting
+solver into the same `CashFlows::yield<Solver>` template QuantLib's default path instantiates: **one** bond
+costs **34 `npv` walks + 29 `modifiedDuration` walks = 63 leg walks**, at ~11 µs each. The cause is a
+scaling bug in the library — `CashFlows::IrrFinder::derivative` returns `modifiedDuration = −P′/P`, but its
+objective is `npv − P(y)`, whose derivative is `−P′(y) = P·modDur`. `BondFunctions` normalizes the leg to a
+100-face basis, so `P ≈ 99` and `NewtonSafe` is handed a derivative ~99× too small: every Newton step
+undershoots and the safeguarded solver mostly bisects. (Starting the solve *at* the answer saves only ~16%,
+so it is the step scaling, not the bracket hunt.)
+
+`BM_BondSweep_QuantLibTuned` therefore drives the **same** QuantLib pricing (`CashFlows::npv` /
+`CashFlows::duration` over the same `Leg`) from a correctly-scaled Newton, ~4 iterations. That is the honest
+kernel-vs-kernel number, **125×**, and the `bond_sweep` threshold is set at 50× — below both ratios, so the
+gate does not rest on the artifact.
+
+Also measured from the same probe, and worth knowing: a leg walk is ~11 µs for 45 cashflows (~245
+ns/cashflow), of which **~215 ns is `ActualActual(ISMA)::yearFraction`** — swapping in `Actual365Fixed`
+drops the full solve 783 µs → 230 µs. Recomputing the accrual structure every iteration is most of a walk;
+we bake it into the exponents once at build. That is the thesis of §3, quantified.
+
+**Gate integrity.** The fixture *aborts* rather than reporting a speedup unless the batched yields match a
+converged `BondFunctions::yield` to 1e-12 (measured 1.0e-14), the tuned baseline to 1e-12 (7.8e-16), and the
+curve-space dirty prices match `DiscountingBondEngine` to 1e-9 relative (5.9e-15). The correctness check
+drives QuantLib at accuracy 1e-14; at its **default** 1e-10 the two differ by ~1e-10, which is QuantLib's
+own stopping rule and not a disagreement. Both *timed* sides run at their library defaults, and ours is the
+stricter (1e-13 on the dirty-price residual).
+
+**No small-universe crossover.** The batched Newton cannot arrest a converged bond, so it was expected to
+be relatively weaker on a small universe. The size sweep (opt-in: `SWAPS_BOND_SCALE=1
+./build/bench/bond_sweep_bench --benchmark_filter=Scale`) says otherwise — ours is 680 / 600 / 736 / 738 ns
+per bond at 100 / 1k / 5k / 10k, against a flat ~500 µs per bond for QuantLib.
+
 ## 5. When-issued (WI) — the subtly-different yield path
 
 A when-issued treasury trades before issue, for settlement ON the issue (dated) date, and its FIRST coupon
 period is frequently irregular. Two subtleties, both in the first period, make the yield calc differ from a
-seasoned bond (`build::when_issued_bond` / `us_treasury_wi`, following **31 CFR Part 356 Appendix B** —
-Rateslib's `ust_31bii`):
+seasoned bond (`build::when_issued_bond` / `us_treasury_wi`). Its **coupon proration** follows **31 CFR
+Part 356 Appendix B**; its **discounting** is the street convention, not App B's — see "Street vs Treasury
+(31 CFR App B) discounting" above:
 
 1. **Issue-date settlement.** A NEW issue settles on the dated date, so accrued is exactly **zero**. A
    **reopening** settles later within the first period and carries accrued from the *original* dated date —
@@ -163,9 +241,10 @@ Crucially this **stays on the fast Horner path**: the discount exponents are sti
 the geometric structure is intact and `BondUniverse::is_regular()` stays true. A **long** first coupon
 (dated before the prior quasi-coupon date, so the first payment spans >1 quasi-period) needs the App B
 quasi-period sum and is rejected for now (documented follow-up). Gated by `BondWhenIssued.*`
-(`bond_yield_test.cpp`) and `BondReference.CfrAppendixBShortFirstCoupon`.
+(`bond_yield_test.cpp`) and `BondReference.CfrAppendixBShortFirstCoupon`, which checks the App B coupon
+polynomial (hence the proration) exactly AND the street↔Treasury factor above.
 
-## 6. Next: bond asset swaps
+## 6. Bond asset swaps — DONE
 
 A **par-par asset swap** is the engine's existing machinery with a bond leg:
 - The investor pays par (1.0), receives the bond (worth its market dirty price `P`), pays the bond's fixed
@@ -175,8 +254,9 @@ A **par-par asset swap** is the engine's existing machinery with a bond leg:
   where one leg is the bond's fixed cashflows (curve-priced) and the target is the market dirty price.
 
 This reuses `float_leg_pv` / `annuity` (`cashflows.hpp`) and the curve-space bond PV above — no new pricing
-primitive. Planned as `build/asset_swap.hpp` (construction) + a `ParSpread`-style residual/quote so a book
-of asset swaps calibrates/reprices on the same W-cache, plus a JSON/`BundleSession` verb.
+primitive. **Landed** in `d4e3184` (par-par ASW spread + a `QuantLib::AssetSwap::fairSpread` oracle,
+`tests/bond_asset_swap_oracle.cpp`, 5e-5) and `88e9196` (the curve-space `asset_swap` run_json verb); the
+stateless street-space `bonds` verb landed in `e4d0b6b`.
 
 ## 7. Extending to other bond types (no layer change)
 
