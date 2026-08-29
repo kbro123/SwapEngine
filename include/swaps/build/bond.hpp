@@ -1,8 +1,13 @@
 // swaps::build — bond construction. Assembles the engine's plain bond structs (pricing::Bond in curve
 // space, pricing::YieldBond in street/yield space) from bond terms + conventions. The bond-type specifics
-// live HERE as DATA (US Treasury = semiannual, ACT/ACT ICMA, unadjusted regular periods, street street
-// yield f=2), never in the pricing kernel (CLAUDE.md §0/§1). A new bond type (Gilt, Bund, corporate,
+// live HERE as DATA (US Treasury = semiannual, ACT/ACT ICMA, unadjusted regular periods, street yield
+// f=2), never in the pricing kernel (CLAUDE.md §0/§1). A new bond type (Gilt, Bund, corporate,
 // ACT/365 money-market bond, FRN) is a new builder filling the SAME structs — no engine change.
+//
+// TIMING conventions are absorbed into the per-flow exponent E_i here, which is why the sweep stays on
+// the Horner fast path. The one thing an exponent cannot express is the DISCOUNT FORM of the fractional
+// first period, so that travels as pricing::YieldConvention (stub + final_period_simple) — see the
+// convention table in pricing/bond.hpp. Named builders below pick it; callers should not set it by hand.
 //
 // Faithful to QuantLib's FixedRateBond built on a semiannual Schedule with Unadjusted dates and
 // ActualActual(ISMA): coupon amounts rate/f per unit notional, redemption 1.0 at maturity, ACT/ACT ISMA
@@ -34,7 +39,13 @@ struct FixedBondTerms {
   Date issue;
   Date maturity;
   double coupon = 0.0;  // annual coupon rate (0.04 = 4%)
-  int freq = 2;         // coupons per year
+  int freq = 2;         // coupons per year (also the yield compounding frequency f)
+  // Yield CONVENTION — how the fractional first period is discounted (pricing/bond.hpp YieldConvention).
+  // The default is the plain compound stub (UK gilt / French OAT). A US Treasury quoted STREET wants
+  // final_period_simple = true; the 31 CFR App B / Bloomberg "Treasury method" wants stub = Simple. Use
+  // the named builders below rather than setting these by hand.
+  px::StubDiscount stub = px::StubDiscount::Compound;
+  bool final_period_simple = false;
 };
 
 // Both representations of one built bond, plus the pieces a caller needs to relate them.
@@ -123,7 +134,9 @@ inline BuiltBond fixed_rate_bond(const FixedBondTerms& t) {
   // Street-space flows: exponent E_i = w + i for the i-th future coupon (i = 0 at `cur`), amount rate/f
   // (+1.0 redemption at maturity). This is the ACT/ACT ISMA street convention (each full period adds
   // exactly 1 compounding period; the current partial period contributes w).
-  out.yield.freq = double(t.freq);
+  out.yield.conv.freq = double(t.freq);
+  out.yield.conv.stub = t.stub;
+  out.yield.conv.final_period_simple = t.final_period_simple;
   out.yield.accrued = out.accrued;
   for (std::size_t j = cur; j < cpn.size(); ++j) {
     px::YieldFlow yf;
@@ -134,10 +147,24 @@ inline BuiltBond fixed_rate_bond(const FixedBondTerms& t) {
   return out;
 }
 
-// Convenience: a US Treasury note/bond (semiannual, ACT/ACT ISMA street convention).
+// Convenience: a US Treasury note/bond (semiannual, ACT/ACT ISMA), quoted on the US STREET convention —
+// compound stub, EXCEPT once settlement reaches the final coupon period, where the market (and QuantLib
+// via SimpleThenCompounded, and Rateslib `us_gb`) discounts the remaining stub simple. Before that final
+// period the two are identical; inside it they differ by ~0.7 bp, so the flag is not cosmetic.
 inline BuiltBond us_treasury(const Date& value_date, const Date& settle, const Date& issue,
                              const Date& maturity, double coupon) {
-  return fixed_rate_bond(FixedBondTerms{value_date, settle, issue, maturity, coupon, /*freq=*/2});
+  return fixed_rate_bond(FixedBondTerms{value_date, settle, issue, maturity, coupon, /*freq=*/2,
+                                        px::StubDiscount::Compound, /*final_period_simple=*/true});
+}
+
+// The TREASURY METHOD: 31 CFR Part 356 Appendix B, which is also what Bloomberg reports as the Treasury
+// (as opposed to street) yield, and Rateslib's `ust_31bii`/`us_gb_tsy`. The regulation writes EVERY
+// sub-case as "P[1 + (r/s)(i/2)] = ...", i.e. the fractional period is discounted SIMPLE always — not
+// only in the final period. Oracle: QuantLib with Compounding::SimpleThenCompounded.
+inline BuiltBond us_treasury_tsy(const Date& value_date, const Date& settle, const Date& issue,
+                                 const Date& maturity, double coupon) {
+  return fixed_rate_bond(FixedBondTerms{value_date, settle, issue, maturity, coupon, /*freq=*/2,
+                                        px::StubDiscount::Simple, /*final_period_simple=*/false});
 }
 
 // =================================================================================================
@@ -166,7 +193,9 @@ inline BuiltBond us_treasury(const Date& value_date, const Date& settle, const D
 // (dated BEFORE the prior quasi-coupon date, so the first payment spans >1 quasi-period) is rejected — it
 // needs the App B quasi-period sum and is the documented follow-up.
 inline BuiltBond when_issued_bond(const Date& value_date, const Date& dated, const Date& first_coupon,
-                                  const Date& maturity, double coupon, int freq, const Date& settle) {
+                                  const Date& maturity, double coupon, int freq, const Date& settle,
+                                  px::StubDiscount stub = px::StubDiscount::Compound,
+                                  bool final_period_simple = false) {
   if (freq <= 0 || 12 % freq != 0) throw std::invalid_argument("bond freq must divide 12");
   const int step_m = 12 / freq;
   if (first_coupon <= dated) throw std::invalid_argument("first_coupon must be after the dated date");
@@ -197,7 +226,9 @@ inline BuiltBond when_issued_bond(const Date& value_date, const Date& dated, con
 
   out.curve.settle = curve_time(value_date, settle);
   out.curve.accrued = out.accrued;
-  out.yield.freq = double(freq);
+  out.yield.conv.freq = double(freq);
+  out.yield.conv.stub = stub;
+  out.yield.conv.final_period_simple = final_period_simple;
   out.yield.accrued = out.accrued;
   for (int j = 0; j < N; ++j) {
     const double amt = (j == 0 ? cpn * s : cpn) + (j + 1 == N ? 1.0 : 0.0);  // first coupon prorated by s
@@ -213,11 +244,25 @@ inline BuiltBond when_issued_bond(const Date& value_date, const Date& dated, con
   return out;
 }
 
-// Convenience: a when-issued US Treasury settling on its issue (dated) date (semiannual). New issue =>
-// zero accrued; pass an explicit `settle` (via when_issued_bond) for a reopening within the first period.
+// Convenience: a when-issued US Treasury settling on its issue (dated) date (semiannual), STREET quoted.
+// New issue => zero accrued; pass an explicit `settle` (via when_issued_bond) for a reopening within the
+// first period. A WI bond is by construction in its FIRST period, never its last, so `final_period_simple`
+// cannot fire here — street and plain-compound coincide for a WI quote, and the meaningful choice is
+// street vs the Treasury method below.
 inline BuiltBond us_treasury_wi(const Date& value_date, const Date& dated, const Date& first_coupon,
                                 const Date& maturity, double coupon) {
-  return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, /*freq=*/2, /*settle=*/dated);
+  return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, /*freq=*/2, /*settle=*/dated,
+                          px::StubDiscount::Compound, /*final_period_simple=*/true);
+}
+
+// A when-issued US Treasury on the TREASURY METHOD (31 CFR Part 356 App B). This is the combination the
+// regulation is actually written for: App B's worked examples are new issues and reopenings, and its
+// short-first-coupon proration (already applied by when_issued_bond) travels WITH its simple-stub
+// discounting. Quoting a WI bond off `us_treasury_wi` gives the STREET number instead; they differ.
+inline BuiltBond us_treasury_wi_tsy(const Date& value_date, const Date& dated, const Date& first_coupon,
+                                    const Date& maturity, double coupon, const Date& settle) {
+  return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, /*freq=*/2, settle,
+                          px::StubDiscount::Simple, /*final_period_simple=*/false);
 }
 
 }  // namespace swaps::build

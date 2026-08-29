@@ -63,7 +63,7 @@ TEST(BondYield, DurationConvexityVsFiniteDifference) {
   EXPECT_NEAR(r.modified_duration, -(Pp - Pm) / (2 * h) / P, 1e-6);
   EXPECT_NEAR(r.convexity, (Pp - 2 * P + Pm) / (h * h) / P, 1e-3 * r.convexity);  // 2nd-order FD is roundoff-limited (~eps/h^2); relative sanity bound (QL oracle pins the exact value)
   // Macaulay = Modified * (1 + y/f).
-  EXPECT_NEAR(r.macaulay_duration, r.modified_duration * (1.0 + y / b.yield.freq), 1e-14);
+  EXPECT_NEAR(r.macaulay_duration, r.modified_duration * (1.0 + y / b.yield.conv.freq), 1e-14);
 }
 
 TEST(BondYield, UniverseBatchedEqualsScalar) {

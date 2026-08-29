@@ -888,19 +888,37 @@ delete those, they enforce the rule. Two honest residues:
         changes the first coefficient, not the exponent spacing, so `is_regular()` holds. Long first coupon
         (spans >1 quasi-period) is rejected (follow-up). Gated by `BondWhenIssued.*`. **The PRORATION is
         31 CFR Part 356 App B; the DISCOUNTING is NOT** — see the convention note below.
-      - **STREET vs TREASURY (31 CFR App B) discounting — a real convention gap, now pinned.** Both agree on
-        the cashflows, on accrued and on the whole coupon polynomial `Q(v)`; they differ ONLY in the
-        FRACTIONAL first period: ours is `dirty = Q(v)·v^w` (COMPOUND — the US street convention, what
-        QuantLib `BondFunctions`/`Compounded` and Rateslib `us_gb` give), while App B is
-        `dirty = Q(v)/(1+w·y/f)` (SIMPLE — Rateslib `ust_31bii` = `us_gb_tsy`). The regulation is uniform:
-        every sub-case in App B Section II (regular/short/long first period + the three reopened cases) is
-        written `P[1 + (r/s)(i/2)] = …`, never a compound `(1+i/2)^(r/s)`. The exact identity is
-        `dirty_AppB = dirty_street·(1+y/f)^w/(1+w·y/f)` — **~7e-6 of price (~0.7 bp)** on a 6y note at 2%, so
-        the two are NOT interchangeable. **We implement STREET only.** This was invisible until the Rateslib
-        golden was actually generated (2026-08-29): the old `CfrAppendixBShortFirstCoupon` "reimplementation"
-        reimplemented `v^w` and compared it to our `v^w` — a TAUTOLOGY that could not fail. Both tests now
-        pin the relationship explicitly. A Treasury-convention mode on `YieldBond` is a follow-up (cheap —
-        only the `pow(v,w)` factor changes, Horner intact — but it needs an explicit mode flag).
+      - **STREET vs TREASURY (31 CFR App B) discounting — a real convention gap, found AND now closed.**
+        Every street convention agrees on the cashflows, on accrued and on the coupon polynomial `Q(v)`;
+        they differ ONLY in how the FRACTIONAL first period `w` is discounted. `pricing::YieldConvention
+        {freq, stub, final_period_simple}` is that one degree of freedom (rateslib factors the same thing
+        as v1/v2/v3; interior periods are always regular, so two fields cover it):
+          * `stub=Compound, final=false` — `Q(v)·v^w`. UK gilt / French OAT / Chinese GB. **Default**, and
+            what the kernel always computed. Oracle: QuantLib `Compounded`.
+          * `stub=Compound, final=TRUE` — compound, but SIMPLE once only one cashflow remains. **US
+            Treasury STREET** and Bund (`build::us_treasury`). Before this landed we compounded to the end
+            and were **~0.7 bp rich on every bond in its last six months** — invisible because no test had
+            a final-period bond, and because our QuantLib oracle used `Compounded` too (a shared
+            assumption, the same failure mode twice).
+          * `stub=Simple` — `Q(v)/(1+w·y/f)`. **31 CFR Part 356 App B / Bloomberg Treasury method**
+            (`build::us_treasury_tsy`, `us_treasury_wi_tsy`). The regulation is uniform: every Section II
+            sub-case is written `P[1 + (r/s)(i/2)] = …`, never a compound `(1+i/2)^(r/s)`.
+        **BOTH forms have a first-class QuantLib oracle** — `Compounding::SimpleThenCompounded` reproduces
+        App B exactly (it applies simple interest precisely when the step `t <= 1/f`, i.e. the stub), so
+        neither convention rests on a hand-rolled formula. ⚠️ but QuantLib's `BondFunctions::duration`/
+        `convexity` are NOT the derivative of its own price under `SimpleThenCompounded` (npv chains
+        STEPWISE factors; modifiedDuration branches on CUMULATIVE time then compounds purely): measured
+        1.4e-4 relative vs a central difference of its own price, against 2.1e-11 under `Compounded`. Ours
+        matches that finite difference to ~1e-10, so the oracle test checks prices/yields against
+        QuantLib's analytic values and duration/convexity against an FD of QuantLib's PRICE.
+        **Perf is untouched:** TIMING conventions stay baked into the exponent `E_i` (the Horner fast
+        path); only the closing factor differs (`v^w` vs `1/(1+w·y/f)`, the latter needing NO `pow`), a
+        mixed universe blends the two lanes by a 0/1 mask with no scalar remainder, and a compound-only
+        universe early-returns through byte-identical arithmetic — `bond_sweep` unchanged.
+        Gated by `BondOracle.{TreasuryMethodMatchesSimpleThenCompounded,
+        StreetSwitchesToSimpleStubInTheFinalPeriod, MixedConventionUniverseMatchesTheScalarKernel}`.
+        NOT done: a TIPS index-ratio mode (needs a builder for the 3-month lag + daily CPI interpolation,
+        and the principal deflation floor is optionality, not data), and Gilt ex-div / BTP pay-adjust.
       - **Cross-validation beyond QuantLib** (`tests/bond_reference_test.cpp`, QL-free; `tools/bond_reference/`):
         Excel/OpenFormula PRICE/YIELD (reimplemented — different algebra than Horner) is checked in-code to
         1e-12, and the 31 CFR App B reimplementation now pins the coupon polynomial exactly AND the
@@ -930,6 +948,7 @@ delete those, they enforce the rule. Two honest residues:
         on curve prices) so a mis-set-up universe cannot quote a speedup. Size sweep (opt-in
         `SWAPS_BOND_SCALE=1`): no small-universe crossover — 680/600/736/738 ns per bond at 100/1k/5k/10k
         vs a flat ~500 µs per bond.
-      **PENDING (next):** curve-space key-rate DV01 beyond PV; a Treasury (App B) discounting mode; long-
+      **PENDING (next):** curve-space key-rate DV01 beyond PV; TIPS (index ratio + real yield); long-
       first-coupon when-issued; non-treasury bond types (Gilt/Bund/corporate/FRN) as new builders filling
-      the SAME structs.
+      the SAME structs — the yield-convention slots they need now exist, so most are a one-liner over
+      `fixed_rate_bond` plus their own accrual/ex-div rules.

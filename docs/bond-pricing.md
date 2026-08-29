@@ -149,10 +149,11 @@ See `tools/bond_reference/README.md` for how to generate the external golden.
 Both conventions agree on the cashflows, on accrued, and on the entire coupon polynomial
 `Q(v) = Σ CF_k·v^k`. They differ ONLY in how the **fractional first period `w`** is discounted:
 
-| | formula | who |
-|---|---|---|
-| **STREET** | `dirty = Q(v)·v^w` (compound) | **ours**, QuantLib `BondFunctions` with `Compounded`, Rateslib `us_gb` |
-| **TREASURY / 31 CFR App B** | `dirty = Q(v)/(1 + w·y/f)` (simple) | Rateslib `ust_31bii` = `us_gb_tsy`; Bloomberg's Treasury method |
+| convention | fractional first period | `YieldConvention` | builder | QuantLib oracle |
+|---|---|---|---|---|
+| UK gilt / French OAT / Chinese GB | `Q(v)·v^w` (compound) always | `stub=Compound`, `final_period_simple=false` | `fixed_rate_bond` (default) | `Compounded` |
+| **US Treasury STREET**, Bund | compound, **simple once only the final coupon remains** | `stub=Compound`, `final_period_simple=true` | `us_treasury`, `us_treasury_wi` | `Compounded`, then `SimpleThenCompounded` in the final period |
+| **US Treasury METHOD** (31 CFR App B, Bloomberg) | `Q(v)/(1 + w·y/f)` (simple) always | `stub=Simple` | `us_treasury_tsy`, `us_treasury_wi_tsy` | `SimpleThenCompounded` |
 
 The regulation is uniform on this — Appendix B Section II writes *every* sub-case (regular first period,
 short first, long first, and the three reopened cases) as `P[1 + (r/s)(i/2)] = …`, never as a compound
@@ -165,15 +166,28 @@ dirty_AppB = dirty_street · (1 + y/f)^w / (1 + w·y/f)
 On a 6y note at `y = 2%` with `w = 30/184` that is ~7e-6 of price (**~0.7 bp**) — well above every
 tolerance in this repo, so the two are **not** interchangeable.
 
-**We implement STREET only.** This was found by generating the Rateslib golden (which the earlier
-`gen_golden.py` produced under `ust_31bii`) and watching it disagree; the older
-`BondReference.CfrAppendixBShortFirstCoupon` could not have caught it, because it reimplemented `v^w` and
-compared that to our `v^w` — a tautology. Both tests now pin the relationship explicitly.
+This was found by generating the Rateslib golden (which the earlier `gen_golden.py` produced under
+`ust_31bii`) and watching it disagree; the older `BondReference.CfrAppendixBShortFirstCoupon` could not
+have caught it, because it reimplemented `v^w` and compared that to our `v^w` — a tautology.
 
-**Follow-up (not done):** a Treasury-convention mode on `YieldBond`. It is cheap and stays on the Horner
-fast path — only the single `pow(v,w)` factor is replaced by `1/(1+w·y/f)`, and the derivatives follow —
-but it changes the meaning of `bond_dirty_from_yield`, so it wants an explicit mode flag rather than a
-silent switch.
+**All three modes are now implemented**, selected by `pricing::YieldConvention{freq, stub,
+final_period_simple}` and chosen by the named builders above — callers should not set the fields by hand.
+`simple_stub()` resolves the final-period rule (it fires only when one cashflow remains, at which point
+`Q(v)` is a constant). Both discount forms stay on the **Horner fast path**: the batched sweep already
+accumulates `Q, Q', Q''`, and only the closing factor differs — `v^w` versus `1/(1+w·y/f)` — so the simple
+form is in fact *cheaper* (no `pow`). A universe that mixes conventions is handled by a 0/1 lane mask and
+one blended sweep, with no scalar remainder path; a compound-only universe takes an early return through
+arithmetic that is byte-identical to before, so the `bond_sweep` gate is unaffected.
+
+**Note on QuantLib as the derivative oracle here.** Under `SimpleThenCompounded`, QuantLib's
+`BondFunctions::duration`/`convexity` are *not* the derivatives of its own `dirtyPrice`: `CashFlows::npv`
+chains STEPWISE discount factors (simple stub, then compounding), while `modifiedDuration` branches on the
+CUMULATIVE time and applies a pure-compound factor over it. Measured: QuantLib's analytic modified duration
+differs from a central difference of its own price by **1.4e-4** relative under `SimpleThenCompounded`,
+versus **2.1e-11** under `Compounded` (where `base^{−Σ} == Π base^{−τ}` makes the two agree). Our analytic
+derivative matches that finite difference to ~1e-10. So `BondOracle.TreasuryMethodMatchesSimpleThenCompounded`
+checks prices and yields against QuantLib's analytic values but duration/convexity against a finite
+difference of QuantLib's **price** — still a QuantLib oracle, just not its inconsistent derivative.
 
 ## 4b. Measured, not asserted — the perf gate
 

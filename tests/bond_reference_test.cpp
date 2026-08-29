@@ -31,10 +31,11 @@
 // which is an exact identity, not an approximation. On a 6y note at y=2% (w = 30/184) it is ~7e-6 of
 // price — ~0.7 bp — so the two are NOT interchangeable at the tolerances this repo works to.
 //
-// OUR KERNEL IMPLEMENTS THE STREET CONVENTION ONLY. The App B convention is not implemented; what
-// `build::when_issued_bond` takes from App B is the SHORT-FIRST-COUPON PRORATION (coupon·(first_coupon
-// − dated)/E), not its discounting. Adding a Treasury-convention mode is a documented follow-up
-// (docs/bond-pricing.md).
+// THE KERNEL NOW IMPLEMENTS BOTH, selected by pricing::YieldConvention (see the table in
+// pricing/bond.hpp). `build::us_treasury` is STREET (compound stub, simple once only the final coupon
+// remains); `build::us_treasury_tsy` is the App B / Treasury method (simple stub always); the plain
+// `fixed_rate_bond` default is compound-everywhere, i.e. the UK gilt / French OAT mode. The WI builders
+// mirror the same pair. Both have QuantLib oracles -- Compounded and SimpleThenCompounded respectively.
 //
 // See docs/bond-pricing.md §"Cross-validation beyond QuantLib".
 
@@ -161,22 +162,29 @@ TEST(BondReference, ExternalGoldenIfPresent) {
     std::getline(ss, yl, ','); std::getline(ss, cl, ','); std::getline(ss, di, ',');
     std::getline(ss, ac, ',');
     const bld::Date settle = bld::Date::from_iso(st);
-    const bld::BuiltBond b = bld::us_treasury(bld::Date::from_iso(vd), settle,
-                                              bld::Date::from_iso(is), bld::Date::from_iso(ma),
-                                              std::stod(cp));
-    const double y = std::stod(yl);
-    // accrued is convention-independent (a pure schedule quantity), so it is checked for every row.
-    EXPECT_NEAR(b.accrued, std::stod(ac), 1e-9) << "accrued row " << rows << " (" << mode << ")";
+    const bld::Date vdate = bld::Date::from_iso(vd), iss = bld::Date::from_iso(is),
+                    mat = bld::Date::from_iso(ma);
+    const double cpn = std::stod(cp), y = std::stod(yl);
     if (mode == "us_gb") {
+      // STREET: build::us_treasury. None of these rows settles in the final coupon period, so the
+      // street and plain-compound forms coincide here; the final-period switch is pinned separately by
+      // BondOracle.StreetSwitchesToSimpleStubInTheFinalPeriod.
+      const bld::BuiltBond b = bld::us_treasury(vdate, settle, iss, mat, cpn);
+      EXPECT_NEAR(b.accrued, std::stod(ac), 1e-9) << "accrued row " << rows << " (" << mode << ")";
       EXPECT_NEAR(px::bond_clean_from_yield(b.yield, y), std::stod(cl), 1e-9) << "clean row " << rows;
       EXPECT_NEAR(px::bond_dirty_from_yield(b.yield, y), std::stod(di), 1e-9) << "dirty row " << rows;
       ++street_rows;
     } else if (mode == "ust_31bii") {
-      const double w = double(b.next_coupon - settle) / double(b.next_coupon - b.prev_coupon);
-      const double to_tsy = std::pow(1.0 + y / 2.0, w) / (1.0 + w * y / 2.0);  // street -> Treasury
-      const double dirty_tsy = px::bond_dirty_from_yield(b.yield, y) * to_tsy;
-      EXPECT_NEAR(dirty_tsy, std::stod(di), 1e-9) << "dirty(31bii) row " << rows;
-      EXPECT_NEAR(dirty_tsy - b.accrued, std::stod(cl), 1e-9) << "clean(31bii) row " << rows;
+      // TREASURY METHOD: build::us_treasury_tsy prices the App B convention directly, so this is a plain
+      // equality against the external library -- no conversion factor applied on our side.
+      const bld::BuiltBond b = bld::us_treasury_tsy(vdate, settle, iss, mat, cpn);
+      EXPECT_NEAR(b.accrued, std::stod(ac), 1e-9) << "accrued row " << rows << " (" << mode << ")";
+      EXPECT_NEAR(px::bond_clean_from_yield(b.yield, y), std::stod(cl), 1e-9) << "clean(31bii) row " << rows;
+      EXPECT_NEAR(px::bond_dirty_from_yield(b.yield, y), std::stod(di), 1e-9) << "dirty(31bii) row " << rows;
+      // ... and the two conventions are genuinely different numbers on this same bond.
+      EXPECT_GT(std::abs(px::bond_dirty_from_yield(b.yield, y) -
+                         px::bond_dirty_from_yield(bld::us_treasury(vdate, settle, iss, mat, cpn).yield, y)),
+                1e-6) << "row " << rows;
       ++tsy_rows;
     } else {
       ADD_FAILURE() << "unknown calc mode '" << mode << "' in " << path << " row " << rows;

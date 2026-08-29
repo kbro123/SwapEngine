@@ -59,10 +59,16 @@ class BondUniverse {
     freq_.resize(B);
     accrued_.resize(B);
     w_.setZero(B);
+    simple_.setZero(B);
     regular_ = true;
+    any_simple_ = false;
     for (int b = 0; b < B; ++b) {
-      freq_[b] = bonds[b].freq;
+      freq_[b] = bonds[b].conv.freq;
       accrued_[b] = bonds[b].accrued;
+      // Per-bond stub-discount mode as a 0/1 lane mask (pricing::YieldBond::simple_stub resolves the
+      // final-period rule). Kept as a MASK, not a branch, so a mixed universe still runs one SIMD sweep
+      // with no scalar remainder path (CLAUDE.md §5).
+      if (bonds[b].simple_stub()) { simple_[b] = 1.0; any_simple_ = true; }
       const auto& fl = bonds[b].flows;
       const double w0 = fl.empty() ? 0.0 : fl[0].exponent;  // E_0 = w
       w_[b] = w0;
@@ -149,17 +155,41 @@ class BondUniverse {
       q_ = q_ * v + A_.col(k).array();
     }
     const Eigen::ArrayXd vw = v.pow(w_.array());  // one transcendental per bond (fractional current period)
-    dirty_ = (vw * q_).matrix();
+    const Eigen::ArrayXd w = w_.array();
+    const Eigen::ArrayXd vp = -(v * v) / freq_.array();                             // dv/dy
+    const Eigen::ArrayXd vpp = 2.0 * (v * v * v) / (freq_.array() * freq_.array());  // d²v/dy²
+
+    // COMPOUND stub (the default, and the only path when no bond in the universe is simple): the
+    // arithmetic below is untouched, so a compound-only universe is bit-for-bit what it always was.
+    if (!any_simple_) {
+      dirty_ = (vw * q_).matrix();
+      if (!want_deriv) return;
+      const Eigen::ArrayXd Qp = d_, Qpp = 2.0 * e_;
+      // P_v = v^w(w·Q/v + Q');  P_vv = v^w(w(w−1)Q/v² + 2w·Q'/v + Q'').
+      const Eigen::ArrayXd Pv = vw * (w * q_ / v + Qp);
+      const Eigen::ArrayXd Pvv = vw * (w * (w - 1.0) * q_ / (v * v) + 2.0 * w * Qp / v + Qpp);
+      d1_ = (Pv * vp).matrix();
+      d2_ = (Pvv * vp * vp + Pv * vpp).matrix();
+      return;
+    }
+
+    // MIXED universe. Both closing forms share the SAME Horner accumulators Q, Q', Q'' — only the leading
+    // factor differs — so they are evaluated over all lanes and blended by the 0/1 mask. Branchless, one
+    // sweep, no per-bond dispatch. `SIMPLE` divides by D = 1 + w·y/f instead of multiplying by v^w:
+    //     P = Q/D,  P' = Q'v'/D − Q·D'/D²,  P'' = (Q''v'²+Q'v'')/D − 2Q'v'D'/D² + 2Q·D'²/D³   (D' = w/f)
+    const Eigen::ArrayXd m = simple_.array(), mc = 1.0 - m;
+    const Eigen::ArrayXd D = 1.0 + w * y.array() / freq_.array(), Dp = w / freq_.array();
+    dirty_ = (mc * (vw * q_) + m * (q_ / D)).matrix();
     if (!want_deriv) return;
     const Eigen::ArrayXd Qp = d_, Qpp = 2.0 * e_;
-    const Eigen::ArrayXd w = w_.array();
-    // P_v = v^w(w·Q/v + Q');  P_vv = v^w(w(w−1)Q/v² + 2w·Q'/v + Q'').
     const Eigen::ArrayXd Pv = vw * (w * q_ / v + Qp);
     const Eigen::ArrayXd Pvv = vw * (w * (w - 1.0) * q_ / (v * v) + 2.0 * w * Qp / v + Qpp);
-    const Eigen::ArrayXd vp = -(v * v) / freq_.array();          // dv/dy
-    const Eigen::ArrayXd vpp = 2.0 * (v * v * v) / (freq_.array() * freq_.array());  // d²v/dy²
-    d1_ = (Pv * vp).matrix();
-    d2_ = (Pvv * vp * vp + Pv * vpp).matrix();
+    const Eigen::ArrayXd c1 = Pv * vp, c2 = Pvv * vp * vp + Pv * vpp;            // compound d1/d2
+    const Eigen::ArrayXd Qy = Qp * vp, Qyy = Qpp * vp * vp + Qp * vpp;           // dQ/dy, d²Q/dy²
+    const Eigen::ArrayXd s1 = Qy / D - q_ * Dp / (D * D);                        // simple d1
+    const Eigen::ArrayXd s2 = Qyy / D - 2.0 * Qy * Dp / (D * D) + 2.0 * q_ * Dp * Dp / (D * D * D);
+    d1_ = (mc * c1 + m * s1).matrix();
+    d2_ = (mc * c2 + m * s2).matrix();
   }
 
   // GENERAL PATH (irregular schedules). Per cashflow column: CF·base^{−E}, base = 1 + y/f, one vectorized
@@ -168,23 +198,33 @@ class BondUniverse {
     const int K = static_cast<int>(E_.cols());
     const Eigen::ArrayXd base = 1.0 + y.array() / freq_.array();
     const Eigen::ArrayXd lnbase = base.log();
-    dirty_.setZero(y.size());
-    if (want_deriv) { d1_.setZero(y.size()); d2_.setZero(y.size()); }
+    // A SIMPLE-stub lane shifts its exponents by w (so the stub is not compounded) and divides by
+    // D = 1 + w·y/f at the end; a COMPOUND lane shifts by 0 and divides by 1. One expression, both modes.
+    const Eigen::ArrayXd shift = simple_.array() * w_.array();
+    const Eigen::ArrayXd D = 1.0 + shift * y.array() / freq_.array();
+    const Eigen::ArrayXd Dp = shift / freq_.array();
+    Eigen::ArrayXd N = Eigen::ArrayXd::Zero(y.size()), N1 = N, N2 = N;
     for (int k = 0; k < K; ++k) {
-      const Eigen::ArrayXd Ek = E_.col(k).array();
-      const Eigen::ArrayXd p = A_.col(k).array() * (-Ek * lnbase).exp();  // CF·base^{−E}
-      dirty_.array() += p;
+      const Eigen::ArrayXd Ek = E_.col(k).array() - shift;
+      const Eigen::ArrayXd p = A_.col(k).array() * (-Ek * lnbase).exp();  // CF·base^{−(E−shift)}
+      N += p;
       if (want_deriv) {
-        d1_.array() += -(Ek / freq_.array()) * p / base;                      // CF·(−E/f)·base^{−E−1}
-        d2_.array() += (Ek * (Ek + 1.0) / (freq_.array() * freq_.array())) * p / (base * base);
+        N1 += -(Ek / freq_.array()) * p / base;                      // CF·(−E/f)·base^{−E−1}
+        N2 += (Ek * (Ek + 1.0) / (freq_.array() * freq_.array())) * p / (base * base);
       }
     }
+    dirty_ = (N / D).matrix();
+    if (!want_deriv) return;
+    d1_ = (N1 / D - N * Dp / (D * D)).matrix();
+    d2_ = (N2 / D - 2.0 * N1 * Dp / (D * D) + 2.0 * N * Dp * Dp / (D * D * D)).matrix();
   }
 
   Eigen::MatrixXd E_, A_;             // B×K padded exponents / amounts (A_ = the coupon-polynomial coeffs)
   Eigen::ArrayXd freq_;               // per-bond compounding freq (used in array math)
   Eigen::VectorXd accrued_;           // per-bond accrued (used in price vector arithmetic)
   Eigen::ArrayXd w_;                  // per-bond current-period fraction w = E_0 (the v^w offset)
+  Eigen::ArrayXd simple_;             // per-bond 0/1: 1 => SIMPLE stub discounting (App B / final period)
+  bool any_simple_ = false;           // false => the untouched compound-only closing form is used
   bool regular_ = true;               // all E_i = w + integer => Horner fast path applies
   mutable Eigen::VectorXd y_, dirty_, clean_, d1_, d2_;  // reusable scratch
   mutable Eigen::ArrayXd q_, d_, e_;                     // Horner accumulators (Q, Q', Q''/2)

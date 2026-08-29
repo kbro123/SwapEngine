@@ -49,7 +49,8 @@ struct Pair {
   QuantLib::Date settle;
 };
 
-Pair make_pair(const bld::Date& value, const bld::Date& issue, const bld::Date& maturity, double coupon) {
+Pair make_pair(const bld::Date& value, const bld::Date& issue, const bld::Date& maturity, double coupon,
+               px::StubDiscount stub = px::StubDiscount::Compound, bool final_period_simple = false) {
   Settings::instance().evaluationDate() = qd(value);
   Schedule sched(qd(issue), qd(maturity), Period(Semiannual), NullCalendar(), Unadjusted, Unadjusted,
                  DateGeneration::Backward, false);
@@ -65,6 +66,8 @@ Pair make_pair(const bld::Date& value, const bld::Date& issue, const bld::Date& 
   t.maturity = maturity;
   t.coupon = coupon;
   t.freq = 2;
+  t.stub = stub;
+  t.final_period_simple = final_period_simple;
   return {bld::fixed_rate_bond(t), bond, dc, settle};
 }
 
@@ -98,6 +101,121 @@ TEST(BondOracle, YieldSpaceMatchesBondFunctions) {
     const double cx_ql = BondFunctions::convexity(*p.ql, y, p.dc, Compounded, Semiannual, p.settle);
     EXPECT_TRUE(close(r.modified_duration, md_ql, swaps::tol::jacobian_rel)) << "mod-dur y=" << y;
     EXPECT_TRUE(close(r.convexity, cx_ql, swaps::tol::jacobian_rel)) << "convexity y=" << y;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The STUB-DISCOUNT convention (pricing::YieldConvention). QuantLib's Compounding enum spans both forms:
+//   Compounded            -> compound stub  (UK gilt / French OAT; our default)
+//   SimpleThenCompounded  -> simple stub    (31 CFR Part 356 App B / Bloomberg "Treasury method"), since
+//                            it applies simple interest exactly when the step t <= 1/f, i.e. the stub.
+// So both conventions have a first-class QuantLib oracle and neither rests on a hand-rolled formula.
+// ---------------------------------------------------------------------------------------------------
+
+TEST(BondOracle, TreasuryMethodMatchesSimpleThenCompounded) {
+  const Pair p = make_pair(bld::Date::ymd(2024, 1, 15), bld::Date::ymd(2019, 8, 15),
+                           bld::Date::ymd(2034, 2, 15), 0.05, px::StubDiscount::Simple, false);
+  ASSERT_TRUE(p.ours.yield.simple_stub());
+  for (double y : {0.02, 0.035, 0.05, 0.07}) {
+    const double clean_ql =
+        BondFunctions::cleanPrice(*p.ql, y, p.dc, SimpleThenCompounded, Semiannual, p.settle);
+    const double dirty_ql =
+        BondFunctions::dirtyPrice(*p.ql, y, p.dc, SimpleThenCompounded, Semiannual, p.settle);
+    EXPECT_TRUE(close(px::bond_clean_from_yield(p.ours.yield, y) * 100.0, clean_ql, swaps::tol::curve_rel))
+        << "clean y=" << y;
+    EXPECT_TRUE(close(px::bond_dirty_from_yield(p.ours.yield, y) * 100.0, dirty_ql, swaps::tol::curve_rel))
+        << "dirty y=" << y;
+    // Round trip, and the analytic y-derivatives under the quotient form.
+    EXPECT_TRUE(close(px::bond_yield_from_clean(p.ours.yield, clean_ql / 100.0), y, swaps::tol::curve_rel))
+        << "yield y=" << y;
+    // Duration/convexity are checked against a FINITE DIFFERENCE OF QUANTLIB'S OWN PRICE, not against
+    // BondFunctions::duration/convexity. Under SimpleThenCompounded QuantLib's analytic derivatives are
+    // NOT the derivative of its own price function: CashFlows::npv chains STEPWISE discount factors (so
+    // the stub is simple and every later period compounds), while modifiedDuration/convexity branch on
+    // the CUMULATIVE time and then use a pure-compound factor over it. The two coincide for Compounded
+    // -- base^{-sum} == prod base^{-tau} -- which is why the compound-stub test above can and does use
+    // the analytic ones. Measured here: QuantLib's analytic modified duration differs from a central
+    // difference of its own dirtyPrice by 1.4e-4 relative under SimpleThenCompounded and by 2.1e-11
+    // under Compounded. Ours matches that finite difference to ~1e-10, so it is our analytic derivative
+    // that is right and QuantLib's that is internally inconsistent in this mode.
+    const px::BondRisk r = px::bond_risk(p.ours.yield, y);
+    const double h = 1e-5;
+    auto Pql = [&](double yy) {
+      return BondFunctions::dirtyPrice(*p.ql, yy, p.dc, SimpleThenCompounded, Semiannual, p.settle);
+    };
+    const double p0 = Pql(y), pu = Pql(y + h), pdn = Pql(y - h);
+    const double md_fd = -(pu - pdn) / (2.0 * h) / p0;
+    const double cx_fd = (pu - 2.0 * p0 + pdn) / (h * h) / p0;
+    EXPECT_TRUE(close(r.modified_duration, md_fd, 1e-8)) << "mod-dur y=" << y;
+    EXPECT_TRUE(close(r.convexity, cx_fd, 1e-5)) << "convexity y=" << y;
+  }
+  // ... and it is genuinely a DIFFERENT number from the compound-stub convention (~0.7 bp of price).
+  const Pair c = make_pair(bld::Date::ymd(2024, 1, 15), bld::Date::ymd(2019, 8, 15),
+                           bld::Date::ymd(2034, 2, 15), 0.05);
+  EXPECT_GT(std::abs(px::bond_dirty_from_yield(p.ours.yield, 0.02) -
+                     px::bond_dirty_from_yield(c.ours.yield, 0.02)),
+            1e-6);
+}
+
+// The gap the STREET convention exists to close: once settlement reaches the FINAL coupon period the
+// market discounts the remaining stub SIMPLE, so build::us_treasury (street) must stop agreeing with
+// QuantLib's plain Compounded there and start agreeing with SimpleThenCompounded. Before this fix the
+// kernel compounded to the end and was ~0.7 bp rich on every bond in its last six months.
+TEST(BondOracle, StreetSwitchesToSimpleStubInTheFinalPeriod) {
+  const bld::Date value = bld::Date::ymd(2024, 6, 14), issue = bld::Date::ymd(2014, 8, 15),
+                  maturity = bld::Date::ymd(2024, 8, 15);
+  const Pair street = make_pair(value, issue, maturity, 0.03, px::StubDiscount::Compound,
+                                /*final_period_simple=*/true);
+  ASSERT_EQ(street.ours.yield.flows.size(), 1u);   // one cashflow left => settlement is in the last period
+  ASSERT_TRUE(street.ours.yield.simple_stub());    // ... so the final-period rule fires
+
+  // A bond that is NOT in its final period must be unaffected by the same flag (compound stub still).
+  const Pair seasoned = make_pair(bld::Date::ymd(2024, 1, 15), bld::Date::ymd(2019, 8, 15),
+                                  bld::Date::ymd(2034, 2, 15), 0.05, px::StubDiscount::Compound, true);
+  ASSERT_GT(seasoned.ours.yield.flows.size(), 1u);
+  EXPECT_FALSE(seasoned.ours.yield.simple_stub());
+
+  for (double y : {0.03, 0.05, 0.08}) {
+    const double simple_ql =
+        BondFunctions::dirtyPrice(*street.ql, y, street.dc, SimpleThenCompounded, Semiannual, street.settle);
+    const double compound_ql =
+        BondFunctions::dirtyPrice(*street.ql, y, street.dc, Compounded, Semiannual, street.settle);
+    EXPECT_TRUE(close(px::bond_dirty_from_yield(street.ours.yield, y) * 100.0, simple_ql,
+                      swaps::tol::curve_rel))
+        << "street final period y=" << y;
+    EXPECT_GT(std::abs(simple_ql - compound_ql), 1e-4) << "y=" << y;  // the two really do differ
+  }
+}
+
+// The batched sweep must honour the per-bond convention, INCLUDING a universe that mixes them (that is
+// the blended lane path in BondUniverse::horner_pass, which no single-convention universe exercises).
+TEST(BondOracle, MixedConventionUniverseMatchesTheScalarKernel) {
+  std::vector<px::YieldBond> univ;
+  std::vector<double> targets;
+  for (int i = 0; i < 24; ++i) {
+    // Rotate the three conventions across the universe so both lanes are populated.
+    const px::StubDiscount stub = (i % 3 == 2) ? px::StubDiscount::Simple : px::StubDiscount::Compound;
+    const bool fps = (i % 3 == 1);
+    const Pair p = make_pair(bld::Date::ymd(2024, 1, 15), bld::Date::ymd(2016, 5, 15),
+                             bld::Date::ymd(2027 + i % 9, 5, 15), 0.01 + 0.001 * (i % 20), stub, fps);
+    univ.push_back(p.ours.yield);
+    targets.push_back(0.95 + 0.004 * i);
+  }
+  pf::BondUniverse bu;
+  bu.set(univ);
+  Eigen::VectorXd cl(univ.size());
+  for (std::size_t i = 0; i < univ.size(); ++i) cl[i] = targets[i];
+  const Eigen::VectorXd y = bu.yields_from_clean(cl);
+  const Eigen::VectorXd back = bu.clean_prices(y);
+  const Eigen::VectorXd md = bu.modified_durations(y);
+  const Eigen::VectorXd cx = bu.convexities(y);
+  for (std::size_t i = 0; i < univ.size(); ++i) {
+    // batched == scalar, bond for bond, on every quantity the sweep produces
+    EXPECT_TRUE(close(y[i], px::bond_yield_from_clean(univ[i], targets[i]), swaps::tol::curve_rel)) << i;
+    EXPECT_TRUE(close(back[i], targets[i], swaps::tol::curve_rel)) << "round trip " << i;
+    const px::BondRisk r = px::bond_risk(univ[i], y[i]);
+    EXPECT_TRUE(close(md[i], r.modified_duration, swaps::tol::curve_rel)) << "mod-dur " << i;
+    EXPECT_TRUE(close(cx[i], r.convexity, swaps::tol::curve_rel)) << "convexity " << i;
   }
 }
 

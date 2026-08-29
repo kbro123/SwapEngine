@@ -5,7 +5,10 @@
 // (cashflows.hpp) has: Scalar = double prices, Scalar = ad::Dual yields the analytic gradient from the
 // SAME code. A bond is modelled as the engine already models everything: as DATA (a list of dated
 // cashflows + a small YieldConvention), not a subclass (CLAUDE.md §0). "US Treasury" is a set of field
-// values a builder fills in (semiannual, ACT/ACT ICMA, street compounding), never a type in engine code.
+// values a builder fills in (semiannual, ACT/ACT ICMA, and a stub-discount rule), never a type in engine
+// code. TIMING conventions (day count, period structure, frequency) are absorbed into the per-flow
+// exponent E_i at build time -- that is what keeps the sweep on the Horner fast path; the DISCOUNT FORM
+// is the one thing an exponent cannot express, so it lives in YieldConvention below.
 //
 // TWO pricing modes, both native shapes:
 //
@@ -120,10 +123,48 @@ struct YieldFlow {
   double amount = 0.0;    // CF_i per unit notional
 };
 
+// ---- the yield CONVENTION: which discount form applies to the FRACTIONAL first period ---------------
+// Every street convention in use agrees on the cashflows, on accrued, and on the whole coupon polynomial
+//     Q(v) = Sum_k CF_k * v^{E_k - w},   v = 1/(1+y/f),   w = E_0 (the fractional period at settlement)
+// and differs ONLY in how that leading fraction w is discounted. Two forms cover the market:
+//
+//     Compound :  dirty = v^w * Q(v)              (what a "yield to maturity" normally means)
+//     Simple   :  dirty = Q(v) / (1 + w*y/f)      (money-market discounting of the stub)
+//
+// and one flag says WHEN the simple form applies. Rateslib factors the same thing as v1/v2/v3 (first /
+// interior / final period); interior periods are always regular compounding, so the two fields below are
+// the whole degree of freedom. Mapping (all verified against Rateslib and QuantLib to 12+ digits):
+//
+//   convention                        stub      final_period_simple   engine oracle
+//   UK gilt / French OAT / Chinese GB  Compound  false                QuantLib Compounded
+//   US Treasury STREET (us_gb), Bund   Compound  TRUE                 QuantLib Compounded / ...ThenSimple
+//   US Treasury METHOD  (ust_31bii)    Simple    -                    QuantLib SimpleThenCompounded
+//     == 31 CFR Part 356 Appendix B == Bloomberg's Treasury method
+//
+// QuantLib's Compounding::SimpleThenCompounded reproduces the App B convention exactly (it applies simple
+// interest whenever the step t <= 1/f, which is the stub and nothing else), so BOTH modes have a QuantLib
+// oracle -- see tests/bond_oracle_test.cpp. Ours defaults to Compound/false, i.e. the gilt/OAT mode, which
+// is what this kernel has always computed.
+enum class StubDiscount { Compound, Simple };
+
+struct YieldConvention {
+  double freq = 2.0;                                // compounding frequency f (US Treasury: 2, Bund: 1)
+  StubDiscount stub = StubDiscount::Compound;       // v1: how the leading fraction w is discounted
+  bool final_period_simple = false;                 // v3: force Simple once only one cashflow remains
+};
+
 struct YieldBond {
   std::vector<YieldFlow> flows;
-  double freq = 2.0;     // compounding frequency f (US Treasury: 2)
+  YieldConvention conv;  // freq + which stub-discount form applies
   double accrued = 0.0;  // accrued interest at settlement, per unit notional (for clean<->dirty)
+
+  // The stub form actually in force for THIS bond. `final_period_simple` fires only when a single
+  // cashflow is left (settlement inside the last coupon period) -- at which point Q(v) is a constant and
+  // the two forms differ by exactly the street/Treasury factor.
+  bool simple_stub() const {
+    return conv.stub == StubDiscount::Simple ||
+           (conv.final_period_simple && flows.size() == 1);
+  }
 };
 
 // dirty(y) and its first two y-derivatives in one pass. base = 1 + y/f; d base/dy = 1/f, so
@@ -137,14 +178,38 @@ struct BondYieldValue {
   double d2 = 0.0;  // d² dirty / dy²
 };
 inline BondYieldValue bond_yield_value(const YieldBond& b, double y) {
-  const double f = b.freq, base = 1.0 + y / f;
+  const double f = b.conv.freq, base = 1.0 + y / f;
   BondYieldValue v;
-  for (const auto& fl : b.flows) {
-    const double p = fl.amount * std::pow(base, -fl.exponent);   // CF · base^{−E}
-    v.dirty += p;
-    v.d1 += -(fl.exponent / f) * p / base;                        // CF·(−E/f)·base^{−E−1}
-    v.d2 += (fl.exponent * (fl.exponent + 1.0) / (f * f)) * p / (base * base);
+  if (!b.simple_stub()) {
+    // COMPOUND stub: dirty = Sum CF·base^{−E}. Unchanged, arithmetic identical to before the convention
+    // split, so every existing oracle number is bit-for-bit preserved.
+    for (const auto& fl : b.flows) {
+      const double p = fl.amount * std::pow(base, -fl.exponent);   // CF · base^{−E}
+      v.dirty += p;
+      v.d1 += -(fl.exponent / f) * p / base;                        // CF·(−E/f)·base^{−E−1}
+      v.d2 += (fl.exponent * (fl.exponent + 1.0) / (f * f)) * p / (base * base);
+    }
+    return v;
   }
+  // SIMPLE stub: dirty = N(y)/D(y) with N = Sum CF·base^{−m}, m = E − w (so the leading fraction is NOT
+  // compounded), and D = 1 + w·y/f. Same three accumulations as above on the SHIFTED exponents, then the
+  // quotient rule: D' = w/f, D'' = 0, so
+  //     P   = N/D
+  //     P'  = N'/D − N·D'/D²
+  //     P'' = N''/D − 2N'D'/D² + 2N·D'²/D³
+  const double w = b.flows.empty() ? 0.0 : b.flows.front().exponent;
+  double N = 0.0, N1 = 0.0, N2 = 0.0;
+  for (const auto& fl : b.flows) {
+    const double m = fl.exponent - w;
+    const double p = fl.amount * std::pow(base, -m);
+    N += p;
+    N1 += -(m / f) * p / base;
+    N2 += (m * (m + 1.0) / (f * f)) * p / (base * base);
+  }
+  const double D = 1.0 + w * y / f, Dp = w / f;
+  v.dirty = N / D;
+  v.d1 = N1 / D - N * Dp / (D * D);
+  v.d2 = N2 / D - 2.0 * N1 * Dp / (D * D) + 2.0 * N * Dp * Dp / (D * D * D);
   return v;
 }
 
@@ -179,7 +244,7 @@ inline BondRisk bond_risk(const YieldBond& b, double y) {
   const BondYieldValue v = bond_yield_value(b, y);
   BondRisk r;
   r.modified_duration = -v.d1 / v.dirty;
-  r.macaulay_duration = r.modified_duration * (1.0 + y / b.freq);  // Macaulay = Modified·(1+y/f)
+  r.macaulay_duration = r.modified_duration * (1.0 + y / b.conv.freq);  // Macaulay = Modified·(1+y/f)
   r.convexity = v.d2 / v.dirty;
   return r;
 }
