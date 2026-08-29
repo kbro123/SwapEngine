@@ -278,21 +278,21 @@ json::object xleg_to(const cal::FixedLeg& L) {
 }
 json::object spec_to(const cal::BundleCurveSpec& s) {
   json::object o;
-  o["meeting"] = da(s.meeting);
-  o["back"] = da(s.back);
   o["base"] = s.base;
   o["currency"] = s.currency;
-  if (!s.regions.empty()) {
-    json::array rs;
-    for (const auto& m : s.regions) {
-      json::object mo;
-      mo["scheme"] = scheme_to_str(m.scheme);
-      mo["knots"] = da(m.knots);
-      if (m.scheme == curve::Scheme::Tension) mo["sigma"] = m.sigma;
-      rs.push_back(mo);
-    }
-    o["regions"] = rs;
+  // Canonical curve representation on the wire: ALWAYS `regions`. modules() collapses the legacy Flat-front
+  // + Hermite-back `meeting`/`back` layout into the identical region list, so a meeting/back-authored curve
+  // and a region-authored curve serialize byte-identically — one representation, not two. (bundle_from_json
+  // still READS meeting/back, so bundles persisted before this change still load.)
+  json::array rs;
+  for (const auto& m : s.modules()) {
+    json::object mo;
+    mo["scheme"] = scheme_to_str(m.scheme);
+    mo["knots"] = da(m.knots);
+    if (m.scheme == curve::Scheme::Tension) mo["sigma"] = m.sigma;
+    rs.push_back(std::move(mo));
   }
+  o["regions"] = std::move(rs);
   // Emit turns ONLY when present, so a turn-free curve serializes byte-identically (mirrors `regions`).
   if (!s.turns.empty()) {
     json::array ts;
