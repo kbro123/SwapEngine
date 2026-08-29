@@ -190,7 +190,7 @@ TEST(TensionRegularizer, FlatStepDiscontinuitiesHaveZeroTensionEnergy) {
   const int nl = p.curves[0].n_interp_knots();
   for (double sigma : {0.0, 1.0, 5.0}) {
     // (i) directly on the stiffness K = K2 + sigma^2 K1: the flat forward's energy x^T K x must vanish.
-    const Eigen::MatrixXd K = cal::detail::curve_tension_stiffness(mods, nl, sigma);
+    const Eigen::MatrixXd K = cal::detail::curve_tension_stiffness(mods, nl, 1.0, sigma);
     const double eK = x.transpose() * K * x;
     EXPECT_LT(std::abs(eK), 1e-12 * scale)
         << "x^T K x for a stepped Flat forward must be ZERO (sigma=" << sigma << ")";
@@ -219,7 +219,7 @@ TEST(TensionRegularizer, FlatStepZeroEnergyEvenForTinyIntervals) {
   const auto mods = p.curves[0].modules();
   const int nl = p.curves[0].n_interp_knots();
   for (double sigma : {0.0, 1.0, 5.0}) {
-    const Eigen::MatrixXd K = cal::detail::curve_tension_stiffness(mods, nl, sigma);
+    const Eigen::MatrixXd K = cal::detail::curve_tension_stiffness(mods, nl, 1.0, sigma);
     EXPECT_LT(std::abs(double(x.transpose() * K * x)), 1e-12)
         << "a stepped Flat front with TINY intervals must still cost ZERO energy (sigma=" << sigma << ")";
     EXPECT_LT(K.cwiseAbs().maxCoeff(), 1e-12)
@@ -295,4 +295,38 @@ TEST(RegionSmoothing, UniformLambdaMatchesGlobal) {
     EXPECT_NEAR(R(r, i), -1.4, 1e-12);
     EXPECT_NEAR(R(r, i + 1), 0.7, 1e-12);
   }
+}
+
+// Phase 2: per-region TENSION-ENERGY σ (and weight). Setting a region's reg_sigma changes only that
+// region's membrane term; inheriting (reg_sigma<0) reproduces the global-σ operator byte-for-byte.
+TEST(RegionSmoothing, TensionEnergyIsPerRegionSigma) {
+  auto make = [](double back_reg_sigma, double back_reg_lambda) {
+    cal::BundleProblem p;
+    cal::BundleCurveSpec spec;
+    spec.base = -1;
+    spec.regions.push_back(curve::CurveModule{{0.25, 0.5}, curve::Scheme::Flat});  // front: zero energy
+    curve::CurveModule back{{1.0, 2.0, 5.0, 10.0}, curve::Scheme::NaturalCubic};    // back: real curvature
+    back.reg_sigma = back_reg_sigma;
+    back.reg_lambda = back_reg_lambda;
+    spec.regions.push_back(back);
+    p.curves.push_back(spec);
+    return p;
+  };
+  const double weight = 0.5, gsig = 1.0;
+  Eigen::VectorXd x(6);
+  x << 0.030, 0.028, 0.020, 0.026, 0.019, 0.031;  // wiggly -> genuine tension energy
+
+  const Eigen::MatrixXd R_inh = cal::tension_energy_operator(make(-1.0, -1.0), weight, gsig, {0});  // inherit
+  const Eigen::MatrixXd R_exp = cal::tension_energy_operator(make(1.0, -1.0), weight, gsig, {0});   // σ=1 explicit
+  const Eigen::MatrixXd R_hi = cal::tension_energy_operator(make(3.0, -1.0), weight, gsig, {0});    // σ=3
+  const Eigen::MatrixXd R_w2 = cal::tension_energy_operator(make(-1.0, 2.0 * weight), weight, gsig, {0});  // ρ=2
+
+  const double e_inh = (R_inh * x).squaredNorm();
+  ASSERT_GT(e_inh, 1e-9) << "the back region must carry non-trivial tension energy";
+  // Explicit σ == the global default: byte-identical energy.
+  EXPECT_NEAR((R_exp * x).squaredNorm(), e_inh, 1e-12 * e_inh);
+  // Higher per-region σ adds membrane energy.
+  EXPECT_GT((R_hi * x).squaredNorm(), e_inh * (1.0 + 1e-6));
+  // Per-region weight ρ=2 scales this region's energy by ρ²=4 (front carries none).
+  EXPECT_NEAR((R_w2 * x).squaredNorm(), 4.0 * e_inh, 1e-9 * e_inh);
 }

@@ -90,6 +90,11 @@ struct CurveModule {
   // is penalised exactly as before (one global λ). Set it to give the meeting-date front λ=0 while the long
   // end is smoothed, or two regions different tension. The regulariser reads it per region.
   double reg_lambda = -1.0;
+  // PER-REGION tension-energy membrane σ (Phase 2): the σ in the (bending + σ²·membrane) tension-energy
+  // penalty, applied to THIS region's intervals. <0 (the default) inherits the bundle default σ. Distinct
+  // from `sigma` above (that is the INTERPOLATION tension of a Scheme::Tension region); this is the
+  // REGULARISER's σ, and it may vary per region while the interpolation stays whatever the scheme is.
+  double reg_sigma = -1.0;
 };
 
 template <class S>

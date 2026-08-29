@@ -196,7 +196,8 @@ cal::BundleCurveSpec spec_from(const json::object& o) {
       m.scheme = scheme_from_str(get_s(ro, "scheme", "Hermite"));
       m.knots = get_da(ro, "knots");
       m.sigma = get_d(ro, "sigma", 0.0);  // tension hyperparameter (Scheme::Tension only); else ignored
-      m.reg_lambda = get_d(ro, "reg_lambda", -1.0);  // per-region smoothing (Phase 1); <0 = inherit default
+      m.reg_lambda = get_d(ro, "reg_lambda", -1.0);  // per-region smoothing weight (Phase 1); <0 = inherit
+      m.reg_sigma = get_d(ro, "reg_sigma", -1.0);    // per-region tension-energy σ (Phase 2); <0 = inherit
       s.regions.push_back(std::move(m));
     }
   // Calibration TURNS (docs/turns-calibration.md, Mode 2): an OPTIONAL array of overlay windows. Absent
@@ -292,6 +293,7 @@ json::object spec_to(const cal::BundleCurveSpec& s) {
     mo["knots"] = da(m.knots);
     if (m.scheme == curve::Scheme::Tension) mo["sigma"] = m.sigma;
     if (m.reg_lambda >= 0.0) mo["reg_lambda"] = m.reg_lambda;  // emit only when set (default stays byte-identical)
+    if (m.reg_sigma >= 0.0) mo["reg_sigma"] = m.reg_sigma;
     rs.push_back(std::move(mo));
   }
   o["regions"] = std::move(rs);

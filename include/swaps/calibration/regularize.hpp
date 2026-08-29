@@ -190,13 +190,34 @@ inline std::vector<double> forward_pieces(const std::vector<curve::CurveModule>&
   return bp;
 }
 
-// K1 (membrane) and K2 (bending) stiffness matrices of ONE curve's own knots, from its region schemes.
-// Returns K = K2 + sigma^2 K1 (n_local x n_local, symmetric SPSD). Off the hot path (setup only).
+// K1 (membrane) and K2 (bending) stiffness of ONE curve's own knots, from its region schemes.
+// Returns K = Σ_pieces ρ²·(K2_p + σ_p²·K1_p) (n_local x n_local, symmetric SPSD). Off the hot path (setup).
+//
+// PER-REGION (Phase 2): each interval (piece) uses the σ and a RELATIVE weight ρ = reg_λ/default of the
+// region containing its MIDPOINT — so the C0-join interval [A.back, B.front] belongs to the back region B
+// (which owns that extrapolation energy). A region inheriting (reg_lambda<0 -> ρ=1, reg_sigma<0 -> σ=default)
+// contributes exactly as before, so with no overrides K == K2 + default_σ²·K1 UNCHANGED (the outer `weight`
+// in tension_energy_operator then reproduces the old operator byte-for-byte, incl. the eigen-rank tolerance).
 inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveModule>& mods, int n_local,
-                                               double sigma) {
+                                               double default_weight, double default_sigma) {
   auto crv = curve::make_modular_curve<double>(mods);
   const std::vector<double> bp = detail::forward_pieces(mods);
   const int P = static_cast<int>(bp.size()) - 1;
+
+  // Per-region relative weight ρ (=1 when inheriting; default_weight>0 is guaranteed by the operator guard)
+  // and σ, plus each region's last-knot time for the midpoint->region lookup.
+  std::vector<double> region_end, rho, rsig;
+  for (const auto& m : mods) {
+    if (m.knots.empty()) continue;
+    region_end.push_back(m.knots.back());
+    rho.push_back((m.reg_lambda >= 0.0 ? m.reg_lambda : default_weight) / default_weight);
+    rsig.push_back(m.reg_sigma >= 0.0 ? m.reg_sigma : default_sigma);
+  }
+  auto region_of = [&](double t_mid) -> int {
+    for (std::size_t r = 0; r < region_end.size(); ++r)
+      if (t_mid <= region_end[r] + 1e-12) return static_cast<int>(r);
+    return static_cast<int>(region_end.size()) - 1;
+  };
 
   // Fixed cubic Vandermonde on the INTERIOR nodes {1/8, 3/8, 5/8, 7/8} (working in s = (t-a)/h keeps the
   // fit well-conditioned regardless of the interval width h). The forward is a single polynomial (<= cubic)
@@ -226,14 +247,15 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
     }
   }
 
-  Eigen::MatrixXd K1 = Eigen::MatrixXd::Zero(n_local, n_local);
-  Eigen::MatrixXd K2 = Eigen::MatrixXd::Zero(n_local, n_local);
+  Eigen::MatrixXd K = Eigen::MatrixXd::Zero(n_local, n_local);
   auto sym = [](const Eigen::RowVectorXd& a, const Eigen::RowVectorXd& b) {
     return (a.transpose() * b + b.transpose() * a).eval();
   };
   for (int p = 0; p < P; ++p) {
     const double h = bp[p + 1] - bp[p];
     if (h <= 1e-13) continue;
+    const int rgn = region_of(0.5 * (bp[p] + bp[p + 1]));  // this interval's region (midpoint rule)
+    const double r2 = rho[rgn] * rho[rgn], sg = rsig[rgn];
     // Cubic coeffs (in the normalised s) as linear functions of x: rows of G = Vinv*F are c0..c3. Subtract
     // the piece's CONSTANT baseline (row 0) before the solve: the energy uses only c1..c3, which are
     // invariant to a constant shift, but this keeps the (large) constant out of the fit so it is never
@@ -246,11 +268,14 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
     // f(u) = c0 + c1 s + c2 s^2 + c3 s^3, s = u/h.  INT_0^h (f'')^2 du = (1/h^3)[4c2^2+12c2c3+12c3^2];
     // INT_0^h (f')^2 du = (1/h)[c1^2 + 2c1c2 + (4/3)c2^2 + 2c1c3 + 3c2c3 + (9/5)c3^2].  (see the note's
     // closed forms; the constant term c0 drops out of both derivatives.)
-    K2 += (1.0 / (h * h * h)) * (4.0 * (g2.transpose() * g2) + 6.0 * sym(g2, g3) + 12.0 * (g3.transpose() * g3));
-    K1 += (1.0 / h) * ((g1.transpose() * g1) + sym(g1, g2) + (4.0 / 3.0) * (g2.transpose() * g2) +
-                       sym(g1, g3) + 1.5 * sym(g2, g3) + (9.0 / 5.0) * (g3.transpose() * g3));
+    const Eigen::MatrixXd K2p =
+        (1.0 / (h * h * h)) * (4.0 * (g2.transpose() * g2) + 6.0 * sym(g2, g3) + 12.0 * (g3.transpose() * g3));
+    const Eigen::MatrixXd K1p =
+        (1.0 / h) * ((g1.transpose() * g1) + sym(g1, g2) + (4.0 / 3.0) * (g2.transpose() * g2) +
+                     sym(g1, g3) + 1.5 * sym(g2, g3) + (9.0 / 5.0) * (g3.transpose() * g3));
+    K += r2 * (K2p + (sg * sg) * K1p);  // per-region: this interval's relative weight ρ² and membrane σ
   }
-  return K2 + (sigma * sigma) * K1;
+  return K;
 }
 
 }  // namespace detail
@@ -274,7 +299,7 @@ Eigen::MatrixXd tension_energy_operator(const Problem& p, double weight, double 
   for (int c : curves) {
     const int nl = p.curves[c].n_interp_knots();  // tension energy is over the interp forward, not δ's
     const int o = off[c];
-    K.block(o, o, nl, nl) += detail::curve_tension_stiffness(p.curves[c].modules(), nl, sigma);
+    K.block(o, o, nl, nl) += detail::curve_tension_stiffness(p.curves[c].modules(), nl, weight, sigma);
   }
   K = 0.5 * (K + K.transpose());  // kill any roundoff asymmetry before the self-adjoint solve
 
