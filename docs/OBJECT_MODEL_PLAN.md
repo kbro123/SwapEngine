@@ -65,23 +65,22 @@ and hold these numbers** (a new `bench_spec_compile` may be added to guard the c
   `region_knot_lambdas` (uniform λ ⇒ byte-identical). Round-trips through bundle JSON (emitted only when set).
   `RegionSmoothing` tests prove per-region + backward-compat; 296/296, oracle green; warm/curve_build under
   baseline. Engine `a276d43`, web `4153154`. (The tension-energy default penalty is finished in Phase 2.)
+- **Phase 2 — Per-region smoothing complete (tension-energy path).** `CurveModule.reg_sigma`;
+  `curve_tension_stiffness` assembles K per INTERVAL using each piece's region (midpoint→region), a relative
+  weight ρ=reg_lambda/default and the region's σ: `K += ρ²·(K2p + σ²·K1p)`. Inheriting ⇒ K unchanged ⇒ outer
+  `weight` reproduces the old operator byte-for-byte (eigen-rank tolerance held). `RegionSmoothing.
+  TensionEnergyIsPerRegionSigma` proves per-region σ (+weight); A1/A2/A3 + TensionRegularizerOracle green,
+  301 tests; setup-only, warm/curve_build within noise. Engine `cda0923`, web `13563e6`. **Per-region
+  smoothing now complete for BOTH penalty modes — the differentiator no surveyed product offers.**
+- **Phase 3 — First-class reference-data objects (engine-objects-first).** `build/ref_data.hpp`: typed
+  VALUE objects `Calendar`/`DayCount`/`Index`/`Convention` over the string-keyed free functions + the
+  constexpr DB; the `Index` is the pure pivot the model references (its own conventions, no curve). Each
+  method DELEGATES to the parity-tested free functions ⇒ additive, header-only, off every hot path; oracle/
+  compile-parity untouched. `RefData` tests pin delegation; 301/301. Engine `9f9c039`, web `5e4f135`.
+  (Chose engine objects only — the full C++/Python de-duplication, which would collapse the independent-
+  implementation parity check, is deferred.)
 
-### NEXT FOUR
-
-- **Phase 2 — Complete per-region smoothing (tension-energy path).** Extend per-region weighting to the
-  DEFAULT penalty (`calibration/regularize.hpp` `tension_energy_operator` / `curve_tension_stiffness`): vary
-  the per-region weight/σ **per element** inside the stiffness assembly, respecting the C0 cross-join coupling
-  (a region's energy touches its neighbour's boundary forward). Add a per-region reg-σ field (or reuse
-  `reg_lambda` + a mode); demote `RegSpec`'s global σ to a default. *Gate:* `TensionRegularizer` + oracle
-  bit-identical when uniform; a per-region-σ unit test; setup-only, warm unchanged. *Deliverable:* per-region
-  smoothing complete for BOTH penalty modes.
-
-- **Phase 3 — First-class, single-source reference data.** Promote `Calendar`/`DayCount`/`Convention`/`Index`
-  from string-keyed free functions (`build/*.hpp`, transcribed again in `server/calendars.py`/`conventions_db.py`
-  and kept in sync by parity tests) to real typed objects over the `conventions.json` DB (still the source of
-  truth); the web binds the same objects, thinning the Python duplicates to wrappers. *Gate:* conventions-sync
-  + the C++↔Python parity tests confirm equivalence (then simplify); oracle green. *Deliverable:* one
-  reference-data source — a new instrument/index is a DB entry, not code in two places.
+### REMAINING (larger, product-facing — a checkpoint before the saved-spec migration is wise)
 
 - **Phase 4 — Curve-unbound instruments + the spec/output object split.** An `Instrument` references its
   projection `Index` (not bundle curve indices); the compiler DERIVES knot/region placement (retire
@@ -92,6 +91,17 @@ and hold these numbers** (a new `bench_spec_compile` may be added to guard the c
   to flat). *Gate:* compile-parity; oracle; a test proving ONE instrument reused across two builds; the
   `curve_build` compile path within baseline. *Deliverable:* reusable instruments; clean Spec objects — the
   "generic building blocks, reusable" North Star realised.
+  *Scout findings (blast radius):* (a) curve-unbinding is a **web-layer remap** — engine legs stay int
+  indices (`problem.hpp` `FloatLeg.forecast/discount`, `Instrument.fx_num/turn_curve`), the wire format is
+  unchanged; the compiler translates Index→int. (b) Retiring `meeting/back` is mechanical but WIDE:
+  `CurveStructure.meeting/back` (~12 construction/test sites) plus the separate `CalibrationProblem.
+  meeting_times/back_times` twin (~15 more test files); every positional aggregate init `{meeting,back,base}`
+  must be rewritten, not reordered. (c) **Clean-break migration** (chosen): saved specs are JSON blobs in
+  `engines.spec`, recompiled on open — old blobs relying on `adds_knot`/`knot_region` will break, so existing
+  saved engines need rebuilding. (d) `CurveStructure` is the shared pricing↔calibration fulcrum — a prior
+  duplicate was deliberately folded in, so the `CurveSpec`/`ModelSpec` split must NOT re-fork it (highest
+  regression risk of the whole plan; keep the definition/output split at the compile boundary, not by
+  cloning the struct).
 
 - **Phase 5 — Named handles + the forkable Model.** Make the definition/output split concrete —
   `ModelSpec.calibrate(quotes) → Model`; the immutable, forkable `Model` (state-fork over the W-cache =
