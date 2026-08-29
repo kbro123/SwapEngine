@@ -31,6 +31,8 @@ METRICS = {
     "risk_full_jacobian":  ("risk_bench",        "BM_Risk_QuantLib_Bump",    "BM_Risk_Ours_Analytic"),
     "portfolio_analytics": ("portfolio_bench",   "BM_Portfolio_QuantLib",    "BM_Portfolio_Ours"),
     "warm_recalibration":  ("warm_bench",        "BM_WarmRecal_QuantLib",    "BM_WarmRecal_Ours"),
+    "bond_sweep":          ("bond_sweep_bench",  "BM_BondSweep_QuantLib",    "BM_BondSweep_Ours"),
+    "bond_book":           ("bond_sweep_bench",  "BM_BondBook_QuantLib",     "BM_BondBook_Ours"),
     "vol_cube_warm":       ("vol_cube_bench",    None,                       "BM_VolCube_Warm"),
     "vol_cube_cold":       ("vol_cube_bench",    None,                       "BM_VolCube_Cold"),
 }

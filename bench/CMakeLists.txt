@@ -88,6 +88,11 @@ if(TARGET quantlib_oracle)
   target_link_libraries(bundle_parallel_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
   target_include_directories(bundle_parallel_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 
+  # The bond baseline: our batched universe sweep + curve-space book vs QuantLib's per-bond loops.
+  add_executable(bond_sweep_bench bond_sweep_bench.cpp)
+  target_link_libraries(bond_sweep_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(bond_sweep_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
   # Jacobian-recompute vs tick cost -- profiling probe for the speculative background-Jacobian research.
   add_executable(jacobian_cost_bench jacobian_cost_bench.cpp)
   target_link_libraries(jacobian_cost_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)

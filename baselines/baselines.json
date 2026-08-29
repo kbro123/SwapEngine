@@ -35,6 +35,14 @@
       "min_speedup_vs_quantlib": 5.0,
       "max_self_regression": 1.25
     },
+    "bond_sweep": {
+      "min_speedup_vs_quantlib": 50.0,
+      "max_self_regression": 1.25
+    },
+    "bond_book": {
+      "min_speedup_vs_quantlib": 20.0,
+      "max_self_regression": 1.25
+    },
     "vol_cube_warm": {
       "max_self_regression": 1.4
     },
@@ -46,7 +54,9 @@
     "curve_build": "Global-LM calibration of a square curve (23 instruments, 23 knots): ours (AAD Jacobian + templated kernel) vs QuantLib GlobalBootstrap (numerical Jacobian + object pricing)",
     "risk_full_jacobian": "Full bucketed delta ladder (our AAD + implicit-function-theorem vs QuantLib bump-and-reprice)",
     "portfolio_analytics": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)",
-    "warm_recalibration": "Stage 2: re-calibrate after a small (in-envelope) market tick -- ours (cached-Jacobian, auto envelope detection) vs QuantLib IterativeBootstrap re-bootstrap"
+    "warm_recalibration": "Stage 2: re-calibrate after a small (in-envelope) market tick -- ours (cached-Jacobian, auto envelope detection) vs QuantLib IterativeBootstrap re-bootstrap",
+    "bond_sweep": "Bond universe price->YTM sweep, 5000 seasoned semiannual treasuries: ours (one batched Newton, Horner over the coupon polynomial) vs QuantLib BondFunctions::yield bond-for-bond. NB QuantLib's default path is inflated by a solver artifact (IrrFinder::derivative returns modified duration, not dP/dy, so NewtonSafe is handed a derivative ~P times too small and mostly bisects: 63 leg walks per bond, measured). The threshold is set below the ratio against the HARDER BM_BondSweep_QuantLibTuned baseline (same QuantLib pricing, correctly-scaled Newton, ~4 iterations), so this gate does not rest on that artifact.",
+    "bond_book": "Curve-space bond book, 5000 bonds: ours (DF = exp(-Wx), gathered flows, sparse per-bond reduction) vs a per-bond QuantLib Bond::dirtyPrice() off a DiscountingBondEngine on the SAME discount factors (handle relinked each iteration so QuantLib cannot serve cached NPVs). No solver is involved on either side."
   },
   "machines": {
     "52e94be82bc4": {
@@ -127,6 +137,62 @@
         "vol_cube_cold": {
           "quantlib_ns": null,
           "ours_ns": 1932766,
+          "speedup": null
+        }
+      }
+    },
+    "86d5211c2c03": {
+      "fingerprint": {
+        "arch": "x86_64",
+        "os": "Darwin 25.6.0",
+        "cpu": "Intel(R) Xeon(R) W-3223 CPU @ 3.50GHz",
+        "physical_cores": 8,
+        "isa": "AVX-512",
+        "doubles_per_register": 8,
+        "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+        "arch_flag": "-march=native"
+      },
+      "captured_utc": "2026-08-29T11:11:40Z",
+      "notes": "Captured by tools/check_perf.py --update.",
+      "metrics": {
+        "curve_build": {
+          "quantlib_ns": 15244038,
+          "ours_ns": 490050,
+          "speedup": 31.11
+        },
+        "risk_full_jacobian": {
+          "quantlib_ns": 16449905,
+          "ours_ns": 90017,
+          "speedup": 182.74
+        },
+        "portfolio_analytics": {
+          "quantlib_ns": 20776750,
+          "ours_ns": 81547,
+          "speedup": 254.78
+        },
+        "warm_recalibration": {
+          "quantlib_ns": 972586,
+          "ours_ns": 17794,
+          "speedup": 54.66
+        },
+        "bond_sweep": {
+          "quantlib_ns": 2499825256,
+          "ours_ns": 3508682,
+          "speedup": 712.47
+        },
+        "bond_book": {
+          "quantlib_ns": 27931634,
+          "ours_ns": 414414,
+          "speedup": 67.4
+        },
+        "vol_cube_warm": {
+          "quantlib_ns": null,
+          "ours_ns": 10280,
+          "speedup": null
+        },
+        "vol_cube_cold": {
+          "quantlib_ns": null,
+          "ours_ns": 1165714,
           "speedup": null
         }
       }
