@@ -80,9 +80,29 @@ and hold these numbers** (a new `bench_spec_compile` may be added to guard the c
   (Chose engine objects only — the full C++/Python de-duplication, which would collapse the independent-
   implementation parity check, is deferred.)
 
-### REMAINING (larger, product-facing — a checkpoint before the saved-spec migration is wise)
+- **Phase 4a — Retire the vestigial `CurveStructure.meeting/back`.** Completes "one representation" at the
+  struct level (Phase 0 did the wire). `CurveStructure` is regions-only; `modules()` returns them directly;
+  a `pricing::flat_hermite_curve(meeting, back, base, ccy)` factory succeeds the old `{meeting, back, base}`
+  aggregate init (struct stays an aggregate). `CompiledPortfolio`/`ParallelPortfolio` take `modules()`; the
+  single-curve→bundle bridge + the C++ compiler's classic branch build regions; the JSON loader still
+  accepts legacy meeting/back (normalised to two regions, so old blobs load). ~40 sites across api/tests/
+  benches/reference-helpers converted. 301/301, oracle + compile-parity green; warm/curve_build within
+  baseline. Engine `e79f25b`, web `7cd010e`(+binding fix `c0a10f1`).
+- **Phase 4b — Curve-unbound instruments (a row names its projection Index).** `compile.py` builds a
+  bundle-level `index_to_ci` map; each quoted row resolves its forecast curve + conventions from its OWN
+  index (else the container's, so existing specs are byte-identical and the shared-index case stays
+  unambiguous); knot ownership + discount stay with the container; an unrealized index is a CompileError.
+  `test_curve_unbound` proves the North Star (a USD-SOFR row nested under PRIME forecasts SOFR; re-indexing
+  the same row to USD-FEDFUNDS forecasts FF; demos unchanged). Web `a4cdc45`. **Instruments are reusable.**
+  *Deliberately NOT done (scout-flagged highest regression):* the `CurveSpec`/`ModelSpec` C++ type split —
+  the definition/output split already exists at the compile boundary (spec → BundleProblem → Session-with-x),
+  so cloning the shared `CurveStructure` fulcrum would only re-introduce the drift it was folded in to remove.
+  Remaining Phase-4 polish (follow-on): a per-instrument index selector in the composer UI (`engine.js`) so
+  the capability is user-visible; `bench`/`fx_den` stay curve-id cross-refs (bundle-specific, not reusable).
 
-- **Phase 4 — Curve-unbound instruments + the spec/output object split.** An `Instrument` references its
+### REMAINING
+
+- **Phase 4 (superseded — see 4a/4b above).** An `Instrument` references its
   projection `Index` (not bundle curve indices); the compiler DERIVES knot/region placement (retire
   `adds_knot`/`knot_region` from instrument rows); introduce the `CurveSpec`/`ModelSpec` definition objects
   distinct from the calibrated `Curve`/`Model`; `Index→Curve` binding lives on the Model. Folds in the
@@ -103,12 +123,19 @@ and hold these numbers** (a new `bench_spec_compile` may be added to guard the c
   regression risk of the whole plan; keep the definition/output split at the compile boundary, not by
   cloning the struct).
 
-- **Phase 5 — Named handles + the forkable Model.** Make the definition/output split concrete —
-  `ModelSpec.calibrate(quotes) → Model`; the immutable, forkable `Model` (state-fork over the W-cache =
-  nearly free, structure-fork of the spec); a named-handle object surface (optional name → auto type-handle)
-  across the web composer, then Excel/Python to parity. *Gate:* exposure/scenario expressed as fork-per-state
-  (reuse the exposure kernel); state-fork nearly free; interface smoke. *Deliverable:* forkable models +
-  named-handle UX — the commercial polish.
+- **Phase 5 — Named handles + the forkable Model (DONE, Python SDK).** On the `swaps` package (the
+  commercial Python/Excel surface): (a) NAMED HANDLES — every composed object carries a handle, an optional
+  `name=` (verbatim) else an auto `<Type>#<hash>` from content; `handle_name()`/`name_handle()` helpers,
+  `name=` threaded through `create_index`/`create_curve_bundle`/`calibrate_bundle` (a Model inherits its
+  bundle's name). (b) FORKABLE MODEL — `fork(model, quotes)` rebinds the market and re-solves over the SAME
+  compiled structure (no recompile), returning a NEW immutable Model that back-references its parent; the
+  parent is never mutated, so a scenario fan / exposure ladder is many forks off one build. `test_model_fork`
+  (12 checks) pins typed handles, explicit names, parent immutability, a genuinely-different forked state,
+  and a faithful no-quote copy. Web `31386fa`. *Deferred (per the session's scope decision):* the C++
+  `ModelSpec.calibrate()` type + wiring the fork to the engine's W-cache streaming path (the truly-free
+  state-fork; today's SDK fork re-solves via LM — correct, an immutable fork, but not yet the warm-path
+  version) + the Excel-side handles (Windows). The definition/output split stays at the compile boundary
+  (spec → BundleProblem → Model-with-x), NOT a cloned `CurveStructure`.
 
 ### AFTER
 - **Phase 6 — Beyond rates.** `VolSurface` (the vol-of-an-index twin of `Curve`, forking the same way) beside
