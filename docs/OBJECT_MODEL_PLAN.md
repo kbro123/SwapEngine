@@ -56,31 +56,54 @@ and hold these numbers** (a new `bench_spec_compile` may be added to guard the c
 
 ## Phased plan (engine-first; kernel untouched; gate green each step)
 
-- **Phase 0 — Retire the legacy front/back topology.** Collapse the parallel `meeting`/`back` representation
-  (`pricing/curve_spec.hpp` `CurveStructure`, `curve/curve_module.hpp` `flat_hermite`) into the single region
-  list; remove the classic/modular fork in `server/compile.py` (`_curve_layout`). One curve model, not two.
-  *Gate:* oracle bit-identical; `curve_build`/`warm` unchanged. Pure simplification, no new capability.
+### DONE
+- **Phase 0 — One wire representation.** `bundle_to_json` normalises to `regions` via `modules()`;
+  `compile.py._curve_layout` always emits regions; `bundle_from_json` still reads `meeting`/`back` (old data
+  loads). Bit-identical (compile-parity + oracle; web A/B max|Δfwd|=0.0). Engine `b234056`, web `4e4e8fb`.
+- **Phase 1 — Per-region CURVATURE smoothing (the differentiator, curvature path).** `CurveModule.reg_lambda`;
+  `second_difference_operator` + `SmoothedProblem` weight each row by its centre knot's region λ, via
+  `region_knot_lambdas` (uniform λ ⇒ byte-identical). Round-trips through bundle JSON (emitted only when set).
+  `RegionSmoothing` tests prove per-region + backward-compat; 296/296, oracle green; warm/curve_build under
+  baseline. Engine `a276d43`, web `4153154`. (The tension-energy default penalty is finished in Phase 2.)
 
-- **Phase 1 — Promote `Region` to first-class + per-region smoothing.** Widen `CurveModule` to own smoothing
-  (λ + mode + energy σ), boundary policy, span, id; make construction a uniform parameter-bag (retire the
-  `TensionHolder` special-case); rewrite the three penalty-operator builders in `calibration/regularize.hpp`
-  to loop **per-region knot blocks** with per-block λ/σ; demote `RegSpec` to a mode/override. End the σ-name
-  collision. *This is where per-region smoothing is born.* *Gate:* oracle green; `warm`/`risk`/`curve_build`
-  within baseline; add a bench proving a two-region-different-smoothing curve calibrates without a hot-path
-  malloc regression.
+### NEXT FOUR
 
-- **Phase 2 — First-class, single-source reference data.** `Calendar`/`DayCount`/`Convention`/`Index` as real
-  objects defined once, ending the C++↔Python double-maintenance (DB stays source of truth; objects are the
-  typed surface). *Gate:* conventions-sync + oracle green.
+- **Phase 2 — Complete per-region smoothing (tension-energy path).** Extend per-region weighting to the
+  DEFAULT penalty (`calibration/regularize.hpp` `tension_energy_operator` / `curve_tension_stiffness`): vary
+  the per-region weight/σ **per element** inside the stiffness assembly, respecting the C0 cross-join coupling
+  (a region's energy touches its neighbour's boundary forward). Add a per-region reg-σ field (or reuse
+  `reg_lambda` + a mode); demote `RegSpec`'s global σ to a default. *Gate:* `TensionRegularizer` + oracle
+  bit-identical when uniform; a per-region-σ unit test; setup-only, warm unchanged. *Deliverable:* per-region
+  smoothing complete for BOTH penalty modes.
 
-- **Phase 3 — The spec contract + named handles.** Move knot/region derivation into the compiler so
-  instruments stop carrying `adds_knot`/`knot_region`; introduce `CurveSpec`/`ModelSpec` + the curve-unbound
-  `Instrument` (references `Index`, bound at build); named-handle object surface (optional name → auto
-  type-handle). Web composer first, then Excel/Python to parity. *Gate:* compile-parity vs `compile.py`.
+- **Phase 3 — First-class, single-source reference data.** Promote `Calendar`/`DayCount`/`Convention`/`Index`
+  from string-keyed free functions (`build/*.hpp`, transcribed again in `server/calendars.py`/`conventions_db.py`
+  and kept in sync by parity tests) to real typed objects over the `conventions.json` DB (still the source of
+  truth); the web binds the same objects, thinning the Python duplicates to wrappers. *Gate:* conventions-sync
+  + the C++↔Python parity tests confirm equivalence (then simplify); oracle green. *Deliverable:* one
+  reference-data source — a new instrument/index is a DB entry, not code in two places.
 
-- **Later — Model tree + vols/inflation.** Make `Model` immutable/forkable (state-fork over the W-cache;
-  structure-fork of the spec); `VolSurface` beside curves; inflation as an `Index` variant. Built *on* the
-  core; does not touch Phase 0/1.
+- **Phase 4 — Curve-unbound instruments + the spec/output object split.** An `Instrument` references its
+  projection `Index` (not bundle curve indices); the compiler DERIVES knot/region placement (retire
+  `adds_knot`/`knot_region` from instrument rows); introduce the `CurveSpec`/`ModelSpec` definition objects
+  distinct from the calibrated `Curve`/`Model`; `Index→Curve` binding lives on the Model. Folds in the
+  Phase 0b cleanup (retire the now-vestigial `CurveStructure.meeting/back` fields + the `CalibrationProblem`
+  legacy). Reusable Instrument + build-time role binding → compiled to the fast index struct (OOP collapses
+  to flat). *Gate:* compile-parity; oracle; a test proving ONE instrument reused across two builds; the
+  `curve_build` compile path within baseline. *Deliverable:* reusable instruments; clean Spec objects — the
+  "generic building blocks, reusable" North Star realised.
+
+- **Phase 5 — Named handles + the forkable Model.** Make the definition/output split concrete —
+  `ModelSpec.calibrate(quotes) → Model`; the immutable, forkable `Model` (state-fork over the W-cache =
+  nearly free, structure-fork of the spec); a named-handle object surface (optional name → auto type-handle)
+  across the web composer, then Excel/Python to parity. *Gate:* exposure/scenario expressed as fork-per-state
+  (reuse the exposure kernel); state-fork nearly free; interface smoke. *Deliverable:* forkable models +
+  named-handle UX — the commercial polish.
+
+### AFTER
+- **Phase 6 — Beyond rates.** `VolSurface` (the vol-of-an-index twin of `Curve`, forking the same way) beside
+  the curves; inflation as an `Index` variant realised as a price-index curve. Slots into the Model; no new
+  top-level object.
 
 ## Verification discipline
 
