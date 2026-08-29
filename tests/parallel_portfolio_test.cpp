@@ -54,8 +54,8 @@ Eigen::VectorXd forwards() {
 TEST(ParallelPortfolio, CoherentSplitIsBitIdenticalToSerial) {
   const pf::Portfolio book = make_book(2000);
   const Eigen::VectorXd x = forwards();
-  const pf::CompiledPortfolio serial(kMeeting, kBack, book);
-  const pf::ParallelPortfolio parallel(kMeeting, kBack, book, 8);
+  const pf::CompiledPortfolio serial(swaps::curve::flat_hermite(kMeeting, kBack), book);
+  const pf::ParallelPortfolio parallel(swaps::curve::flat_hermite(kMeeting, kBack), book, 8);
 
   ASSERT_EQ(parallel.n_slices(), 8);
   ASSERT_EQ(parallel.n_swaps(), 2000);
@@ -70,7 +70,7 @@ TEST(ParallelPortfolio, CoherentSplitIsBitIdenticalToSerial) {
   // Same book on a PERSISTENT THREAD POOL must also be bit-identical (the pool changes WHEN tasks run,
   // never WHAT they compute) -- and reprices repeatedly without spawning a thread per call.
   swaps::parallel::ThreadPool poolobj(8);
-  const pf::ParallelPortfolio pooled(kMeeting, kBack, book, 8, &poolobj);
+  const pf::ParallelPortfolio pooled(swaps::curve::flat_hermite(kMeeting, kBack), book, 8, &poolobj);
   for (int rep = 0; rep < 3; ++rep)
     EXPECT_EQ((pooled.reprice(x) - s).cwiseAbs().maxCoeff(), 0.0) << "pool reprice == serial, every call";
 }
@@ -93,8 +93,8 @@ TEST(ParallelPortfolio, PricesOffOnePinnedSnapshotFromTheFeed) {
   // The coherent cut in practice: the calibrator publishes curves; the pricer snapshots ONCE (pins a
   // version) and reprices the whole book off that single x -> every worker prices the SAME curve.
   const pf::Portfolio book = make_book(500);
-  const pf::CompiledPortfolio serial(kMeeting, kBack, book);
-  const pf::ParallelPortfolio parallel(kMeeting, kBack, book, 4);
+  const pf::CompiledPortfolio serial(swaps::curve::flat_hermite(kMeeting, kBack), book);
+  const pf::ParallelPortfolio parallel(swaps::curve::flat_hermite(kMeeting, kBack), book, 4);
 
   cal::LiveCurveFeed feed(static_cast<int>(kMeeting.size() + kBack.size()));
   // Publish a few distinct curves (as a calibrator would); the pricer pins the latest.

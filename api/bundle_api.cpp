@@ -185,8 +185,8 @@ const char* scheme_to_str(curve::Scheme s) {
 
 cal::BundleCurveSpec spec_from(const json::object& o) {
   cal::BundleCurveSpec s;
-  s.meeting = get_da(o, "meeting");
-  s.back = get_da(o, "back");
+  const std::vector<double> legacy_meeting = get_da(o, "meeting");  // legacy Flat+Hermite layout (pre-regions)
+  const std::vector<double> legacy_back = get_da(o, "back");
   s.base = get_i(o, "base", -1);
   s.currency = get_i(o, "currency", 0);
   if (o.contains("regions") && o.at("regions").is_array())
@@ -210,6 +210,10 @@ cal::BundleCurveSpec spec_from(const json::object& o) {
       t.end = get_d(to, "end", 0.0);
       s.turns.push_back(t);
     }
+  // Backward-compat: a legacy bundle that named the Flat(meeting)+Hermite(back) layout instead of
+  // `regions` is normalised to the equivalent two-region layout (identical to the old modules()).
+  if (s.regions.empty() && !(legacy_meeting.empty() && legacy_back.empty()))
+    s.regions = curve::flat_hermite(legacy_meeting, legacy_back);
   return s;
 }
 

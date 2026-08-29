@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "swaps/curve/curve_module.hpp"
 #include "swaps/pricing/compiled_book.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 
@@ -23,9 +24,8 @@ namespace swaps::portfolio {
 
 class CompiledPortfolio {
  public:
-  CompiledPortfolio(const std::vector<double>& meeting_times, const std::vector<double>& back_times,
-                    const Portfolio& pf) {
-    cs_.init({pricing::CurveStructure{meeting_times, back_times, -1}});  // one self-discounting curve
+  CompiledPortfolio(const std::vector<curve::CurveModule>& modules, const Portfolio& pf) {
+    cs_.init({pricing::CurveStructure{.regions = modules}});  // one self-discounting curve (base = -1)
     const int P = static_cast<int>(pf.positions.size());
     fixed_rate_.resize(P);
     notional_.resize(P);

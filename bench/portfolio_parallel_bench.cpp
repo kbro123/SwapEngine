@@ -50,14 +50,14 @@ constexpr int kBookSize = 20000;
 }  // namespace
 
 static void BM_PortfolioReprice_Serial(benchmark::State& s) {
-  const pf::CompiledPortfolio book(kMeeting, kBack, make_book(kBookSize));
+  const pf::CompiledPortfolio book(swaps::curve::flat_hermite(kMeeting, kBack), make_book(kBookSize));
   const Eigen::VectorXd x = forwards();
   for (auto _ : s) benchmark::DoNotOptimize(book.npv(x).data());
 }
 BENCHMARK(BM_PortfolioReprice_Serial)->Unit(benchmark::kMicrosecond);
 
 static void BM_PortfolioReprice_Async8(benchmark::State& s) {
-  const pf::ParallelPortfolio book(kMeeting, kBack, make_book(kBookSize), 8);  // std::async per reprice
+  const pf::ParallelPortfolio book(swaps::curve::flat_hermite(kMeeting, kBack), make_book(kBookSize), 8);  // std::async per reprice
   const Eigen::VectorXd x = forwards();
   for (auto _ : s) benchmark::DoNotOptimize(book.reprice(x).data());
 }
@@ -65,7 +65,7 @@ BENCHMARK(BM_PortfolioReprice_Async8)->Unit(benchmark::kMicrosecond);
 
 static void BM_PortfolioReprice_Pool8(benchmark::State& s) {
   swaps::parallel::ThreadPool pool(8);  // persistent: workers created ONCE, reused every reprice
-  const pf::ParallelPortfolio book(kMeeting, kBack, make_book(kBookSize), 8, &pool);
+  const pf::ParallelPortfolio book(swaps::curve::flat_hermite(kMeeting, kBack), make_book(kBookSize), 8, &pool);
   const Eigen::VectorXd x = forwards();
   for (auto _ : s) benchmark::DoNotOptimize(book.reprice(x).data());
 }

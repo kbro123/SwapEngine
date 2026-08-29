@@ -30,8 +30,8 @@ class ParallelPortfolio {
   // Partition `pf` into `n_slices` contiguous CompiledPortfolio blocks (capped at one position per slice).
   // Optional `pool`: a persistent thread pool to reprice on (reused across calls, no per-reprice thread
   // creation). nullptr => a std::async fan-out per reprice.
-  ParallelPortfolio(const std::vector<double>& meeting_times, const std::vector<double>& back_times,
-                    const Portfolio& pf, int n_slices, swaps::parallel::ThreadPool* pool = nullptr)
+  ParallelPortfolio(const std::vector<curve::CurveModule>& modules, const Portfolio& pf, int n_slices,
+                    swaps::parallel::ThreadPool* pool = nullptr)
       : n_swaps_(static_cast<int>(pf.positions.size())), pool_(pool) {
     const int P = n_swaps_;
     n_slices = std::max(1, std::min(n_slices, P));
@@ -40,7 +40,7 @@ class ParallelPortfolio {
       const int hi = std::min(P, lo + per);
       Portfolio slice;
       slice.positions.assign(pf.positions.begin() + lo, pf.positions.begin() + hi);
-      slices_.push_back(std::make_unique<CompiledPortfolio>(meeting_times, back_times, slice));
+      slices_.push_back(std::make_unique<CompiledPortfolio>(modules, slice));
       offset_.push_back(lo);
     }
   }

@@ -58,8 +58,8 @@ cal::BundleProblem build() {
   cal::BundleProblem p;
   const std::vector<double> meeting{0.5}, back{1, 2, 3, 5, 10};
   p.curves.resize(2);
-  p.curves[0] = {meeting, back, -1};
-  p.curves[1] = {meeting, back, 0};
+  p.curves[0] = {.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};
+  p.curves[1] = {.base = 0, .regions = swaps::curve::flat_hermite(meeting, back)};
   for (double T : {1.0, 2.0, 3.0, 5.0, 10.0}) p.instruments.push_back(annual(T, 0, 0, cal::QuoteKind::ParRate));
   for (double T : {1.0, 2.0, 3.0, 5.0, 10.0})
     p.instruments.push_back(annual(T, 1, 0, cal::QuoteKind::ParSpread, 0));

@@ -91,9 +91,9 @@ cal::Instrument front_rate(double a, double b, int fc) {
 //   curve 2 = foreign discount (ccy 1) -- the "xccy" curve an xccy position must touch.
 cal::BundleProblem build_bundle(Eigen::VectorXd& x_true) {
   cal::BundleProblem p;
-  p.curves.push_back({kMeeting, kBack, /*base=*/-1, /*currency=*/0});
-  p.curves.push_back({kMeeting, kBack, /*base=*/-1, /*currency=*/0});
-  p.curves.push_back({kMeeting, kBack, /*base=*/-1, /*currency=*/1});
+  p.curves.push_back({.base = -1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
+  p.curves.push_back({.base = -1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
+  p.curves.push_back({.base = -1, .currency = 1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
   // curve 0: self-discounting swaps + a front pin.
   p.instruments.push_back(front_rate(0.0, 0.5, 0));
   for (double T : kSwapT) p.instruments.push_back(par_swap(T, 0, 0));
@@ -188,9 +188,9 @@ cal::Instrument par_swap_step(double T, int fc, int dc, double step) {
 // calibrate to the IDENTICAL curves through different instrument sets — the A/B pair the transform needs.
 cal::BundleProblem build_bundle_freq(const Eigen::VectorXd& x_true, double step) {
   cal::BundleProblem p;
-  p.curves.push_back({kMeeting, kBack, -1, 0});
-  p.curves.push_back({kMeeting, kBack, -1, 0});
-  p.curves.push_back({kMeeting, kBack, -1, 1});
+  p.curves.push_back({.base = -1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
+  p.curves.push_back({.base = -1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
+  p.curves.push_back({.base = -1, .currency = 1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
   p.instruments.push_back(front_rate(0.0, 0.5, 0));
   for (double T : kSwapT) p.instruments.push_back(par_swap_step(T, 0, 0, step));
   p.instruments.push_back(front_rate(0.0, 0.5, 1));

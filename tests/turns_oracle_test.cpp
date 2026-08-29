@@ -31,8 +31,7 @@ namespace qlx = swaps::qlx;
 namespace {
 px::CurveStructure turned_spec() {
   px::CurveStructure s;
-  s.meeting = {0.25, 0.5};
-  s.back = {1, 2, 3, 5, 7, 10};
+  s.regions = swaps::curve::flat_hermite({0.25, 0.5}, {1, 2, 3, 5, 7, 10});
   s.base = -1;
   s.turns = {{0.98, 1.0}};  // a year-end-ish turn window (year fractions, resolved web-side)
   return s;

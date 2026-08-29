@@ -545,8 +545,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     cs.base = base;
     cs.currency = ccy_index(get_s(c, "currency"));
     if (layout.classic) {
-      cs.meeting = layout.front;
-      cs.back = layout.back;
+      cs.regions = curve::flat_hermite(layout.front, layout.back);
       pc.n_front = int(layout.front.size());
       pc.n_back = int(layout.back.size());
       pc.n_knots = pc.n_front + pc.n_back;

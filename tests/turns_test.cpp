@@ -28,8 +28,7 @@ namespace {
 
 px::CurveStructure make_spec(std::vector<px::Turn> turns) {
   px::CurveStructure s;
-  s.meeting = {0.25, 0.5};
-  s.back = {1.0, 2.0, 3.0, 5.0};
+  s.regions = swaps::curve::flat_hermite({0.25, 0.5}, {1.0, 2.0, 3.0, 5.0});
   s.base = -1;
   s.turns = std::move(turns);
   return s;

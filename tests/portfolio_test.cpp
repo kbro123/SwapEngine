@@ -44,7 +44,7 @@ struct PortfolioVec : ::testing::Test {
 };
 
 TEST_F(PortfolioVec, MatchesScalarKernelAtManyCurves) {
-  swaps::portfolio::CompiledPortfolio cp(prob.meeting_times, prob.back_times, pf);
+  swaps::portfolio::CompiledPortfolio cp(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times), pf);
   ASSERT_EQ(cp.n_swaps(), static_cast<int>(pf.positions.size()));
 
   // A spread of curves: flat levels + a calibrated one + tilts.

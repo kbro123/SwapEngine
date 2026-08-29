@@ -76,10 +76,10 @@ struct BundleRealistic : ::testing::Test {
     // SPREAD to the one below it, so its free variables are forward SPREADS (base < curve index):
     //   FF = SOFR + spread, PRIME = FF + spread, PRIME2 = PRIME + spread.
     prob.curves.resize(NC);
-    prob.curves[SOFR] = {sofr.meeting_times, sofr.back_times, -1};        // outright
-    prob.curves[FF] = {sofr.meeting_times, back_t, SOFR};                 // spread over SOFR
-    prob.curves[PRIME] = {mon_t, back_t, FF};                            // spread over FF
-    prob.curves[PRIME2] = {mon_t, back_t, PRIME};                        // spread over PRIME
+    prob.curves[SOFR] = swaps::pricing::flat_hermite_curve(sofr.meeting_times, sofr.back_times, -1);        // outright
+    prob.curves[FF] = swaps::pricing::flat_hermite_curve(sofr.meeting_times, back_t, SOFR);                 // spread over SOFR
+    prob.curves[PRIME] = swaps::pricing::flat_hermite_curve(mon_t, back_t, FF);                            // spread over FF
+    prob.curves[PRIME2] = swaps::pricing::flat_hermite_curve(mon_t, back_t, PRIME);                        // spread over PRIME
     off.assign(NC, 0);
     for (int c = 1; c < NC; ++c) off[c] = off[c - 1] + prob.curves[c - 1].n_knots();
     const int N = off[NC - 1] + prob.curves[NC - 1].n_knots();
@@ -409,8 +409,8 @@ TEST(BundleSpread, JointAndStagedRecoverSpreadCurve) {
   cal::BundleProblem prob;
   const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
   prob.curves.resize(2);
-  prob.curves[0] = {meeting, back, -1};  // outright
-  prob.curves[1] = {meeting, back, 0};   // spread over curve 0
+  prob.curves[0] = {.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};  // outright
+  prob.curves[1] = {.base = 0, .regions = swaps::curve::flat_hermite(meeting, back)};   // spread over curve 0
   const int nk = prob.curves[0].n_knots();
   const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
   for (double T : mats) prob.instruments.push_back(annual_par_rate(T, 0, 0));     // pin the base
@@ -447,8 +447,8 @@ TEST(BundleParallel, StarTopologyParallelIsBitIdenticalToSerial) {
   cal::BundleProblem prob;
   const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
   prob.curves.resize(K + 1);
-  prob.curves[0] = {meeting, back, -1};  // outright base
-  for (int c = 1; c <= K; ++c) prob.curves[c] = {meeting, back, 0};  // spread straight off the base
+  prob.curves[0] = {.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};  // outright base
+  for (int c = 1; c <= K; ++c) prob.curves[c] = {.base = 0, .regions = swaps::curve::flat_hermite(meeting, back)};  // spread straight off the base
   const int nk = prob.curves[0].n_knots();
   const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
   for (double T : mats) prob.instruments.push_back(annual_par_rate(T, 0, 0));            // pin the base
@@ -519,8 +519,8 @@ TEST(BundleSpread, CompiledResidualHandlesSpreadCurves) {
   cal::BundleProblem prob;
   const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
   prob.curves.resize(2);
-  prob.curves[0] = {meeting, back, -1};  // outright base
-  prob.curves[1] = {meeting, back, 0};   // spread over curve 0
+  prob.curves[0] = {.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};  // outright base
+  prob.curves[1] = {.base = 0, .regions = swaps::curve::flat_hermite(meeting, back)};   // spread over curve 0
   const int nk = prob.curves[0].n_knots();
   const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
   for (double T : mats) prob.instruments.push_back(annual_par_rate(T, 0, 0));
@@ -542,7 +542,7 @@ TEST(BundleSpread, CompiledResidualHandlesSpreadCurves) {
 TEST(BundleSpread, SpreadHandleMatchesBasePlusSpread) {
   // The spread handle must be EXACTLY forward = base + spread, DF = base_DF * exp(-int spread).
   const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
-  std::vector<cal::BundleCurveSpec> specs{{meeting, back, -1}, {meeting, back, 0}};
+  std::vector<cal::BundleCurveSpec> specs{{.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)}, {.base = 0, .regions = swaps::curve::flat_hermite(meeting, back)}};
   const int nk = specs[0].n_knots();
   Eigen::VectorXd base_f(nk), spread_f(nk);
   for (int i = 0; i < nk; ++i) {

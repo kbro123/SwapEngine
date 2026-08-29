@@ -43,7 +43,10 @@ const std::vector<double> kBack{1.0, 2.0, 3.0, 5.0, 10.0};
 constexpr int kNk = 6;  // per curve: 1 front + 5 back
 
 // Curve 0 = outright (the discount curve); curve 1 = an independent outright forecast curve.
-std::vector<cal::BundleCurveSpec> two_outright() { return {{kMeeting, kBack, -1}, {kMeeting, kBack, -1}}; }
+std::vector<cal::BundleCurveSpec> two_outright() {
+  const auto m = swaps::curve::flat_hermite(kMeeting, kBack);
+  return {{.base = -1, .regions = m}, {.base = -1, .regions = m}};
+}
 
 Eigen::VectorXd stacked(double base0, double base1) {
   Eigen::VectorXd x(2 * kNk);

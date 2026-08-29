@@ -71,7 +71,7 @@ Eigen::MatrixXd make_grid(int n_states) {
 
 static void BM_ExposureGrid(benchmark::State& state) {
   const int n_states = static_cast<int>(state.range(0));  // e.g. paths * time-nodes
-  const pf::CompiledPortfolio book(kMeeting, kBack, make_book(50));
+  const pf::CompiledPortfolio book(swaps::curve::flat_hermite(kMeeting, kBack), make_book(50));
   const Eigen::MatrixXd X = make_grid(n_states);
 
   // Validate: the batched grid must reproduce the serial single-state reprice on the pinned column. Not
@@ -112,7 +112,7 @@ static void BM_ExposureProfile(benchmark::State& state) {
   const int n_paths = 1000, n_nodes = 100;
   std::vector<double> t(n_nodes);
   for (int j = 0; j < n_nodes; ++j) t[j] = 30.0 * j / (n_nodes - 1);  // 0..30y horizon
-  const pf::CompiledPortfolio book(kMeeting, kBack, make_book(50));
+  const pf::CompiledPortfolio book(swaps::curve::flat_hermite(kMeeting, kBack), make_book(50));
   const Eigen::MatrixXd X = profile_grid(n_paths, n_nodes, t);
 
   // Validate: node 0 is today (deterministic), so EPE(0) == max(book MtM at x_cal, 0), PFE(0) == that MtM.

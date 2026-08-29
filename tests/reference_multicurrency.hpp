@@ -91,9 +91,9 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
   // EUR3M / EUR6M: forward-SPREAD curves over their base, same front + a shorter back.
   const std::vector<double> eur_meet{0.5};
   const std::vector<double> eur_back{1, 2, 3, 5, 7, 10};
-  b.prob.curves[b.ESTR] = {estr_meet, estr_back, -1, CCY_EUR};      // outright
-  b.prob.curves[b.EUR3M] = {eur_meet, eur_back, b.ESTR, CCY_EUR};   // spread over ESTR
-  b.prob.curves[b.EUR6M] = {eur_meet, eur_back, b.EUR3M, CCY_EUR};  // spread over EUR3M
+  b.prob.curves[b.ESTR] = swaps::pricing::flat_hermite_curve(estr_meet, estr_back, -1, CCY_EUR);      // outright
+  b.prob.curves[b.EUR3M] = swaps::pricing::flat_hermite_curve(eur_meet, eur_back, b.ESTR, CCY_EUR);   // spread over ESTR
+  b.prob.curves[b.EUR6M] = swaps::pricing::flat_hermite_curve(eur_meet, eur_back, b.EUR3M, CCY_EUR);  // spread over EUR3M
 
   b.off.assign(3, 0);
   for (int c = 1; c < 3; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();
@@ -308,12 +308,12 @@ inline MultiCcyBundle build_usd_bundle() {
   b.SOFR = 0;
   b.FF = 1;
   b.prob.curves.resize(2);
-  b.prob.curves[b.SOFR] = {mk.meeting_times, mk.back_times, -1, CCY_USD};  // outright
+  b.prob.curves[b.SOFR] = swaps::pricing::flat_hermite_curve(mk.meeting_times, mk.back_times, -1, CCY_USD);  // outright
 
   // FF: spread over SOFR, a flat front + Hermite back at the basis-swap pillars.
   const std::vector<double> ff_meet{0.5};
   const std::vector<double> ff_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
-  b.prob.curves[b.FF] = {ff_meet, ff_back, b.SOFR, CCY_USD};
+  b.prob.curves[b.FF] = swaps::pricing::flat_hermite_curve(ff_meet, ff_back, b.SOFR, CCY_USD);
 
   b.off = {0, b.prob.curves[b.SOFR].n_knots()};
   const int N = b.off[b.FF] + b.prob.curves[b.FF].n_knots();
@@ -411,9 +411,9 @@ inline MultiCcyBundle build_xccy_bundle(QuantLib::Date eval = QuantLib::Date(15,
   const std::vector<double> meet{0.5};
   const std::vector<double> ois_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
   const std::vector<double> xccy_back{1, 2, 3, 5, 7, 10};
-  b.prob.curves[b.SOFR] = {meet, ois_back, -1, CCY_USD};        // outright
-  b.prob.curves[b.ESTR] = {meet, ois_back, -1, CCY_EUR};        // outright
-  b.prob.curves[b.EURUSD] = {meet, xccy_back, b.ESTR, CCY_EUR}; // spread over ESTR (the xccy basis)
+  b.prob.curves[b.SOFR] = swaps::pricing::flat_hermite_curve(meet, ois_back, -1, CCY_USD);        // outright
+  b.prob.curves[b.ESTR] = swaps::pricing::flat_hermite_curve(meet, ois_back, -1, CCY_EUR);        // outright
+  b.prob.curves[b.EURUSD] = swaps::pricing::flat_hermite_curve(meet, xccy_back, b.ESTR, CCY_EUR); // spread over ESTR (the xccy basis)
 
   b.off = {0, b.prob.curves[b.SOFR].n_knots(),
            b.prob.curves[b.SOFR].n_knots() + b.prob.curves[b.ESTR].n_knots()};
@@ -522,9 +522,9 @@ inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(
   b.prob.curves.resize(3);
   const std::vector<double> meet{0.5}, ois_back{1, 2, 3, 5, 7, 10};
   const std::vector<double> xccy_meet{0.25, 0.5}, xccy_back{1, 2, 3, 5, 7, 10};
-  b.prob.curves[b.SOFR] = {meet, ois_back, -1, CCY_USD};
-  b.prob.curves[b.ESTR] = {meet, ois_back, -1, CCY_EUR};
-  b.prob.curves[b.EURUSD] = {xccy_meet, xccy_back, b.ESTR, CCY_EUR};  // ESTR + xccy basis
+  b.prob.curves[b.SOFR] = swaps::pricing::flat_hermite_curve(meet, ois_back, -1, CCY_USD);
+  b.prob.curves[b.ESTR] = swaps::pricing::flat_hermite_curve(meet, ois_back, -1, CCY_EUR);
+  b.prob.curves[b.EURUSD] = swaps::pricing::flat_hermite_curve(xccy_meet, xccy_back, b.ESTR, CCY_EUR);  // ESTR + xccy basis
   b.off = {0, b.prob.curves[b.SOFR].n_knots(),
            b.prob.curves[b.SOFR].n_knots() + b.prob.curves[b.ESTR].n_knots()};
   const int N = b.off[b.EURUSD] + b.prob.curves[b.EURUSD].n_knots();
@@ -821,13 +821,13 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
   for (int y : swap_tenors) b.prob.instruments.push_back(eur6m_outright(y));
 
   // ---- Curve specs + parameterization (ESTR outright; EUR3M spread/ESTR; EUR6M spread/EUR3M) ----
-  b.prob.curves[b.ESTR] = {estr_meet, estr_back, -1, CCY_EUR};
+  b.prob.curves[b.ESTR] = swaps::pricing::flat_hermite_curve(estr_meet, estr_back, -1, CCY_EUR);
   // STAR (not chain): ESTR is the ONE outright curve; EUR3M AND EUR6M are each a spread over ESTR
   // directly. A spread chain (EUR6M over EUR3M over ESTR) accumulates and is less stable; a single
   // outright + spreads-over-it is the desk-standard parameterization. EUR3M's first futures pillar is
   // ~0.44y so its flat-front knot sits below that (Flat/Hermite join needs back.front() > meeting.back()).
-  b.prob.curves[b.EUR3M] = {{0.1}, eur3m_back, b.ESTR, CCY_EUR};
-  b.prob.curves[b.EUR6M] = {{0.5}, eur6m_back, b.ESTR, CCY_EUR};
+  b.prob.curves[b.EUR3M] = swaps::pricing::flat_hermite_curve({0.1}, eur3m_back, b.ESTR, CCY_EUR);
+  b.prob.curves[b.EUR6M] = swaps::pricing::flat_hermite_curve({0.5}, eur6m_back, b.ESTR, CCY_EUR);
   b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
   const int N = b.off[2] + b.prob.curves[2].n_knots();
   b.default_discount = {{b.ESTR, b.ESTR}, {b.EUR3M, b.ESTR}, {b.EUR6M, b.ESTR}};
@@ -916,14 +916,14 @@ inline MultiCcyBundle build_eur_multicurrency() {
   b.eur6m = eur.eur6m;
 
   b.prob.curves.resize(5);
-  b.prob.curves[b.SOFR] = {mk.meeting_times, mk.back_times, -1, CCY_USD};
+  b.prob.curves[b.SOFR] = swaps::pricing::flat_hermite_curve(mk.meeting_times, mk.back_times, -1, CCY_USD);
   for (int c = 0; c < 3; ++c) {  // splice the EUR trio specs, shifting bases by +1
     auto spec = eur.prob.curves[c];
     if (spec.base >= 0) spec.base += 1;
     b.prob.curves[1 + c] = spec;
   }
   const std::vector<double> xccy_meet{0.25, 0.5}, xccy_back{1, 2, 3, 5, 7, 10};
-  b.prob.curves[b.EURUSD] = {xccy_meet, xccy_back, b.ESTR, CCY_EUR};
+  b.prob.curves[b.EURUSD] = swaps::pricing::flat_hermite_curve(xccy_meet, xccy_back, b.ESTR, CCY_EUR);
 
   b.off.assign(5, 0);
   for (int c = 1; c < 5; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();
@@ -1090,9 +1090,9 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
   b.prob.instruments.push_back(irs_par(b.eur6m, 2, 6 * Months));
   for (int y : pillars) b.prob.instruments.push_back(irs_par(b.eur6m, 2, Period(y, Years)));
 
-  b.prob.curves[0] = {estr_meet, estr_back, -1, CCY_EUR};
-  b.prob.curves[1] = {{0.5}, eur_back, 0, CCY_EUR};  // EUR3M = ESTR + spread
-  b.prob.curves[2] = {{0.5}, eur_back, 1, CCY_EUR};  // EUR6M = EUR3M + spread
+  b.prob.curves[0] = swaps::pricing::flat_hermite_curve(estr_meet, estr_back, -1, CCY_EUR);
+  b.prob.curves[1] = swaps::pricing::flat_hermite_curve({0.5}, eur_back, 0, CCY_EUR);  // EUR3M = ESTR + spread
+  b.prob.curves[2] = swaps::pricing::flat_hermite_curve({0.5}, eur_back, 1, CCY_EUR);  // EUR6M = EUR3M + spread
   b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
   const int N = b.off[2] + b.prob.curves[2].n_knots();
   b.default_discount = {{0, 0}, {1, 0}, {2, 0}};
@@ -1166,15 +1166,15 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   const std::vector<int> spr_tenors{1, 2, 3, 5, 7, 10, 15, 20, 30};
 
   b.prob.curves.resize(NC);
-  b.prob.curves[b.SOFR] = {mk.meeting_times, mk.back_times, -1, CCY_USD};
-  b.prob.curves[b.FF] = {{0.5}, spr_back, b.SOFR, CCY_USD};
-  b.prob.curves[PRIME] = {{0.5}, spr_back, b.FF, CCY_USD};
+  b.prob.curves[b.SOFR] = swaps::pricing::flat_hermite_curve(mk.meeting_times, mk.back_times, -1, CCY_USD);
+  b.prob.curves[b.FF] = swaps::pricing::flat_hermite_curve({0.5}, spr_back, b.SOFR, CCY_USD);
+  b.prob.curves[PRIME] = swaps::pricing::flat_hermite_curve({0.5}, spr_back, b.FF, CCY_USD);
   for (int c = 0; c < 3; ++c) {  // EUR trio, bases shifted +3
     auto spec = eur.prob.curves[c];
     if (spec.base >= 0) spec.base += 3;
     b.prob.curves[b.ESTR + c] = spec;
   }
-  if (include_xccy) b.prob.curves[b.EURUSD] = {{0.25, 0.5}, {1, 2, 3, 5, 7, 10}, b.ESTR, CCY_EUR};
+  if (include_xccy) b.prob.curves[b.EURUSD] = swaps::pricing::flat_hermite_curve({0.25, 0.5}, {1, 2, 3, 5, 7, 10}, b.ESTR, CCY_EUR);
 
   b.off.assign(NC, 0);
   for (int c = 1; c < NC; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();

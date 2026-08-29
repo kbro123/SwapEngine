@@ -41,7 +41,10 @@ constexpr int kNk = 7;  // per curve: 2 front + 5 back
 
 // Curve 0 = outright base; curve 1 = base + forward spread. A leg forecasting curve 1 and discounting
 // curve 0 therefore drags the base-ancestry columns of W_all into its Jacobian row.
-std::vector<cal::BundleCurveSpec> specs() { return {{kMeeting, kBack, -1}, {kMeeting, kBack, 0}}; }
+std::vector<cal::BundleCurveSpec> specs() {
+  const auto m = swaps::curve::flat_hermite(kMeeting, kBack);
+  return {{.base = -1, .regions = m}, {.base = 0, .regions = m}};
+}
 
 Eigen::VectorXd stacked_knots() {
   Eigen::VectorXd x(2 * kNk);
@@ -102,7 +105,7 @@ Book build(const Eigen::VectorXd& x, const std::vector<px::FloatCoupon>& a,
            const std::vector<px::FloatCoupon>& b) {
   Book bk;
   std::vector<px::CurveStructure> st;
-  for (const auto& s : specs()) st.push_back({s.meeting, s.back, s.base});
+  for (const auto& s : specs()) st.push_back(s);
   bk.cs.init(st);
   bk.fl.add(bk.cs, /*fc=*/1, /*dc=*/0, a);
   bk.fl.add(bk.cs, /*fc=*/0, /*dc=*/0, b);
@@ -188,7 +191,7 @@ TEST(CompiledGeneric, FuturesBatchAndJacobianMatchTheKernelAndAad) {
   const double conv_avg = 1.7e-4, conv_one = 3.4e-4;
 
   std::vector<px::CurveStructure> st;
-  for (const auto& s : specs()) st.push_back({s.meeting, s.back, s.base});
+  for (const auto& s : specs()) st.push_back(s);
   px::CompiledCurveSet cs;
   cs.init(st);
   px::BundleFloatBatch fu;

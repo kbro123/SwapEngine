@@ -36,19 +36,16 @@ inline double turn_overlap(double t, const Turn& w) {
 }
 
 struct CurveStructure {
-  std::vector<double> meeting;  // front (flat) knot times   -- used only when `regions` is empty
-  std::vector<double> back;     // back (Hermite) knot times  -- used only when `regions` is empty
   int base = -1;                // -1 = outright; else this curve = curves[base] + spread (spread knots)
   // Engine-BLIND currency tag (multi-currency). The kernel -- build_bundle_curves, residuals, the
   // W-cache -- NEVER reads it; it exists only so a BUILDER can resolve a per-index default discount
   // curve and FX conversion at construction time (CLAUDE.md §1: the engine names no currency). Default
-  // 0 keeps every single-currency bundle byte-identical. Kept before `regions` so the existing positional
-  // aggregate inits {meeting, back, base} and {meeting, back, base, currency, regions} stay valid.
+  // 0 keeps every single-currency bundle byte-identical.
   int currency = 0;
-  // Interpolation regions (each a scheme + its knot times). When non-empty these define the curve and
-  // `meeting`/`back` are ignored; when empty they mean the shipped layout: Flat(meeting) + Hermite(back).
-  // Either way exactly one curve type is built from modules(). Region knots are the free forwards,
-  // region by region, in this order.
+  // Interpolation regions (each a scheme + its knot times) -- the ONE representation of this curve's
+  // interpolation. Exactly one curve type is built from modules(); region knots are the free forwards,
+  // region by region, in this order. (The legacy front/back Flat+Hermite pair is now just the two-region
+  // layout `flat_hermite(meeting, back)` a builder puts here -- see curve/curve_module.hpp.)
   std::vector<curve::CurveModule> regions;
 
   // Calibration TURNS (docs/turns-calibration.md, Mode 2). Each turn appends ONE free overlay state
@@ -57,22 +54,17 @@ struct CurveStructure {
   // and is EXCLUDED from the curvature regulariser (its columns sit outside the penalised interp block).
   std::vector<Turn> turns;
 
-  // The ONE description of this curve's interpolation -- custom regions or the shipped default. Turns
-  // are an overlay, not a region, so they never appear here.
-  std::vector<curve::CurveModule> modules() const {
-    return regions.empty() ? curve::flat_hermite(meeting, back) : regions;
-  }
+  // The ONE description of this curve's interpolation. Turns are an overlay, not a region, so they
+  // never appear here.
+  std::vector<curve::CurveModule> modules() const { return regions; }
 
   // The INTERPOLATION-knot count: the size of the piece of this curve's state that feeds the region
-  // interpolation (meeting + back, or the region knots). This is what integral_weight_matrix, the region
-  // math and the curvature regulariser operate on -- turns are NOT interpolation knots.
+  // interpolation (the region knots). This is what integral_weight_matrix, the region math and the
+  // curvature regulariser operate on -- turns are NOT interpolation knots.
   int n_interp_knots() const {
-    if (!regions.empty()) {
-      int n = 0;
-      for (const auto& r : regions) n += static_cast<int>(r.knots.size());
-      return n;
-    }
-    return static_cast<int>(meeting.size() + back.size());
+    int n = 0;
+    for (const auto& r : regions) n += static_cast<int>(r.knots.size());
+    return n;
   }
 
   // The STATE-block size: interpolation knots PLUS one δ per turn. The turn δ's live at the END of the
@@ -81,5 +73,13 @@ struct CurveStructure {
   // itself (which uses n_interp_knots()).
   int n_knots() const { return n_interp_knots() + static_cast<int>(turns.size()); }
 };
+
+// Convenience: a CurveStructure whose interpolation is the shipped Flat(meeting)+Hermite(back) two-region
+// layout. This is the successor to the old `{meeting, back, base}` aggregate init -- a builder/test that
+// wants that default layout writes `flat_hermite_curve(meeting, back, base)` instead of hand-listing regions.
+inline CurveStructure flat_hermite_curve(const std::vector<double>& meeting, const std::vector<double>& back,
+                                         int base = -1, int currency = 0) {
+  return {.base = base, .currency = currency, .regions = curve::flat_hermite(meeting, back)};
+}
 
 }  // namespace swaps::pricing

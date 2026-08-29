@@ -26,7 +26,9 @@ namespace px = swaps::pricing;
 namespace {
 
 // One outright OIS curve, Hermite over {1,2,5,10}. Self-discounting (forecast = discount = 0).
-std::vector<cal::BundleCurveSpec> specs() { return {{{}, {1, 2, 5, 10}, -1}}; }
+std::vector<cal::BundleCurveSpec> specs() {
+  return {{.base = -1, .regions = swaps::curve::flat_hermite({}, {1, 2, 5, 10})}};
+}
 Eigen::VectorXd knots() {
   Eigen::VectorXd x(4);
   x << 0.030, 0.035, 0.040, 0.045;

@@ -81,7 +81,7 @@ std::string exposure_json(const std::string& request) {
   }
   if (port.positions.empty())
     throw std::invalid_argument("exposure: no single-curve swap positions in the book");
-  const pf::CompiledPortfolio cp(C0.meeting, C0.back, port);
+  const pf::CompiledPortfolio cp(C0.modules(), port);
 
   // Node times 0..horizon (node 0 = today: sqrt(0)=0 -> deterministic, EPE(0)=max(MtM,0)).
   std::vector<double> node_time(n_nodes);

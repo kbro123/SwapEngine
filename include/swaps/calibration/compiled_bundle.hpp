@@ -26,7 +26,7 @@ namespace swaps::calibration {
 // thin delegate to CompiledBundleResidual -- one compiled engine, not two.
 inline BundleProblem single_curve_bundle(const CalibrationProblem& p) {
   BundleProblem b;
-  b.curves.push_back({p.meeting_times, p.back_times, -1});
+  b.curves.push_back({.regions = curve::flat_hermite(p.meeting_times, p.back_times)});  // base = -1
   for (Instrument ins : p.instruments) {  // by value: force every role onto the single curve, so the
     ins.fwd.forecast = ins.fwd.discount = 0;  // compiled path cannot disagree with price_residuals(),
     ins.bench.forecast = ins.bench.discount = 0;  // which resolves every role to the one curve.

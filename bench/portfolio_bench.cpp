@@ -63,7 +63,7 @@ struct Fixture {
                               swaps::qlx::extract_fixed_leg(sw->fixedLeg(), mk.today, mk.dc), fixed,
                               notl});
     }
-    cp = std::make_unique<swaps::portfolio::CompiledPortfolio>(prob.meeting_times, prob.back_times, pf);
+    cp = std::make_unique<swaps::portfolio::CompiledPortfolio>(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times), pf);
   }
 };
 

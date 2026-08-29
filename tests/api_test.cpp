@@ -95,8 +95,8 @@ cal::Instrument make_rate(double a, double b, int fc) {
 // Build the 2-curve bundle (instruments with market=0) + the true parameter vector.
 cal::BundleProblem build_bundle(Eigen::VectorXd& x_true) {
   cal::BundleProblem p;
-  p.curves.push_back({kMeeting, kBack, /*base=*/-1, /*currency=*/0});  // curve 0: outright
-  p.curves.push_back({kMeeting, kBack, /*base=*/0, /*currency=*/0});   // curve 1: spread over 0
+  p.curves.push_back({.base = -1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});  // curve 0: outright
+  p.curves.push_back({.base = 0, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});   // curve 1: spread over 0
 
   // Curve 0 (forecast=discount=0): front pins + par swaps.
   p.instruments.push_back(make_rate(0.0, 0.25, 0));
@@ -241,8 +241,7 @@ cal::BundleProblem build_turn_bundle(Eigen::VectorXd& x_true, int& delta_index) 
   const double a = 0.98, b = 1.02, delta_true = 0.0030;
   cal::BundleProblem p;
   px::CurveStructure s;
-  s.meeting = {0.25, 0.5};
-  s.back = {1.0, 2.0, 3.0, 5.0};
+  s.regions = swaps::curve::flat_hermite({0.25, 0.5}, {1.0, 2.0, 3.0, 5.0});
   s.turns = {{a, b}};
   p.curves = {s};
   delta_index = s.n_interp_knots();  // δ sits right after the 6 interp knots

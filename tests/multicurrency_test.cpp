@@ -919,9 +919,10 @@ TEST(EurCurves, DiagnoseNullDirection) {
       if (g >= b.off[c]) {
         const int k = g - b.off[c];
         const int nk = b.prob.curves[c].n_knots();
-        double tt = (k < static_cast<int>(b.prob.curves[c].meeting.size()))
-                        ? b.prob.curves[c].meeting[k]
-                        : b.prob.curves[c].back[k - b.prob.curves[c].meeting.size()];
+        std::vector<double> allk;  // flattened interpolation knots, region by region
+        for (const auto& mm : b.prob.curves[c].modules())
+          allk.insert(allk.end(), mm.knots.begin(), mm.knots.end());
+        const double tt = (k < static_cast<int>(allk.size())) ? allk[k] : 0.0;
         return std::string(nm[c]) + " knot " + std::to_string(k) + "/" + std::to_string(nk) + " (t=" +
                std::to_string(tt) + ")";
       }

@@ -240,7 +240,7 @@ class CompiledBondBook {
  public:
   CompiledBondBook(const std::vector<double>& meeting_times, const std::vector<double>& back_times,
                    const std::vector<pricing::Bond>& bonds) {
-    cs_.init({pricing::CurveStructure{meeting_times, back_times, -1}});  // one self-discounting curve
+    cs_.init({pricing::CurveStructure{.regions = curve::flat_hermite(meeting_times, back_times)}});  // one self-discounting curve
     const int B = static_cast<int>(bonds.size());
     settle_idx_.resize(B);
     accrued_.resize(B);
