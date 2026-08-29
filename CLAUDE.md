@@ -919,6 +919,20 @@ delete those, they enforce the rule. Two honest residues:
         StreetSwitchesToSimpleStubInTheFinalPeriod, MixedConventionUniverseMatchesTheScalarKernel}`.
         NOT done: a TIPS index-ratio mode (needs a builder for the 3-month lag + daily CPI interpolation,
         and the principal deflation floor is optionality, not data), and Gilt ex-div / BTP pay-adjust.
+      - **Bond types are DB entries, not code (§0).** `conventions/conventions.json` gained a `bonds`
+        section (codegen'd to `BondConv`/`kBonds`/`conventions::bond(id)`), so a bond TYPE is an id:
+        `build::yield_convention(id)` / `bond_from_convention` / `wi_bond_from_convention` pull frequency +
+        stub rule from the DB, and the `bonds` run_json verb takes `convention` (default "US-TREASURY").
+        Catalogued: `US-TREASURY` (street) and `US-TREASURY-TSY` (App B). **Only conventions supported END
+        TO END — builder AND QuantLib oracle — are listed.** UK gilts / OATs / Bunds are ONE entry away
+        (the kernel already reproduces their yield math exactly: verified against Rateslib `uk_gb`/`fr_gb`
+        to 12 digits on an annual bond) but gilts need ex-dividend + a GBP calendar and Bunds a EUR bond
+        calendar, so they are deliberately ABSENT rather than listed half-supported; BTPs additionally need
+        a payment-date adjustment. `Conventions.BondConventionsDriveTheNamedBuilders` pins DB == named
+        builder == QuantLib's two compounding modes, so the JSON, the builders and the oracle cannot drift.
+      - **WHEN-ISSUED is now reachable across the API seam** (it previously had no JSON path at all): the
+        `bonds` verb takes `dated` + `first_coupon` in place of `issue`. Gated by
+        `BundleApi.BondsVerbSelectsConventionAndHandlesWhenIssued`.
       - **Cross-validation beyond QuantLib** (`tests/bond_reference_test.cpp`, QL-free; `tools/bond_reference/`):
         Excel/OpenFormula PRICE/YIELD (reimplemented — different algebra than Horner) is checked in-code to
         1e-12, and the 31 CFR App B reimplementation now pins the coupon polynomial exactly AND the

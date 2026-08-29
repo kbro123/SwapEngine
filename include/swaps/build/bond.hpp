@@ -18,9 +18,12 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "swaps/build/date.hpp"
+#include "swaps/conventions_data.hpp"
 #include "swaps/build/day_count.hpp"
 #include "swaps/build/schedule.hpp"
 #include "swaps/pricing/bond.hpp"
@@ -263,6 +266,46 @@ inline BuiltBond us_treasury_wi_tsy(const Date& value_date, const Date& dated, c
                                     const Date& maturity, double coupon, const Date& settle) {
   return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, /*freq=*/2, settle,
                           px::StubDiscount::Simple, /*final_period_simple=*/false);
+}
+
+// =================================================================================================
+// CONVENTION-DRIVEN construction — the §0 path: the bond type is DATA, looked up by id.
+// =================================================================================================
+// `conventions/conventions.json` (codegen'd to swaps/conventions_data.hpp) is the single source of truth,
+// shared with the Python web layer. A caller names a convention ("US-TREASURY", "US-TREASURY-TSY") and the
+// frequency + stub-discount rule FLOW from the DB — nothing about a bond type is inlined here. Only
+// conventions the engine supports end to end (builder + QuantLib oracle) are listed; see the note in the
+// DB's meta for why gilts/OATs/Bunds are deliberately absent despite the kernel already reproducing their
+// yield math.
+inline px::YieldConvention yield_convention(std::string_view convention_id) {
+  const auto c = conventions::bond(convention_id);
+  if (!c) throw std::invalid_argument("unknown bond convention '" + std::string(convention_id) + "'");
+  px::YieldConvention y;
+  const double period = conventions::period_years(c->frequency);           // '6M' -> 0.5, '1Y' -> 1.0
+  if (period <= 0.0) throw std::invalid_argument("bond convention has an unusable frequency");
+  y.freq = 1.0 / period;                                                  // coupons per year: 2, 1, ...
+  y.stub = (c->stub_discount == "simple") ? px::StubDiscount::Simple : px::StubDiscount::Compound;
+  y.final_period_simple = c->final_period_simple;
+  return y;
+}
+
+// A seasoned fixed-rate bond built from a named convention.
+inline BuiltBond bond_from_convention(std::string_view convention_id, const Date& value_date,
+                                      const Date& settle, const Date& issue, const Date& maturity,
+                                      double coupon) {
+  const px::YieldConvention y = yield_convention(convention_id);
+  return fixed_rate_bond(FixedBondTerms{value_date, settle, issue, maturity, coupon,
+                                        int(y.freq + 0.5), y.stub, y.final_period_simple});
+}
+
+// A WHEN-ISSUED bond built from a named convention (short first coupon prorated per 31 CFR App B).
+// `settle` defaults to the dated date (a new issue, zero accrued); pass a later date for a reopening.
+inline BuiltBond wi_bond_from_convention(std::string_view convention_id, const Date& value_date,
+                                         const Date& dated, const Date& first_coupon, const Date& maturity,
+                                         double coupon, const Date& settle) {
+  const px::YieldConvention y = yield_convention(convention_id);
+  return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, int(y.freq + 0.5), settle,
+                          y.stub, y.final_period_simple);
 }
 
 }  // namespace swaps::build

@@ -19,6 +19,8 @@
 #include <gtest/gtest.h>
 
 #include "conventions_ql.hpp"
+#include "swaps/build/bond.hpp"
+#include "swaps/pricing/bond.hpp"
 
 using namespace QuantLib;
 namespace conv = swaps::refbuild::conv;
@@ -111,4 +113,50 @@ TEST(Conventions, XccyMtmLegRolesMatchDeskSpec) {
   EXPECT_EQ(p.floating.index, std::string("USD-SOFR"));
   EXPECT_EQ(p.spot_lag, 2);
   EXPECT_EQ(p.payment_lag, 2);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// BOND conventions. The DB carries the one degree of freedom a per-flow exponent cannot express (the
+// stub-discount rule, pricing::YieldConvention), so a bond TYPE is a DB id, not a C++ branch. This pins
+// the DB against the named builders in build/bond.hpp AND against QuantLib's two compounding modes, so
+// the JSON, the builders and the oracle cannot drift apart.
+// ---------------------------------------------------------------------------------------------------
+TEST(Conventions, BondConventionsDriveTheNamedBuilders) {
+  namespace bld = swaps::build;
+  namespace px = swaps::pricing;
+  const bld::Date value = bld::Date::ymd(2024, 1, 15), settle = bld::Date::ymd(2024, 1, 16),
+                  issue = bld::Date::ymd(2019, 8, 15), maturity = bld::Date::ymd(2029, 8, 15);
+  const double coupon = 0.025, y = 0.04;
+
+  // Every catalogued convention resolves, and the DB fields land where the kernel reads them.
+  const px::YieldConvention street = bld::yield_convention("US-TREASURY");
+  EXPECT_EQ(street.freq, 2.0);
+  EXPECT_EQ(street.stub, px::StubDiscount::Compound);
+  EXPECT_TRUE(street.final_period_simple);
+  const px::YieldConvention tsy = bld::yield_convention("US-TREASURY-TSY");
+  EXPECT_EQ(tsy.freq, 2.0);
+  EXPECT_EQ(tsy.stub, px::StubDiscount::Simple);
+  EXPECT_FALSE(tsy.final_period_simple);
+  EXPECT_THROW(bld::yield_convention("NO-SUCH-BOND"), std::invalid_argument);
+
+  // DB-driven construction == the hand-written named builder, to the last bit.
+  const auto db_street = bld::bond_from_convention("US-TREASURY", value, settle, issue, maturity, coupon);
+  const auto db_tsy = bld::bond_from_convention("US-TREASURY-TSY", value, settle, issue, maturity, coupon);
+  EXPECT_EQ(px::bond_dirty_from_yield(db_street.yield, y),
+            px::bond_dirty_from_yield(bld::us_treasury(value, settle, issue, maturity, coupon).yield, y));
+  EXPECT_EQ(px::bond_dirty_from_yield(db_tsy.yield, y),
+            px::bond_dirty_from_yield(bld::us_treasury_tsy(value, settle, issue, maturity, coupon).yield, y));
+
+  // ... and the two conventions are the two DIFFERENT numbers QuantLib gives for the same bond.
+  Settings::instance().evaluationDate() = QuantLib::Date(15, January, 2024);
+  Schedule sch(QuantLib::Date(15, August, 2019), QuantLib::Date(15, August, 2029), Period(Semiannual),
+               NullCalendar(), Unadjusted, Unadjusted, DateGeneration::Backward, false);
+  DayCounter dc = ActualActual(ActualActual::ISMA, sch);
+  FixedRateBond ql(1, 100.0, sch, std::vector<Rate>{coupon}, dc, Following, 100.0,
+                   QuantLib::Date(15, August, 2019));
+  const QuantLib::Date s = ql.settlementDate();
+  EXPECT_NEAR(px::bond_dirty_from_yield(db_street.yield, y) * 100.0,
+              BondFunctions::dirtyPrice(ql, y, dc, Compounded, Semiannual, s), 1e-9);
+  EXPECT_NEAR(px::bond_dirty_from_yield(db_tsy.yield, y) * 100.0,
+              BondFunctions::dirtyPrice(ql, y, dc, SimpleThenCompounded, Semiannual, s), 1e-9);
 }

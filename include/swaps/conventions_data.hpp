@@ -23,6 +23,13 @@ struct IndexConv {
   std::string_view id, currency, type, day_count, calendar, par_product, tenor;
   int fixing_lag, publication_lag;
 };
+// A BOND convention. `stub_discount` is the one thing the per-flow exponent cannot express (see
+// pricing/bond.hpp YieldConvention): "compound" -> dirty = Q(v)*v^w, "simple" -> Q(v)/(1 + w*y/f).
+// `final_period_simple` forces the simple form once a single cashflow remains (US street, Bund).
+struct BondConv {
+  std::string_view id, currency, calendar, day_count, frequency, stub_discount;
+  int settle_lag; bool final_period_simple;
+};
 
 inline constexpr std::array<ProductConv, 12> kProducts = {{
   {"EUR-3S6S-BASIS", "EUR", "EUR", "ModifiedFollowing", 2, 0, {"", "", "", "", -1, false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", -1, true, false, false}},
@@ -47,6 +54,15 @@ inline constexpr std::array<IndexConv, 5> kIndices = {{
   {"USD-SOFR", "USD", "overnight", "ACT/360", "USD-SOFR", "USD-SOFR-OIS", "", -1, 1},
 }};
 
+inline constexpr std::array<BondConv, 2> kBonds = {{
+  {"US-TREASURY", "USD", "USD", "ACT/ACT-ICMA", "6M", "compound", 1, true},
+  {"US-TREASURY-TSY", "USD", "USD", "ACT/ACT-ICMA", "6M", "simple", 1, false},
+}};
+
+inline std::optional<BondConv> bond(std::string_view id) {
+  for (const auto& b : kBonds) if (b.id == id) return b;
+  return std::nullopt;
+}
 inline std::optional<ProductConv> product(std::string_view id) {
   for (const auto& p : kProducts) if (p.id == id) return p;
   return std::nullopt;

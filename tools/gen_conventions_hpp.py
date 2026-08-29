@@ -36,7 +36,7 @@ def leg(d):
 
 def main():
     db = json.load(open(JSON))
-    products, indices = db["products"], db["indices"]
+    products, indices, bonds = db["products"], db["indices"], db.get("bonds", {})
 
     lines = [
         "#pragma once",
@@ -64,6 +64,13 @@ def main():
         "  std::string_view id, currency, type, day_count, calendar, par_product, tenor;",
         "  int fixing_lag, publication_lag;",
         "};",
+        "// A BOND convention. `stub_discount` is the one thing the per-flow exponent cannot express (see",
+        "// pricing/bond.hpp YieldConvention): \"compound\" -> dirty = Q(v)*v^w, \"simple\" -> Q(v)/(1 + w*y/f).",
+        "// `final_period_simple` forces the simple form once a single cashflow remains (US street, Bund).",
+        "struct BondConv {",
+        "  std::string_view id, currency, calendar, day_count, frequency, stub_discount;",
+        "  int settle_lag; bool final_period_simple;",
+        "};",
         "",
         f"inline constexpr std::array<ProductConv, {len(products)}> kProducts = {{{{",
     ]
@@ -87,7 +94,22 @@ def main():
         ]) + "},")
     lines += ["}};", ""]
 
+    lines.append(f"inline constexpr std::array<BondConv, {len(bonds)}> kBonds = {{{{")
+    for bid in sorted(bonds):
+        b = bonds[bid]
+        lines.append("  {" + ", ".join([
+            sv(bid), sv(b.get("currency")), sv(b.get("calendar")), sv(b.get("day_count")),
+            sv(b.get("frequency")), sv(b.get("stub_discount")),
+            str(b.get("settle_lag", -1)),
+            "true" if b.get("final_period_simple") else "false",
+        ]) + "},")
+    lines += ["}};", ""]
+
     lines += [
+        "inline std::optional<BondConv> bond(std::string_view id) {",
+        "  for (const auto& b : kBonds) if (b.id == id) return b;",
+        "  return std::nullopt;",
+        "}",
         "inline std::optional<ProductConv> product(std::string_view id) {",
         "  for (const auto& p : kProducts) if (p.id == id) return p;",
         "  return std::nullopt;",
@@ -119,7 +141,7 @@ def main():
         return
     with open(OUT, "w") as f:
         f.write(text)
-    print(f"wrote {OUT} ({len(products)} products, {len(indices)} indices)")
+    print(f"wrote {OUT} ({len(products)} products, {len(indices)} indices, {len(bonds)} bonds)")
 
 
 if __name__ == "__main__":

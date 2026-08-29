@@ -62,18 +62,53 @@ std::string bonds_json(const std::string& request) {
     const std::string settle_iso = js(bo, "settle");
     const std::string maturity_iso = js(bo, "maturity");
     const std::string issue_iso = js(bo, "issue");
-    if (settle_iso.empty() || maturity_iso.empty() || issue_iso.empty())
-      throw std::invalid_argument("bonds: each bond needs 'issue', 'settle' and 'maturity' (YYYY-MM-DD)");
+    if (settle_iso.empty() || maturity_iso.empty() ||
+        (issue_iso.empty() && js(bo, "dated").empty()))
+      throw std::invalid_argument(
+          "bonds: each bond needs 'settle', 'maturity' and either 'issue' (seasoned) or "
+          "'dated'+'first_coupon' (when-issued), all YYYY-MM-DD");
     if (!bo.contains("coupon")) throw std::invalid_argument("bonds: each bond needs 'coupon'");
 
-    b::FixedBondTerms t;
-    t.value_date = b::Date::from_iso(vd_top.empty() ? settle_iso : vd_top);  // unused in street space
-    t.settle = b::Date::from_iso(settle_iso);
-    t.issue = b::Date::from_iso(issue_iso);
-    t.maturity = b::Date::from_iso(maturity_iso);
-    t.coupon = jd(bo, "coupon", 0.0);
-    t.freq = static_cast<int>(jd(bo, "freq", 2.0));
-    const b::BuiltBond bb = b::fixed_rate_bond(t);
+    // Yield CONVENTION. Named conventions come from conventions/conventions.json (the same DB the web
+    // layer reads), so a caller says "US-TREASURY" (street) or "US-TREASURY-TSY" (31 CFR App B / the
+    // Bloomberg Treasury method) rather than encoding the discounting rule. Explicit `freq` still
+    // overrides for a bond that is not one of the catalogued types.
+    const std::string conv_id = js(bo, "convention").empty() ? std::string("US-TREASURY")
+                                                             : js(bo, "convention");
+    const px::YieldConvention yc = b::yield_convention(conv_id);
+
+    const b::Date value = b::Date::from_iso(vd_top.empty() ? settle_iso : vd_top);
+    const b::Date settle_d = b::Date::from_iso(settle_iso);
+    const b::Date maturity_d = b::Date::from_iso(maturity_iso);
+    const double cpn = jd(bo, "coupon", 0.0);
+    const int freq = bo.contains("freq") ? static_cast<int>(jd(bo, "freq", 2.0))
+                                         : static_cast<int>(yc.freq + 0.5);
+
+    // WHEN-ISSUED / odd-first-period bond: signalled by `dated` + `first_coupon`. A new issue settles ON
+    // the dated date (zero accrued); a reopening passes a later `settle` within the first period. The
+    // short first coupon is prorated per 31 CFR Part 356 App B.
+    const std::string dated_iso = js(bo, "dated"), first_cpn_iso = js(bo, "first_coupon");
+    if (dated_iso.empty() != first_cpn_iso.empty())
+      throw std::invalid_argument("bonds: a when-issued bond needs BOTH 'dated' and 'first_coupon'");
+    const bool is_wi = !dated_iso.empty();
+
+    b::BuiltBond bb = [&] {
+      if (is_wi) {
+        const b::Date dated = b::Date::from_iso(dated_iso);
+        return b::when_issued_bond(value, dated, b::Date::from_iso(first_cpn_iso), maturity_d, cpn, freq,
+                                   settle_iso.empty() ? dated : settle_d, yc.stub, yc.final_period_simple);
+      }
+      b::FixedBondTerms t;
+      t.value_date = value;  // unused in street space
+      t.settle = settle_d;
+      t.issue = b::Date::from_iso(issue_iso);
+      t.maturity = maturity_d;
+      t.coupon = cpn;
+      t.freq = freq;
+      t.stub = yc.stub;
+      t.final_period_simple = yc.final_period_simple;
+      return b::fixed_rate_bond(t);
+    }();
 
     const bool has_clean = bo.contains("clean") && !bo.at("clean").is_null();
     const bool has_yield = bo.contains("yield") && !bo.at("yield").is_null();

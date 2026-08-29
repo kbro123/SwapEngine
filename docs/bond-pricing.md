@@ -179,6 +179,20 @@ form is in fact *cheaper* (no `pow`). A universe that mixes conventions is handl
 one blended sweep, with no scalar remainder path; a compound-only universe takes an early return through
 arithmetic that is byte-identical to before, so the `bond_sweep` gate is unaffected.
 
+**Selecting a convention: it is DATA.** `conventions/conventions.json` has a `bonds` section (codegen'd
+into `conventions_data.hpp` as `BondConv`), so a bond type is an id rather than a C++ branch:
+
+```
+build::yield_convention("US-TREASURY-TSY")                       -> pricing::YieldConvention
+build::bond_from_convention(id, value, settle, issue, mat, cpn)  -> seasoned
+build::wi_bond_from_convention(id, value, dated, first_cpn, mat, cpn, settle)  -> when-issued
+```
+
+and the `bonds` run_json verb takes `convention` (default `US-TREASURY`), plus `dated` + `first_coupon`
+for the when-issued path — which previously had no JSON seam at all. Only conventions supported end to end
+(builder **and** QuantLib oracle) are catalogued; gilts/OATs/Bunds are deliberately absent until their
+calendars and ex-dividend rules exist, rather than listed half-supported.
+
 **Note on QuantLib as the derivative oracle here.** Under `SimpleThenCompounded`, QuantLib's
 `BondFunctions::duration`/`convexity` are *not* the derivatives of its own `dirtyPrice`: `CashFlows::npv`
 chains STEPWISE discount factors (simple stub, then compounding), while `modifiedDuration` branches on the

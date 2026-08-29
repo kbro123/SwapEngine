@@ -343,3 +343,43 @@ TEST(BundleApi, RunJsonEndToEnd) {
   EXPECT_EQ(o.at("risk_operator").as_array()[0].as_array().size(),
             static_cast<std::size_t>(p.n_residuals()));
 }
+
+// The stateless `bonds` verb: convention selection and the when-issued path across the JSON seam. This is
+// the contract the web/Excel layer consumes, so it is pinned here rather than only in the C++ builders.
+TEST(BundleApi, BondsVerbSelectsConventionAndHandlesWhenIssued) {
+  auto run = [](const std::string& req) {
+    return boost::json::parse(api::run_json(req)).as_object();
+  };
+  // Same bond, same yield, two conventions -> two different prices (street vs 31 CFR App B).
+  const auto o = run(R"({"bonds":{"bonds":[
+      {"convention":"US-TREASURY","issue":"2019-08-15","settle":"2024-01-16",
+       "maturity":"2029-08-15","coupon":0.025,"yield":0.04},
+      {"convention":"US-TREASURY-TSY","issue":"2019-08-15","settle":"2024-01-16",
+       "maturity":"2029-08-15","coupon":0.025,"yield":0.04}]}})");
+  ASSERT_TRUE(o.contains("dirty")) << api::run_json("");
+  const auto& d = o.at("dirty").as_array();
+  ASSERT_EQ(d.size(), 2u);
+  const double street = d[0].as_double(), tsy = d[1].as_double();
+  // Rateslib us_gb / ust_31bii on this bond, per 100 face.
+  EXPECT_NEAR(street * 100.0, 93.607147151563, 1e-9);
+  EXPECT_NEAR(tsy * 100.0, 93.604631472068, 1e-9);
+  EXPECT_GT(std::abs(street - tsy), 1e-6);
+  // Omitting `convention` defaults to US-TREASURY (street).
+  const auto def = run(R"({"bonds":{"bonds":[{"issue":"2019-08-15","settle":"2024-01-16",
+      "maturity":"2029-08-15","coupon":0.025,"yield":0.04}]}})");
+  EXPECT_EQ(def.at("dirty").as_array()[0].as_double(), street);
+
+  // WHEN-ISSUED: `dated` + `first_coupon` instead of `issue`. A new issue settles on the dated date, so
+  // accrued is exactly zero and clean == dirty.
+  const auto wi = run(R"({"bonds":{"bonds":[{"convention":"US-TREASURY-TSY","dated":"2024-06-15",
+      "first_coupon":"2024-11-15","settle":"2024-06-15","maturity":"2034-11-15",
+      "coupon":0.045,"yield":0.047}]}})");
+  EXPECT_NEAR(wi.at("accrued").as_array()[0].as_double(), 0.0, 1e-15);
+  EXPECT_EQ(wi.at("clean").as_array()[0].as_double(), wi.at("dirty").as_array()[0].as_double());
+
+  // Bad input is rejected, not silently defaulted.
+  EXPECT_TRUE(run(R"({"bonds":{"bonds":[{"convention":"NO-SUCH","issue":"2019-08-15",
+      "settle":"2024-01-16","maturity":"2029-08-15","coupon":0.025,"yield":0.04}]}})").contains("error"));
+  EXPECT_TRUE(run(R"({"bonds":{"bonds":[{"dated":"2024-06-15","settle":"2024-06-15",
+      "maturity":"2034-11-15","coupon":0.045,"yield":0.047}]}})").contains("error"));
+}
