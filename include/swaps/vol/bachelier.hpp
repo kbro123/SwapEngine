@@ -14,6 +14,7 @@
 // price/Greeks duality). Closed-form vega/delta are provided too; implied-vol inverts on double via Newton.
 #include <algorithm>
 #include <cmath>
+#include <numbers>  // std::numbers::pi (portable; M_PI is non-standard — MSVC omits it without _USE_MATH_DEFINES)
 
 #include "swaps/vol/normal.hpp"
 
@@ -138,7 +139,7 @@ inline double bachelier_implied_vol(double price, double fwd, double strike, dou
   };
   // Upper bracket: the ATM formula UNDER-estimates for OTM (a given price needs a higher vol there), so grow
   // `hi` until it over-prices the target; `lo=0` always under-prices (intrinsic).
-  double lo = 0.0, hi = std::max(1e-6, (price / annuity) * std::sqrt(2.0 * M_PI / expiry));
+  double lo = 0.0, hi = std::max(1e-6, (price / annuity) * std::sqrt(2.0 * std::numbers::pi / expiry));
   for (int i = 0; i < 64 && price_at(hi) < price; ++i) hi *= 2.0;
   double vol = 0.5 * (lo + hi);
   for (int i = 0; i < max_iter; ++i) {

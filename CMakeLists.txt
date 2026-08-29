@@ -17,7 +17,12 @@ endif()
 # results — so the ~1e-10 QuantLib oracle and the internal bit-identical gates are unaffected. (Deliberately
 # NOT -ffast-math / -funsafe-math / reassociation, which WOULD break those gates — see
 # docs/calibration-overhead-analysis.md.)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -fno-math-errno")
+# These are GCC/Clang flags; on MSVC keep its own default Release flags (/O2 /Ob2 /DNDEBUG) — MSVC has no
+# -O3/-fno-math-errno and its default float model is already value-preserving. (Overwriting the string on
+# MSVC would silently drop /O2 and ship an unoptimised DLL.)
+if(NOT MSVC)
+  set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -fno-math-errno")
+endif()
 
 # ---- Automatic ISA/SIMD detection (portable across hosts) -------------------
 # Detects AVX2 / AVX-512 / NEON / SSE2 on whatever machine this is built on and
@@ -39,6 +44,11 @@ endif()
 add_library(swaps INTERFACE)
 target_include_directories(swaps INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(swaps INTERFACE cxx_std_20)
+
+# MSVC needs /bigobj: bundle_api.cpp (header-only Boost.JSON + the templated instrument model in one TU)
+# exceeds the COFF object-section limit (C1128). Generator-expression-guarded, so it is a no-op on
+# GCC/Clang. Propagates to every target that links `swaps` (the api facade, tests, benches).
+target_compile_options(swaps INTERFACE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
 
 # Generated header recording what DetectISA found (swaps/simd_config.hpp).
 configure_file(
