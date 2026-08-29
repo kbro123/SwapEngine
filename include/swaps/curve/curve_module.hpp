@@ -85,6 +85,11 @@ struct CurveModule {
   // Tension hyperparameter (Scheme::Tension only): pulls the spline taut, σ→0 recovers NaturalCubic,
   // σ→∞ approaches piecewise-linear. Ignored by every other scheme. <=0 means "use the default 1.0".
   double sigma = 0.0;
+  // PER-REGION smoothing weight (Phase 1): the curvature/tension-energy penalty strength for THIS region's
+  // knots. <0 (the default) means "inherit the bundle default λ" — so a curve whose regions never set this
+  // is penalised exactly as before (one global λ). Set it to give the meeting-date front λ=0 while the long
+  // end is smoothed, or two regions different tension. The regulariser reads it per region.
+  double reg_lambda = -1.0;
 };
 
 template <class S>

@@ -30,14 +30,27 @@
 
 namespace swaps::calibration {
 
+// Per-knot smoothing weight for one curve: each REGION's own reg_lambda if set (>=0), else the bundle
+// default. Length == the curve's interpolation-knot count, in knot order. A curve whose regions never
+// override (reg_lambda<0 everywhere — e.g. the legacy Flat/Hermite layout) yields a uniform vector equal
+// to the old single global λ, so the penalty rows are byte-identical to before. (Phase 1.)
+template <class CurveSpec>
+inline std::vector<double> region_knot_lambdas(const CurveSpec& c, double default_lambda) {
+  std::vector<double> lam;
+  lam.reserve(static_cast<std::size_t>(c.n_interp_knots()));
+  for (const auto& m : c.modules())
+    lam.insert(lam.end(), m.knots.size(), m.reg_lambda >= 0.0 ? m.reg_lambda : default_lambda);
+  return lam;
+}
+
 template <class Problem>
 struct SmoothedProblem {
   const Problem* prob;
-  double lambda;
-  std::vector<std::pair<int, int>> segs;  // (global knot offset, n_knots) of each REGULARISED curve
+  std::vector<std::pair<int, int>> segs;  // (global knot offset, n_interp_knots) of each REGULARISED curve
+  std::vector<std::vector<double>> lam;   // per-seg, per-knot smoothing weight (region λ or the default)
 
-  SmoothedProblem(const Problem& p, double lam, std::vector<std::pair<int, int>> s)
-      : prob(&p), lambda(lam), segs(std::move(s)) {}
+  SmoothedProblem(const Problem& p, std::vector<std::pair<int, int>> s, std::vector<std::vector<double>> l)
+      : prob(&p), segs(std::move(s)), lam(std::move(l)) {}
 
   int n_knots() const { return prob->n_knots(); }
   int n_reg() const {
@@ -54,9 +67,11 @@ struct SmoothedProblem {
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
     for (int i = 0; i < r0.size(); ++i) r[i] = r0[i];
     int k = static_cast<int>(r0.size());
-    for (const auto& s : segs)
-      for (int i = 1; i < s.second - 1; ++i)
-        r[k++] = lambda * (x[s.first + i - 1] - 2.0 * x[s.first + i] + x[s.first + i + 1]);
+    for (std::size_t si = 0; si < segs.size(); ++si) {
+      const int off = segs[si].first, n = segs[si].second;
+      for (int i = 1; i < n - 1; ++i)  // curvature row weighted by the λ of its centre knot's region
+        r[k++] = lam[si][i] * (x[off + i - 1] - 2.0 * x[off + i] + x[off + i + 1]);
+    }
     return r;
   }
 };
@@ -65,12 +80,14 @@ struct SmoothedProblem {
 template <class Problem>
 SmoothedProblem<Problem> smoothed(const Problem& p, double lambda) {
   std::vector<std::pair<int, int>> segs;
+  std::vector<std::vector<double>> lam;
   int off = 0;
   for (const auto& c : p.curves) {
     segs.push_back({off, c.n_interp_knots()});  // penalise the interpolation knots only, NOT turn δ's
+    lam.push_back(region_knot_lambdas(c, lambda));
     off += c.n_knots();                          // but stride over the WHOLE state block (incl. δ's)
   }
-  return SmoothedProblem<Problem>(p, lambda, std::move(segs));
+  return SmoothedProblem<Problem>(p, std::move(segs), std::move(lam));
 }
 
 // Regularise ONLY the listed curves (leave shaped reference curves like SOFR untouched).
@@ -79,8 +96,12 @@ SmoothedProblem<Problem> smoothed(const Problem& p, double lambda, const std::ve
   std::vector<int> off(p.curves.size(), 0);
   for (std::size_t c = 1; c < p.curves.size(); ++c) off[c] = off[c - 1] + p.curves[c - 1].n_knots();
   std::vector<std::pair<int, int>> segs;
-  for (int c : curves) segs.push_back({off[c], p.curves[c].n_interp_knots()});  // interp knots only (no δ)
-  return SmoothedProblem<Problem>(p, lambda, std::move(segs));
+  std::vector<std::vector<double>> lam;
+  for (int c : curves) {
+    segs.push_back({off[c], p.curves[c].n_interp_knots()});  // interp knots only (no δ)
+    lam.push_back(region_knot_lambdas(p.curves[c], lambda));
+  }
+  return SmoothedProblem<Problem>(p, std::move(segs), std::move(lam));
 }
 
 // The explicit second-difference (curvature) operator R = λ·D as a DENSE matrix (n_reg × n_knots), one
@@ -99,10 +120,12 @@ Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, cons
   int r = 0;
   for (int c : curves) {
     const int o = off[c], n = p.curves[c].n_interp_knots();  // curvature over interp knots only (no δ)
+    const std::vector<double> lam = region_knot_lambdas(p.curves[c], lambda);  // per-region λ (Phase 1)
     for (int i = 1; i < n - 1; ++i) {
-      R(r, o + i - 1) = lambda;
-      R(r, o + i) = -2.0 * lambda;
-      R(r, o + i + 1) = lambda;
+      const double li = lam[i];  // the λ of knot i's region
+      R(r, o + i - 1) = li;
+      R(r, o + i) = -2.0 * li;
+      R(r, o + i + 1) = li;
       ++r;
     }
   }

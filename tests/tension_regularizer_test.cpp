@@ -252,3 +252,47 @@ TEST(TensionRegularizer, SmoothRegionTensionEnergyUnchangedByInteriorNodes) {
         << sigma;
   }
 }
+
+// ---- Phase 1: PER-REGION smoothing (second_difference_operator reads each region's reg_lambda) --------
+
+// A curve's two regions carry different curvature lambda: the operator weights each row by the lambda of
+// its centre knot's region. Front region lambda=0 (unpenalised), back region lambda=5.
+TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec spec;
+  spec.base = -1;
+  spec.regions.push_back(curve::CurveModule{{1.0, 2.0}, curve::Scheme::Flat, 0.0, 0.0});             // reg_lambda 0
+  spec.regions.push_back(curve::CurveModule{{3.0, 4.0, 5.0, 6.0}, curve::Scheme::Hermite, 0.0, 5.0}); // reg_lambda 5
+  p.curves.push_back(spec);
+
+  const Eigen::MatrixXd R = cal::second_difference_operator(p, /*default lambda*/ 1.0, {0});
+  ASSERT_EQ(R.rows(), 4);  // 6 interp knots -> interior rows i=1..4
+  ASSERT_EQ(R.cols(), 6);
+  EXPECT_NEAR(R.row(0).cwiseAbs().sum(), 0.0, 1e-15);  // knot i=1 in the lambda=0 front region: zero row
+  for (int r = 1; r <= 3; ++r) {                        // knots i=2,3,4 in the lambda=5 back region
+    const int i = r + 1;
+    EXPECT_NEAR(R(r, i - 1), 5.0, 1e-12);
+    EXPECT_NEAR(R(r, i), -10.0, 1e-12);
+    EXPECT_NEAR(R(r, i + 1), 5.0, 1e-12);
+  }
+}
+
+// Backward compatibility: with no region overriding (reg_lambda<0), the operator is the plain single-lambda
+// stencil everywhere -- byte-identical to the pre-Phase-1 global-lambda behaviour.
+TEST(RegionSmoothing, UniformLambdaMatchesGlobal) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec spec;
+  spec.base = -1;
+  spec.regions.push_back(curve::CurveModule{{1.0, 2.0, 3.0}, curve::Scheme::Flat});     // reg_lambda default (-1)
+  spec.regions.push_back(curve::CurveModule{{4.0, 5.0, 6.0}, curve::Scheme::Hermite});  // reg_lambda default (-1)
+  p.curves.push_back(spec);
+
+  const Eigen::MatrixXd R = cal::second_difference_operator(p, /*global lambda*/ 0.7, {0});
+  ASSERT_EQ(R.rows(), 4);
+  for (int r = 0; r < 4; ++r) {
+    const int i = r + 1;
+    EXPECT_NEAR(R(r, i - 1), 0.7, 1e-12);
+    EXPECT_NEAR(R(r, i), -1.4, 1e-12);
+    EXPECT_NEAR(R(r, i + 1), 0.7, 1e-12);
+  }
+}
