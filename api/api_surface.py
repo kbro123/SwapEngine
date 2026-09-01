@@ -52,6 +52,11 @@ METHODS = [
     {"name": "model_quote", "cpp": None, "args": [("instrument_json", "STR")], "ret": "SCALAR", "verb": None,
      "body": "return sess_.model_quote(api::instrument_from_json(json::parse(instrument_json)));",
      "doc": "Model quote (par rate/spread/future rate/FX fwd) of an arbitrary instrument off the curves."},
+    {"name": "same_structure", "cpp": None, "args": [("bundle_json", "STR")], "ret": "INT", "verb": None,
+     "body": "return sess_.same_structure(api::bundle_from_json(json::parse(bundle_json))) ? 1 : 0;",
+     "doc": "1 if `bundle_json` differs from this session's problem ONLY in market levels (warm-tickable "
+            "over the compiled W-cache); 0 if the topology changed (a recompile is needed). The OO/hot-path "
+            "switch a stateful Model asks before choosing warm-vs-recompile."},
     {"name": "price_portfolio", "cpp": "price_portfolio_json", "args": [("book_json", "STR")],
      "ret": "STRUCT:PortfolioReprice", "verb": "portfolio",
      "doc": "Reprice a multi-curve+xccy book off the calibrated curves -> {npv,pv01,price_us,n}."},
