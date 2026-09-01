@@ -160,6 +160,22 @@ TEST(BundleApi, SessionCalibrateRecoversAndMatchesNative) {
   EXPECT_LT((sess.x() - native.x).cwiseAbs().maxCoeff(), 1e-10);
 }
 
+// The OO/hot-path switch at the session level: a re-quote keeps the compiled W-cache valid (warm tick),
+// a topology edit invalidates it (recompile).
+TEST(BundleApi, SameStructureIsTheWarmVsRecompileSwitch) {
+  Eigen::VectorXd x_true;
+  const cal::BundleProblem p = build_bundle(x_true);
+  const api::BundleSession sess(p);
+
+  cal::BundleProblem requoted = p;  // market-only move -> same structure -> warm-tickable
+  for (auto& ins : requoted.instruments) ins.market += 5e-4;
+  EXPECT_TRUE(sess.same_structure(requoted));
+
+  cal::BundleProblem moved = p;  // move a knot -> different structure -> must recompile
+  moved.curves[0].regions.back().knots.back() += 0.25;
+  EXPECT_FALSE(sess.same_structure(moved));
+}
+
 TEST(BundleApi, SampleAndPriceOffSolvedCurves) {
   Eigen::VectorXd x_true;
   const cal::BundleProblem p = build_bundle(x_true);

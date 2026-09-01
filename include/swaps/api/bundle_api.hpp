@@ -195,6 +195,12 @@ class BundleSession {
   const cal::CalibrationResult& result() const { return result_; }
   const Eigen::VectorXd& x() const { return x_; }
   const cal::BundleProblem& problem() const { return prob_; }
+  // The topology hash of the problem this session compiled its W-cache for (structure_fingerprint.hpp).
+  std::uint64_t structure_fingerprint() const { return fingerprint_; }
+  // True iff `p` differs from this session's problem ONLY in market levels — so the calibrated W-cache is
+  // still valid and the caller can warm-tick (recalibrate) instead of building a fresh session. A false
+  // means the topology moved and W must be recompiled (a new BundleSession). This is the OO/hot-path switch.
+  bool same_structure(const cal::BundleProblem& p) const;
   bool has_fx() const { return has_fx_; }
   bool has_modular() const { return has_modular_; }
   // A non-linear region scheme (MonotoneCubic's value-dependent filter) has no constant W, so its bundle
@@ -347,6 +353,7 @@ class BundleSession {
   int resolve_fixings();
 
   cal::BundleProblem prob_;
+  std::uint64_t fingerprint_ = 0;  // structure hash at compile time (the warm-vs-recompile switch)
   Eigen::VectorXd x_;
   cal::CalibrationResult result_;
   bool has_fx_ = false;

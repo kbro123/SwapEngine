@@ -22,6 +22,7 @@ add_executable(swaps_tests
   build_calendar_test.cpp
   build_instruments_test.cpp
   build_ref_data_test.cpp
+  structure_fingerprint_test.cpp
   bond_yield_test.cpp
   bond_reference_test.cpp
   vol_bachelier_test.cpp

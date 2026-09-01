@@ -20,6 +20,7 @@
 #include <type_traits>
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
+#include "swaps/calibration/structure_fingerprint.hpp"  // structure_fingerprint (warm-vs-recompile switch)
 
 namespace swaps::api {
 
@@ -507,6 +508,7 @@ int BundleSession::resolve_fixings() {
 }
 
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
+  fingerprint_ = cal::structure_fingerprint(prob_);  // the topology this session's W-cache is compiled for
   for (const auto& ins : prob_.instruments) {
     if (has_noncacheable_leaf(ins)) has_fx_ = true;  // FX/MtM (incl. inside a Portfolio) -> AAD engine
     if (ins.band_upper > ins.band_lower)
@@ -687,6 +689,10 @@ PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book
 
 PortfolioRisk BundleSession::price_portfolio_risk_json(const std::string& book_json, const RegSpec& reg) const {
   return price_portfolio_risk(book_from_json(json::parse(book_json)), reg);
+}
+
+bool BundleSession::same_structure(const cal::BundleProblem& p) const {
+  return cal::structure_fingerprint(p) == fingerprint_;
 }
 
 bool BundleSession::same_curve_set(const cal::BundleProblem& source) const {
