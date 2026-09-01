@@ -23,6 +23,10 @@ add_executable(swaps_tests
   build_instruments_test.cpp
   build_ref_data_test.cpp
   structure_fingerprint_test.cpp
+  market_currency_test.cpp
+  market_fx_test.cpp
+  market_quote_test.cpp
+  build_tenor_test.cpp
   bond_yield_test.cpp
   bond_reference_test.cpp
   vol_bachelier_test.cpp
