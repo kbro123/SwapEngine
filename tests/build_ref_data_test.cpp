@@ -60,3 +60,28 @@ TEST(RefData, IndexProducesItsConventionObjectToObject) {
   EXPECT_EQ(conv.float_day_count().id, ref.float_dc);
   EXPECT_EQ(conv.spot_lag(), ref.spot_lag);
 }
+
+TEST(RefData, TypedConventionFamily) {
+  const b::Index sofr("USD-SOFR");
+  // OIS: overnight, compounding float leg. Same resolved SwapConv as the base view, richer type.
+  const b::OisConvention ois = sofr.ois_convention();
+  EXPECT_TRUE(ois.compounded());
+  EXPECT_EQ(ois.float_day_count().id, sofr.par_convention().float_day_count().id);
+  EXPECT_EQ(ois.calendar().id, b::swap_conv("USD", 0.0, "USD-SOFR").calendar);
+
+  // Term IBOR swap: a fixed tenor, no compounding.
+  const b::Index e3m("EUR-EURIBOR-3M");
+  const b::IborSwapConvention irs = e3m.swap_convention(0.25);
+  EXPECT_FALSE(irs.compounded());
+  EXPECT_EQ(irs.currency, "EUR");
+
+  // Basis: carries the benchmark index it is quoted against.
+  const b::BasisConvention basis = e3m.basis_convention("EUR-ESTR");
+  EXPECT_EQ(basis.bench_index, "EUR-ESTR");
+  EXPECT_EQ(basis.index, "EUR-EURIBOR-3M");
+
+  // Cross-currency: a sibling shape resolving to XccyConv.
+  const b::XccyConvention xccy{"EURUSD"};
+  EXPECT_EQ(xccy.calendar().id, b::xccy_conv().calendar);
+  EXPECT_EQ(xccy.day_count().id, b::xccy_conv().dc);
+}

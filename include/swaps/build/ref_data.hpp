@@ -44,12 +44,13 @@ struct DayCount {
   double year_frac(const Date& d1, const Date& d2) const { return swaps::build::year_frac(id, d1, d2); }
 };
 
-// A market CONVENTION for building instruments off a (currency, index): the leg conventions a swap carries
-// (calendar, business-day rule, fixed/float day counts, spot/pay lags, float frequency). It is a first-class
-// object: `resolve()` flattens it to the engine's SwapConv, and the typed accessors expose each convention
-// as its own object (calendar as a Calendar, each day count as a DayCount) so a caller can compose
-// object-to-object instead of digging into raw strings. Normally obtained from an Index (par_convention());
-// build one directly only to override the DB default.
+// The market-CONVENTION family (ORE-style): a typed view over the conventions DB, resolving to the engine's
+// flat SwapConv. `Convention` is the swap-family base — calendar / bdc / day counts / lags / frequency, each
+// exposed as its own object (Calendar, DayCount) so callers compose object-to-object. The product subtypes
+// (OisConvention, IborSwapConvention, BasisConvention) add ONLY what that product actually has, so the shape
+// is self-documenting. Cross-currency (XccyConvention) resolves to XccyConv, a genuinely different shape, so
+// it is a sibling rather than a subtype. Normally obtained from an Index (ois_convention() / swap_convention());
+// construct one directly only to override the DB default.
 struct Convention {
   std::string currency;
   std::string index;        // the projection index id (drives the floating-leg conventions)
@@ -62,6 +63,47 @@ struct Convention {
   DayCount float_day_count() const { return DayCount{resolve().float_dc}; }
   std::string bdc() const { return resolve().bdc; }
   std::string frequency() const { return resolve().float_freq_tok; }
+  int spot_lag() const { return resolve().spot_lag; }
+  int pay_lag() const { return resolve().pay_lag; }
+};
+
+// OIS conventions: an overnight index vs an annual fixed leg; the float leg COMPOUNDS daily.
+struct OisConvention : Convention {
+  OisConvention() = default;
+  OisConvention(std::string ccy, std::string ix) : Convention{std::move(ccy), std::move(ix), 0.0} {}
+  bool compounded() const { return true; }
+  std::string fixed_frequency() const { return resolve().float_freq_tok; }  // annual for OIS
+};
+
+// Term IBOR swap conventions: a float leg on a fixed tenor (3M / 6M) vs a fixed leg; the float leg does NOT
+// compound (each period is one fixing).
+struct IborSwapConvention : Convention {
+  IborSwapConvention() = default;
+  IborSwapConvention(std::string ccy, std::string ix, double float_freq)
+      : Convention{std::move(ccy), std::move(ix), float_freq} {}
+  bool compounded() const { return false; }
+  std::string float_tenor() const { return resolve().float_freq_tok; }  // 3M / 6M
+};
+
+// Tenor / index basis conventions: a spread leg on `index` quoted AGAINST a benchmark index (`bench_index`),
+// both discounted on the currency's OIS.
+struct BasisConvention : Convention {
+  std::string bench_index;  // the index this basis is measured against
+  BasisConvention() = default;
+  BasisConvention(std::string ccy, std::string ix, std::string bench, double float_freq = 0.0)
+      : Convention{std::move(ccy), std::move(ix), float_freq}, bench_index(std::move(bench)) {}
+};
+
+// Cross-currency MtM basis conventions. Resolves to XccyConv (calendar / bdc / day count / frequency of the
+// resetting funding leg) — a different shape from the swap family, hence a sibling, not a Convention subtype.
+struct XccyConvention {
+  std::string pair;  // e.g. "EURUSD"
+
+  XccyConv resolve() const { return xccy_conv(); }
+  Calendar calendar() const { return Calendar{resolve().calendar}; }
+  DayCount day_count() const { return DayCount{resolve().dc}; }
+  std::string bdc() const { return resolve().bdc; }
+  std::string frequency() const { return resolve().freq_tok; }
   int spot_lag() const { return resolve().spot_lag; }
   int pay_lag() const { return resolve().pay_lag; }
 };
@@ -86,8 +128,16 @@ struct Index {
   int fixing_lag() const { auto c = conv(); return c ? c->fixing_lag : 0; }
 
   // The par-swap CONVENTION this index quotes under — the object-to-object bridge Index -> Convention ->
-  // Instrument. `float_freq` overrides the leg frequency (0 = the index/product default).
+  // Instrument. `float_freq` overrides the leg frequency (0 = the index/product default). The typed
+  // producers below give the ORE-style product-specific convention for cleaner call sites.
   Convention par_convention(double float_freq = 0.0) const { return Convention{currency(), id, float_freq}; }
+  OisConvention ois_convention() const { return OisConvention{currency(), id}; }
+  IborSwapConvention swap_convention(double float_freq) const {
+    return IborSwapConvention{currency(), id, float_freq};
+  }
+  BasisConvention basis_convention(const std::string& bench_index, double float_freq = 0.0) const {
+    return BasisConvention{currency(), id, bench_index, float_freq};
+  }
 };
 
 }  // namespace swaps::build
