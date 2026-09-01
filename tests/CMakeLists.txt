@@ -27,6 +27,7 @@ add_executable(swaps_tests
   market_fx_test.cpp
   market_quote_test.cpp
   build_tenor_test.cpp
+  market_env_test.cpp
   bond_yield_test.cpp
   bond_reference_test.cpp
   vol_bachelier_test.cpp
