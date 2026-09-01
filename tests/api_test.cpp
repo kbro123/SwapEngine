@@ -176,6 +176,30 @@ TEST(BundleApi, SameStructureIsTheWarmVsRecompileSwitch) {
   EXPECT_FALSE(sess.same_structure(moved));
 }
 
+// rebind carries the FULL quote RHS (targets AND soft-quote bands) on the warm path — a band edit is not
+// structural and must NOT force a recompile; a residual-count change is structural and is rejected.
+TEST(BundleApi, RebindCarriesTheFullQuoteRhsWarm) {
+  Eigen::VectorXd x_true;
+  const cal::BundleProblem p = build_bundle(x_true);
+  api::BundleSession sess(p);
+  sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
+  const Eigen::VectorXd x0 = sess.x();
+
+  sess.rebind(p);  // rebinding to the same problem is an idempotent warm re-solve
+  EXPECT_LT((sess.x() - x0).cwiseAbs().maxCoeff(), 1e-10);
+
+  cal::BundleProblem banded = p;  // a soft band is a quote change, not a structure change
+  banded.instruments[0].band_lower = banded.instruments[0].market - 0.01;
+  banded.instruments[0].band_upper = banded.instruments[0].market + 0.01;
+  banded.instruments[0].band_decay = 0.0;
+  EXPECT_TRUE(sess.same_structure(banded));  // fingerprint excludes bands -> stays warm
+  EXPECT_NO_THROW(sess.rebind(banded));      // ...and rebind applies the band warm
+
+  cal::BundleProblem bigger = p;  // an extra instrument IS structural -> rebind rejects it
+  bigger.instruments.push_back(p.instruments.back());
+  EXPECT_THROW(sess.rebind(bigger), std::runtime_error);
+}
+
 TEST(BundleApi, SampleAndPriceOffSolvedCurves) {
   Eigen::VectorXd x_true;
   const cal::BundleProblem p = build_bundle(x_true);

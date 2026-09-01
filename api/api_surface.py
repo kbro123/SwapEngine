@@ -97,6 +97,10 @@ METHODS = [
      "verb": None,
      "body": "sess_.recalibrate(to_vec(market), reg_from(reg)); return to_list(sess_.x());",
      "doc": "Warm-recalibrate to a new market (custom-region/non-linear fallback) -> the new x."},
+    {"name": "rebind", "cpp": None, "args": [("bundle_json", "STR"), ("reg", "REG")], "ret": "VEC", "verb": None,
+     "body": "sess_.rebind(api::bundle_from_json(json::parse(bundle_json)), reg_from(reg)); return to_list(sess_.x());",
+     "doc": "Warm re-solve to a structurally-identical bundle, updating market targets AND soft-quote bands "
+            "(the complex-quote-aware warm path) -> the new x. Throws if the residual count differs (structural)."},
     {"name": "start_streaming", "cpp": "start_streaming", "args": [("reg", "REG"), ("step_tol", "SCALAR", "0.0")],
      "ret": "VOID", "verb": None,
      "doc": "Anchor the streaming calibrator at the current x (step_tol>0 loosens the corrector tolerance)."},

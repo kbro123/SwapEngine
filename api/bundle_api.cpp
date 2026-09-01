@@ -555,6 +555,20 @@ const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& 
   return calibrate(x_, reg);  // warm from the current solution
 }
 
+const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p, const RegSpec& reg) {
+  if (p.n_residuals() != prob_.n_residuals())
+    throw std::runtime_error("rebind: instrument count differs — the structure changed (recompile instead)");
+  for (int i = 0; i < prob_.n_residuals(); ++i) {  // the FULL quote RHS: target AND soft-quote band
+    cal::Instrument& dst = prob_.instruments[i];
+    const cal::Instrument& src = p.instruments[i];
+    dst.market = src.market;
+    dst.band_lower = src.band_lower;
+    dst.band_upper = src.band_upper;
+    dst.band_decay = src.band_decay;
+  }
+  return calibrate(x_, reg);  // warm from the current solution, with the new targets + bands
+}
+
 std::vector<CurveSample> BundleSession::sample(const std::vector<double>& times) const {
   const auto C = cal::build_bundle_curves<double>(
       prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });

@@ -192,6 +192,12 @@ class BundleSession {
   // interpolation regions / non-linear schemes): still a full analytic AAD solve, sub-millisecond.
   const cal::CalibrationResult& recalibrate(const Eigen::VectorXd& new_market, const RegSpec& reg = {});
 
+  // Warm re-solve to a STRUCTURALLY-IDENTICAL problem `p` (same fingerprint), updating the FULL quote RHS
+  // in place — market targets AND the soft-quote bands (band_lower/upper/decay) — then warm-calibrating from
+  // the current x. Unlike recalibrate() (targets only), this carries the complex quote types, so a band edit
+  // stays on the warm path. Throws if `p` has a different residual count (that is a structural change).
+  const cal::CalibrationResult& rebind(const cal::BundleProblem& p, const RegSpec& reg = {});
+
   const cal::CalibrationResult& result() const { return result_; }
   const Eigen::VectorXd& x() const { return x_; }
   const cal::BundleProblem& problem() const { return prob_; }
