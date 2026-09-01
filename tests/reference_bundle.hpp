@@ -64,10 +64,10 @@ inline RealisticBundle build_realistic_bundle(Market& mk,
   // Curve specs: SOFR outright (reference knots); each basis curve = meeting front + basis-tenor back,
   // spread over its base (Star: base 0; Chain: base c-1).
   rb.prob.curves.resize(NC);
-  rb.prob.curves[0] = swaps::pricing::flat_hermite_curve(sofr.meeting_times, sofr.back_times, -1);
+  rb.prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .regions = swaps::curve::flat_hermite(sofr.meeting_times, sofr.back_times)};
   for (int c = 1; c < NC; ++c) {
     const int base = (topo == BundleTopology::Star) ? 0 : c - 1;
-    rb.prob.curves[c] = swaps::pricing::flat_hermite_curve(sofr.meeting_times, back_t, base);
+    rb.prob.curves[c] = swaps::pricing::CurveStructure{.base = base, .regions = swaps::curve::flat_hermite(sofr.meeting_times, back_t)};
   }
   rb.off.assign(NC, 0);
   for (int c = 1; c < NC; ++c) rb.off[c] = rb.off[c - 1] + rb.prob.curves[c - 1].n_knots();

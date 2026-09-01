@@ -11,6 +11,7 @@
 
 #include "swaps/build/conventions.hpp"
 #include "swaps/build/observations.hpp"
+#include "swaps/build/ref_data.hpp"
 #include "swaps/build/schedule.hpp"
 #include "swaps/calibration/problem.hpp"
 
@@ -147,6 +148,21 @@ inline cal::Instrument turn_jump(int ci, int turn_index, double market) {
   ins.turn_index = turn_index;
   ins.market = market;
   return ins;
+}
+
+// ---- Convention-object overloads: let a caller pass a build::Convention (from Index::par_convention())
+// straight to the builders, so the ground-up flow reads Index -> Convention -> Instrument object-to-object
+// instead of threading a raw SwapConv. Each just flattens via conv.resolve(). ------------------------------
+inline cal::Instrument par_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int disc,
+                                double market) {
+  return par_swap(vd, conv.resolve(), mat, fc, disc, market);
+}
+inline cal::Instrument basis_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int bench,
+                                  int disc, double market) {
+  return basis_swap(vd, conv.resolve(), mat, fc, bench, disc, market);
+}
+inline cal::FixedLeg fixed_coupons(const Date& vd, const Convention& conv, const Date& mat, int disc) {
+  return fixed_coupons(vd, conv.resolve(), mat, disc);
 }
 
 }  // namespace swaps::build

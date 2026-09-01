@@ -74,12 +74,4 @@ struct CurveStructure {
   int n_knots() const { return n_interp_knots() + static_cast<int>(turns.size()); }
 };
 
-// Convenience: a CurveStructure whose interpolation is the shipped Flat(meeting)+Hermite(back) two-region
-// layout. This is the successor to the old `{meeting, back, base}` aggregate init -- a builder/test that
-// wants that default layout writes `flat_hermite_curve(meeting, back, base)` instead of hand-listing regions.
-inline CurveStructure flat_hermite_curve(const std::vector<double>& meeting, const std::vector<double>& back,
-                                         int base = -1, int currency = 0) {
-  return {.base = base, .currency = currency, .regions = curve::flat_hermite(meeting, back)};
-}
-
 }  // namespace swaps::pricing

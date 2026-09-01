@@ -44,6 +44,28 @@ struct DayCount {
   double year_frac(const Date& d1, const Date& d2) const { return swaps::build::year_frac(id, d1, d2); }
 };
 
+// A market CONVENTION for building instruments off a (currency, index): the leg conventions a swap carries
+// (calendar, business-day rule, fixed/float day counts, spot/pay lags, float frequency). It is a first-class
+// object: `resolve()` flattens it to the engine's SwapConv, and the typed accessors expose each convention
+// as its own object (calendar as a Calendar, each day count as a DayCount) so a caller can compose
+// object-to-object instead of digging into raw strings. Normally obtained from an Index (par_convention());
+// build one directly only to override the DB default.
+struct Convention {
+  std::string currency;
+  std::string index;        // the projection index id (drives the floating-leg conventions)
+  double float_freq = 0.0;  // 0 => the index/product default
+
+  SwapConv resolve() const { return swap_conv(currency, float_freq, index); }
+
+  Calendar calendar() const { return Calendar{resolve().calendar}; }
+  DayCount fixed_day_count() const { return DayCount{resolve().fixed_dc}; }
+  DayCount float_day_count() const { return DayCount{resolve().float_dc}; }
+  std::string bdc() const { return resolve().bdc; }
+  std::string frequency() const { return resolve().float_freq_tok; }
+  int spot_lag() const { return resolve().spot_lag; }
+  int pay_lag() const { return resolve().pay_lag; }
+};
+
 // A rate INDEX — the pivot reference object the model projects off (USD-SOFR, EUR-EURIBOR-3M, ...). PURE
 // reference data: its own observation conventions (fixing calendar, day count, tenor, lags) and NO curve; a
 // bundle later realises it as a Curve. Unknown ids stay valid (empty conventions, sensible fallbacks).
@@ -62,17 +84,10 @@ struct Index {
   std::string par_product() const { auto c = conv(); return c ? sv_str(c->par_product) : std::string(); }
   std::string tenor() const { auto c = conv(); return c ? sv_str(c->tenor) : std::string(); }
   int fixing_lag() const { auto c = conv(); return c ? c->fixing_lag : 0; }
-};
 
-// A market CONVENTION preset for building instruments off a (currency, index): the leg conventions a swap
-// row inherits. A thin object over the DB's ProductConv resolution (swap_conv), so the instrument builders
-// read one resolved SwapConv rather than each re-deriving day counts / calendars / frequencies.
-struct Convention {
-  std::string currency;
-  std::string index;      // the projection index id (drives the floating-leg conventions)
-  double float_freq = 0.0;  // 0 => the index/product default
-
-  SwapConv resolve() const { return swap_conv(currency, float_freq, index); }
+  // The par-swap CONVENTION this index quotes under — the object-to-object bridge Index -> Convention ->
+  // Instrument. `float_freq` overrides the leg frequency (0 = the index/product default).
+  Convention par_convention(double float_freq = 0.0) const { return Convention{currency(), id, float_freq}; }
 };
 
 }  // namespace swaps::build

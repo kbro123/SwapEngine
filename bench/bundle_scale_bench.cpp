@@ -82,8 +82,8 @@ struct Fixture {
     for (int i = 1; i <= NK - 1; ++i) back.push_back(MAX_T * i / (NK - 1));  // back knots to 30y
 
     prob.curves.resize(NC);
-    prob.curves[0] = swaps::pricing::flat_hermite_curve(meeting, back, -1);                    // outright base
-    for (int c = 1; c < NC; ++c) prob.curves[c] = swaps::pricing::flat_hermite_curve(meeting, back, c - 1);  // spread over the previous
+    prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};                    // outright base
+    for (int c = 1; c < NC; ++c) prob.curves[c] = swaps::pricing::CurveStructure{.base = c - 1, .regions = swaps::curve::flat_hermite(meeting, back)};  // spread over the previous
 
     std::vector<double> mats;
     for (double T = 1.0; T <= MAX_T + 1e-9; T += 1.0) mats.push_back(T);   // annual pillars 1y..30y

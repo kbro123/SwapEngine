@@ -63,8 +63,8 @@ struct BundleFixture {
     }
     // Desk convention: curve 0 OUTRIGHT, every other curve a SPREAD over the previous (a spread chain).
     prob.curves.resize(NC);
-    prob.curves[0] = swaps::pricing::flat_hermite_curve(meeting, back, -1);
-    for (int c = 1; c < NC; ++c) prob.curves[c] = swaps::pricing::flat_hermite_curve(meeting, back, c - 1);
+    prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};
+    for (int c = 1; c < NC; ++c) prob.curves[c] = swaps::pricing::CurveStructure{.base = c - 1, .regions = swaps::curve::flat_hermite(meeting, back)};
     const int nk = prob.curves[0].n_knots();
 
     // x_true: curve 0 forward level (~4%); curves 1+ forward SPREADS to their base (~-8bp, +308bp,

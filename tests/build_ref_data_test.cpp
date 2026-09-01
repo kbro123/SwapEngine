@@ -45,3 +45,18 @@ TEST(RefData, ConventionResolvesToSwapConv) {
   EXPECT_EQ(sc.float_dc, ref.float_dc);
   EXPECT_EQ(sc.spot_lag, ref.spot_lag);
 }
+
+TEST(RefData, IndexProducesItsConventionObjectToObject) {
+  const b::Index sofr("USD-SOFR");
+  const b::Convention conv = sofr.par_convention();  // Index -> Convention, no raw swap_conv() call
+  const b::SwapConv ref = b::swap_conv("USD", 0.0, "USD-SOFR");
+  // The Convention resolves to the same SwapConv as the procedural path...
+  EXPECT_EQ(conv.resolve().calendar, ref.calendar);
+  EXPECT_EQ(conv.index, "USD-SOFR");
+  EXPECT_EQ(conv.currency, "USD");
+  // ...and its typed accessors expose each convention as its own object.
+  EXPECT_EQ(conv.calendar().id, ref.calendar);
+  EXPECT_EQ(conv.fixed_day_count().id, ref.fixed_dc);
+  EXPECT_EQ(conv.float_day_count().id, ref.float_dc);
+  EXPECT_EQ(conv.spot_lag(), ref.spot_lag);
+}

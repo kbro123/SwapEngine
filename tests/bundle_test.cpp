@@ -76,10 +76,10 @@ struct BundleRealistic : ::testing::Test {
     // SPREAD to the one below it, so its free variables are forward SPREADS (base < curve index):
     //   FF = SOFR + spread, PRIME = FF + spread, PRIME2 = PRIME + spread.
     prob.curves.resize(NC);
-    prob.curves[SOFR] = swaps::pricing::flat_hermite_curve(sofr.meeting_times, sofr.back_times, -1);        // outright
-    prob.curves[FF] = swaps::pricing::flat_hermite_curve(sofr.meeting_times, back_t, SOFR);                 // spread over SOFR
-    prob.curves[PRIME] = swaps::pricing::flat_hermite_curve(mon_t, back_t, FF);                            // spread over FF
-    prob.curves[PRIME2] = swaps::pricing::flat_hermite_curve(mon_t, back_t, PRIME);                        // spread over PRIME
+    prob.curves[SOFR] = swaps::pricing::CurveStructure{.base = -1, .regions = swaps::curve::flat_hermite(sofr.meeting_times, sofr.back_times)};        // outright
+    prob.curves[FF] = swaps::pricing::CurveStructure{.base = SOFR, .regions = swaps::curve::flat_hermite(sofr.meeting_times, back_t)};                 // spread over SOFR
+    prob.curves[PRIME] = swaps::pricing::CurveStructure{.base = FF, .regions = swaps::curve::flat_hermite(mon_t, back_t)};                            // spread over FF
+    prob.curves[PRIME2] = swaps::pricing::CurveStructure{.base = PRIME, .regions = swaps::curve::flat_hermite(mon_t, back_t)};                        // spread over PRIME
     off.assign(NC, 0);
     for (int c = 1; c < NC; ++c) off[c] = off[c - 1] + prob.curves[c - 1].n_knots();
     const int N = off[NC - 1] + prob.curves[NC - 1].n_knots();
