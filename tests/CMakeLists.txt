@@ -33,6 +33,7 @@ add_executable(swaps_tests
   market_scenario_test.cpp
   market_fixing_series_test.cpp
   trade_book_test.cpp
+  asset_swap_spread_test.cpp
   bond_yield_test.cpp
   bond_reference_test.cpp
   vol_bachelier_test.cpp
