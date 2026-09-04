@@ -12,6 +12,7 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <stdexcept>
 #include <vector>
 
@@ -58,6 +59,65 @@ class CompiledBundleResidual {
     dnum_.resize(static_cast<int>(q_rows_.size()), T);
     dann_.resize(static_cast<int>(q_rows_.size()), T);
     dr_.resize(static_cast<int>(r_rows_.size()), T);
+
+    // ---- the support-blocked Jacobian's STRUCTURE (built once; see jacobian_vs) --------------------
+    // G is structurally BLOCK-SPARSE: row r is nonzero only at the DF times instrument r's legs actually
+    // registered (its pay dates + sub-period boundaries + FX pillar times). Those positions are known
+    // exactly from the batch index arrays, so record them per residual row as a CSR support list. The
+    // final product then sums ONLY over each row's support instead of a dense n_res × T × n_knots GEMM.
+    {
+      std::vector<std::vector<int>> sup(n_gen_);
+      const auto add_float = [&](const pricing::BundleFloatBatch& b, const std::vector<Scatter>& rows) {
+        for (int i = 0; i < b.n_coupons(); ++i)
+          if (b.pay[i] >= 0) sup[rows[b.inst[i]].row].push_back(b.pay[i]);  // futures carry pay = -1
+        for (int j = 0; j < static_cast<int>(b.subS.size()); ++j) {
+          const int r = rows[b.inst[b.sub_cpn[j]]].row;
+          sup[r].push_back(b.subS[j]);
+          sup[r].push_back(b.subE[j]);
+        }
+      };
+      add_float(gen_pos_, q_rows_);
+      add_float(gen_neg_, q_rows_);
+      add_float(gen_rate_, r_rows_);
+      for (int i = 0; i < static_cast<int>(gen_fixed_.pay.size()); ++i)
+        sup[q_rows_[gen_fixed_.inst[i]].row].push_back(gen_fixed_.pay[i]);
+      for (const auto& f : fx_rows_) {
+        sup[f.row].push_back(f.idx_num);
+        sup[f.row].push_back(f.idx_den);
+      }
+      for (int r = 0; r < n_gen_; ++r) {
+        std::sort(sup[r].begin(), sup[r].end());
+        sup[r].erase(std::unique(sup[r].begin(), sup[r].end()), sup[r].end());
+      }
+      // TIME-MAJOR CSR (t -> the residual rows whose support contains t): the product iterates times in
+      // the OUTER loop so one W row stays L1-hot across all (~n_res/n_curves) rows that share it -- the
+      // axpy stream then only writes Jt, instead of re-reading a different W row per term.
+      tsup_ptr_.assign(T + 1, 0);
+      for (int r = 0; r < n_gen_; ++r)
+        for (int t : sup[r]) ++tsup_ptr_[t + 1];
+      for (int t = 0; t < T; ++t) tsup_ptr_[t + 1] += tsup_ptr_[t];
+      tsup_row_.resize(tsup_ptr_[T]);
+      {
+        std::vector<int> cur(tsup_ptr_.begin(), tsup_ptr_.end() - 1);
+        for (int r = 0; r < n_gen_; ++r)
+          for (int t : sup[r]) tsup_row_[cur[t]++] = r;
+      }
+      // W transposed once: Wt.col(t) == W.row(t), CONTIGUOUS (col-major). And each W row is itself
+      // sparse -- time t on curve c touches only c's ancestry knots -- so record its nonzero column SPAN
+      // [wlo, whi) once and axpy only that segment (a spread-chain's early curves touch a fraction of
+      // the state, so this cuts both the flops and the Jt write traffic).
+      Wt_ = cs_.W().transpose();
+      const int nk = static_cast<int>(Wt_.rows());
+      wlo_.assign(T, 0);
+      whi_.assign(T, 0);
+      for (int t = 0; t < T; ++t) {
+        int lo = 0, hi = nk;
+        while (lo < nk && Wt_(lo, t) == 0.0) ++lo;
+        while (hi > lo && Wt_(hi - 1, t) == 0.0) --hi;
+        wlo_[t] = lo;
+        whi_[t] = hi;
+      }
+    }
   }
 
   int n_residuals() const { return n_gen_; }
@@ -152,7 +212,7 @@ class CompiledBundleResidual {
       for (std::size_t k = 0; k < band_.size(); ++k) qb_[static_cast<int>(k)] = mr[band_[k].row];
     }
     G_.setZero();  // reuse the scratch buffer (sized once in the ctor)
-    Eigen::MatrixXd& G = G_;
+    pricing::RowMatrixXd& G = G_;
 
     // Quotient rows: (pv_pos - pv_neg)/annuity, the ONE transform behind both ParRate (an empty `neg`
     // leg => pv_neg == 0) and ParSpread. Each batch row j lands on the instrument's own residual row.
@@ -170,8 +230,8 @@ class CompiledBundleResidual {
       const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);
       dnum_.setZero();
       dann_.setZero();
-      Eigen::MatrixXd& dnum = dnum_;
-      Eigen::MatrixXd& dann = dann_;
+      pricing::RowMatrixXd& dnum = dnum_;
+      pricing::RowMatrixXd& dann = dann_;
       gen_pos_.d_pv_from_num(num_pos, DF, dnum, 0, 1.0);
       gen_neg_.d_pv_from_num(num_neg, DF, dnum, 0, -1.0);
       gen_fixed_.d_annuity(dann, 0);
@@ -183,7 +243,7 @@ class CompiledBundleResidual {
     if (!r_rows_.empty()) {
       const int nr = static_cast<int>(r_rows_.size());
       dr_.setZero();
-      Eigen::MatrixXd& dr = dr_;
+      pricing::RowMatrixXd& dr = dr_;
       gen_rate_.d_rate(DF, dr, 0);
       for (int j = 0; j < nr; ++j) G.row(r_rows_[j].row) += r_rows_[j].weight * dr.row(j);
     }
@@ -205,7 +265,28 @@ class CompiledBundleResidual {
       const std::pair<double, double> wd = band_weight_d(qb_[i], b.lower, b.upper, b.decay);
       G.row(b.row) *= (wd.first + wd.second * (qb_[i] - q[b.row]));  // (q_model - q), q = the live market
     }
-    Eigen::MatrixXd J = -((G * DF.asDiagonal()) * cs_.W());
+    // SUPPORT-BLOCKED product replacing the dense -(G·diag(DF))·W GEMM: J.row(r) = -Σ_{t ∈ sup(r)}
+    // G(r,t)·DF[t]·W.row(t). G's nonzeros per row are exactly the row's registered times (recorded once
+    // in the ctor), so this sums Σ|sup| × span terms instead of n_res × T × n_knots -- the audit's U1
+    // (the dense GEMM was ~38x the residual cost at desk scale). Three structural exploits, all
+    // ctor-precomputed: TIME-MAJOR order (one W row stays L1-hot across every residual row sharing it),
+    // TRANSPOSED accumulation (Jt.col(r) -= c·Wt.col(t): contiguous axpys; one transpose at the end),
+    // and W-row SPANS (time t touches only its curve's ancestry knots [wlo, whi)). Turn rows have empty
+    // support -> zero rows, exactly as the GEMM gave.
+    Jt_.setZero(Wt_.rows(), n_gen_);
+    const int T = static_cast<int>(Wt_.cols());
+    for (int t = 0; t < T; ++t) {
+      const int lo = wlo_[t], len = whi_[t] - lo;
+      if (len <= 0) continue;
+      const auto w = Wt_.col(t).segment(lo, len);
+      const double dft = DF[t];
+      for (int s = tsup_ptr_[t]; s < tsup_ptr_[t + 1]; ++s) {
+        const int r = tsup_row_[s];
+        const double c = G(r, t) * dft;
+        if (c != 0.0) Jt_.col(r).segment(lo, len).noalias() -= c * w;
+      }
+    }
+    Eigen::MatrixXd J = Jt_.transpose();
     // TURN rows: r = (banded) (δ − market) with δ = weight·x[state index] -- LINEAR in x, and independent
     // of every DF, so its Jacobian is a single DIRECT entry ∂r/∂x[state index], not part of the W matmul.
     // The band chain-rule factor (w + w'·(δ − market)) multiplies that entry (matches residuals_vs).
@@ -347,7 +428,17 @@ class CompiledBundleResidual {
   mutable Eigen::VectorXd df_, df_x_;
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
   mutable Eigen::VectorXd qb_, num_;   // jacobian_vs scratch: banded model quotes, quotient numerator
-  mutable Eigen::MatrixXd G_, dnum_, dann_, dr_;
+  // ROW-MAJOR: every fill site (the d_* scatters, the per-row G assembly, the band row
+  // scaling) and the product's G(r,t) reads are row-local, so row-major makes them contiguous
+  // (a col-major .row() expression is strided by n_res -- it dominated the fill cost).
+  mutable pricing::RowMatrixXd G_, dnum_, dann_, dr_;
+  // Support-blocked Jacobian structure (ctor-built, constant): time-major CSR (time -> residual rows
+  // using it), each W row's nonzero column span, the transposed W (contiguous per-time columns), and
+  // the transposed-accumulation scratch.
+  std::vector<int> tsup_ptr_, tsup_row_;
+  std::vector<int> wlo_, whi_;
+  Eigen::MatrixXd Wt_;
+  mutable Eigen::MatrixXd Jt_;
 };
 
 }  // namespace swaps::calibration

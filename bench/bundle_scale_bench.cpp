@@ -185,6 +185,29 @@ static void BM_BundleScale_OneJacobian(benchmark::State& state) {
 }
 BENCHMARK(BM_BundleScale_OneJacobian);
 
+// PORTFOLIO-ROW probe: the same bundle with every curve-0 par swap wrapped as a 1-component Portfolio
+// (the ASW-basis / butterfly row shape). The compiled engine flattens Portfolio components into the same
+// batches at REGISTRATION, so tick-time residual cost must match the plain bundle -- this probe locks
+// that in (a future change pushing the recursion into model_rates would show up as a jump here).
+static void BM_BundleScale_PortfolioRowResidual(benchmark::State& state) {
+  const auto& f = fx();
+  cal::BundleProblem p = f.prob;
+  for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) {
+    if (p.instruments[i].fwd.forecast != 0 || p.instruments[i].quote != cal::QuoteKind::ParRate) continue;
+    cal::Instrument wrap;
+    wrap.quote = cal::QuoteKind::Portfolio;
+    wrap.market = p.instruments[i].market;
+    wrap.combination = {{1.0, p.instruments[i]}};
+    p.instruments[i] = std::move(wrap);
+  }
+  const cal::CompiledBundleResidual eng(p);
+  for (auto _ : state) {
+    Eigen::VectorXd r = eng.residuals(f.x_solved);
+    benchmark::DoNotOptimize(r.data());
+  }
+}
+BENCHMARK(BM_BundleScale_PortfolioRowResidual);
+
 // Real per-tick probes: x CHANGES every tick, so DF = exp(-W x) actually recomputes (the memo misses).
 // DfVaryX isolates the matvec+exp; ResidualVaryX is the full per-tick reprice (df + gather/reduce); the
 // gather/reduce alone is ~ ResidualVaryX - DfVaryX (and ~ OneResidual, which reuses a cached DF).

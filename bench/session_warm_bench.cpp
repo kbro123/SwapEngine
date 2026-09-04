@@ -166,6 +166,35 @@ static void BM_Session_StreamTick(benchmark::State& state) {
 }
 BENCHMARK(BM_Session_StreamTick);
 
+// The GATED shipped book reprice: session.price_portfolio over a 200-swap multi-curve book off the
+// calibrated bundle. This is the productized MultiCurveBook path (templated virtual curves today) -- the
+// audit's U2 target; gating it locks the baseline the compiled multi-curve book must later beat.
+static void BM_Session_PricePortfolio(benchmark::State& state) {
+  const auto& f = fx();
+  api::BundleSession sess(f.prob);
+  sess.calibrate(f.x0);
+  swaps::portfolio::MultiCurveBook book;
+  for (int i = 0; i < 200; ++i) {
+    const double T = 1.0 + (i % 30);
+    Legs L = annual(T);
+    swaps::portfolio::MultiCurveBook::Position p;
+    p.kind = swaps::portfolio::MultiCurveBook::Kind::Swap;
+    p.notional = (i % 2 ? 1.0 : -1.0) * (1.0 + 0.01 * i);
+    p.float_coupons = L.flt;
+    p.fixed_coupons = L.fix;
+    p.fwd_curve = i % NC;
+    p.disc_curve = 0;
+    p.fixed_curve = 0;
+    p.fixed_rate = 0.04;
+    book.positions.push_back(std::move(p));
+  }
+  for (auto _ : state) {
+    const api::PortfolioReprice r = sess.price_portfolio(book);
+    benchmark::DoNotOptimize(r.npv);
+  }
+}
+BENCHMARK(BM_Session_PricePortfolio);
+
 // Cold-construction reference: a full session build + cold calibrate (what a rebind used to approximate).
 // Not gated -- context for the warm numbers above.
 static void BM_Session_ColdBuildCalibrate(benchmark::State& state) {

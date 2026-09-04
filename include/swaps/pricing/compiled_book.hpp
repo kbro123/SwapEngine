@@ -378,7 +378,8 @@ struct BundleFloatBatch {
   // the sub-period gather is done ONCE per Jacobian call, not once for the value and again for the
   // derivative. A == num_cpn + konst is the k-form numerator; the pay-column term uses it and the
   // s/e-column terms use DF directly. BIT-IDENTICAL to the previous d_pv (which recomputed num(DF)).
-  void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, Eigen::MatrixXd& d,
+  template <class Mat>  // any dense matrix (row-major preferred: the scatters are row-local)
+  void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, Mat& d,
                      int row0, double sign) const {
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "d_pv_from_num() needs pay dates");
     for (int i = 0; i < n_cpn_; ++i)
@@ -393,7 +394,8 @@ struct BundleFloatBatch {
   // d(rate)/dDF for a futures batch (realized and convexity are constants -> zero derivative):
   //     d rate / d DF[s_k] = + w_k·inv_tau / DF[e_k]
   //     d rate / d DF[e_k] = − w_k·inv_tau·DF[s_k] / DF[e_k]²
-  void d_rate(const Eigen::VectorXd& DF, Eigen::MatrixXd& d, int row0) const {
+  template <class Mat>
+  void d_rate(const Eigen::VectorXd& DF, Mat& d, int row0) const {
     for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
       const int i = sub_cpn[j], s = subS[j], e = subE[j], r = row0 + inst[i];
       const double f = inv_tau[i] * sub_w[j];
@@ -507,7 +509,8 @@ struct BundleFixedLegs {
     return ann_grid_;
   }
   // d(annuity)/dDF[pay_i] = tau_i, accumulated into rows [row0, row0+n_inst).
-  void d_annuity(Eigen::MatrixXd& d, int row0) const {
+  template <class Mat>
+  void d_annuity(Mat& d, int row0) const {
     for (int i = 0; i < static_cast<int>(pay.size()); ++i) d(row0 + inst[i], pay[i]) += tau[i];
   }
 

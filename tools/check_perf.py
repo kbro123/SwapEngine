@@ -40,6 +40,10 @@ METRICS = {
     # AAD) shows up here directly, where the product actually pays it.
     "session_rebind":      ("session_warm_bench", None,                      "BM_Session_RebindWarm"),
     "stream_tick":         ("session_warm_bench", None,                      "BM_Session_StreamTick"),
+    # The per-LM-iteration bundle Jacobian (8x26 desk scale) and the shipped multi-curve book reprice --
+    # the two audit targets (U1/U2). Ours-only, self-regression gated.
+    "bundle_jacobian":     ("bundle_scale_bench", None,                      "BM_BundleScale_OneJacobian"),
+    "price_portfolio":     ("session_warm_bench", None,                      "BM_Session_PricePortfolio"),
 }
 UNIT_NS = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
 
