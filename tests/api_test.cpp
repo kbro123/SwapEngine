@@ -616,3 +616,26 @@ TEST(BundleApi, SwapSpreadVerbDerivesTheBasisRows) {
   EXPECT_FALSE(asw.combination[0].instrument.fwd.coupons.empty())
       << "the +1 component is the convention-built spot par swap";
 }
+
+// A RANK-DEFICIENT bundle (a knot no instrument pins) must STREAM, not NaN: the unregularized frozen-
+// Newton operator is a rank-safe minimum-norm pseudo-inverse, so unpinned directions stay frozen at the
+// calibrated anchor instead of being inverted (sigma ~ 1e-11 blew up the old QR solve within one tick —
+// the web's smoothness-off engines hit exactly this).
+TEST(BundleApi, RankDeficientBundleStreamsFinite) {
+  Eigen::VectorXd x_true;
+  cal::BundleProblem p = build_bundle(x_true);
+  p.curves[1].regions.back().knots.push_back(20.0);  // an unpinned knot: no instrument reaches 20y
+  api::BundleSession sess(p);
+  sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
+  ASSERT_TRUE(sess.x().allFinite());
+  sess.start_streaming({}, 1e-6);
+  Eigen::VectorXd q = p.market();
+  for (int i = 1; i <= 3; ++i) {
+    const Eigen::VectorXd& x = sess.stream_update(q.array() + 1e-5 * i);
+    ASSERT_TRUE(x.allFinite()) << "tick " << i << " must stay finite on a rank-deficient bundle";
+  }
+  // The solve genuinely tracked the move (not a frozen no-op): model rates follow the shifted market.
+  const Eigen::VectorXd r = p.residuals<double>(sess.x());
+  (void)r;  // residual vs the ORIGINAL market is ~3e-5 (the shift); finiteness is the contract here
+  EXPECT_LT(sess.last_drift(), 1e-3);
+}

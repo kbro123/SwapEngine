@@ -168,8 +168,19 @@ class StreamingCalibrator {
       M_.noalias() = Ainv * J.transpose();
       B_.noalias() = Ainv * RtR_;
     } else {
-      M_ = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(J).solve(
-          Eigen::MatrixXd::Identity(n_res_, n_res_));
+      // RANK-SAFE minimum-norm pseudo-inverse. A bundle can be legitimately rank-deficient (a knot no
+      // instrument pins, or redundant xccy/basis rows): LM handles that in calibration via its damping,
+      // but a plain QR solve of the normal system inverts the near-null directions (sigma ~ 1e-11 is
+      // ABOVE Eigen's machine-precision default threshold), so one frozen-Newton step throws the state
+      // thousands of units along an unconstrained direction and the tick diverges to NaN. A complete
+      // orthogonal decomposition with an explicit rank threshold ZEROES those directions instead: the
+      // frozen-Newton step then simply never moves an unpinned state off its calibrated anchor — the
+      // streaming analogue of what LM's damping did during the fit. 1e-10 (relative to the largest
+      // pivot) cleanly separates genuine curve stiffness (~1e-3..1e-5) from numerical null (~1e-11).
+      Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
+      cod.setThreshold(1e-10);
+      cod.compute(J);
+      M_ = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
     }
     ++refresh_count_;
   }
