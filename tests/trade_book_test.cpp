@@ -54,3 +54,33 @@ TEST(TradeNettingSet, GroupsTradesAndDiscountsViaTheCsa) {
   EXPECT_TRUE(ns.csa().is_cash_collateralized());
   EXPECT_EQ(ns.discount_index_id(), "USD-SOFR");   // discounting is the CSA's collateral-ccy OIS
 }
+
+// The per-trade-convention and CSA-override materializations added with the API wiring: each trade rolls
+// under ITS OWN index's conventions (to_position(vd) / Book::to_book(vd)), and NettingSet::to_book(vd,
+// csa_role) forces every trade's discounting onto the CSA's collateral-OIS role.
+TEST(TradeBook, PerTradeConventionsAndCsaDiscountRole) {
+  namespace tr = swaps::trade;
+  namespace bld = swaps::build;
+  const bld::Date vd = bld::Date::from_iso("2026-09-04");
+  const bld::Date eff = bld::Date::from_iso("2026-09-08");
+  const bld::Date mat = bld::Date::from_iso("2031-09-08");
+
+  tr::Trade t = tr::Trade::vanilla_swap("T1", 1e6, tr::Pay::Fixed, 0.03, "USD", "USD-SOFR", eff, mat,
+                                        /*forecast*/ 0, /*discount*/ 0);
+  // Resolving from the trade's OWN index equals resolving its convention by hand — one source of truth.
+  const auto own = t.to_position(vd);
+  const auto handed = t.to_position(vd, bld::Index("USD-SOFR").par_convention().resolve());
+  ASSERT_EQ(own.float_coupons.size(), handed.float_coupons.size());
+  EXPECT_EQ(own.float_coupons.back().pay, handed.float_coupons.back().pay);
+  EXPECT_EQ(own.fixed_coupons.size(), handed.fixed_coupons.size());
+
+  // NettingSet::to_book(vd, csa_role): the CSA's role OVERRIDES the trade's booked discount roles.
+  tr::NettingSet ns("CP-1", tr::CSA::cash("USD"));
+  t.discount_curve = 7;  // booked against some other role on purpose
+  ns.add(t);
+  const auto book = ns.to_book(vd, /*csa_discount_role=*/2);
+  ASSERT_EQ(book.positions.size(), 1u);
+  EXPECT_EQ(book.positions[0].disc_curve, 2) << "the CSA decides discounting, not the booked int";
+  EXPECT_EQ(book.positions[0].fixed_curve, 2);
+  EXPECT_EQ(book.positions[0].fwd_curve, 0) << "forecasting stays the trade's own index role";
+}

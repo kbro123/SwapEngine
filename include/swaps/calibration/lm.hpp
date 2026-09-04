@@ -39,58 +39,6 @@ struct ResidualFunctor {
   }
 };
 
-// Same residual, but with the ANALYTIC AAD Jacobian supplied via df() (no numerical differencing).
-template <class Problem>
-struct ResidualFunctorAAD {
-  using Scalar = double;
-  using InputType = Eigen::VectorXd;
-  using ValueType = Eigen::VectorXd;
-  using JacobianType = Eigen::MatrixXd;
-  enum { InputsAtCompileTime = Eigen::Dynamic, ValuesAtCompileTime = Eigen::Dynamic };
-
-  const Problem* prob;
-  explicit ResidualFunctorAAD(const Problem& p) : prob(&p) {}
-  int inputs() const { return prob->n_knots(); }
-  int values() const { return prob->n_residuals(); }
-
-  int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec) const {
-    fvec = prob->template residuals<double>(x);
-    return 0;
-  }
-  int df(const Eigen::VectorXd& x, Eigen::MatrixXd& fjac) const {
-    fjac = aad_jacobian(*prob, x);
-    return 0;
-  }
-};
-
-// LM functor driven by a residual ENGINE (residual_engine_t<Problem>): residuals + the ANALYTIC
-// Jacobian, both from the compiled W-cache when the problem has one (CalibrationProblem, BundleProblem)
-// and from AAD otherwise. This is what makes cold calibrate() skip the per-iteration AAD sweep AND the
-// per-eval curve rebuild -- the engine is built ONCE and reprices off DF = exp(-Wx).
-template <class Problem>
-struct EngineFunctor {
-  using Scalar = double;
-  using InputType = Eigen::VectorXd;
-  using ValueType = Eigen::VectorXd;
-  using JacobianType = Eigen::MatrixXd;
-  enum { InputsAtCompileTime = Eigen::Dynamic, ValuesAtCompileTime = Eigen::Dynamic };
-
-  const residual_engine_t<Problem>* eng;
-  int n_knots_, n_res_;
-  EngineFunctor(const residual_engine_t<Problem>& e, int knots, int res)
-      : eng(&e), n_knots_(knots), n_res_(res) {}
-  int inputs() const { return n_knots_; }
-  int values() const { return n_res_; }
-  int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec) const {
-    fvec = eng->residuals(x);
-    return 0;
-  }
-  int df(const Eigen::VectorXd& x, Eigen::MatrixXd& fjac) const {
-    fjac = eng->jacobian(x);
-    return 0;
-  }
-};
-
 struct CalibrationResult {
   Eigen::VectorXd x;
   int iterations = 0;

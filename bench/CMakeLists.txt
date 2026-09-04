@@ -45,6 +45,11 @@ target_compile_definitions(vol_cube_bench PRIVATE
 
 # AAD vs bump / calibration benchmarks (link the QuantLib oracle for problem setup).
 if(TARGET quantlib_oracle)
+  # The PRODUCT bundle (SOFR + ESTR + EUR-in-USD xccy, real conventions): cold/tension/warm/stream probe.
+  add_executable(xccy_bundle_bench xccy_bundle_bench.cpp)
+  target_link_libraries(xccy_bundle_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark_main)
+  target_include_directories(xccy_bundle_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+
   # Swaption vol-surface reprice: ours (batched SoA) vs QuantLib's per-cell analytic path. QuantLib-paired
   # speedup metric (vol_cube_warm); links swaps_api for BundleSession + the SOFR bundle fixture.
   add_executable(vol_cube_ql_bench vol_cube_ql_bench.cpp)
