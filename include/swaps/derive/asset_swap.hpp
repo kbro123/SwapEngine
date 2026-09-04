@@ -18,6 +18,7 @@
 // The bond street-yield / price↔yield inversion is a PRECOMPUTE off the Market, never on the calibration hot
 // path (the compiled solve for the swap curve never sees a bond).
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -50,16 +51,10 @@ enum class SwapSpreadType {
   Invoice,          // bond-future CTD FORWARD yield to delivery vs the matched swap.
 };
 
-// One bond's static identity in a universe (dates + coupon + which bond convention prices its yield). Its
-// live PRICE is a Quote in the Market, keyed by `id` — ref data and market data stay separate.
-struct BondRef {
-  std::string id;          // the key under which the Market carries this bond's CLEAN-price quote
-  std::string sector;      // benchmark bucket, e.g. "5Y" (which tenor's on-the-run this is)
-  std::string yield_conv;  // conventions.json bond convention id, e.g. "US-TREASURY" (freq + stub rule)
-  build::Date issue;       // dated date (first accrual start)
-  build::Date maturity;
-  double coupon = 0.0;     // annual coupon rate (0.04 = 4%)
-};
+// A bond's identity is build::BondId (build/bond.hpp) — the ONE canonical identity type: convention-keyed,
+// when-issued-capable (first_coupon), independent of any market snapshot. Its live PRICE is a Quote in the
+// Market, keyed by BondId::id — ref data and market data stay separate. (This layer previously carried its
+// own BondRef restating a subset of the terms; folded per the CurveStructure de-dup rule.)
 
 // A per-currency asset-swap convention. Data — the benchmark selection, the govvie curve it references (by
 // NAME, so it can be a 1-knot headline factor today and a fitted RV curve later), the settlement rule, and
@@ -75,11 +70,10 @@ struct AssetSwapConvention {
 
 // The benchmark's STREET yield, precomputed from the Market: build the bond on its convention, read its
 // market CLEAN price (Market.quote(id).mid()), and invert to yield via the engine's Newton (pricing/bond).
-inline double benchmark_yield(const AssetSwapConvention& conv, const BondRef& bond,
+inline double benchmark_yield(const AssetSwapConvention& conv, const build::BondId& bond,
                               const market::Market& mkt) {
   const build::Date settle = build::advance_bd(conv.settle_calendar, mkt.today(), conv.settle_lag);
-  const build::BuiltBond bb = build::bond_from_convention(bond.yield_conv, mkt.today(), settle, bond.issue,
-                                                          bond.maturity, bond.coupon);
+  const build::BuiltBond bb = build::build_bond(bond, mkt.today(), settle);  // WI-aware via the identity
   const double clean = mkt.quote(bond.id).mid();  // bond quotes are CLEAN prices, per unit notional
   return pricing::bond_yield_from_clean(bb.yield, clean);
 }
@@ -94,9 +88,15 @@ struct DerivedAssetSwap {
 // Derive the swap-spread rows for one benchmark. `spot_swap` is the matched par swap on the swap curve
 // (built by the general problem-derivation from the convention's swap_index + tenor); `factor_curve`/`anchor`
 // locate the govvie yield factor; `spread_quote_id` names the Market quote holding the quoted spread.
-inline DerivedAssetSwap derive_asset_swap(const AssetSwapConvention& conv, const BondRef& bond,
+inline DerivedAssetSwap derive_asset_swap(const AssetSwapConvention& conv, const build::BondId& bond,
                                           const cal::Instrument& spot_swap, int factor_curve, double anchor,
                                           const market::Market& mkt, const std::string& spread_quote_id) {
+  // The convention's spread_type SELECTS the derivation. Only the yield-vs-matched-swap forms are wired
+  // (HeadlineYield / MatchedMaturity share this derivation — they differ in which swap the caller matched);
+  // ParAssetSwap (endogenous) and Invoice (CTD forward yield) are declared-but-unwired: fail loudly rather
+  // than silently deriving the wrong number.
+  if (conv.type != SwapSpreadType::HeadlineYield && conv.type != SwapSpreadType::MatchedMaturity)
+    throw std::invalid_argument("derive_asset_swap: this spread_type's derivation is not implemented yet");
   DerivedAssetSwap out;
   out.bond_yield = benchmark_yield(conv, bond, mkt);
   out.spread = mkt.quote(spread_quote_id).mid();
@@ -106,17 +106,15 @@ inline DerivedAssetSwap derive_asset_swap(const AssetSwapConvention& conv, const
 
 // Build every bond in the universe (curve-space cashflows) and pull its market clean price from the Market —
 // the shared front half of both the spline and the parametric minimum-pricing-error fits.
-inline void load_universe(const AssetSwapConvention& conv, const std::vector<BondRef>& universe,
+inline void load_universe(const AssetSwapConvention& conv, const std::vector<build::BondId>& universe,
                           const market::Market& mkt, std::vector<pricing::Bond>& bonds, Eigen::VectorXd& mc) {
   bonds.clear();
   bonds.reserve(universe.size());
   mc.resize(static_cast<int>(universe.size()));
   const build::Date settle = build::advance_bd(conv.settle_calendar, mkt.today(), conv.settle_lag);
   for (std::size_t b = 0; b < universe.size(); ++b) {
-    const BondRef& br = universe[b];
-    const build::BuiltBond bb = build::bond_from_convention(br.yield_conv, mkt.today(), settle, br.issue,
-                                                            br.maturity, br.coupon);
-    bonds.push_back(bb.curve);
+    const build::BondId& br = universe[b];
+    bonds.push_back(build::build_bond(br, mkt.today(), settle).curve);  // WI-aware via the identity
     mc[static_cast<int>(b)] = mkt.quote(br.id).mid();
   }
 }
@@ -125,28 +123,30 @@ inline void load_universe(const AssetSwapConvention& conv, const std::vector<Bon
 // returned GovvieBondFit is driven by cal::calibrate like any Problem; after the fit,
 // portfolio::CompiledBondBook::z_spreads() over the SAME (meeting, back) topology gives the per-bond RV
 // ladder. `weight` (optional, per bond) lets a caller down-weight illiquid/off-the-run bonds.
-inline cal::GovvieBondFit make_govvie_fit(const AssetSwapConvention& conv, const std::vector<BondRef>& universe,
+inline cal::GovvieBondFit make_govvie_fit(const AssetSwapConvention& conv, const std::vector<build::BondId>& universe,
                                           const market::Market& mkt, const std::vector<double>& meeting,
                                           const std::vector<double>& back,
                                           const std::vector<double>& weight = {}) {
   cal::GovvieBondFit fit;
-  fit.model = cal::CurveModel::Spline;
   fit.regions = curve::flat_hermite(meeting, back);
   load_universe(conv, universe, mkt, fit.bonds, fit.market_clean);
   if (!weight.empty()) fit.weight = Eigen::Map<const Eigen::VectorXd>(weight.data(), weight.size());
   return fit;
 }
 
-// Assemble a PARAMETRIC (Nelson-Siegel / Svensson) minimum-pricing-error fit: the govvie curve is a few
-// time-stable parameters, calibrated to the whole universe's market prices. This is the fair-value-curve RV
-// form — the fitted parameters (level/slope/curvature…) are the state, and each bond's leftover residual /
-// z-spread is its richness-cheapness. Same LM, same z-spread ladder as the spline; only the curve differs.
-inline cal::GovvieBondFit make_parametric_fit(const AssetSwapConvention& conv,
-                                              const std::vector<BondRef>& universe, const market::Market& mkt,
-                                              cal::CurveModel model, double tau1, double tau2 = 5.0,
-                                              const std::vector<double>& weight = {}) {
-  cal::GovvieBondFit fit;
-  fit.model = model;
+// Assemble a PARAMETRIC minimum-pricing-error fit: the govvie curve is a few time-stable parameters,
+// calibrated to the whole universe's market prices. This is the fair-value-curve RV form — the fitted
+// parameters (level/slope/curvature…) are the state, and each bond's leftover residual / z-spread is its
+// richness-cheapness. The MODEL is the template parameter (curve::NelsonSiegel, curve::Svensson, or any
+// Scalar-templated family with n_params/set_params/discount) — same LM, same universe loading as the
+// spline; only the curve type differs:  auto fit = make_parametric_fit<curve::NelsonSiegel>(...).
+template <template <class> class Model>
+inline cal::ParametricBondFit<Model> make_parametric_fit(const AssetSwapConvention& conv,
+                                                         const std::vector<build::BondId>& universe,
+                                                         const market::Market& mkt, double tau1,
+                                                         double tau2 = 5.0,
+                                                         const std::vector<double>& weight = {}) {
+  cal::ParametricBondFit<Model> fit;
   fit.tau1 = tau1;
   fit.tau2 = tau2;
   load_universe(conv, universe, mkt, fit.bonds, fit.market_clean);

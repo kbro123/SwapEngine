@@ -29,7 +29,7 @@
 #include "conventions_ql.hpp"    // conv::* -- pull instrument conventions from the market-conventions DB
 #include "reference_curve.hpp"  // build_market / build_problem (SOFR base), Market, Future, sofr_start/end
 #include "swaps/calibration/bundle_problem.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 
 namespace swaps::refbuild {

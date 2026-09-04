@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "swaps/build/bond.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/pricing/bond.hpp"
 #include "swaps/portfolio/bond_universe.hpp"
 #include "tolerances.hpp"

@@ -14,7 +14,7 @@
 
 #include "swaps/api/bond.hpp"
 #include "swaps/api/bundle_api.hpp"
-#include "swaps/build/asset_swap.hpp"
+#include "swaps/build/par_asset_swap.hpp"
 #include "swaps/build/bond.hpp"
 #include "swaps/build/date.hpp"
 #include "swaps/build/day_count.hpp"

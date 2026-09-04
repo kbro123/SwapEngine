@@ -8,14 +8,13 @@
 
 #include <vector>
 
-#include "swaps/calibration/live_curve.hpp"
+#include "swaps/parallel/live_curve.hpp"
 #include "swaps/parallel/thread_pool.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/parallel.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 
 namespace pf = swaps::portfolio;
-namespace cal = swaps::calibration;
 
 namespace {
 const std::vector<double> kMeeting{0.5};
@@ -96,7 +95,7 @@ TEST(ParallelPortfolio, PricesOffOnePinnedSnapshotFromTheFeed) {
   const pf::CompiledPortfolio serial(swaps::curve::flat_hermite(kMeeting, kBack), book);
   const pf::ParallelPortfolio parallel(swaps::curve::flat_hermite(kMeeting, kBack), book, 4);
 
-  cal::LiveCurveFeed feed(static_cast<int>(kMeeting.size() + kBack.size()));
+  swaps::parallel::LiveCurveFeed feed(static_cast<int>(kMeeting.size() + kBack.size()));
   // Publish a few distinct curves (as a calibrator would); the pricer pins the latest.
   Eigen::VectorXd x = forwards();
   for (int v = 0; v < 5; ++v) { x.array() += 1e-4; feed.publish(x); }

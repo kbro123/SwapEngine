@@ -6,16 +6,10 @@
 // small, standalone VALUE TYPE that represents a real two-sided market and RESOLVES to the engine's
 // existing calibration target + soft-quote band. It is header-only, QuantLib-free, value-semantic and
 // depends on NOTHING in the calibration layer: the hand-off is the plain-POD `CalibrationTarget`
-// below, whose fields map ONE-TO-ONE onto Instrument.{market, band_lower, band_upper, band_decay}.
-//
-// The engine's band semantics (problem.hpp, ~L103-108) that we mirror EXACTLY:
-//   * band_upper >  band_lower  => a SOFT target: the residual weight decays from 1 outside the band
-//                                  down to a floor `band_decay` inside [band_lower, band_upper].
-//   * band_upper <= band_lower (with band_decay == 1) => a plain HARD target (a hard pin): the
-//                                  residual is the unweighted (q - market). This is the engine default.
-//
-// So a two-sided quote becomes a soft band [bid, ask] pulling to mid; a mid-only quote becomes a hard
-// pin on the mid — the exact shape the solver already understands.
+// below, consumed by `Instrument::set_target` (calibration/problem.hpp) — the ONE place the band
+// semantics are defined. This header defines no semantics of its own: a two-sided quote resolves to a
+// soft band [bid, ask] pulling to mid, a mid-only quote to a hard pin on the mid, and what "soft" and
+// "hard" MEAN (the band-weight residual) lives entirely in problem.hpp.
 
 #include <cmath>
 #include <limits>
@@ -24,14 +18,11 @@
 
 namespace swaps::market {
 
-// The hand-off CONTRACT between a market Quote and the calibration layer. A plain POD by design: its
-// four fields correspond ONE-TO-ONE, and in order, to the calibration Instrument's quote fields —
-//   target      <-> Instrument.market
-//   band_lower  <-> Instrument.band_lower
-//   band_upper  <-> Instrument.band_upper
-//   band_decay  <-> Instrument.band_decay
-// Copy them straight across (no transform) to feed a calibration Instrument from a Quote. Kept here,
-// not pulled from problem.hpp, so the market layer stays independent of the calibration layer.
+// The hand-off CONTRACT between a market Quote and the calibration layer: pass one of these to
+// `Instrument::set_target` (calibration/problem.hpp), which reads the four fields by name (duck-typed,
+// so the two layers stay independent — this header never includes problem.hpp and vice versa). A plain
+// POD by design; any other quote source (e.g. the API compiler's wire quote) feeds the SAME setter, so
+// there is exactly one definition of how a target + band lands on an instrument.
 struct CalibrationTarget {
   double target = 0.0;
   double band_lower = 0.0;

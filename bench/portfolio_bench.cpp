@@ -16,7 +16,7 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/portfolio.hpp"

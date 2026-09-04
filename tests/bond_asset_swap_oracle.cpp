@@ -1,7 +1,7 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 //
-// Pins the par-par asset-swap spread (swaps/build/asset_swap.hpp) against QuantLib::AssetSwap::fairSpread on
+// Pins the par-par asset-swap spread (swaps/build/par_asset_swap.hpp) against QuantLib::AssetSwap::fairSpread on
 // the SAME discount curve and bond, across a range of market prices. The float leg is a 0-fixing-day index
 // with the leg starting on the evaluation date, so the first fixing is FORECAST (no historical fixings needed)
 // and QuantLib's asset swap is deterministic off the flat curve.
@@ -11,11 +11,11 @@
 #include <cmath>
 #include <vector>
 
-#include "swaps/build/asset_swap.hpp"
+#include "swaps/build/par_asset_swap.hpp"
 #include "swaps/build/bond.hpp"
 #include "swaps/build/date.hpp"
 #include "swaps/build/day_count.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/pricing/bond.hpp"
 #include "tolerances.hpp"
 

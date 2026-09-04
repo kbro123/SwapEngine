@@ -31,7 +31,7 @@
 #include "swaps/calibration/compiled_bundle.hpp"
 #include <random>
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "swaps/ql/extract.hpp"
 #include "tolerances.hpp"

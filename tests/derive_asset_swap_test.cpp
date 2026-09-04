@@ -79,8 +79,7 @@ der::AssetSwapConvention usd_headline() {
 TEST(DeriveAssetSwap, HeadlineSpreadDerivesTheBenchmarkYieldAndRowsFromTheMarket) {
   const bd::Date today = iso("2026-09-04");
   const der::AssetSwapConvention conv = usd_headline();
-  const der::BondRef otr5{.id = "UST-5Y",
-                          .sector = "5Y",
+  const bd::BondId otr5{.id = "UST-5Y",
                           .yield_conv = "US-TREASURY",
                           .issue = iso("2026-08-15"),
                           .maturity = iso("2031-08-15"),
@@ -131,10 +130,9 @@ TEST(DeriveAssetSwap, RvMinimumPricingErrorFitAndZSpreadSignal) {
                                {"B3", "2029-09-15", 0.040}, {"B4", "2030-09-15", 0.038},
                                {"B5", "2031-09-15", 0.042}, {"B6", "2033-09-15", 0.045},
                                {"B7", "2036-09-15", 0.043}, {"B8", "2036-09-15", 0.050}};
-  std::vector<der::BondRef> universe;
+  std::vector<bd::BondId> universe;
   for (const auto& u : defs)
     universe.push_back({.id = u.id,
-                        .sector = "",
                         .yield_conv = "US-TREASURY",
                         .issue = iso("2026-08-15"),
                         .maturity = iso(u.mat),
@@ -209,10 +207,9 @@ TEST(DeriveAssetSwap, ParametricNelsonSiegelFitRecoversStableParamsAndFlagsRv) {
                                {"B3", "2029-09-15", 0.040}, {"B4", "2030-09-15", 0.038},
                                {"B5", "2031-09-15", 0.042}, {"B6", "2033-09-15", 0.045},
                                {"B7", "2036-09-15", 0.043}, {"B8", "2041-09-15", 0.050}};
-  std::vector<der::BondRef> universe;
+  std::vector<bd::BondId> universe;
   for (const auto& u : defs)
     universe.push_back({.id = u.id,
-                        .sector = "",
                         .yield_conv = "US-TREASURY",
                         .issue = iso("2026-08-15"),
                         .maturity = iso(u.mat),
@@ -242,7 +239,7 @@ TEST(DeriveAssetSwap, ParametricNelsonSiegelFitRecoversStableParamsAndFlagsRv) {
     m.add_quote(universe[i].id, mkt::Quote::mid(clean_true[i]));
 
   // Fit the 3 Nelson-Siegel parameters to the 8-bond universe by minimum pricing error.
-  cal::GovvieBondFit fit = der::make_parametric_fit(conv, universe, m, cal::CurveModel::NelsonSiegel, tau);
+  auto fit = der::make_parametric_fit<cv::NelsonSiegel>(conv, universe, m, tau);
   ASSERT_EQ(fit.n_knots(), 3);
   ASSERT_EQ(fit.n_residuals(), 8);
   Eigen::VectorXd seed(3);
@@ -262,7 +259,7 @@ TEST(DeriveAssetSwap, ParametricNelsonSiegelFitRecoversStableParamsAndFlagsRv) {
   for (int i = 0; i < static_cast<int>(universe.size()); ++i)
     m2.add_quote(universe[i].id, mkt::Quote::mid(clean_mkt[i]));
 
-  cal::GovvieBondFit fit2 = der::make_parametric_fit(conv, universe, m2, cal::CurveModel::NelsonSiegel, tau);
+  auto fit2 = der::make_parametric_fit<cv::NelsonSiegel>(conv, universe, m2, tau);
   const cal::CalibrationResult res2 = cal::calibrate(fit2, res.x);
 
   // The RV signal: model − market per bond off the fitted fair-value curve. The cheapened bond reads CHEAP —

@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 #include "swaps/pricing/cashflows.hpp"
 

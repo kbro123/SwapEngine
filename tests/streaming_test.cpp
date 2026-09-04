@@ -22,7 +22,7 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/compiled_residual.hpp"
-#include "swaps/calibration/live_curve.hpp"
+#include "swaps/parallel/live_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 
@@ -84,7 +84,7 @@ TEST_F(Streaming, AsyncPricerThreadPricesLatestCurveLockFree) {
   // torn/blended one -- proving the async split is correct with the real streaming engine.
   const int M = 400;
   std::vector<Eigen::VectorXd> published(static_cast<std::size_t>(M) + 2);
-  cal::LiveCurveFeed feed(prob.n_knots());
+  swaps::parallel::LiveCurveFeed feed(prob.n_knots());
   std::atomic<bool> done{false};
   std::atomic<long> checks{0}, bad{0}, priced{0};
 

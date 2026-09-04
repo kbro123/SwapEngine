@@ -23,7 +23,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace swaps::calibration {
+namespace swaps::parallel {
 
 class LiveCurveFeed {
  public:
@@ -95,4 +95,4 @@ class LiveCurveFeed {
   int write_idx_ = 0;                    // writer-thread-local round-robin cursor
 };
 
-}  // namespace swaps::calibration
+}  // namespace swaps::parallel

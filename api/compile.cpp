@@ -21,6 +21,7 @@
 
 #include "swaps/api/bundle_api.hpp"        // bundle_to_json (reused for the "bundle" field)
 #include "swaps/build/instruments.hpp"     // the whole build/ object model (schedule/conventions/observations)
+#include "swaps/market/quote.hpp"          // CalibrationTarget -- the ONE quote->instrument hand-off POD
 
 namespace swaps::api {
 
@@ -145,16 +146,22 @@ QuoteBand quote_band(const json::object& ins) {
   return q;
 }
 // Attach a bid/offer band to the instrument when it declares a REAL band (upper > lower), in rate units
-// (compile._apply_band). A hard pin emits no band, so it stays exact.
+// (compile._apply_band). A hard pin emits no band, so it stays exact. The wire shape is target + band —
+// the target is NOT necessarily the band mid and the default decay is 1 (parity with server/compile.py) —
+// so this maps onto the ONE hand-off POD (market::CalibrationTarget) and lands via Instrument::set_target,
+// the single definition of how a target + band reaches an instrument (no third band semantics here).
 void apply_band(cal::Instrument& obj, const json::object& ins, const std::string& unit) {
   const QuoteBand q = quote_band(ins);
-  if (!q.lower || !q.upper) return;
-  const double lo = to_decimal(*q.lower, unit), hi = to_decimal(*q.upper, unit);
-  if (hi > lo) {
-    obj.band_lower = lo;
-    obj.band_upper = hi;
-    obj.band_decay = q.decay ? *q.decay : 1.0;
+  swaps::market::CalibrationTarget t{obj.market, 0.0, 0.0, 1.0};  // the already-set target, hard pin
+  if (q.lower && q.upper) {
+    const double lo = to_decimal(*q.lower, unit), hi = to_decimal(*q.upper, unit);
+    if (hi > lo) {
+      t.band_lower = lo;
+      t.band_upper = hi;
+      t.band_decay = q.decay ? *q.decay : 1.0;
+    }
   }
+  obj.set_target(t);
 }
 
 // resolve a token to (date, curve-time), throwing CompileError with context on a bad token.

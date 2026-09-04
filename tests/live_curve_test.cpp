@@ -12,14 +12,13 @@
 #include <thread>
 #include <vector>
 
-#include "swaps/calibration/live_curve.hpp"
+#include "swaps/parallel/live_curve.hpp"
 
-namespace cal = swaps::calibration;
 
 TEST(LiveCurve, ConcurrentReadsAreNeverTornAndVersionsAreMonotone) {
   const int nk = 96;      // a realistic knot count; a wide payload widens the tear window if the seqlock is wrong
   const long M = 300000;  // publishes
-  cal::LiveCurveFeed feed(nk);
+  swaps::parallel::LiveCurveFeed feed(nk);
 
   std::atomic<bool> stop{false};
   std::atomic<long> total_reads{0}, torn{0}, regressions{0};
@@ -60,7 +59,7 @@ TEST(LiveCurve, SnapshotAlwaysEqualsAPublishedCurveUnderChurn) {
   // cycles a small set of distinct non-constant vectors; the reader asserts every snapshot equals one of
   // them element-for-element.
   const int nk = 32;
-  cal::LiveCurveFeed feed(nk);
+  swaps::parallel::LiveCurveFeed feed(nk);
   std::vector<Eigen::VectorXd> known;
   for (int p = 0; p < 5; ++p) {
     Eigen::VectorXd v(nk);

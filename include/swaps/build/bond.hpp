@@ -17,6 +17,7 @@
 #define SWAPS_BUILD_BOND_HPP
 
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -306,6 +307,38 @@ inline BuiltBond wi_bond_from_convention(std::string_view convention_id, const D
   const px::YieldConvention y = yield_convention(convention_id);
   return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, int(y.freq + 0.5), settle,
                           y.stub, y.final_period_simple);
+}
+
+// =================================================================================================
+// BondId — the CANONICAL bond identity.
+// =================================================================================================
+// What names a bond independent of any market snapshot or valuation date: an id (the key its live
+// CLEAN-price Quote is stored under in a market::Market), the conventions-DB bond convention that
+// prices its yield, its dated/maturity dates and coupon — and, when set, the first_coupon that marks
+// it WHEN-ISSUED / odd-first-period (the 31 CFR App B short-stub machinery in when_issued_bond).
+// This is the ONE identity the layers above consume (derive/ universes, benchmark selection); the
+// convention-keyed builder below materializes it for a given (value_date, settle). Callers with
+// EXPLICIT non-convention terms (per-request freq/stub overrides, e.g. the bonds API verb) keep
+// filling FixedBondTerms directly — that is the terms path, not a second identity.
+struct BondId {
+  std::string id;          // the key a Market carries this bond's CLEAN-price quote under
+  std::string yield_conv;  // conventions.json bond convention id, e.g. "US-TREASURY"
+  Date issue;              // dated date (first accrual start)
+  Date maturity;
+  double coupon = 0.0;     // annual coupon rate (0.04 = 4%)
+  // Set => WHEN-ISSUED / odd first period: the first coupon date is off the maturity-anchored grid and
+  // the short first coupon is prorated (built via when_issued_bond). Unset => a seasoned regular bond.
+  std::optional<Date> first_coupon;
+  bool is_when_issued() const { return first_coupon.has_value(); }
+};
+
+// Materialize a BondId as of (value_date, settle), dispatching seasoned vs when-issued off the identity
+// itself — the single build entry point for identity-keyed callers (derive/ universes, benchmarks).
+inline BuiltBond build_bond(const BondId& b, const Date& value_date, const Date& settle) {
+  return b.first_coupon
+             ? wi_bond_from_convention(b.yield_conv, value_date, b.issue, *b.first_coupon, b.maturity,
+                                       b.coupon, settle)
+             : bond_from_convention(b.yield_conv, value_date, settle, b.issue, b.maturity, b.coupon);
 }
 
 }  // namespace swaps::build

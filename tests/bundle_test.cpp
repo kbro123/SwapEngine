@@ -29,7 +29,7 @@
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/calibration/warm.hpp"
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 #include "tolerances.hpp"
 

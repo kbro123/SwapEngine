@@ -17,7 +17,7 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/warm.hpp"
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/curve/ql_term_structure.hpp"
+#include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
 
 using namespace QuantLib;

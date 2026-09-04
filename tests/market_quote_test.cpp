@@ -3,6 +3,7 @@
 // two-sided -> soft-band and mid-only -> hard-pin bridges, and source/timestamp round-tripping.
 #include <gtest/gtest.h>
 
+#include "swaps/calibration/problem.hpp"
 #include "swaps/market/quote.hpp"
 
 namespace mkt = swaps::market;
@@ -50,4 +51,20 @@ TEST(MarketQuote, SourceAndTimestampRoundTrip) {
   const mkt::Quote m = mkt::Quote::mid(3.72, "ICAP", 46001.0);
   EXPECT_EQ(m.source(), "ICAP");
   EXPECT_DOUBLE_EQ(m.timestamp(), 46001.0);
+}
+
+// The LOAD-BEARING hand-off: Quote::to_target() -> Instrument::set_target -- the one path a market quote
+// takes into a calibration instrument (problem.hpp defines the band semantics; nothing is hand-copied).
+TEST(MarketQuote, SetTargetLandsTheFullQuoteRhsOnAnInstrument) {
+  swaps::calibration::Instrument ins;
+  ins.set_target(mkt::Quote::bid_ask(0.0370, 0.0374).to_target(0.2));
+  EXPECT_DOUBLE_EQ(ins.market, 0.0372);
+  EXPECT_DOUBLE_EQ(ins.band_lower, 0.0370);
+  EXPECT_DOUBLE_EQ(ins.band_upper, 0.0374);
+  EXPECT_DOUBLE_EQ(ins.band_decay, 0.2);
+
+  ins.set_target(mkt::Quote::mid(0.0372).to_target());  // a mid-only quote resets to a HARD pin
+  EXPECT_DOUBLE_EQ(ins.market, 0.0372);
+  EXPECT_LE(ins.band_upper, ins.band_lower);
+  EXPECT_DOUBLE_EQ(ins.band_decay, 1.0);
 }

@@ -137,6 +137,20 @@ struct Instrument {
   // residual is (banded) δ − market, with `market` the target jump (rate units). See QuoteKind::TurnJump.
   int turn_curve = 0, turn_index = 0;
 
+  // Set the FULL quote RHS -- target and soft-quote band -- from any target-shaped object exposing
+  // {target, band_lower, band_upper, band_decay}. This is THE one hand-off from a market quote into a
+  // calibration instrument: market::Quote::to_target() (market/quote.hpp CalibrationTarget) and the
+  // API compiler's wire quote (api/compile.cpp) both feed THIS setter, so the band semantics above are
+  // defined exactly once -- here. Duck-typed on purpose: the calibration layer sits BELOW the market
+  // layer and must not include it; any POD with those four fields is a valid source.
+  template <class Target>
+  void set_target(const Target& t) {
+    market = t.target;
+    band_lower = t.band_lower;
+    band_upper = t.band_upper;
+    band_decay = t.band_decay;
+  }
+
   // The curve this instrument primarily PINS. Used by the staged solver to assign it to a dependency
   // block; FxForward pins its FOREIGN (fx_num) curve, every leg-based quote its fwd leg's forecast, a
   // Portfolio its first component's. Defined out-of-line (Portfolio dereferences the nested type).
