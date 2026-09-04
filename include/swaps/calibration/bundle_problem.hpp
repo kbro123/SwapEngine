@@ -263,8 +263,12 @@ class BundleProblem {
 
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
+    // Hoist the per-curve state offsets: offset(c) is an O(n_curves) walk and the value lambda below
+    // runs once per knot, so inlining it would cost O(n_curves x n_knots) per residual evaluation.
+    std::vector<int> off(curves.size());
+    for (int c = 0; c < static_cast<int>(curves.size()); ++c) off[c] = offset(c);
     const auto C = build_bundle_curves<Scalar>(
-        curves, [&](int c, int i) { return x[offset(c) + i]; });
+        curves, [&](int c, int i) { return x[off[c] + i]; });
 
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
     // Each generic leg resolves its OWN role, so forecast != discount and cross-curve legs need no

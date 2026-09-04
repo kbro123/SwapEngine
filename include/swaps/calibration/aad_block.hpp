@@ -76,6 +76,21 @@ class AadBlock {
   int size() const { return static_cast<int>(rows_.size()); }
   const std::vector<int>& rows() const { return rows_; }
 
+  // Overwrite the quote RHS (target + band) of every block instrument from the FULL problem `p`, matched
+  // by each block instrument's global residual row. Quote fields are read at residual time, never during
+  // init's structure discovery (touched knots / DF cache key on the schedule alone), so this is the
+  // block's half of a warm rebind: no re-init, no re-discovery, no seed rebuild.
+  void set_quotes(const BundleProblem& p) {
+    for (int j = 0; j < size(); ++j) {
+      Instrument& dst = sub_.instruments[j];
+      const Instrument& src = p.instruments[rows_[j]];
+      dst.market = src.market;
+      dst.band_lower = src.band_lower;
+      dst.band_upper = src.band_upper;
+      dst.band_decay = src.band_decay;
+    }
+  }
+
   // Build from the bundle's curves, the non-cacheable instruments, their GLOBAL residual rows, and the
   // global knot count. Determines the touched knots and pre-sizes the reusable width-reduced seed.
   void init(const std::vector<BundleCurveSpec>& curves, std::vector<Instrument> instruments,
@@ -84,6 +99,10 @@ class AadBlock {
     rows_ = std::move(rows);
     sub_.curves = curves;
     sub_.instruments = std::move(instruments);
+    // Per-curve global state offsets, hoisted ONCE: sub_.offset(c) is an O(n_curves) walk, and the
+    // update lambdas below would otherwise pay it per knot per refresh (per streaming tick).
+    off_.resize(sub_.curves.size());
+    for (std::size_t c = 0; c < sub_.curves.size(); ++c) off_[c] = sub_.offset(static_cast<int>(c));
     if (rows_.empty()) return;
 
     // Touched knots = every knot of every curve any sub-instrument references, closed under spread
@@ -120,7 +139,7 @@ class AadBlock {
   // are never the driver of a frozen-Newton reprice.)
   void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const {
     if (rows_.empty()) return;
-    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
+    dcurves_.update([&](int c, int i) { return x[off_[c] + i]; });
     const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_model_quote<double>(sub_.instruments[j], curve_of);
@@ -140,7 +159,7 @@ class AadBlock {
   void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const {
     if (rows_.empty()) return;
     for (int k = 0; k < n_knots_; ++k) xd_[k].value() = x[k];   // reuse the seed: values only
-    ducurves_.update([&](int c, int i) { return xd_[sub_.offset(c) + i]; });
+    ducurves_.update([&](int c, int i) { return xd_[off_[c] + i]; });
     const auto curve_of = [this](int i) -> const CurveHandle<ad::Dual>& { return ducurves_[i]; };
     const int w = static_cast<int>(touched_.size());
     for (int j = 0; j < size(); ++j) {
@@ -173,7 +192,7 @@ class AadBlock {
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
     if (rows_.empty()) return;
     for (int k = 0; k < n_knots_; ++k) xd_[k].value() = x[k];   // reuse the seed: values only
-    ducurves_.update([&](int c, int i) { return xd_[sub_.offset(c) + i]; });
+    ducurves_.update([&](int c, int i) { return xd_[off_[c] + i]; });
     const auto curve_of = [this](int i) -> const CurveHandle<ad::Dual>& { return ducurves_[i]; };
     const int w = static_cast<int>(touched_.size());
     for (int j = 0; j < size(); ++j) {
@@ -234,8 +253,18 @@ class AadBlock {
     std::vector<ad::Dual> xd(n_knots_);
     for (int k = 0; k < n_knots_; ++k) { xd[k].value() = 0.0; xd[k].derivatives() = Eigen::VectorXd::Unit(n_knots_, k); }
     const auto Cu = build_bundle_curves<ad::Dual>(sub_.curves, [&](int c, int i) { return xd[sub_.offset(c) + i]; });
+    // The affine cache is valid ONLY for a linear-map curve (integral(t) = M·x + b exactly). A value-
+    // dependent scheme (MonotoneCubic) has an x-dependent "M", so sampling AAD derivatives at x = 0 would
+    // bake in the WRONG constant map -- such a curve (or one whose spread ANCESTRY is non-linear) keeps
+    // the real-curve fallback (resolve_ already points at dcurves_) and simply prices without the cache.
+    std::vector<char> linear(NC, 1);
     for (int c = 0; c < NC; ++c) {
-      if (seq[c].empty()) continue;
+      if (!curve::make_modular_curve<ad::Dual>(sub_.curves[c].modules()).is_linear_map()) linear[c] = 0;
+      for (int a = sub_.curves[c].base; a >= 0; a = sub_.curves[a].base)
+        if (!linear[a]) linear[c] = 0;  // bases are built first (base < c), so linear[a] is final here
+    }
+    for (int c = 0; c < NC; ++c) {
+      if (seq[c].empty() || !linear[c]) continue;
       std::vector<double> uniq = seq[c];
       std::sort(uniq.begin(), uniq.end());
       uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
@@ -265,7 +294,7 @@ class AadBlock {
   // Per residual eval: update the reusable curves (fallback + integral/forward), recompute each cached
   // curve's DFs as one GEMV + one vectorised exp, and rewind its cursor to replay the fixed query order.
   void refresh_curves(const Eigen::VectorXd& x) const {
-    dcurves_.update([&](int c, int i) { return x[sub_.offset(c) + i]; });
+    dcurves_.update([&](int c, int i) { return x[off_[c] + i]; });
     for (int c : cached_ids_) {
       // GEMV straight into the df buffer (noalias -> no heap temp for M*x), then the affine + exp in place.
       disc_df_[c].noalias() = disc_M_[c] * x;
@@ -276,6 +305,7 @@ class AadBlock {
 
   BundleProblem sub_;          // the non-cacheable instruments over the SAME curves (built once)
   std::vector<int> rows_;      // block index -> global residual row
+  std::vector<int> off_;       // per-curve global state offset (== sub_.offset(c)), hoisted at init
   std::vector<int> touched_;   // global knot indices these instruments differentiate w.r.t. (sorted)
   int n_knots_ = 0;
   mutable Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd_;  // reused width-reduced seed (values updated)

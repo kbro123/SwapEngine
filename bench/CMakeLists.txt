@@ -30,6 +30,11 @@ target_link_libraries(cms_replication_bench PRIVATE swaps benchmark::benchmark_m
 add_executable(cap_stripping_bench cap_stripping_bench.cpp)
 target_link_libraries(cap_stripping_bench PRIVATE swaps benchmark::benchmark_main)
 
+# BundleSession warm paths at desk scale: rebind (plain + tension-regularized) and the streaming tick.
+# Ours-only; session_rebind + stream_tick are fingerprint-GATED metrics (tools/check_perf.py).
+add_executable(session_warm_bench session_warm_bench.cpp)
+target_link_libraries(session_warm_bench PRIVATE swaps swaps_api benchmark::benchmark_main)
+
 # Swaption vol-cube reprice: warm (streaming, no recalibration) vs cold (one-shot verb). Ours-only probe;
 # links swaps_api for BundleSession + bundle_from_json, reads the SOFR bundle fixture by compiled-in path.
 add_executable(vol_cube_bench vol_cube_bench.cpp)

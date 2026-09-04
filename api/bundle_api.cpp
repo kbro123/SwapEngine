@@ -498,12 +498,16 @@ int BundleSession::resolve_fixings() {
   int missing = 0;
   for (px::RateObservation* o : obs) {
     try {
-      px::resolve_into(*o, ctx);  // rewrites realized/subs in place; no recompile
+      px::resolve_into(*o, ctx);  // rewrites realized/subs in place; no recompile of prob_ itself
     } catch (const px::MissingFixing&) {
       ++missing;  // leave the observation as-is; the instrument is un-priceable until the fixing arrives
     }
   }
   n_unresolved_ = missing;
+  // Resolution rewrites observation sub-periods/realized constants -- STRUCTURE as far as the compiled
+  // engine is concerned (registered times / batch constants). Drop the cached engine; the next solve
+  // rebuilds it against the resolved problem. (No-op when nothing carries a schedule: obs is empty.)
+  if (!obs.empty()) invalidate_engine();
   return missing;
 }
 
@@ -523,24 +527,45 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   resolve_fixings();  // resolve any schedule-carrying observations (no-op when none carry a schedule)
 }
 
+// The cached tension pseudo-residual block R (= sqrt(mu)*L, regularize.hpp §5). R depends only on the
+// bundle's STRUCTURE and the reg parameters, never on quotes or x -- so it is built once per (lambda,
+// sigma, curves) and reused across every warm re-solve. invalidate_engine() drops it with the engine.
+const Eigen::MatrixXd& BundleSession::ensure_reg_R(const RegSpec& reg) const {
+  if (!reg_R_valid_ || reg_R_lambda_ != reg.lambda || reg_R_sigma_ != reg.sigma ||
+      reg_R_curves_ != reg.curves) {
+    reg_R_ = cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves);
+    reg_R_lambda_ = reg.lambda;
+    reg_R_sigma_ = reg.sigma;
+    reg_R_curves_ = reg.curves;
+    reg_R_valid_ = true;
+  }
+  return reg_R_;
+}
+
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
   const auto t0 = std::chrono::steady_clock::now();
-  if (reg.on() && reg.tension)
-    // Continuous tension-energy penalty: a constant pseudo-residual block R (= sqrt(mu)*L) appended to
-    // the least squares (regularize.hpp §5). Built once, off the AAD hot path, like the second-diff path.
-    result_ = cal::calibrate(
-        cal::linearly_regularized(prob_, cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)),
-        x0, /*use_aad=*/true);
-  else if (reg.on())
+  if (reg.on() && !reg.tension) {
+    // Legacy second-difference smoothing: the SmoothedProblem wrapper (generic AAD engine). Kept as-is;
+    // the shipped default is the tension path below.
     result_ = cal::calibrate(cal::smoothed(prob_, reg.lambda, reg.curves), x0, /*use_aad=*/true);
-  else if (!has_nonlinear_)
-    // HYBRID W-cache: cacheable rows on the fast path, any FX/MtM (or portfolio-with-FX) rows on a
-    // width-reduced AAD block -- so one FX trade no longer drops the whole book to AAD.
-    result_ = cal::calibrate(prob_, x0, /*use_aad=*/true);
-  else
-    // A non-linear region scheme (MonotoneCubic) has NO constant W at all, so the whole bundle prices on
-    // the generic AAD engine (a zero-reg smoothed wrapper routes there).
-    result_ = cal::calibrate(cal::smoothed(prob_, 0.0, {}), x0, /*use_aad=*/true);
+  } else {
+    // EVERY other path drives the ONE cached hybrid engine (compiled W-cache rows + width-reduced AAD
+    // rows; for a non-linear scheme the hybrid routes every row to the AAD block, so it subsumes the old
+    // smoothed(0) escape hatch). The engine is built once per structure and reused across warm re-solves
+    // -- construction (W build, batch registration, MtM guard) is no longer paid per calibrate call.
+    const cal::HybridBundleResidual& eng = ensure_engine();
+    if (reg.on() && reg.tension) {
+      // Tension-energy penalty as an ENGINE composition: instrument rows keep the compiled/analytic
+      // residual + Jacobian, the constant R block costs a GEMV -- the regularised solve now rides the
+      // W-cache instead of falling to a per-iteration AAD sweep over the wrapper problem.
+      const Eigen::MatrixXd& R = ensure_reg_R(reg);
+      const cal::RegularizedEngine<cal::HybridBundleResidual> composed(eng, R);
+      result_ = cal::calibrate_with(composed, prob_.n_knots(),
+                                    prob_.n_residuals() + static_cast<int>(R.rows()), x0);
+    } else {
+      result_ = cal::calibrate_with(eng, prob_.n_knots(), prob_.n_residuals(), x0);
+    }
+  }
   last_solve_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
   result_.solve_micros = last_solve_us_;
   x_ = result_.x;
@@ -552,6 +577,7 @@ const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& 
   if (new_market.size() != prob_.n_residuals())
     throw std::runtime_error("recalibrate: market length does not match the instrument count");
   for (int i = 0; i < prob_.n_residuals(); ++i) prob_.instruments[i].market = new_market[i];
+  if (engine_) engine_->set_quotes(prob_);  // quote RHS only: the cached engine stays compiled
   return calibrate(x_, reg);  // warm from the current solution
 }
 
@@ -566,6 +592,7 @@ const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p,
     dst.band_upper = src.band_upper;
     dst.band_decay = src.band_decay;
   }
+  if (engine_) engine_->set_quotes(prob_);  // full quote RHS (targets + bands); no recompile
   return calibrate(x_, reg);  // warm from the current solution, with the new targets + bands
 }
 
@@ -604,7 +631,10 @@ double BundleSession::residual(const cal::Instrument& ins) const {
 
 Eigen::MatrixXd BundleSession::jacobian(const RegSpec& reg) const {
   (void)reg;  // J = dq/dx is independent of any regulariser (reg only enters M through RᵀR); see header.
-  return cal::aad_jacobian(prob_, x_);  // n_res x n_knots: rows = instruments, cols = knots
+  // The cached hybrid engine's ANALYTIC Jacobian (W-cache rows analytic, FX/MtM rows width-reduced AAD)
+  // -- pin-tested equal to the full AAD sweep, and reuses the session's compiled engine instead of an
+  // n_knots-wide AAD pass per call. risk_operator()/transform_matrix() flow through here and inherit it.
+  return ensure_engine().jacobian(x_);  // n_res x n_knots: rows = instruments, cols = knots
 }
 
 Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {

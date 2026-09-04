@@ -56,6 +56,38 @@ class AadResidualEngine {
   const Problem* p_;
 };
 
+// A residual engine COMPOSED with a constant pseudo-residual block R (rows x n_knots): appends R·x rows
+// to the base engine's residual and R itself to its Jacobian. This is the engine-level counterpart of
+// LinearRegularizedProblem (regularize.hpp): where that wraps the PROBLEM (and so routes the whole solve
+// to the generic AAD engine), this wraps the ENGINE -- the instrument rows keep their compiled W-cache
+// residual/Jacobian, and the regulariser costs a GEMV + a block copy. R and the base engine are held by
+// reference; both must outlive the composition (BundleSession owns both).
+template <class Engine>
+class RegularizedEngine {
+ public:
+  RegularizedEngine(const Engine& base, const Eigen::MatrixXd& R) : base_(&base), R_(&R) {}
+
+  int n_residuals() const { return base_->n_residuals() + static_cast<int>(R_->rows()); }
+  Eigen::VectorXd residuals(const Eigen::VectorXd& x) const {
+    const auto& r0 = base_->residuals(x);
+    Eigen::VectorXd r(r0.size() + R_->rows());
+    r.head(r0.size()) = r0;
+    r.tail(R_->rows()).noalias() = (*R_) * x;
+    return r;
+  }
+  Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
+    const Eigen::MatrixXd J0 = base_->jacobian(x);
+    Eigen::MatrixXd J(J0.rows() + R_->rows(), J0.cols());
+    J.topRows(J0.rows()) = J0;
+    J.bottomRows(R_->rows()) = *R_;
+    return J;
+  }
+
+ private:
+  const Engine* base_;
+  const Eigen::MatrixXd* R_;
+};
+
 // CalibrationProblem -> the single-curve analytic CompiledResidual; BundleProblem -> the multi-curve
 // analytic CompiledBundleResidual (W_all fast path); anything else -> the generic AAD engine. All three
 // expose the same residuals/jacobian/model_rates/n_residuals ops, so warm/streaming are oblivious.

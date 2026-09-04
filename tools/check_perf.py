@@ -35,6 +35,11 @@ METRICS = {
     "bond_book":           ("bond_sweep_bench",  "BM_BondBook_QuantLib",     "BM_BondBook_Ours"),
     "vol_cube_warm":       ("vol_cube_bench",    None,                       "BM_VolCube_Warm"),
     "vol_cube_cold":       ("vol_cube_bench",    None,                       "BM_VolCube_Cold"),
+    # The SHIPPED session warm paths at desk scale (8-curve spread chain). Ours-only, self-regression
+    # gated: a regression to per-call engine reconstruction (or the reg path falling back to per-iteration
+    # AAD) shows up here directly, where the product actually pays it.
+    "session_rebind":      ("session_warm_bench", None,                      "BM_Session_RebindWarm"),
+    "stream_tick":         ("session_warm_bench", None,                      "BM_Session_StreamTick"),
 }
 UNIT_NS = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
 

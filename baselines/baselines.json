@@ -48,6 +48,12 @@
     },
     "vol_cube_cold": {
       "max_self_regression": 1.4
+    },
+    "session_rebind": {
+      "max_self_regression": 1.4
+    },
+    "stream_tick": {
+      "max_self_regression": 1.4
     }
   },
   "metric_descriptions": {
@@ -152,47 +158,57 @@
         "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
         "arch_flag": "-march=native"
       },
-      "captured_utc": "2026-08-29T11:11:40Z",
+      "captured_utc": "2026-09-04T19:00:18Z",
       "notes": "Captured by tools/check_perf.py --update.",
       "metrics": {
         "curve_build": {
-          "quantlib_ns": 15244038,
-          "ours_ns": 490050,
-          "speedup": 31.11
+          "quantlib_ns": 15462069,
+          "ours_ns": 501226,
+          "speedup": 30.85
         },
         "risk_full_jacobian": {
-          "quantlib_ns": 16449905,
-          "ours_ns": 90017,
-          "speedup": 182.74
+          "quantlib_ns": 16625897,
+          "ours_ns": 92549,
+          "speedup": 179.65
         },
         "portfolio_analytics": {
-          "quantlib_ns": 20776750,
-          "ours_ns": 81547,
-          "speedup": 254.78
+          "quantlib_ns": 21100253,
+          "ours_ns": 83737,
+          "speedup": 251.98
         },
         "warm_recalibration": {
-          "quantlib_ns": 972586,
-          "ours_ns": 17794,
-          "speedup": 54.66
+          "quantlib_ns": 985549,
+          "ours_ns": 18744,
+          "speedup": 52.58
         },
         "bond_sweep": {
-          "quantlib_ns": 2499825256,
-          "ours_ns": 3508682,
-          "speedup": 712.47
+          "quantlib_ns": 2737275764,
+          "ours_ns": 3563273,
+          "speedup": 768.19
         },
         "bond_book": {
-          "quantlib_ns": 27931634,
-          "ours_ns": 414414,
-          "speedup": 67.4
+          "quantlib_ns": 30176823,
+          "ours_ns": 418827,
+          "speedup": 72.05
         },
         "vol_cube_warm": {
           "quantlib_ns": null,
-          "ours_ns": 10280,
+          "ours_ns": 10311,
           "speedup": null
         },
         "vol_cube_cold": {
           "quantlib_ns": null,
-          "ours_ns": 1165714,
+          "ours_ns": 1105452,
+          "speedup": null
+        },
+        "session_rebind": {
+          "quantlib_ns": null,
+          "ours_ns": 17691574,
+          "speedup": null
+        },
+        "stream_tick": {
+          "quantlib_ns": null,
+          "ours_ns": 180114,
           "speedup": null
         }
       }

@@ -102,6 +102,55 @@ struct CalibrationResult {
                             // calibration time, not a language-boundary wall-clock.
 };
 
+// LM functor over ANY residual engine (residuals(x) + jacobian(x)), not tied to residual_engine_t --
+// what lets a caller drive the SAME LM loop with an engine it built once and keeps across solves
+// (BundleSession's warm recalibrate/rebind), or with a composed engine (compiled + a constant
+// regularizer block) that has no Problem type of its own.
+template <class Engine>
+struct AnyEngineFunctor {
+  using Scalar = double;
+  using InputType = Eigen::VectorXd;
+  using ValueType = Eigen::VectorXd;
+  using JacobianType = Eigen::MatrixXd;
+  enum { InputsAtCompileTime = Eigen::Dynamic, ValuesAtCompileTime = Eigen::Dynamic };
+
+  const Engine* eng;
+  int n_knots_, n_res_;
+  AnyEngineFunctor(const Engine& e, int knots, int res) : eng(&e), n_knots_(knots), n_res_(res) {}
+  int inputs() const { return n_knots_; }
+  int values() const { return n_res_; }
+  int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec) const {
+    fvec = eng->residuals(x);
+    return 0;
+  }
+  int df(const Eigen::VectorXd& x, Eigen::MatrixXd& fjac) const {
+    fjac = eng->jacobian(x);
+    return 0;
+  }
+};
+
+// The LM loop over a PREBUILT residual engine. Identical control flow / tolerances / result stats to
+// calibrate() below -- calibrate() IS this after constructing the engine -- but the engine's lifetime
+// belongs to the caller, so a warm caller pays construction (the W-cache build) once, not per solve.
+template <class Engine>
+CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residuals,
+                                 const Eigen::VectorXd& x0) {
+  CalibrationResult res;
+  res.x = x0;
+  AnyEngineFunctor<Engine> functor(engine, n_knots, n_residuals);
+  Eigen::LevenbergMarquardt<AnyEngineFunctor<Engine>> lm(functor);
+  lm.parameters.xtol = 1e-14;
+  lm.parameters.ftol = 1e-14;
+  lm.parameters.maxfev = 4000;
+  res.info = lm.minimize(res.x);
+  res.iterations = lm.iter;
+  const Eigen::VectorXd r = engine.residuals(res.x);
+  res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
+  const Eigen::MatrixXd J = engine.jacobian(res.x);
+  res.stationarity = (J.transpose() * r).cwiseAbs().maxCoeff();
+  return res;
+}
+
 // use_aad = drive the LM with the ANALYTIC residual engine (default; compiled W-cache Jacobian for
 // CalibrationProblem/BundleProblem, AAD otherwise) or Eigen NumericalDiff. The engine is built ONCE, so
 // cold calibrate no longer does a per-iteration AAD sweep or a per-eval curve rebuild.
@@ -112,18 +161,7 @@ CalibrationResult calibrate(const Problem& prob, const Eigen::VectorXd& x0, bool
 
   if (use_aad) {
     const residual_engine_t<Problem> engine(prob);  // W-cache built once; analytic Jacobian per iter
-    EngineFunctor<Problem> functor(engine, prob.n_knots(), prob.n_residuals());
-    Eigen::LevenbergMarquardt<EngineFunctor<Problem>> lm(functor);
-    lm.parameters.xtol = 1e-14;
-    lm.parameters.ftol = 1e-14;
-    lm.parameters.maxfev = 4000;
-    res.info = lm.minimize(res.x);
-    res.iterations = lm.iter;
-    const Eigen::VectorXd r = engine.residuals(res.x);
-    res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
-    const Eigen::MatrixXd J = engine.jacobian(res.x);
-    res.stationarity = (J.transpose() * r).cwiseAbs().maxCoeff();
-    return res;
+    return calibrate_with(engine, prob.n_knots(), prob.n_residuals(), x0);
   }
 
   ResidualFunctor<Problem> functor(prob);

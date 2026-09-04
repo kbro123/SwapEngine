@@ -62,6 +62,25 @@ class CompiledBundleResidual {
 
   int n_residuals() const { return n_gen_; }
   int n_times() const { return cs_.n_times(); }
+
+  // Overwrite the quote RHS -- targets and soft-quote bands -- WITHOUT touching the compiled structure.
+  // The W-cache, batches and scatter maps depend only on topology (legs, times, curve roles); the market
+  // vector and the band list are plain per-row data read at residual time. This is what makes a session's
+  // rebind/recalibrate a true warm path: mutate the RHS here, re-solve on the SAME engine, no recompile.
+  // `p` must be the same problem shape this engine was compiled from (row count enforced; topology is the
+  // caller's contract, guarded upstream by the structure fingerprint).
+  void set_quotes(const BundleProblem& p) {
+    if (p.n_residuals() != n_gen_)
+      throw std::invalid_argument("CompiledBundleResidual::set_quotes: instrument count differs");
+    market_ = p.market();
+    band_.clear();
+    for (int row = 0; row < n_gen_; ++row) {
+      const Instrument& ins = p.instruments[row];
+      if (ins.band_upper > ins.band_lower)
+        band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
+    }
+    // The DF memo (df_x_) keys on x alone -- DF = exp(-Wx) is quote-independent -- so it stays valid.
+  }
   // DF = exp(-W_all x) (memoized on x). Exposed for profiling / downstream analytics.
   const Eigen::VectorXd& discount_factors(const Eigen::VectorXd& x) const { return df_at(x); }
 
@@ -127,11 +146,10 @@ class CompiledBundleResidual {
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& DF = df_at(x);
     // Capture the model quotes for banded rows BEFORE the batch scratch below is overwritten.
-    std::vector<double> qb;
     if (!band_.empty()) {
       const Eigen::VectorXd& mr = model_rates(x);
-      qb.reserve(band_.size());
-      for (const auto& b : band_) qb.push_back(mr[b.row]);
+      qb_.resize(static_cast<int>(band_.size()));
+      for (std::size_t k = 0; k < band_.size(); ++k) qb_[static_cast<int>(k)] = mr[band_[k].row];
     }
     G_.setZero();  // reuse the scratch buffer (sized once in the ctor)
     Eigen::MatrixXd& G = G_;
@@ -142,12 +160,14 @@ class CompiledBundleResidual {
       const int nq = static_cast<int>(q_rows_.size());
       // Compute each batch's per-coupon numerator (the sub-period gather + reduce) ONCE, then feed it
       // to BOTH the value pass (pv_from_num) and the derivative pass (d_pv_from_num) -- the gather no
-      // longer runs a second time for the derivative.
-      const Eigen::VectorXd num_pos = gen_pos_.num(DF);
-      const Eigen::VectorXd num_neg = gen_neg_.num(DF);
-      const Eigen::VectorXd num =
-          gen_pos_.pv_from_num(num_pos, DF) - gen_neg_.pv_from_num(num_neg, DF);
-      const Eigen::VectorXd ann = gen_fixed_.annuity(DF);
+      // longer runs a second time for the derivative. Const refs: each accessor returns a ref into ITS
+      // OWN batch object's scratch (gen_pos_/gen_neg_/gen_fixed_ are distinct), so all stay live -- no
+      // per-call vector copies. Only `num` (a genuine difference) lands in a reused member scratch.
+      const Eigen::VectorXd& num_pos = gen_pos_.num(DF);
+      const Eigen::VectorXd& num_neg = gen_neg_.num(DF);
+      num_.noalias() = gen_pos_.pv_from_num(num_pos, DF) - gen_neg_.pv_from_num(num_neg, DF);
+      const Eigen::VectorXd& num = num_;
+      const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);
       dnum_.setZero();
       dann_.setZero();
       Eigen::MatrixXd& dnum = dnum_;
@@ -181,8 +201,9 @@ class CompiledBundleResidual {
     // applied to the DIRECT ∂δ/∂x entry below instead.
     for (std::size_t k = 0; k < band_.size(); ++k) {
       const Band& b = band_[k];
-      const std::pair<double, double> wd = band_weight_d(qb[k], b.lower, b.upper, b.decay);
-      G.row(b.row) *= (wd.first + wd.second * (qb[k] - q[b.row]));  // (q_model - q), q = the live market
+      const int i = static_cast<int>(k);
+      const std::pair<double, double> wd = band_weight_d(qb_[i], b.lower, b.upper, b.decay);
+      G.row(b.row) *= (wd.first + wd.second * (qb_[i] - q[b.row]));  // (q_model - q), q = the live market
     }
     Eigen::MatrixXd J = -((G * DF.asDiagonal()) * cs_.W());
     // TURN rows: r = (banded) (δ − market) with δ = weight·x[state index] -- LINEAR in x, and independent
@@ -325,6 +346,7 @@ class CompiledBundleResidual {
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.
   mutable Eigen::VectorXd df_, df_x_;
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
+  mutable Eigen::VectorXd qb_, num_;   // jacobian_vs scratch: banded model quotes, quotient numerator
   mutable Eigen::MatrixXd G_, dnum_, dann_, dr_;
 };
 

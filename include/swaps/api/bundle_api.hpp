@@ -358,6 +358,22 @@ class BundleSession {
   // count that could not resolve (missing a past fixing). Pointers are stable: prob_ is not resized.
   int resolve_fixings();
 
+  // ---- the cached warm engine (fingerprint-keyed W-cache reuse) ----------------------------------
+  // The hybrid residual engine is compiled ONCE per problem STRUCTURE and reused across every solve:
+  // recalibrate()/rebind() overwrite only the quote RHS (engine_->set_quotes) and re-solve warm on the
+  // same engine -- no W rebuild, no batch re-registration, no MtM re-guard. The tension pseudo-residual
+  // block R is likewise structure-only (given fixed reg params), so it is cached keyed on (lambda, sigma,
+  // curves) and recomputed only when those change. invalidate_engine() drops both whenever prob_ mutates
+  // STRUCTURALLY -- today that is fixings resolution (it rewrites observation times/realized in place).
+  // Mutable + const ensure: the engine is a pure cache of prob_'s structure, so const queries (jacobian)
+  // may build it lazily.
+  void invalidate_engine() { engine_.reset(); reg_R_valid_ = false; }
+  cal::HybridBundleResidual& ensure_engine() const {
+    if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);
+    return *engine_;
+  }
+  const Eigen::MatrixXd& ensure_reg_R(const RegSpec& reg) const;  // cached tension block (structure-only)
+
   cal::BundleProblem prob_;
   std::uint64_t fingerprint_ = 0;  // structure hash at compile time (the warm-vs-recompile switch)
   Eigen::VectorXd x_;
@@ -367,6 +383,12 @@ class BundleSession {
   bool has_nonlinear_ = false;
   bool has_band_ = false;
   std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;
+  // The cached hybrid engine + tension-block cache (see ensure_engine/ensure_reg_R above).
+  mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
+  mutable Eigen::MatrixXd reg_R_;
+  mutable bool reg_R_valid_ = false;
+  mutable double reg_R_lambda_ = 0, reg_R_sigma_ = 0;
+  mutable std::vector<int> reg_R_curves_;
   swaps::pricing::FixingTable fixings_;
   int eval_date_ = 0;
   int n_unresolved_ = 0;

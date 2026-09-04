@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/calibration/regularize.hpp"
 
 namespace cal = swaps::calibration;
 namespace px = swaps::pricing;
@@ -198,6 +199,56 @@ TEST(BundleApi, RebindCarriesTheFullQuoteRhsWarm) {
   cal::BundleProblem bigger = p;  // an extra instrument IS structural -> rebind rejects it
   bigger.instruments.push_back(p.instruments.back());
   EXPECT_THROW(sess.rebind(bigger), std::runtime_error);
+}
+
+// The warm-engine cache: a session compiles its hybrid engine ONCE and every later solve — regularized
+// included — reuses it, with rebind/recalibrate updating only the quote RHS (set_quotes). Pins that
+// (1) the tension-regularized solve on the composed compiled engine lands where the OLD wrapper path
+// (LinearRegularizedProblem -> generic AAD engine) landed, and (2) a warm rebind/recalibrate on the
+// cached engine equals a FRESH session cold-solving the identical problem — including a band ADDED
+// after the engine was compiled (bands are quote RHS, not structure).
+TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
+  Eigen::VectorXd x_true;
+  const cal::BundleProblem p = build_bundle(x_true);
+  const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(p.n_knots(), 0.02);
+
+  // (1) Tension reg: composed compiled engine vs the old AAD wrapper, same seed, same reg.
+  api::RegSpec reg;
+  reg.lambda = 1e-3;
+  reg.tension = true;
+  reg.sigma = 0.5;
+  reg.curves = {0, 1};
+  api::BundleSession sess(p);
+  sess.calibrate(x0, reg);
+  const auto old_path = cal::calibrate(
+      cal::linearly_regularized(p, cal::tension_energy_operator(p, reg.lambda, reg.sigma, reg.curves)),
+      x0);
+  EXPECT_LT((sess.x() - old_path.x).cwiseAbs().maxCoeff(), 1e-9)
+      << "the compiled+R composition must land where the AAD wrapper landed";
+
+  // (2) Warm rebind (shifted targets + a NEW band) on the cached engine == a fresh cold session.
+  cal::BundleProblem p2 = p;
+  for (auto& ins : p2.instruments) ins.market += 5e-4;
+  p2.instruments[2].band_lower = p2.instruments[2].market - 1e-4;
+  p2.instruments[2].band_upper = p2.instruments[2].market + 1e-4;
+  p2.instruments[2].band_decay = 0.1;
+  sess.rebind(p2, reg);  // warm: same compiled engine, new full quote RHS
+  api::BundleSession fresh(p2);
+  fresh.calibrate(x0, reg);  // cold: engine compiled directly against p2
+  EXPECT_LT((sess.x() - fresh.x()).cwiseAbs().maxCoeff(), 1e-8)
+      << "a warm rebind must reach the same solution as a cold session on the same problem";
+
+  // (3) Plain (unregularized) warm recalibrate equals a fresh cold solve of the shifted market.
+  api::BundleSession s3(p);
+  s3.calibrate(x0);
+  Eigen::VectorXd m2(p.n_residuals());
+  for (int i = 0; i < p.n_residuals(); ++i) m2[i] = p.instruments[i].market + 3e-4;
+  s3.recalibrate(m2);
+  cal::BundleProblem p3 = p;
+  for (int i = 0; i < p3.n_residuals(); ++i) p3.instruments[i].market = m2[i];
+  api::BundleSession f3(p3);
+  f3.calibrate(x0);
+  EXPECT_LT((s3.x() - f3.x()).cwiseAbs().maxCoeff(), 1e-8);
 }
 
 TEST(BundleApi, SampleAndPriceOffSolvedCurves) {
