@@ -8,6 +8,7 @@
 #include "swaps/build/date.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/market/market.hpp"
+#include "swaps/market/scenario.hpp"
 
 namespace mkt = swaps::market;
 namespace cv = swaps::curve;
@@ -61,4 +62,32 @@ TEST(Market, ComposesNamedCurvesFxQuotesCurrenciesAndToday) {
   EXPECT_TRUE(m.currency("USD").discount_index().is_overnight());
   EXPECT_EQ(m.currency("USD").discount_index().currency(), "USD");
   EXPECT_THROW(m.currency("JPY"), std::runtime_error);  // not added to this snapshot
+}
+
+TEST(Market, ScenarioForksAShockedSnapshotLeavingTheParentUnchanged) {
+  const std::vector<double> front{0.25}, back{2.0, 5.0, 10.0};
+  const auto modules = cv::flat_hermite(front, back);
+  Eigen::VectorXd x(4);
+  x << 0.043, 0.041, 0.038, 0.045;
+  mkt::FxMatrix fx;
+  fx.add("EUR", "USD", 1.09);
+
+  mkt::Market base;
+  base.as_of(b::Date::from_iso("2026-09-01")).set_fx(fx).add_curve("USD-SOFR-DISC", modules, x);
+  const double f_before = base.curve("USD-SOFR-DISC").forward(5.0);
+  const double df_before = base.discount("USD-SOFR-DISC", 5.0);
+
+  mkt::Scenario s;
+  s.shift_curve("USD-SOFR-DISC", 25).bump_fx("EUR", "USD", 0.01);  // +25bp on the curve, +1% on EURUSD
+  const mkt::Market up = s.apply(base);                             // the shocked FORK
+
+  // Shocked fork: forwards +25bp everywhere, DF lower (rates up), FX bumped.
+  EXPECT_NEAR(up.curve("USD-SOFR-DISC").forward(5.0), f_before + 0.0025, 1e-12);
+  EXPECT_LT(up.discount("USD-SOFR-DISC", 5.0), df_before);
+  EXPECT_NEAR(up.fx_rate("EUR", "USD"), 1.09 * 1.01, 1e-9);
+
+  // Parent snapshot is untouched — an immutable fork.
+  EXPECT_NEAR(base.curve("USD-SOFR-DISC").forward(5.0), f_before, 1e-15);
+  EXPECT_NEAR(base.discount("USD-SOFR-DISC", 5.0), df_before, 1e-15);
+  EXPECT_NEAR(base.fx_rate("EUR", "USD"), 1.09, 1e-15);
 }

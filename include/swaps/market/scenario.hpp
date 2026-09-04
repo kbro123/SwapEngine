@@ -27,6 +27,7 @@
 #include <Eigen/Core>
 
 #include "swaps/market/fx.hpp"
+#include "swaps/market/market.hpp"
 
 namespace swaps::market {
 
@@ -84,6 +85,18 @@ class Scenario {
       const double old = out.rate(pr.first, pr.second);
       out.add(pr.first, pr.second, old * (1.0 + kv.second));
     }
+    return out;
+  }
+
+  // Apply this scenario to a whole Market, returning a shocked FORK — the parent Market is untouched. Reuses
+  // Market::clone for the market-data copy, then overwrites each curve with its shocked forwards and the FX
+  // with the bumped matrix. This is "fork over the market" at the Market level (cf. the forkable calibrated
+  // Model): build one base market, fan out many scenario markets, price each.
+  Market apply(const Market& base) const {
+    Market out = base.clone();
+    out.set_fx(shocked_fx(base.fx()));
+    for (const std::string& name : base.curve_names())
+      out.add_curve(name, base.curve_modules(name), shocked_forwards(name, base.curve_forwards(name)));
     return out;
   }
 
