@@ -5,7 +5,11 @@
 
 #include "swaps/api/bundle_api.hpp"
 
+#include "swaps/trade/csa.hpp"    // CSA -> discount index (the typed-trade book entry)
+#include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
+
 #include <chrono>
+#include <map>
 #include <stdexcept>
 #include <utility>
 
@@ -15,6 +19,7 @@
 #include "swaps/api/generate_risk.hpp"             // generate_risk_json (the 'generate_risk' verb)
 #include "swaps/api/options.hpp"                   // swaption_json (the 'swaption' verb)
 #include "swaps/api/bond.hpp"                       // bonds_json (the 'bonds' verb)
+#include "swaps/api/rv.hpp"                         // bond_universe / govvie_fit / swap_spread verbs
 #include "swaps/api/exposure.hpp"                   // exposure_json (the 'exposure' verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include <type_traits>
@@ -419,6 +424,59 @@ namespace pf = swaps::portfolio;
 pf::MultiCurveBook book_from_json(const json::value& v) {
   pf::MultiCurveBook book;
   const auto& o = v.as_object();
+
+  // ---- TYPED TRADES (the trade:: domain's production entry) ---------------------------------------
+  // Alongside (or instead of) raw resolved "positions", a book may carry BOOKED DEALS plus the binding
+  // that connects index NAMES to this bundle's curve roles:
+  //   "value_date": "2026-09-04",
+  //   "curve_roles": {"USD-SOFR": 0, "EUR-ESTR": 1},          index id -> bundle curve index
+  //   "trades": [{"id": "T1", "kind": "swap", "notional": 1e6, "pay": "fixed"|"float",
+  //               "fixed_rate": 0.0375, "index": "USD-SOFR", "effective": "2026-09-08",
+  //               "maturity": "2031-09-08",
+  //               "csa": {"collateral_currency": "USD"}        OR "discount_index": "USD-SOFR"}]
+  // Each trade becomes a trade::Trade and materializes via to_position(vd) — rolling under ITS OWN
+  // index's conventions (conventions DB), never one shared SwapConv. The DISCOUNT role comes from the
+  // CSA when given (collateral currency's OIS via trade::CSA — the CSA object actually reaching
+  // pricing), else an explicit "discount_index", else the trade's own index; all resolved through
+  // "curve_roles" — the C++ index->role binding that used to exist only in the web layer.
+  if (o.contains("trades") && o.at("trades").is_array()) {
+    if (!o.contains("value_date"))
+      throw std::invalid_argument("book: typed 'trades' require a 'value_date' (ISO)");
+    const swaps::build::Date vd = swaps::build::Date::from_iso(get_s(o, "value_date", ""));
+    std::map<std::string, int> roles;
+    if (o.contains("curve_roles"))
+      for (const auto& kv : o.at("curve_roles").as_object())
+        roles[std::string(kv.key())] = static_cast<int>(kv.value().as_int64());
+    const auto role_of = [&](const std::string& id, const char* what) -> int {
+      const auto it = roles.find(id);
+      if (it == roles.end())
+        throw std::invalid_argument(std::string("book: curve_roles has no entry for ") + what + " '" +
+                                    id + "'");
+      return it->second;
+    };
+    for (const auto& e : o.at("trades").as_array()) {
+      const auto& to = e.as_object();
+      const std::string index = get_s(to, "index", "");
+      if (index.empty()) throw std::invalid_argument("book: every typed trade needs an 'index'");
+      std::string disc_id;
+      if (to.contains("csa"))
+        disc_id = swaps::trade::CSA::cash(get_s(to.at("csa").as_object(), "collateral_currency", ""))
+                      .discount_index_id();
+      else
+        disc_id = get_s(to, "discount_index", index.c_str());
+      if (disc_id.empty())
+        throw std::invalid_argument("book: trade CSA has an unknown collateral currency");
+      swaps::trade::Trade t = swaps::trade::Trade::vanilla_swap(
+          get_s(to, "id", ""), get_d(to, "notional", 1.0),
+          get_s(to, "pay", "fixed") == "float" ? swaps::trade::Pay::Float : swaps::trade::Pay::Fixed,
+          get_d(to, "fixed_rate", 0.0), get_s(to, "currency", ""), index,
+          swaps::build::Date::from_iso(get_s(to, "effective", "")),
+          swaps::build::Date::from_iso(get_s(to, "maturity", "")), role_of(index, "trade index"),
+          role_of(disc_id, "discount index"));
+      book.positions.push_back(t.to_position(vd));  // per-trade conventions from the trade's own index
+    }
+  }
+
   if (!o.contains("positions") || !o.at("positions").is_array()) return book;
   auto floats = [](const json::object& po, const char* key, std::vector<px::FloatCoupon>& out) {
     if (po.contains(key) && po.at(key).is_array())
@@ -858,6 +916,13 @@ std::string run_json(const std::string& request) {
 
     // Stateless ASSET_SWAP verb: par asset-swap spread(s) for bonds off a calibrated bundle (curve-space).
     if (o.contains("asset_swap")) return asset_swap_json(request);
+
+    // Stateless RV verbs (api/rv.cpp): batched bond-universe analytics; the minimum-pricing-error govvie
+    // fit (spline / Nelson-Siegel / Svensson) with the per-bond RV ladder; and the headline swap-spread
+    // derivation returning the {pin, asw} asset-swap BASIS rows as instrument JSON.
+    if (o.contains("bond_universe")) return bond_universe_json(request);
+    if (o.contains("govvie_fit")) return govvie_fit_json(request);
+    if (o.contains("swap_spread")) return swap_spread_json(request);
 
     // Stateless EXPOSURE verb: EPE/ENE/PFE counterparty-exposure profile for a swap book off a calibrated curve.
     if (o.contains("exposure")) return exposure_json(request);

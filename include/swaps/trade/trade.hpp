@@ -143,6 +143,14 @@ struct Trade {
     return p;
   }
 
+  // Materialize resolving the conventions from THE TRADE'S OWN index (conventions DB via build::Index ->
+  // par_convention). This is the honest form for a mixed book: a USD-SOFR swap and a EUR-ESTR swap each
+  // roll under their own calendar / day count / frequency — one caller-supplied SwapConv cannot serve
+  // both. The (vd, conv) overload above remains for callers that resolved (or overrode) the convention.
+  portfolio::MultiCurveBook::Position to_position(const build::Date& value_date) const {
+    return to_position(value_date, build::Index(index).par_convention().resolve());
+  }
+
   // Direction-signed notional for the payer-of-fixed valuation kernel. Payer of fixed => +, receiver => -.
   double signed_notional() const { return pay == Pay::Fixed ? notional : -notional; }
 };

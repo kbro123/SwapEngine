@@ -60,10 +60,20 @@ class Book {
   }
 
   // Materialize the whole tree into the fast valuation book — one Position per trade, priced off the
-  // calibrated bundle curves through the existing MultiCurveBook kernel.
+  // calibrated bundle curves through the existing MultiCurveBook kernel. This overload applies ONE
+  // caller-supplied convention to every trade — correct only for a single-index book; a mixed book
+  // should use the per-trade-convention overload below.
   portfolio::MultiCurveBook to_book(const build::Date& value_date, const build::SwapConv& conv) const {
     portfolio::MultiCurveBook mb;
     for (const Trade& t : all_trades()) mb.positions.push_back(t.to_position(value_date, conv));
+    return mb;
+  }
+
+  // Materialize with each trade rolling under ITS OWN index's conventions (Trade::to_position(vd) —
+  // conventions DB via build::Index). The honest form for a mixed multi-index book.
+  portfolio::MultiCurveBook to_book(const build::Date& value_date) const {
+    portfolio::MultiCurveBook mb;
+    for (const Trade& t : all_trades()) mb.positions.push_back(t.to_position(value_date));
     return mb;
   }
 
@@ -91,6 +101,20 @@ class NettingSet {
   const std::vector<Trade>& trades() const { return trades_; }
   int count() const { return static_cast<int>(trades_.size()); }
   bool empty() const { return trades_.empty(); }
+
+  // Materialize this netting set for valuation/exposure, with the CSA DECIDING the discount role: every
+  // trade's discount_curve (and fixed-leg discounting) is overridden to `csa_discount_role` — the bundle
+  // index of the collateral currency's OIS curve (the caller resolves discount_index_id() -> role via its
+  // curve binding). Each trade still rolls under its own index's conventions. This is what makes the CSA
+  // an OBJECT that actually reaches pricing, not an annotation.
+  portfolio::MultiCurveBook to_book(const build::Date& value_date, int csa_discount_role) const {
+    portfolio::MultiCurveBook mb;
+    for (Trade t : trades_) {
+      t.discount_curve = csa_discount_role;
+      mb.positions.push_back(t.to_position(value_date));
+    }
+    return mb;
+  }
 
  private:
   std::string id_;

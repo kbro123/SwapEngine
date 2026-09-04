@@ -25,9 +25,9 @@ graph TD
     build["build/ — construction object model (dates→calendars→instruments→bonds)"]
     vol["vol/ — Bachelier, SABR, cap stripping, CMS (engine-internal)"]
     xva["xva/ — exposure kernel (demo-grade)"]
-    market["market/ — Market snapshot, Quote, FX, Scenario ⚠ PREVIEW"]
-    trade["trade/ — Trade, Book, CSA, NettingSet ⚠ PREVIEW"]
-    derive["derive/ — Market→calibration bridge (asset swaps, RV fits) ⚠ PREVIEW"]
+    market["market/ — Market snapshot, Quote, FX, Scenario"]
+    trade["trade/ — Trade, Book, CSA, NettingSet"]
+    derive["derive/ — Market→calibration bridge (asset swaps, RV fits)"]
     api["api/ — BundleSession, compile, JSON contract, C ABI (capi.h)"]
     ql["ql/ — QuantLib ORACLE adapter incl. ql_term_structure (tests only)"]
 
@@ -55,13 +55,17 @@ graph TD
     api --> build
     api --> vol
     api --> xva
+    api --> trade
+    api --> derive
+    api --> market
     ql --> pricing
 ```
 
-**⚠ PREVIEW surfaces.** `market/`, `trade/` and `derive/` are built and tested but **not yet reachable
-from `api/`** — no verb constructs a `Market`, a `Trade` or a derived asset-swap row set. They are the
-Tier-1 domain-object layers from the commercial review, staged for API wiring (audit backlog item 6);
-until then treat them as a preview: correct, gated, not shipped. `vol/` and `xva/` are engine-internal
+**Production reach of the Tier-1 domains.** `trade/` ships through `book_from_json` (typed `"trades"`
+rows + the `"curve_roles"` index→role binding; the CSA picks the discount role); `derive/` + `market/`
+ship through the RV verbs (`api/rv.cpp`: `bond_universe`, `govvie_fit`, `swap_spread`). Still engine-only
+(no verb yet): `market::Scenario`/`Market::clone` forks, `trade::Book` trees and `NettingSet` exposure
+aggregation (the exposure verb still nets the whole book). `vol/` and `xva/` are engine-internal
 (reached through `api/options.cpp` / `api/exposure.cpp` only).
 
 ## The three contracts (what keeps the model coherent)
@@ -91,9 +95,9 @@ until then treat them as a preview: correct, gated, not shipped. `vol/` and `xva
 | `parallel/` | `ThreadPool`, `LiveCurveFeed` (lock-free seqlock curve publish) | Leaf concurrency utilities. |
 | `vol/` | `bachelier`, `sabr` (+ calibration), `cap_stripping`, `vol_cube_interp` (no-arb), `swaption`, `cms`/`cms_replication` | Vol/options kernels, engine-internal — reached only through `api/options.cpp` (the `swaption`/`vol_cube`/`sabr_calibrate` verbs + `VolSurface`). |
 | `xva/` | `exposure.hpp` (npv-grid exposure profile) | Demo-grade exposure kernel behind the `exposure` verb (Gaussian proxy, whole-book netting set — a real XVA model is Tier-3). |
-| `market/` ⚠ PREVIEW | **`Market`** (named curves + FX + quotes + currencies + fixings + as-of; `clone()` fork), `Quote`/`CalibrationTarget` (the ONE quote→instrument hand-off, consumed by `Instrument::set_target`), `Currency`, `FxMatrix` (USD-pivot triangulation), `Scenario` (declarative shock → `apply(Market)` fork), `FixingSeries` | The Tier-1 market-environment snapshot (Strata's RatesProvider / ORE's TodaysMarket, in our object model). Tested, not yet reachable from `api/` — staged for wiring. |
-| `trade/` ⚠ PREVIEW | `Trade` (the booked deal; `to_position` → `MultiCurveBook::Position` via the SAME `build::` leg builders as calibration), `Book` (hierarchical portfolio tree, `to_book`), `CSA` (collateral → discount index), `NettingSet` | The Tier-1 trade/book domain split from the calibration Instrument. Tested, not yet reachable from `api/`; the Index→bundle-role binding that lets `CSA`/`Trade::index` reach pricing is audit backlog item 6. |
-| `derive/` ⚠ PREVIEW | `AssetSwapConvention` (+ `SwapSpreadType`), `benchmark_yield` (Market clean price → street YTM precompute), `derive_asset_swap` (→ the `{pin, asw}` basis rows), `load_universe`, `make_govvie_fit` / `make_parametric_fit<Model>` (minimum-pricing-error RV fits over `build::BondId` universes) | The Market→calibration bridge: per-currency conventions + a market snapshot become calibration rows and RV fits. Consumes `build::BondId` (the ONE bond identity) and `calibration::{GovvieBondFit, ParametricBondFit}`. Tested, not yet reachable from `api/` (the shipped `asset_swap` verb still uses `build/par_asset_swap.hpp`'s endogenous par-par form). |
+| `market/` | **`Market`** (named curves + FX + quotes + currencies + fixings + as-of; `clone()` fork), `Quote`/`CalibrationTarget` (the ONE quote→instrument hand-off, consumed by `Instrument::set_target`), `Currency`, `FxMatrix` (USD-pivot triangulation), `Scenario` (declarative shock → `apply(Market)` fork), `FixingSeries` | The Tier-1 market-environment snapshot (Strata's RatesProvider / ORE's TodaysMarket, in our object model). Reaches production through the RV verbs (`govvie_fit`/`swap_spread` build a Market from the request); Scenario forks are still engine-only. |
+| `trade/` | `Trade` (the booked deal; `to_position` → `MultiCurveBook::Position` via the SAME `build::` leg builders as calibration), `Book` (hierarchical portfolio tree, `to_book`), `CSA` (collateral → discount index), `NettingSet` | The Tier-1 trade/book domain split from the calibration Instrument. Reaches production through `book_from_json` typed trades: each trade rolls under ITS OWN index's conventions, `"curve_roles"` is the C++ index→role binding, and the CSA decides the discount role (`NettingSet::to_book(vd, csa_role)`). Book trees/NettingSet exposure aggregation still engine-only. |
+| `derive/` | `AssetSwapConvention` (+ `SwapSpreadType`), `benchmark_yield` (Market clean price → street YTM precompute), `derive_asset_swap` (→ the `{pin, asw}` basis rows), `load_universe`, `make_govvie_fit` / `make_parametric_fit<Model>` (minimum-pricing-error RV fits over `build::BondId` universes) | The Market→calibration bridge: per-currency conventions + a market snapshot become calibration rows and RV fits. Consumes `build::BondId` (the ONE bond identity) and `calibration::{GovvieBondFit, ParametricBondFit}`. Reaches production through `api/rv.cpp` — `govvie_fit` (min-pricing-error spline/NS/Svensson + z-spread RV ladder) and `swap_spread` (the headline derivation → the `{pin, asw}` basis rows); the older `asset_swap` verb keeps the endogenous par-par form (`build/par_asset_swap.hpp`). |
 | `ql/` | `extract.hpp` (QL → plain data), `ql_term_structure.hpp` (`CurveTermStructure`) | The **only** QuantLib-touching code. Used to bake reference markets and as the oracle in tests — never on the deployed path. |
 
 ## The two calibration tiers

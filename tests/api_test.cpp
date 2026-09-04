@@ -14,6 +14,10 @@
 #include <vector>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/build/bond.hpp"
+#include "swaps/build/calendar.hpp"
+#include "swaps/curve/parametric.hpp"
+#include "swaps/pricing/bond.hpp"
 #include "swaps/calibration/regularize.hpp"
 
 namespace cal = swaps::calibration;
@@ -472,4 +476,143 @@ TEST(BundleApi, BondsVerbSelectsConventionAndHandlesWhenIssued) {
       "settle":"2024-01-16","maturity":"2029-08-15","coupon":0.025,"yield":0.04}]}})").contains("error"));
   EXPECT_TRUE(run(R"({"bonds":{"bonds":[{"dated":"2024-06-15","settle":"2024-06-15",
       "maturity":"2034-11-15","coupon":0.045,"yield":0.047}]}})").contains("error"));
+}
+
+// ---- API wiring of the preview domains (trade/, market/, derive/) --------------------------------------
+
+// Typed trades through book_from_json: booked deals + the index->role binding ("curve_roles") replace
+// hand-assembled coupon JSON. Each trade rolls under ITS OWN index's conventions; the CSA picks the
+// discount role (collateral currency's OIS) — the trade:: domain reaching pricing for real.
+TEST(BundleApi, TypedTradesPriceThroughTheBookWithCsaDiscounting) {
+  Eigen::VectorXd x_true;
+  const cal::BundleProblem p = build_bundle(x_true);
+  api::BundleSession sess(p);
+  sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
+
+  const std::string book = R"({
+    "value_date": "2026-09-04",
+    "curve_roles": {"USD-SOFR": 0},
+    "trades": [
+      {"id": "T1", "notional": 1000000, "pay": "fixed", "fixed_rate": 0.03, "index": "USD-SOFR",
+       "effective": "2026-09-08", "maturity": "2031-09-08", "csa": {"collateral_currency": "USD"}},
+      {"id": "T2", "notional": 1000000, "pay": "float", "fixed_rate": 0.03, "index": "USD-SOFR",
+       "effective": "2026-09-08", "maturity": "2031-09-08", "csa": {"collateral_currency": "USD"}}
+    ]})";
+  const auto mb = api::book_from_json(json::parse(book));
+  ASSERT_EQ(mb.positions.size(), 2u);
+  // Roles resolved through the binding: forecast = roles["USD-SOFR"], discount = roles[CSA -> USD-SOFR].
+  EXPECT_EQ(mb.positions[0].fwd_curve, 0);
+  EXPECT_EQ(mb.positions[0].disc_curve, 0);
+  // Direction carried by the signed notional (payer +, receiver -), coupons rolled from real dates.
+  EXPECT_GT(mb.positions[0].notional, 0.0);
+  EXPECT_LT(mb.positions[1].notional, 0.0);
+  EXPECT_FALSE(mb.positions[0].float_coupons.empty());
+  // Opposite directions on the same terms: the book nets to ~0 NPV whatever the curve says.
+  const api::PortfolioReprice r = sess.price_portfolio(mb);
+  EXPECT_NEAR(r.npv, 0.0, 1e-9);
+  // An unmapped index fails loudly, not silently on role 0.
+  const std::string bad = R"({"value_date": "2026-09-04", "curve_roles": {},
+    "trades": [{"index": "USD-SOFR", "effective": "2026-09-08", "maturity": "2027-09-08"}]})";
+  EXPECT_THROW(api::book_from_json(json::parse(bad)), std::invalid_argument);
+}
+
+// The batched bond_universe verb: one vectorized sweep, cross-checked against the scalar kernel.
+TEST(BundleApi, BondUniverseVerbMatchesTheScalarKernel) {
+  const std::string req = R"({"bond_universe": {"value_date": "2026-09-04", "convention": "US-TREASURY",
+    "bonds": [{"id": "A", "issue": "2026-08-15", "maturity": "2031-08-15", "coupon": 0.04},
+              {"id": "B", "issue": "2026-08-15", "maturity": "2036-08-15", "coupon": 0.045}],
+    "clean": [0.991, 1.012]}})";
+  const json::value out = json::parse(api::run_json(req));
+  const auto& u = out.as_object().at("bond_universe").as_object();
+  ASSERT_EQ(u.at("yield").as_array().size(), 2u);
+
+  const swaps::build::Date vd = swaps::build::Date::from_iso("2026-09-04");
+  const swaps::build::Date settle = swaps::build::advance_bd("USD", vd, 1);
+  swaps::build::BondId a{"A", "US-TREASURY", swaps::build::Date::from_iso("2026-08-15"),
+                         swaps::build::Date::from_iso("2031-08-15"), 0.04, {}};
+  const double y_direct =
+      swaps::pricing::bond_yield_from_clean(swaps::build::build_bond(a, vd, settle).yield, 0.991);
+  EXPECT_NEAR(u.at("yield").as_array()[0].as_double(), y_direct, 1e-10);
+  EXPECT_GT(u.at("modified_duration").as_array()[1].as_double(),
+            u.at("modified_duration").as_array()[0].as_double())
+      << "the longer bond carries the higher duration";
+}
+
+// The govvie_fit verb: minimum pricing error over a universe priced ON a known Nelson-Siegel curve
+// recovers the parameters — derive/ + market/ reached through the production JSON seam.
+TEST(BundleApi, GovvieFitVerbRecoversANelsonSiegelCurve) {
+  const swaps::build::Date vd = swaps::build::Date::from_iso("2026-09-04");
+  const swaps::build::Date settle = swaps::build::advance_bd("USD", vd, 1);
+  const double tau = 2.0;
+  Eigen::VectorXd theta(3);
+  theta << 0.045, -0.015, -0.020;
+  swaps::curve::NelsonSiegel<double> truth(tau);
+  truth.set_params(theta);
+
+  struct U { const char* id; const char* mat; double cpn; };
+  const std::vector<U> defs = {{"B1", "2028-09-15", 0.035}, {"B2", "2030-09-15", 0.038},
+                               {"B3", "2032-09-15", 0.042}, {"B4", "2036-09-15", 0.043},
+                               {"B5", "2041-09-15", 0.05}};
+  json::array bonds;
+  json::array cleans;
+  for (const auto& d : defs) {
+    swaps::build::BondId bi{d.id, "US-TREASURY", swaps::build::Date::from_iso("2026-08-15"),
+                            swaps::build::Date::from_iso(d.mat), d.cpn, {}};
+    cleans.push_back(
+        swaps::pricing::bond_clean_price<double>(swaps::build::build_bond(bi, vd, settle).curve, truth));
+    json::object bo;
+    bo["id"] = d.id;
+    bo["issue"] = "2026-08-15";
+    bo["maturity"] = d.mat;
+    bo["coupon"] = d.cpn;
+    bonds.push_back(bo);
+  }
+  json::object gf;
+  gf["value_date"] = "2026-09-04";
+  gf["convention"] = "US-TREASURY";
+  gf["model"] = "nelson_siegel";
+  gf["tau1"] = tau;
+  gf["bonds"] = bonds;
+  gf["clean"] = cleans;
+  json::object req;
+  req["govvie_fit"] = gf;
+
+  const json::value out = json::parse(api::run_json(json::serialize(req)));
+  const auto& g = out.as_object().at("govvie_fit").as_object();
+  ASSERT_EQ(g.at("x").as_array().size(), 3u);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_NEAR(g.at("x").as_array()[i].as_double(), theta[i], 1e-6)
+        << "the fit must recover the true Nelson-Siegel parameters";
+  EXPECT_LT(g.at("rms_residual").as_double(), 1e-9);
+}
+
+// The swap_spread verb: the headline derivation returns the benchmark street yield and the {pin, asw}
+// BASIS rows as instrument JSON — the basis instrument reachable from any host via run_json.
+TEST(BundleApi, SwapSpreadVerbDerivesTheBasisRows) {
+  const std::string req = R"({"swap_spread": {"value_date": "2026-09-04", "convention": "US-TREASURY",
+    "bond": {"id": "UST-5Y", "issue": "2026-08-15", "maturity": "2031-08-15", "coupon": 0.04},
+    "clean": 0.991, "spread": -0.0032, "index": "USD-SOFR", "tenor": "5Y",
+    "swap_curve": 0, "factor_curve": 1}})";
+  const json::value out = json::parse(api::run_json(req));
+  const auto& s = out.as_object().at("swap_spread").as_object();
+
+  const swaps::build::Date vd = swaps::build::Date::from_iso("2026-09-04");
+  const swaps::build::Date settle = swaps::build::advance_bd("USD", vd, 1);
+  swaps::build::BondId bi{"UST-5Y", "US-TREASURY", swaps::build::Date::from_iso("2026-08-15"),
+                          swaps::build::Date::from_iso("2031-08-15"), 0.04, {}};
+  const double y_direct =
+      swaps::pricing::bond_yield_from_clean(swaps::build::build_bond(bi, vd, settle).yield, 0.991);
+  EXPECT_NEAR(s.at("bond_yield").as_double(), y_direct, 1e-10);
+
+  // The rows round-trip through instrument_from_json into the real calibration types.
+  const cal::Instrument pin = api::instrument_from_json(s.at("rows").as_object().at("pin"));
+  const cal::Instrument asw = api::instrument_from_json(s.at("rows").as_object().at("asw"));
+  EXPECT_EQ(pin.quote, cal::QuoteKind::Rate);
+  EXPECT_EQ(pin.forecast, 1);
+  EXPECT_NEAR(pin.market, y_direct, 1e-10);
+  ASSERT_EQ(asw.quote, cal::QuoteKind::Portfolio);
+  ASSERT_EQ(asw.combination.size(), 2u);
+  EXPECT_NEAR(asw.market, -0.0032, 1e-12);
+  EXPECT_FALSE(asw.combination[0].instrument.fwd.coupons.empty())
+      << "the +1 component is the convention-built spot par swap";
 }
