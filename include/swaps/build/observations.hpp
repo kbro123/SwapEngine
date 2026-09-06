@@ -49,16 +49,16 @@ inline std::vector<std::pair<Date, Date>> daily_periods(const Date& start, const
 inline px::RateObservation observation(const Date& vd, const Date& start, const Date& end,
                                        const std::string& accrual, double realized_pct,
                                        const std::string& dc = "ACT/360", const std::string& cal = "") {
-  const double tau = year_frac(dc, start, end);
+  const double tau = year_frac(dc, start, end, cal);  // `cal` is ignored unless dc==BUS/252
   const Date fwd_from = (start > vd) ? start : vd;
-  const double tau_past = (start < vd) ? year_frac(dc, start, vd) : 0.0;
+  const double tau_past = (start < vd) ? year_frac(dc, start, vd, cal) : 0.0;
   const double r = realized_pct / 100.0;
   px::RateObservation o;
   if (accrual == "averaged") {
     bool all_one = true;
     for (const auto& [s, e] : daily_periods(fwd_from, end, cal)) {
       const double ts = curve_time(vd, s), te = curve_time(vd, e), crv = te - ts;
-      const double w = crv > 0 ? year_frac(dc, s, e) / crv : 1.0;
+      const double w = crv > 0 ? year_frac(dc, s, e, cal) / crv : 1.0;
       o.sub_start.push_back(ts);
       o.sub_end.push_back(te);
       o.weight.push_back(w);
@@ -116,13 +116,17 @@ struct RfrLag {
 // Build the RateObservation for a compounded overnight coupon over [s, e] on index day count `dc`, applying
 // an optional RFR observation-timing convention. `lag` inactive (the default) yields EXACTLY the plain single
 // telescoped bracket ois_coupon has always built (sub_start={ct(s)}, sub_end={ct(e)}, tau_index=tau(s,e)).
+// `accr_cal` is the ACCRUAL calendar (the product/index calendar), needed ONLY by BUS/252 to count business
+// days; every other day count ignores it, so `accr_cal=""` keeps every existing call byte-identical. It is
+// distinct from `lag.cal`, the observation-timing calendar used to STEP the fixing/shift windows.
 inline px::RateObservation rfr_observation(const Date& vd, const Date& s, const Date& e,
-                                           const std::string& dc, const RfrLag& lag = {}) {
+                                           const std::string& dc, const RfrLag& lag = {},
+                                           const std::string& accr_cal = "") {
   px::RateObservation o;
   if (!lag.active()) {  // plain telescoped bracket -- byte-identical to ois_coupon's obs
     o.sub_start = {curve_time(vd, s)};
     o.sub_end = {curve_time(vd, e)};
-    o.tau_index = year_frac(dc, s, e);
+    o.tau_index = year_frac(dc, s, e, accr_cal);
     return o;
   }
   if (lag.style == RfrStyle::Shift) {  // shifts the WHOLE window -> still one telescoped bracket
@@ -130,12 +134,12 @@ inline px::RateObservation rfr_observation(const Date& vd, const Date& s, const 
     const Date ee = advance_obs_bd(lag.cal, e, -lag.days);
     o.sub_start = {curve_time(vd, ss)};
     o.sub_end = {curve_time(vd, ee)};
-    o.tau_index = year_frac(dc, ss, ee);  // obs-shift accrues on the shifted window
+    o.tau_index = year_frac(dc, ss, ee, accr_cal);  // obs-shift accrues on the shifted window
     return o;
   }
   // Lookback / Lockout: a genuine daily compounded product (does NOT telescope).
   o.compounded = true;
-  o.tau_index = year_frac(dc, s, e);
+  o.tau_index = year_frac(dc, s, e, accr_cal);
   const auto days = business_days(s, e, lag.cal);
   const std::size_t lock_from =
       (lag.style == RfrStyle::Lockout && days.size() > std::size_t(lag.days))
@@ -144,7 +148,7 @@ inline px::RateObservation rfr_observation(const Date& vd, const Date& s, const 
   for (std::size_t i = 0; i < days.size(); ++i) {
     const Date d0 = days[i];
     const Date d1 = (i + 1 < days.size()) ? days[i + 1] : e;  // ACTUAL accrual span of this fixing day
-    const double acc = year_frac(dc, d0, d1);
+    const double acc = year_frac(dc, d0, d1, accr_cal);
     Date obs0 = d0, obs1 = d1;  // the observation window whose forward rate this day earns
     if (lag.style == RfrStyle::Lookback) {
       obs0 = advance_obs_bd(lag.cal, d0, -lag.days);
@@ -172,10 +176,10 @@ inline px::RateObservation scheduled_observation(const Date& vd, const Date& sta
   px::RateObservation o;
   o.fixing_index = index;
   o.compounded = compounded;
-  o.tau_index = year_frac(dc, start, end);
+  o.tau_index = year_frac(dc, start, end, cal);  // `cal` is ignored unless dc==BUS/252
   for (std::size_t i = 0; i < days.size(); ++i) {
     const Date nxt = i + 1 < days.size() ? days[i + 1] : end;
-    const double acc = year_frac(dc, days[i], nxt);
+    const double acc = year_frac(dc, days[i], nxt, cal);
     const double ts = curve_time(vd, days[i]), te = curve_time(vd, nxt), crv = te - ts;
     const double w = compounded ? 1.0 : (crv > 0 ? acc / crv : 1.0);
     o.fixing_schedule.push_back(px::FixingDay{ordinal(days[i]), acc, ts, te, w});

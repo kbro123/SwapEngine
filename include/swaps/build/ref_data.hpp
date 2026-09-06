@@ -42,6 +42,11 @@ struct Calendar {
 struct DayCount {
   std::string id;
   double year_frac(const Date& d1, const Date& d2) const { return swaps::build::year_frac(id, d1, d2); }
+  // Calendar-aware form: only BUS/252 (Brazilian business/252) consults `cal_id`; every other day count
+  // ignores it and matches the 2-arg form. Pass the product/index calendar when the id may be BUS/252.
+  double year_frac(const Date& d1, const Date& d2, const std::string& cal_id) const {
+    return swaps::build::year_frac(id, d1, d2, cal_id);
+  }
 };
 
 // The market-CONVENTION family (ORE-style): a typed view over the conventions DB, resolving to the engine's

@@ -42,10 +42,10 @@ inline double notional_at(const std::vector<double>& ns, std::size_t i, std::siz
 // accrual `tau_pay` on the actual [s, e] span and defaults BYTE-IDENTICAL to the plain telescoped bracket.
 inline px::FloatCoupon ois_coupon(const Date& vd, const SwapConv& conv, const Date& s, const Date& e,
                                   const std::string& dc, const RfrLag& lag = {}) {
-  const double tau = year_frac(dc, s, e);
+  const double tau = year_frac(dc, s, e, conv.calendar);  // conv.calendar carries BUS/252's business-day count
   const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
   px::FloatCoupon c;
-  c.obs = rfr_observation(vd, s, e, dc, lag);
+  c.obs = rfr_observation(vd, s, e, dc, lag, conv.calendar);
   c.pay = curve_time(vd, pay);
   c.tau_pay = tau;
   return c;
@@ -64,7 +64,7 @@ inline cal::FixedLeg fixed_coupons(const Date& vd, const SwapConv& conv, const D
     const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
     px::FixedCoupon fc;
     fc.pay = curve_time(vd, pay);
-    fc.tau = year_frac(conv.fixed_dc, s, e);
+    fc.tau = year_frac(conv.fixed_dc, s, e, conv.calendar);  // conv.calendar needed only for BUS/252
     fc.scale = notional_at(notionals, i, periods.size());
     leg.coupons.push_back(fc);
   }
@@ -147,7 +147,7 @@ inline cal::Instrument xccy_mtm_basis(const Date& vd, const XccyConv& x, const D
     const Date pay = advance_bd(x.calendar, e, x.pay_lag);
     px::FixedCoupon fc;
     fc.pay = curve_time(vd, pay);
-    fc.tau = year_frac(x.dc, s, e);
+    fc.tau = year_frac(x.dc, s, e, x.calendar);  // x.calendar needed only for BUS/252 (EUR/USD xccy never hits it)
     fixed.coupons.push_back(fc);
   }
   ins.fixed = fixed;

@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "swaps/build/calendar.hpp"  // is_business_day, for BUS/252 (Brazilian business/252)
 #include "swaps/build/date.hpp"
 
 namespace swaps::build {
@@ -42,15 +43,39 @@ inline double act_act_isda(const Date& d1, const Date& d2) {
   return sum;
 }
 
-// Accrual factor between two dates under `dc` (calendars.year_frac). Reference-period-free day counts
-// only; ACT/ACT(ICMA) needs the coupon period and is `act_act_icma` below.
+// Number of BUSINESS days d on calendar `cal_id` with d1 <= d < d2 (half-open, matching the accrual
+// convention: the start date accrues, the end date does not). d2 < d1 flips the sign, so a reversed span
+// negates cleanly like the other day counts' (d2 - d1). This is the numerator of BUS/252.
+inline long business_days_between(const std::string& cal_id, const Date& d1, const Date& d2) {
+  if (d2 < d1) return -business_days_between(cal_id, d2, d1);
+  long n = 0;
+  for (Date d = d1; d < d2; d = d.plus_days(1))
+    if (is_business_day(cal_id, d)) ++n;
+  return n;
+}
+
+// Accrual factor between two dates under `dc` (calendars.year_frac). Reference-period-free, CALENDAR-FREE
+// day counts only; ACT/ACT(ICMA) needs the coupon period (`act_act_icma` below) and BUS/252 needs a
+// calendar (the 4-arg overload below) — the 3-arg form throws for BUS/252 rather than silently guessing one.
 inline double year_frac(const std::string& dc, const Date& d1, const Date& d2) {
   if (dc == "ACT/360") return (d2 - d1) / 360.0;
   if (dc == "ACT/365F") return (d2 - d1) / 365.0;
   if (dc == "ACT/ACT" || dc == "ACT/ACT.ISDA") return act_act_isda(d1, d2);
   if (dc == "30E/360") return thirty_e(d1, d2);
   if (dc == "30U/360") return thirty_us(d1, d2);
+  if (dc == "BUS/252")
+    throw std::invalid_argument(
+        "day count BUS/252 requires a calendar; call year_frac(dc, d1, d2, cal_id)");
   throw std::invalid_argument("unknown day count: " + dc);
+}
+
+// Calendar-aware accrual factor: BUS/252 (Brazilian business/252) counts business days on `cal_id` over
+// [d1, d2) and divides by 252; EVERY other day count ignores `cal_id` and delegates BYTE-IDENTICALLY to the
+// 3-arg form above (same arithmetic, so all non-BUS/252 calibrations are unchanged). Coupon-accrual call
+// sites that can see BUS/252 pass their product/index calendar through this overload.
+inline double year_frac(const std::string& dc, const Date& d1, const Date& d2, const std::string& cal_id) {
+  if (dc == "BUS/252") return double(business_days_between(cal_id, d1, d2)) / 252.0;
+  return year_frac(dc, d1, d2);
 }
 
 // ACT/ACT (ICMA / ISMA) year fraction over [d1,d2] measured against a coupon reference period

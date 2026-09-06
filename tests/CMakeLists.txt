@@ -53,6 +53,9 @@ add_executable(swaps_tests
   fx_black_test.cpp
   inflation_test.cpp
   bond_future_test.cpp
+  ndf_test.cpp
+  credit_test.cpp
+  bus252_daycount_test.cpp
   vol_cap_stripping_test.cpp
   vol_cube_interp_test.cpp
   vol_swaption_test.cpp

@@ -27,6 +27,9 @@
 #include "swaps/api/inflation.hpp"                   // inflation_json (the 'inflation' ZCIS/YoY verb)
 #include "swaps/api/fx_option.hpp"                    // fx_option_json (the 'fx_option'/'fx_vol' verb)
 #include "swaps/api/bond_future.hpp"                  // bond_future_json (the 'bond_future' CTD verb)
+#include "swaps/api/ndf.hpp"                          // ndf_json (the 'ndf' non-deliverable FX verb)
+#include "swaps/api/calib_report.hpp"                 // calib_report_json (calibration diagnostics verb)
+#include "swaps/api/credit.hpp"                       // credit_json (the 'credit' hazard-curve/CDS verb)
 #include "swaps/api/scenario_grid.hpp"                // scenario_grid_json (the 'scenario_grid' P&L surface)
 #include "swaps/api/var.hpp"                          // var_json (the 'var' full-reval VaR/ES verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
@@ -1018,8 +1021,17 @@ std::string run_json(const std::string& request) {
     // Stateless INFLATION verb: ZCIS/YoY breakeven-inflation curve calibration + index/breakeven output.
     if (o.contains("inflation")) return inflation_json(request);
 
+    // Stateless CREDIT verb: hazard-rate survival curve calibrated to a par CDS-spread strip.
+    if (o.contains("credit")) return credit_json(request);
+
     // Stateless FX_OPTION / FX_VOL verb: Garman-Kohlhagen vanilla FX options + delta-quoted smile.
     if (o.contains("fx_option") || o.contains("fx_vol")) return fx_option_json(request);
+
+    // Stateless NDF verb: non-deliverable FX forwards / NDS (covered-interest-parity, linear, no vol).
+    if (o.contains("ndf")) return ndf_json(request);
+
+    // Stateless CALIB_REPORT verb: calibration diagnostics (Jacobian condition number + identifiability).
+    if (o.contains("calib_report")) return calib_report_json(request);
 
     // Stateless RV verbs (api/rv.cpp): batched bond-universe analytics; the minimum-pricing-error govvie
     // fit (spline / Nelson-Siegel / Svensson) with the per-bond RV ladder; and the headline swap-spread
