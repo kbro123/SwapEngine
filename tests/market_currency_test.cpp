@@ -39,11 +39,14 @@ TEST(MarketCurrency, EurIsDerivedFromTheDb) {
 }
 
 TEST(MarketCurrency, MinorUnitsTableCoversZeroDecimalCurrencies) {
-  // JPY is in the explicit minor-units table (0 decimals) but has NO index in the conventions DB, so it is
-  // NOT a known currency: minor_units resolves from the table, while known()==false.
-  const mkt::Currency jpy = mkt::Currency::of("JPY");
-  EXPECT_EQ(jpy.minor_units(), 0);
-  EXPECT_FALSE(jpy.known());
+  // The zero-decimal currencies now carry a DB index (JPY-TONA, KRW-KOFR, IDR-INDONIA), so they are known
+  // AND resolve 0 minor units from the explicit table -- the two facts come from different sources and must
+  // agree. (A currency without a DB index would still get its table value; here all three are known.)
+  for (const char* c : {"JPY", "KRW", "IDR"}) {
+    const mkt::Currency ccy = mkt::Currency::of(c);
+    EXPECT_EQ(ccy.minor_units(), 0) << c;
+    EXPECT_TRUE(ccy.known()) << c;
+  }
 }
 
 TEST(MarketCurrency, UnknownCodeStaysValidButEmpty) {
@@ -65,5 +68,6 @@ TEST(MarketCurrency, KnownCodesListComesFromTheDb) {
   };
   EXPECT_TRUE(has("USD"));
   EXPECT_TRUE(has("EUR"));
-  EXPECT_FALSE(has("JPY"));  // no DB index -> not a known currency
+  EXPECT_TRUE(has("JPY"));   // now carries JPY-TONA in the DB -> a known currency
+  EXPECT_FALSE(has("SGD"));  // no DB index yet -> not a known currency
 }

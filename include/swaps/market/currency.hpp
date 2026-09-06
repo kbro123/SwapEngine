@@ -34,11 +34,13 @@ struct MinorUnits {
   std::string_view code;
   int units;
 };
-inline constexpr std::array<MinorUnits, 4> kMinorUnits = {{
+inline constexpr std::array<MinorUnits, 6> kMinorUnits = {{
     {"USD", 2},
     {"EUR", 2},
     {"GBP", 2},
     {"JPY", 0},
+    {"KRW", 0},  // Korean won: quoted to whole units
+    {"IDR", 0},  // Indonesian rupiah: quoted to whole units
 }};
 inline int minor_units_for(std::string_view code) {
   for (const auto& m : kMinorUnits)

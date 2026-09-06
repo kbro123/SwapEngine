@@ -160,3 +160,66 @@ TEST(Conventions, BondConventionsDriveTheNamedBuilders) {
   EXPECT_NEAR(px::bond_dirty_from_yield(db_tsy.yield, y) * 100.0,
               BondFunctions::dirtyPrice(ql, y, dc, SimpleThenCompounded, Semiannual, s), 1e-9);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// G20 breadth: every new-currency index resolves to its par product + a known calendar, and the par
+// product's float leg points back at the index. Pure-DB assertions (swaps::conventions data accessors,
+// no QuantLib mapping) so they hold even before conventions_ql.hpp learns the new calendars -- mirrors
+// the USD/EUR par_product wiring the reference builders rely on.
+// ---------------------------------------------------------------------------------------------------
+TEST(Conventions, G20IndicesResolveToParProductAndCalendar) {
+  struct Row { const char* index; const char* par_product; const char* calendar; };
+  const Row rows[] = {
+      {"JPY-TONA", "JPY-TONA-OIS", "JPY"},
+      {"GBP-SONIA", "GBP-SONIA-OIS", "GBP"},
+      {"AUD-AONIA", "AUD-AONIA-OIS", "AUD"},
+      {"AUD-BBSW-3M", "AUD-BBSW-3M-IRS", "AUD"},
+      {"AUD-BBSW-6M", "AUD-BBSW-6M-IRS", "AUD"},
+      {"CAD-CORRA", "CAD-CORRA-OIS", "CAD"},
+      {"CHF-SARON", "CHF-SARON-OIS", "CHF"},
+      {"CNY-FR007", "CNY-FR007-IRS", "CNY"},
+      {"CNY-SHIBOR-3M", "CNY-SHIBOR-3M-IRS", "CNY"},
+      {"INR-MIBOR-ON", "INR-MIBOR-OIS", "INR"},
+      {"BRL-CDI", "BRL-CDI-SWAP", "BRL"},
+      {"MXN-TIIE-28", "MXN-TIIE-28-IRS", "MXN"},
+      {"MXN-FTIIE", "MXN-FTIIE-OIS", "MXN"},
+      {"KRW-KOFR", "KRW-KOFR-OIS", "KRW"},
+      {"ZAR-ZARONIA", "ZAR-ZARONIA-OIS", "ZAR"},
+      {"ZAR-JIBAR-3M", "ZAR-JIBAR-3M-IRS", "ZAR"},
+      {"TRY-TLREF", "TRY-TLREF-OIS", "TRY"},
+      {"IDR-INDONIA", "IDR-INDONIA-OIS", "IDR"},
+      {"RUB-RUONIA", "RUB-RUONIA-OIS", "RUB"},
+      {"SAR-SAIBOR-3M", "SAR-SAIBOR-3M-IRS", "SAR"},
+      {"ARS-BADLAR", "ARS-BADLAR-IRS", "ARS"},
+  };
+  for (const auto& r : rows) {
+    const auto ix = db::index(r.index);
+    ASSERT_TRUE(ix.has_value()) << "missing index " << r.index;
+    EXPECT_EQ(ix->par_product, std::string_view(r.par_product)) << r.index;
+    // the index's settlement calendar resolves in the DB ...
+    const auto cal = db::calendar(ix->calendar);
+    ASSERT_TRUE(cal.has_value()) << "index " << r.index << " -> unknown calendar " << ix->calendar;
+    EXPECT_EQ(cal->id, std::string_view(r.calendar)) << r.index;
+    // ... and its par product exists, in the same currency, with the float leg pointing back at it.
+    const auto p = db::product(r.par_product);
+    ASSERT_TRUE(p.has_value()) << "missing product " << r.par_product;
+    EXPECT_EQ(p->floating.index, std::string_view(r.index)) << r.par_product;
+    EXPECT_EQ(p->currency, ix->currency) << r.par_product;
+  }
+}
+
+// The Saudi calendar carries the Islamic Friday/Saturday weekend, unlike the Sat/Sun majors -- guards
+// the per-calendar weekend-mask transcription (bit w set == weekday w is a weekend day, Mon=0..Sun=6).
+TEST(Conventions, SaudiWeekendIsFridaySaturday) {
+  const auto sar = db::calendar("SAR");
+  ASSERT_TRUE(sar.has_value());
+  EXPECT_NE(sar->weekend_mask & (1 << 4), 0);  // Friday is a weekend day
+  EXPECT_NE(sar->weekend_mask & (1 << 5), 0);  // Saturday is a weekend day
+  EXPECT_EQ(sar->weekend_mask & (1 << 6), 0);  // Sunday is a BUSINESS day
+  // A Sat/Sun currency for contrast.
+  const auto gbp = db::calendar("GBP");
+  ASSERT_TRUE(gbp.has_value());
+  EXPECT_NE(gbp->weekend_mask & (1 << 5), 0);  // Saturday
+  EXPECT_NE(gbp->weekend_mask & (1 << 6), 0);  // Sunday
+  EXPECT_EQ(gbp->weekend_mask & (1 << 4), 0);  // Friday is a business day
+}

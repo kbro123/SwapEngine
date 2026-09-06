@@ -100,6 +100,302 @@
         "USD",
         "EUR"
       ]
+    },
+    "JPY": {
+      "name": "Tokyo / Japan settlement",
+      "quantlib": "Japan",
+      "weekend": [5, 6],
+      "observance": "sun_to_mon",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Bank Holiday (Jan 2)", "rule": "fixed", "month": 1, "day": 2, "observance": "none"},
+        {"label": "Bank Holiday (Jan 3)", "rule": "fixed", "month": 1, "day": 3, "observance": "none"},
+        {"label": "Coming of Age Day", "rule": "nth_weekday", "month": 1, "weekday": 0, "n": 2, "observance": "none"},
+        {"label": "National Foundation Day", "rule": "fixed", "month": 2, "day": 11},
+        {"label": "Emperor's Birthday (since 2020)", "rule": "fixed", "month": 2, "day": 23, "from_year": 2020},
+        {"label": "Vernal Equinox Day (astronomical; placeholder Mar 20)", "rule": "fixed", "month": 3, "day": 20},
+        {"label": "Showa Day", "rule": "fixed", "month": 4, "day": 29},
+        {"label": "Constitution Memorial Day", "rule": "fixed", "month": 5, "day": 3},
+        {"label": "Greenery Day", "rule": "fixed", "month": 5, "day": 4},
+        {"label": "Children's Day", "rule": "fixed", "month": 5, "day": 5},
+        {"label": "Marine Day", "rule": "nth_weekday", "month": 7, "weekday": 0, "n": 3, "observance": "none"},
+        {"label": "Mountain Day", "rule": "fixed", "month": 8, "day": 11},
+        {"label": "Respect for the Aged Day", "rule": "nth_weekday", "month": 9, "weekday": 0, "n": 3, "observance": "none"},
+        {"label": "Autumnal Equinox Day (astronomical; placeholder Sep 23)", "rule": "fixed", "month": 9, "day": 23},
+        {"label": "Sports Day", "rule": "nth_weekday", "month": 10, "weekday": 0, "n": 2, "observance": "none"},
+        {"label": "Culture Day", "rule": "fixed", "month": 11, "day": 3},
+        {"label": "Labour Thanksgiving Day", "rule": "fixed", "month": 11, "day": 23},
+        {"label": "Bank Holiday (Dec 31)", "rule": "fixed", "month": 12, "day": 31, "observance": "none"}
+      ]
+    },
+    "GBP": {
+      "name": "London / United Kingdom settlement",
+      "quantlib": "UnitedKingdom",
+      "weekend": [5, 6],
+      "observance": "sun_to_mon",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Easter Monday", "rule": "easter_offset", "days": 1},
+        {"label": "Early May Bank Holiday", "rule": "nth_weekday", "month": 5, "weekday": 0, "n": 1, "observance": "none"},
+        {"label": "Spring Bank Holiday", "rule": "last_weekday", "month": 5, "weekday": 0, "observance": "none"},
+        {"label": "Summer Bank Holiday", "rule": "last_weekday", "month": 8, "weekday": 0, "observance": "none"},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25},
+        {"label": "Boxing Day", "rule": "fixed", "month": 12, "day": 26}
+      ]
+    },
+    "AUD": {
+      "name": "Sydney / Australia (ASX, NSW) settlement",
+      "quantlib": "Australia",
+      "weekend": [5, 6],
+      "observance": "sun_to_mon",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Australia Day", "rule": "fixed", "month": 1, "day": 26},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Easter Monday", "rule": "easter_offset", "days": 1},
+        {"label": "ANZAC Day", "rule": "fixed", "month": 4, "day": 25},
+        {"label": "King's Birthday (2nd Mon Jun, NSW)", "rule": "nth_weekday", "month": 6, "weekday": 0, "n": 2, "observance": "none"},
+        {"label": "Bank Holiday (1st Mon Aug, NSW)", "rule": "nth_weekday", "month": 8, "weekday": 0, "n": 1, "observance": "none"},
+        {"label": "Labour Day (1st Mon Oct, NSW)", "rule": "nth_weekday", "month": 10, "weekday": 0, "n": 1, "observance": "none"},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25},
+        {"label": "Boxing Day", "rule": "fixed", "month": 12, "day": 26}
+      ]
+    },
+    "CAD": {
+      "name": "Toronto / Canada settlement",
+      "quantlib": "Canada",
+      "weekend": [5, 6],
+      "observance": "sun_to_mon",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Family Day (3rd Mon Feb, since 2008)", "rule": "nth_weekday", "month": 2, "weekday": 0, "n": 3, "observance": "none"},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Victoria Day (Mon before May 25; placeholder 3rd Mon May)", "rule": "nth_weekday", "month": 5, "weekday": 0, "n": 3, "observance": "none"},
+        {"label": "Canada Day", "rule": "fixed", "month": 7, "day": 1},
+        {"label": "Civic Holiday (1st Mon Aug)", "rule": "nth_weekday", "month": 8, "weekday": 0, "n": 1, "observance": "none"},
+        {"label": "Labour Day (1st Mon Sep)", "rule": "nth_weekday", "month": 9, "weekday": 0, "n": 1, "observance": "none"},
+        {"label": "National Day for Truth and Reconciliation (since 2021)", "rule": "fixed", "month": 9, "day": 30, "from_year": 2021},
+        {"label": "Thanksgiving (2nd Mon Oct)", "rule": "nth_weekday", "month": 10, "weekday": 0, "n": 2, "observance": "none"},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25},
+        {"label": "Boxing Day", "rule": "fixed", "month": 12, "day": 26}
+      ]
+    },
+    "CHF": {
+      "name": "Zurich / Switzerland settlement",
+      "quantlib": "Switzerland",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Berchtold's Day", "rule": "fixed", "month": 1, "day": 2},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Easter Monday", "rule": "easter_offset", "days": 1},
+        {"label": "Labour Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Ascension Day", "rule": "easter_offset", "days": 39},
+        {"label": "Whit Monday", "rule": "easter_offset", "days": 50},
+        {"label": "Swiss National Day", "rule": "fixed", "month": 8, "day": 1},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25},
+        {"label": "St. Stephen's Day", "rule": "fixed", "month": 12, "day": 26}
+      ]
+    },
+    "CNY": {
+      "name": "Beijing / China interbank (CFETS) settlement",
+      "quantlib": "China::IB",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Spring Festival day 1 (lunar; placeholder, actual dates announced annually)", "rule": "fixed", "month": 2, "day": 1},
+        {"label": "Spring Festival day 2 (lunar; placeholder)", "rule": "fixed", "month": 2, "day": 2},
+        {"label": "Spring Festival day 3 (lunar; placeholder)", "rule": "fixed", "month": 2, "day": 3},
+        {"label": "Qingming / Tomb-Sweeping (solar term; placeholder Apr 5)", "rule": "fixed", "month": 4, "day": 5},
+        {"label": "Labour Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Dragon Boat Festival (lunar; placeholder Jun 10)", "rule": "fixed", "month": 6, "day": 10},
+        {"label": "Mid-Autumn Festival (lunar; placeholder Sep 20)", "rule": "fixed", "month": 9, "day": 20},
+        {"label": "National Day day 1", "rule": "fixed", "month": 10, "day": 1},
+        {"label": "National Day day 2", "rule": "fixed", "month": 10, "day": 2},
+        {"label": "National Day day 3", "rule": "fixed", "month": 10, "day": 3}
+      ]
+    },
+    "INR": {
+      "name": "Mumbai / India settlement",
+      "quantlib": "India",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "Republic Day", "rule": "fixed", "month": 1, "day": 26},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Dr. Ambedkar Jayanti", "rule": "fixed", "month": 4, "day": 14},
+        {"label": "Independence Day", "rule": "fixed", "month": 8, "day": 15},
+        {"label": "Gandhi Jayanti", "rule": "fixed", "month": 10, "day": 2},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25}
+      ]
+    },
+    "BRL": {
+      "name": "Brazil (B3 / ANBIMA) settlement",
+      "quantlib": "Brazil",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Carnival Monday", "rule": "easter_offset", "days": -48},
+        {"label": "Carnival Tuesday", "rule": "easter_offset", "days": -47},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Tiradentes", "rule": "fixed", "month": 4, "day": 21},
+        {"label": "Labour Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Corpus Christi", "rule": "easter_offset", "days": 60},
+        {"label": "Independence Day", "rule": "fixed", "month": 9, "day": 7},
+        {"label": "Our Lady of Aparecida", "rule": "fixed", "month": 10, "day": 12},
+        {"label": "All Souls' Day", "rule": "fixed", "month": 11, "day": 2},
+        {"label": "Republic Proclamation Day", "rule": "fixed", "month": 11, "day": 15},
+        {"label": "Black Awareness Day (national since 2024)", "rule": "fixed", "month": 11, "day": 20, "from_year": 2024},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25}
+      ]
+    },
+    "MXN": {
+      "name": "Mexico City / Mexico settlement",
+      "quantlib": "Mexico",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Constitution Day (1st Mon Feb)", "rule": "nth_weekday", "month": 2, "weekday": 0, "n": 1, "observance": "none"},
+        {"label": "Benito Juarez Birthday (3rd Mon Mar)", "rule": "nth_weekday", "month": 3, "weekday": 0, "n": 3, "observance": "none"},
+        {"label": "Maundy Thursday", "rule": "easter_offset", "days": -3},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Labour Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Independence Day", "rule": "fixed", "month": 9, "day": 16},
+        {"label": "Revolution Day (3rd Mon Nov)", "rule": "nth_weekday", "month": 11, "weekday": 0, "n": 3, "observance": "none"},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25}
+      ]
+    },
+    "KRW": {
+      "name": "Seoul / South Korea settlement",
+      "quantlib": "SouthKorea::Settlement",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Seollal / Lunar New Year (lunar; placeholder Feb 1, 3-day holiday announced annually)", "rule": "fixed", "month": 2, "day": 1},
+        {"label": "Independence Movement Day", "rule": "fixed", "month": 3, "day": 1},
+        {"label": "Children's Day", "rule": "fixed", "month": 5, "day": 5},
+        {"label": "Buddha's Birthday (lunar; placeholder May 15)", "rule": "fixed", "month": 5, "day": 15},
+        {"label": "Memorial Day", "rule": "fixed", "month": 6, "day": 6},
+        {"label": "Liberation Day", "rule": "fixed", "month": 8, "day": 15},
+        {"label": "Chuseok (lunar; placeholder Sep 20, 3-day holiday announced annually)", "rule": "fixed", "month": 9, "day": 20},
+        {"label": "National Foundation Day", "rule": "fixed", "month": 10, "day": 3},
+        {"label": "Hangeul Day", "rule": "fixed", "month": 10, "day": 9},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25}
+      ]
+    },
+    "ZAR": {
+      "name": "Johannesburg / South Africa settlement",
+      "quantlib": "SouthAfrica",
+      "weekend": [5, 6],
+      "observance": "sun_to_mon",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Human Rights Day", "rule": "fixed", "month": 3, "day": 21},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Family Day (Easter Monday)", "rule": "easter_offset", "days": 1, "observance": "none"},
+        {"label": "Freedom Day", "rule": "fixed", "month": 4, "day": 27},
+        {"label": "Workers' Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Youth Day", "rule": "fixed", "month": 6, "day": 16},
+        {"label": "National Women's Day", "rule": "fixed", "month": 8, "day": 9},
+        {"label": "Heritage Day", "rule": "fixed", "month": 9, "day": 24},
+        {"label": "Day of Reconciliation", "rule": "fixed", "month": 12, "day": 16},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25},
+        {"label": "Day of Goodwill", "rule": "fixed", "month": 12, "day": 26}
+      ]
+    },
+    "TRY": {
+      "name": "Istanbul / Turkey settlement",
+      "quantlib": "Turkey",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "National Sovereignty and Children's Day", "rule": "fixed", "month": 4, "day": 23},
+        {"label": "Ramadan Feast / Eid al-Fitr (Islamic lunar; placeholder, announced annually)", "rule": "fixed", "month": 4, "day": 10},
+        {"label": "Labour and Solidarity Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Commemoration of Ataturk, Youth and Sports Day", "rule": "fixed", "month": 5, "day": 19},
+        {"label": "Sacrifice Feast / Eid al-Adha (Islamic lunar; placeholder, announced annually)", "rule": "fixed", "month": 6, "day": 17},
+        {"label": "Democracy and National Unity Day (since 2017)", "rule": "fixed", "month": 7, "day": 15, "from_year": 2017},
+        {"label": "Victory Day", "rule": "fixed", "month": 8, "day": 30},
+        {"label": "Republic Day", "rule": "fixed", "month": 10, "day": 29}
+      ]
+    },
+    "IDR": {
+      "name": "Jakarta / Indonesia settlement",
+      "quantlib": "Indonesia",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Labour Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Pancasila Day", "rule": "fixed", "month": 6, "day": 1},
+        {"label": "Independence Day", "rule": "fixed", "month": 8, "day": 17},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25}
+      ]
+    },
+    "RUB": {
+      "name": "Moscow / Russia (MOEX) settlement",
+      "quantlib": "Russia::Settlement",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year Holidays (Jan 1)", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "New Year Holidays (Jan 2)", "rule": "fixed", "month": 1, "day": 2},
+        {"label": "New Year Holidays (Jan 3)", "rule": "fixed", "month": 1, "day": 3},
+        {"label": "New Year Holidays (Jan 4)", "rule": "fixed", "month": 1, "day": 4},
+        {"label": "New Year Holidays (Jan 5)", "rule": "fixed", "month": 1, "day": 5},
+        {"label": "New Year Holidays (Jan 6)", "rule": "fixed", "month": 1, "day": 6},
+        {"label": "Orthodox Christmas", "rule": "fixed", "month": 1, "day": 7},
+        {"label": "New Year Holidays (Jan 8)", "rule": "fixed", "month": 1, "day": 8},
+        {"label": "Defender of the Fatherland Day", "rule": "fixed", "month": 2, "day": 23},
+        {"label": "International Women's Day", "rule": "fixed", "month": 3, "day": 8},
+        {"label": "Spring and Labour Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "Victory Day", "rule": "fixed", "month": 5, "day": 9},
+        {"label": "Russia Day", "rule": "fixed", "month": 6, "day": 12},
+        {"label": "Unity Day", "rule": "fixed", "month": 11, "day": 4}
+      ]
+    },
+    "SAR": {
+      "name": "Riyadh / Saudi Arabia settlement (Fri/Sat weekend)",
+      "quantlib": "SaudiArabia",
+      "weekend": [4, 5],
+      "observance": "none",
+      "holidays": [
+        {"label": "Eid al-Fitr (Islamic lunar; placeholder, multi-day, announced annually)", "rule": "fixed", "month": 4, "day": 10},
+        {"label": "Eid al-Adha (Islamic lunar; placeholder, multi-day, announced annually)", "rule": "fixed", "month": 6, "day": 17},
+        {"label": "Saudi National Day", "rule": "fixed", "month": 9, "day": 23}
+      ]
+    },
+    "ARS": {
+      "name": "Buenos Aires / Argentina settlement",
+      "quantlib": "Argentina",
+      "weekend": [5, 6],
+      "observance": "none",
+      "holidays": [
+        {"label": "New Year's Day", "rule": "fixed", "month": 1, "day": 1},
+        {"label": "Carnival Monday", "rule": "easter_offset", "days": -48},
+        {"label": "Carnival Tuesday", "rule": "easter_offset", "days": -47},
+        {"label": "Truth and Justice Memorial Day", "rule": "fixed", "month": 3, "day": 24},
+        {"label": "Malvinas Day", "rule": "fixed", "month": 4, "day": 2},
+        {"label": "Good Friday", "rule": "easter_offset", "days": -2},
+        {"label": "Labour Day", "rule": "fixed", "month": 5, "day": 1},
+        {"label": "May Revolution Day", "rule": "fixed", "month": 5, "day": 25},
+        {"label": "Guemes Day", "rule": "fixed", "month": 6, "day": 17},
+        {"label": "Flag Day", "rule": "fixed", "month": 6, "day": 20},
+        {"label": "Independence Day", "rule": "fixed", "month": 7, "day": 9},
+        {"label": "San Martin Day (3rd Mon Aug)", "rule": "nth_weekday", "month": 8, "weekday": 0, "n": 3, "observance": "none"},
+        {"label": "Cultural Diversity Day", "rule": "fixed", "month": 10, "day": 12},
+        {"label": "National Sovereignty Day", "rule": "fixed", "month": 11, "day": 20},
+        {"label": "Immaculate Conception", "rule": "fixed", "month": 12, "day": 8},
+        {"label": "Christmas Day", "rule": "fixed", "month": 12, "day": 25}
+      ]
     }
   },
   "day_counts": {
@@ -108,7 +404,8 @@
     "30U/360": "30/360 US (bond basis) \u2014 USD-Libor-era fixed leg; NOT used by EUR IRS",
     "ACT/365F": "Actual/365 Fixed (curve time axis only)",
     "ACT/ACT-ICMA": "Actual/Actual ICMA (ISMA) \u2014 the bond coupon-period basis: accrual is actual days over actual days in the coupon period. US Treasuries, gilts, OATs, Bunds.",
-    "ACT/ACT-ISDA": "Actual/Actual ISDA \u2014 calendar-year split; general term-structure use"
+    "ACT/ACT-ISDA": "Actual/Actual ISDA \u2014 calendar-year split; general term-structure use",
+    "BUS/252": "Business/252 (Brazilian) \u2014 count of BUSINESS days on the Brazil (ANBIMA/B3) calendar divided by 252. Used by BRL CDI/SELIC DI swaps and Brazilian government bonds (NTN-F/LTN). Requires the BRL calendar to count business days."
   },
   "indices": {
     "USD-SOFR": {
@@ -157,6 +454,203 @@
       "calendar": "EUR",
       "fixing_lag": 2,
       "par_product": "EUR-EURIBOR-6M-IRS"
+    },
+    "JPY-TONA": {
+      "label": "JPY TONA (Tokyo Overnight Average; RFR)",
+      "currency": "JPY",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "JPY",
+      "publication_lag": 1,
+      "par_product": "JPY-TONA-OIS"
+    },
+    "GBP-SONIA": {
+      "label": "GBP SONIA (Sterling Overnight Index Average; RFR)",
+      "currency": "GBP",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "GBP",
+      "publication_lag": 1,
+      "par_product": "GBP-SONIA-OIS"
+    },
+    "AUD-AONIA": {
+      "label": "AUD AONIA (RBA interbank overnight cash rate; RFR)",
+      "currency": "AUD",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "AUD",
+      "publication_lag": 1,
+      "par_product": "AUD-AONIA-OIS"
+    },
+    "AUD-BBSW-3M": {
+      "label": "AUD BBSW 3M (Bank Bill Swap Rate)",
+      "currency": "AUD",
+      "type": "ibor",
+      "tenor": "3M",
+      "day_count": "ACT/365F",
+      "calendar": "AUD",
+      "fixing_lag": 0,
+      "par_product": "AUD-BBSW-3M-IRS"
+    },
+    "AUD-BBSW-6M": {
+      "label": "AUD BBSW 6M (Bank Bill Swap Rate)",
+      "currency": "AUD",
+      "type": "ibor",
+      "tenor": "6M",
+      "day_count": "ACT/365F",
+      "calendar": "AUD",
+      "fixing_lag": 0,
+      "par_product": "AUD-BBSW-6M-IRS"
+    },
+    "CAD-CORRA": {
+      "label": "CAD CORRA (Canadian Overnight Repo Rate Average; RFR)",
+      "currency": "CAD",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "CAD",
+      "publication_lag": 1,
+      "par_product": "CAD-CORRA-OIS"
+    },
+    "CHF-SARON": {
+      "label": "CHF SARON (Swiss Average Rate Overnight; RFR)",
+      "currency": "CHF",
+      "type": "overnight",
+      "day_count": "ACT/360",
+      "calendar": "CHF",
+      "publication_lag": 0,
+      "par_product": "CHF-SARON-OIS"
+    },
+    "CNY-FR007": {
+      "label": "CNY FR007 (7-day fixing repo rate)",
+      "currency": "CNY",
+      "type": "ibor",
+      "tenor": "1W",
+      "day_count": "ACT/365F",
+      "calendar": "CNY",
+      "fixing_lag": 1,
+      "par_product": "CNY-FR007-IRS"
+    },
+    "CNY-SHIBOR-3M": {
+      "label": "CNY SHIBOR 3M (Shanghai Interbank Offered Rate)",
+      "currency": "CNY",
+      "type": "ibor",
+      "tenor": "3M",
+      "day_count": "ACT/360",
+      "calendar": "CNY",
+      "fixing_lag": 1,
+      "par_product": "CNY-SHIBOR-3M-IRS"
+    },
+    "INR-MIBOR-ON": {
+      "label": "INR overnight MIBOR (FBIL Mumbai Interbank Outright Rate)",
+      "currency": "INR",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "INR",
+      "publication_lag": 0,
+      "par_product": "INR-MIBOR-OIS"
+    },
+    "BRL-CDI": {
+      "label": "BRL CDI (DI-over, interbank overnight deposit rate; ~ SELIC)",
+      "currency": "BRL",
+      "type": "overnight",
+      "day_count": "BUS/252",
+      "calendar": "BRL",
+      "publication_lag": 1,
+      "par_product": "BRL-CDI-SWAP"
+    },
+    "MXN-TIIE-28": {
+      "label": "MXN TIIE 28D (Interbank Equilibrium Interest Rate, 28-day)",
+      "currency": "MXN",
+      "type": "ibor",
+      "tenor": "28D",
+      "day_count": "ACT/360",
+      "calendar": "MXN",
+      "fixing_lag": 1,
+      "par_product": "MXN-TIIE-28-IRS"
+    },
+    "MXN-FTIIE": {
+      "label": "MXN F-TIIE (TIIE de Fondeo; Banxico overnight RFR)",
+      "currency": "MXN",
+      "type": "overnight",
+      "day_count": "ACT/360",
+      "calendar": "MXN",
+      "publication_lag": 1,
+      "par_product": "MXN-FTIIE-OIS"
+    },
+    "KRW-KOFR": {
+      "label": "KRW KOFR (Korea Overnight Financing Repo Rate; RFR)",
+      "currency": "KRW",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "KRW",
+      "publication_lag": 1,
+      "par_product": "KRW-KOFR-OIS"
+    },
+    "ZAR-ZARONIA": {
+      "label": "ZAR ZARONIA (SARB Rand Overnight Index Average; RFR)",
+      "currency": "ZAR",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "ZAR",
+      "publication_lag": 1,
+      "par_product": "ZAR-ZARONIA-OIS"
+    },
+    "ZAR-JIBAR-3M": {
+      "label": "ZAR JIBAR 3M (Johannesburg Interbank Average Rate)",
+      "currency": "ZAR",
+      "type": "ibor",
+      "tenor": "3M",
+      "day_count": "ACT/365F",
+      "calendar": "ZAR",
+      "fixing_lag": 0,
+      "par_product": "ZAR-JIBAR-3M-IRS"
+    },
+    "TRY-TLREF": {
+      "label": "TRY TLREF (Turkish Lira Overnight Reference Rate; RFR)",
+      "currency": "TRY",
+      "type": "overnight",
+      "day_count": "ACT/360",
+      "calendar": "TRY",
+      "publication_lag": 1,
+      "par_product": "TRY-TLREF-OIS"
+    },
+    "IDR-INDONIA": {
+      "label": "IDR IndONIA (Indonesia Overnight Index Average; RFR)",
+      "currency": "IDR",
+      "type": "overnight",
+      "day_count": "ACT/360",
+      "calendar": "IDR",
+      "publication_lag": 1,
+      "par_product": "IDR-INDONIA-OIS"
+    },
+    "RUB-RUONIA": {
+      "label": "RUB RUONIA (Ruble Overnight Index Average)",
+      "currency": "RUB",
+      "type": "overnight",
+      "day_count": "ACT/365F",
+      "calendar": "RUB",
+      "publication_lag": 1,
+      "par_product": "RUB-RUONIA-OIS"
+    },
+    "SAR-SAIBOR-3M": {
+      "label": "SAR SAIBOR 3M (Saudi Arabia Interbank Offered Rate)",
+      "currency": "SAR",
+      "type": "ibor",
+      "tenor": "3M",
+      "day_count": "ACT/360",
+      "calendar": "SAR",
+      "fixing_lag": 2,
+      "par_product": "SAR-SAIBOR-3M-IRS"
+    },
+    "ARS-BADLAR": {
+      "label": "ARS BADLAR (private banks 30-35d large-deposit rate)",
+      "currency": "ARS",
+      "type": "ibor",
+      "tenor": "1M",
+      "day_count": "ACT/360",
+      "calendar": "ARS",
+      "fixing_lag": 0,
+      "par_product": "ARS-BADLAR-IRS"
     }
   },
   "products": {
@@ -249,6 +743,216 @@
         "day_count": "ACT/360",
         "fixing_lag": 2
       }
+    },
+    "JPY-TONA-OIS": {
+      "description": "JPY fixed vs TONA OIS. Tokyo calendar; ACT/365F both legs, annual (>1Y; single period <=1Y), compounded. ISDA/JSDA RFR standard (post-JPY-LIBOR).",
+      "currency": "JPY",
+      "spot_lag": 2,
+      "payment_lag": 2,
+      "bdc": "ModifiedFollowing",
+      "calendar": "JPY",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "JPY-TONA", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "GBP-SONIA-OIS": {
+      "description": "GBP fixed vs SONIA OIS. London calendar; ACT/365F both legs, annual, compounded. Spot lag 0 (GBP OIS trades T+0) and no payment delay per market standard (post-GBP-LIBOR).",
+      "currency": "GBP",
+      "spot_lag": 0,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "GBP",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "GBP-SONIA", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "AUD-AONIA-OIS": {
+      "description": "AUD fixed vs AONIA (RBA interbank overnight cash rate) OIS. Sydney calendar; ACT/365F both legs, annual, compounded. Spot T+1.",
+      "currency": "AUD",
+      "spot_lag": 1,
+      "payment_lag": 2,
+      "bdc": "ModifiedFollowing",
+      "calendar": "AUD",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "AUD-AONIA", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "AUD-BBSW-3M-IRS": {
+      "description": "AUD vanilla fixed vs BBSW-3M. Sydney calendar; both legs quarterly ACT/365F (market standard for shorter tenors). Spot T+1. BBSW is NOT discontinued.",
+      "currency": "AUD",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "AUD",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "3M"},
+      "float_leg": {"index": "AUD-BBSW-3M", "frequency": "3M", "day_count": "ACT/365F", "fixing_lag": 0}
+    },
+    "AUD-BBSW-6M-IRS": {
+      "description": "AUD vanilla fixed vs BBSW-6M. Sydney calendar; both legs semiannual ACT/365F (market standard for longer tenors). Spot T+1.",
+      "currency": "AUD",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "AUD",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "6M"},
+      "float_leg": {"index": "AUD-BBSW-6M", "frequency": "6M", "day_count": "ACT/365F", "fixing_lag": 0}
+    },
+    "CAD-CORRA-OIS": {
+      "description": "CAD fixed vs CORRA OIS. Toronto calendar; ACT/365F both legs, annual, compounded. Spot T+1. CORRA-first standard (CDOR ceased Jun 2024).",
+      "currency": "CAD",
+      "spot_lag": 1,
+      "payment_lag": 2,
+      "bdc": "ModifiedFollowing",
+      "calendar": "CAD",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "CAD-CORRA", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "CHF-SARON-OIS": {
+      "description": "CHF fixed vs SARON OIS. Zurich calendar; ACT/360 both legs, annual, compounded. Spot T+2 (post-CHF-LIBOR).",
+      "currency": "CHF",
+      "spot_lag": 2,
+      "payment_lag": 2,
+      "bdc": "ModifiedFollowing",
+      "calendar": "CHF",
+      "fixed_leg": {"day_count": "ACT/360", "frequency": "1Y"},
+      "float_leg": {"index": "CHF-SARON", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360"}
+    },
+    "CNY-FR007-IRS": {
+      "description": "CNY 7-day repo (FR007) IRS. Beijing/CFETS calendar; both legs quarterly ACT/365F, floating leg compounds the weekly FR007 fixings within each quarter. Spot T+1. Most-traded CNY interest-rate swap.",
+      "currency": "CNY",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "CNY",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "3M"},
+      "float_leg": {"index": "CNY-FR007", "compounding": "compounded", "frequency": "3M", "day_count": "ACT/365F"}
+    },
+    "CNY-SHIBOR-3M-IRS": {
+      "description": "CNY fixed vs 3M SHIBOR IRS. Beijing/CFETS calendar; fixed leg quarterly ACT/365F, float SHIBOR-3M quarterly ACT/360. Spot T+1.",
+      "currency": "CNY",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "CNY",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "3M"},
+      "float_leg": {"index": "CNY-SHIBOR-3M", "frequency": "3M", "day_count": "ACT/360", "fixing_lag": 1}
+    },
+    "INR-MIBOR-OIS": {
+      "description": "INR fixed vs overnight MIBOR (FBIL) OIS. Mumbai calendar; ACT/365F both legs, compounded, annual (>1Y) / single-period (<=1Y). Spot T+1. (MIFOR — USD-forward-implied — is a separate rate, not modelled here.)",
+      "currency": "INR",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "INR",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "INR-MIBOR-ON", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "BRL-CDI-SWAP": {
+      "description": "BRL DI x Pre swap (fixed vs CDI). Brazil/ANBIMA calendar; BUS/252 both legs, Following. Economically zero-coupon: the CDI leg compounds daily to maturity and settles in one payment; frequency 1Y here is a schedule placeholder. CDI ~ SELIC overnight.",
+      "currency": "BRL",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "Following",
+      "calendar": "BRL",
+      "fixed_leg": {"day_count": "BUS/252", "frequency": "1Y"},
+      "float_leg": {"index": "BRL-CDI", "compounding": "compounded", "frequency": "1Y", "day_count": "BUS/252"}
+    },
+    "MXN-TIIE-28-IRS": {
+      "description": "MXN fixed vs TIIE-28D IRS. Mexico City calendar; both legs every 28 days (13 periods/yr) ACT/360, compounding none. Spot T+1. The standard Mexican swap.",
+      "currency": "MXN",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "MXN",
+      "fixed_leg": {"day_count": "ACT/360", "frequency": "28D"},
+      "float_leg": {"index": "MXN-TIIE-28", "frequency": "28D", "day_count": "ACT/360", "fixing_lag": 1}
+    },
+    "MXN-FTIIE-OIS": {
+      "description": "MXN fixed vs F-TIIE (TIIE de Fondeo, Banxico overnight RFR) OIS. Mexico City calendar; ACT/360 both legs, annual, compounded. Spot T+1. New RFR replacing TIIE-28.",
+      "currency": "MXN",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "MXN",
+      "fixed_leg": {"day_count": "ACT/360", "frequency": "1Y"},
+      "float_leg": {"index": "MXN-FTIIE", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360"}
+    },
+    "KRW-KOFR-OIS": {
+      "description": "KRW fixed vs KOFR (Korea Overnight Financing Repo Rate) OIS. Seoul calendar; ACT/365F both legs, annual, compounded. Spot T+1. New RFR (legacy CD-91 IRS still trades).",
+      "currency": "KRW",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "KRW",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "KRW-KOFR", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "ZAR-ZARONIA-OIS": {
+      "description": "ZAR fixed vs ZARONIA OIS. Johannesburg calendar; ACT/365F both legs, annual, compounded. Spot T+0. New RFR (SARB, live 2023; JIBAR transition underway).",
+      "currency": "ZAR",
+      "spot_lag": 0,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "ZAR",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "ZAR-ZARONIA", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "ZAR-JIBAR-3M-IRS": {
+      "description": "ZAR fixed vs 3M JIBAR IRS. Johannesburg calendar; both legs quarterly ACT/365F. Spot T+0. Standard ZAR swap (JIBAR still primary).",
+      "currency": "ZAR",
+      "spot_lag": 0,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "ZAR",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "3M"},
+      "float_leg": {"index": "ZAR-JIBAR-3M", "frequency": "3M", "day_count": "ACT/365F", "fixing_lag": 0}
+    },
+    "TRY-TLREF-OIS": {
+      "description": "TRY fixed vs TLREF (Turkish Lira Overnight Reference Rate) OIS. Istanbul calendar; ACT/360 both legs, annual, compounded. Spot T+1.",
+      "currency": "TRY",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "TRY",
+      "fixed_leg": {"day_count": "ACT/360", "frequency": "1Y"},
+      "float_leg": {"index": "TRY-TLREF", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360"}
+    },
+    "IDR-INDONIA-OIS": {
+      "description": "IDR fixed vs IndONIA (Indonesia Overnight Index Average) OIS. Jakarta calendar; ACT/360 both legs, annual, compounded. Spot T+2.",
+      "currency": "IDR",
+      "spot_lag": 2,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "IDR",
+      "fixed_leg": {"day_count": "ACT/360", "frequency": "1Y"},
+      "float_leg": {"index": "IDR-INDONIA", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/360"}
+    },
+    "RUB-RUONIA-OIS": {
+      "description": "RUB fixed vs RUONIA (Ruble Overnight Index Average) OIS. Moscow calendar; ACT/365F both legs, annual, compounded. Spot T+1. NOTE: RUB largely non-deliverable post-2022 sanctions; included for completeness.",
+      "currency": "RUB",
+      "spot_lag": 1,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "RUB",
+      "fixed_leg": {"day_count": "ACT/365F", "frequency": "1Y"},
+      "float_leg": {"index": "RUB-RUONIA", "compounding": "compounded", "frequency": "1Y", "day_count": "ACT/365F"}
+    },
+    "SAR-SAIBOR-3M-IRS": {
+      "description": "SAR fixed vs 3M SAIBOR IRS. Riyadh calendar (Fri/Sat weekend); fixed leg semiannual ACT/360, float SAIBOR-3M quarterly ACT/360. Spot T+2.",
+      "currency": "SAR",
+      "spot_lag": 2,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "SAR",
+      "fixed_leg": {"day_count": "ACT/360", "frequency": "6M"},
+      "float_leg": {"index": "SAR-SAIBOR-3M", "frequency": "3M", "day_count": "ACT/360", "fixing_lag": 2}
+    },
+    "ARS-BADLAR-IRS": {
+      "description": "ARS fixed vs BADLAR (private-bank 30-35d large-deposit rate) IRS. Buenos Aires calendar; both legs monthly ACT/360. Spot T+2. NOTE: ARS heavily capital-controlled / non-deliverable offshore.",
+      "currency": "ARS",
+      "spot_lag": 2,
+      "payment_lag": 0,
+      "bdc": "ModifiedFollowing",
+      "calendar": "ARS",
+      "fixed_leg": {"day_count": "ACT/360", "frequency": "1M"},
+      "float_leg": {"index": "ARS-BADLAR", "frequency": "1M", "day_count": "ACT/360", "fixing_lag": 0}
     },
     "EUR-3S6S-BASIS": {
       "description": "EUR 3s6s tenor basis: EURIBOR-3M + spread vs EURIBOR-6M flat. Spread on the SHORTER (3M) leg. ESTR-discounted.",
