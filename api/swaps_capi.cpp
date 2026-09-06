@@ -77,6 +77,7 @@ extern "C" const char* swaps_session_calibrate(void* session) {
     o["rms_residual"] = r.rms_residual;
     o["rank_deficiency"] = r.rank_deficiency;
     o["iterations"] = r.iterations;
+    o["quote_diagnostics"] = json::parse(s->quote_diagnostics_json());  // per-quote in-band fit
     return dup_str(json::serialize(o));
   } catch (const std::exception& e) {
     return err_json(e.what());

@@ -238,6 +238,14 @@ class BundleSession {
   double model_quote(const cal::Instrument& ins) const;
   double residual(const cal::Instrument& ins) const;
 
+  // Per-instrument calibration diagnostics, so a SOFT (banded) fit is never silent: for each residual
+  // instrument, its model quote vs target, and — when it carries a bid/offer band — whether the model
+  // landed INSIDE the band and the effective in-band residual weight (band_weight, 1 outside decaying to
+  // band_decay inside). A hard pin reports in_band=false, weight=1, residual≈0. JSON array, one entry per
+  // instrument in residual order:
+  //   [{"model","target","residual","soft","in_band","weight"[,"lower","upper","decay"]}, ...]
+  std::string quote_diagnostics_json() const;
+
   // The calibration Jacobian J = dq/dx (n_residuals x n_knots): ROWS are calibration instruments, COLUMNS
   // are the fitted knot forwards, so J(i,j) = ∂(model quote of instrument i)/∂x_j. This is the SAME J that
   // risk_operator() builds M from (risk_operator() calls this, so the two can never desync). One forward-AAD

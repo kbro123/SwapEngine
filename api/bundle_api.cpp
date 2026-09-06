@@ -704,6 +704,34 @@ double BundleSession::residual(const cal::Instrument& ins) const {
   return cal::instrument_residual<double>(ins, curve_of);
 }
 
+std::string BundleSession::quote_diagnostics_json() const {
+  const auto C = cal::build_bundle_curves<double>(
+      prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });
+  const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
+  json::array out;
+  for (const auto& ins : prob_.instruments) {
+    const double m = cal::instrument_model_quote<double>(ins, curve_of);
+    const bool soft = ins.band_upper > ins.band_lower;
+    json::object d;
+    d["model"] = m;
+    d["target"] = ins.market;
+    d["residual"] = m - ins.market;
+    d["soft"] = soft;
+    if (soft) {
+      d["lower"] = ins.band_lower;
+      d["upper"] = ins.band_upper;
+      d["decay"] = ins.band_decay;
+      d["in_band"] = (ins.band_lower <= m && m <= ins.band_upper);
+      d["weight"] = cal::band_weight_d(m, ins.band_lower, ins.band_upper, ins.band_decay).first;
+    } else {
+      d["in_band"] = false;
+      d["weight"] = 1.0;  // hard pin — full-weight residual, no band
+    }
+    out.push_back(d);
+  }
+  return json::serialize(out);
+}
+
 Eigen::MatrixXd BundleSession::jacobian(const RegSpec& reg) const {
   (void)reg;  // J = dq/dx is independent of any regulariser (reg only enters M through RᵀR); see header.
   // The cached hybrid engine's ANALYTIC Jacobian (W-cache rows analytic, FX/MtM rows width-reduced AAD)
@@ -1030,6 +1058,7 @@ std::string run_json(const std::string& request) {
       out["calibration"] = c;
     }
     out["x"] = da(sess.x());
+    out["quote_diagnostics"] = json::parse(sess.quote_diagnostics_json());  // per-quote in-band fit (soft never silent)
 
     if (o.contains("sample_times")) {
       const auto times = get_da(o, "sample_times");
