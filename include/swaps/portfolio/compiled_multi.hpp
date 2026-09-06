@@ -163,10 +163,15 @@ class CompiledMultiCurveBook {
     return 1e-4 * g;
   }
 
-  // True iff a Swap position's float leg fits the batch's arithmetic Σ w·(DF/DF−1) model: no compounded
-  // (product-form) observation and no moment-path (fixing_step) coupon. Spreads, FX scale, realized
-  // constants, weighted sub-periods and empty (fully fixed) observations are all representable.
+  // True iff a Swap position fits the batch's arithmetic Σ w·(DF/DF−1) model with a SINGLE scalar fixed-rate
+  // row-scale (nf_ = notional⊙fixed_rate): no compounded (product-form) observation, no moment-path
+  // (fixing_step) coupon, no STEPPED per-coupon fixed rate (which the scalar nf_ cannot express), and no
+  // principal-exchange cashflows (which the batch has no row for). Spreads, FX scale, realized constants,
+  // weighted sub-periods and empty (fully fixed) observations are all representable. A stepped / principal
+  // position rides the templated fallback exactly like Xccy / compounded, so the compiled hot path is
+  // untouched (nf_ stays a single scalar per compiled position) and the 12 perf metrics are unaffected.
   static bool swap_is_compilable(const MultiCurveBook::Position& p) {
+    if (!p.fixed_rates.empty() || !p.principal_flows.empty()) return false;
     for (const auto& c : p.float_coupons)
       if (c.obs.compounded || c.obs.fixing_step > 0.0) return false;
     return true;

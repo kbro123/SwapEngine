@@ -85,21 +85,100 @@ inline Date spot_date(const Date& value_date, const std::string& cal_id, int spo
 
 using Period = std::pair<Date, Date>;
 
-// Rolled accrual periods from spot to a GIVEN maturity date (calendars.swap_periods_to). Steps `freq_tok`
-// from spot, business-day-adjusting each interior boundary, ending the final period EXACTLY at maturity_date
-// (a short final stub is allowed and correct — the engine weights each coupon by its own accrual factor).
+// ---- ISDA schedule-generation options (Priority-1 roller richness) ----------------------------------
+// EVERY field defaults to TODAY'S behaviour, so a `swap_periods_to(...)` call with no `ScheduleRule`
+// (or a default-constructed one) reproduces the legacy short-back-stub forward roll BYTE-IDENTICALLY
+// (the legacy fast path below is taken verbatim). The new richness is OPT-IN only.
+//
+// The odd (stub) period is the one whose length differs from the regular frequency step. Semantics:
+//   * Back  (default): the SCHEDULE is anchored at spot and rolled FORWARD; the odd period is LAST
+//                      (spot .. b1 .. bN .. maturity, with [bN, maturity] the stub).
+//   * Front:           the schedule is anchored at maturity and rolled BACKWARD; the odd period is FIRST
+//                      ([spot, b1] the stub, then regular steps to maturity).
+//   * Short (default): the odd period is a partial step (shorter than the frequency).
+//   * Long:            the odd period is MERGED into its adjacent regular period (so it is longer than a
+//                      full step); the boundary between them is dropped.
+enum class StubSide { Back, Front };
+enum class StubLen { Short, Long };
+struct ScheduleRule {
+  StubSide side = StubSide::Back;
+  StubLen length = StubLen::Short;
+  bool eom = false;        // force every rolled boundary to month-end.
+  bool eom_auto = false;   // ISDA EOM: infer `eom` when the roll anchor (spot for Back, maturity for
+                           // Front) is itself a month-end date.
+  int roll_dom = 0;        // day-of-month the regular boundaries land on; 0 = derive from the anchor
+                           // (== today's behaviour: spot's own day of month rolled forward).
+  bool is_default() const {
+    return side == StubSide::Back && length == StubLen::Short && !eom && !eom_auto && roll_dom == 0;
+  }
+};
+
+// Rolled accrual periods from spot to a GIVEN maturity date (calendars.swap_periods_to). With the default
+// `ScheduleRule` this steps `freq_tok` FORWARD from spot, business-day-adjusting each interior boundary and
+// ending the final period EXACTLY at maturity_date (a short final stub — the legacy behaviour, byte-for-byte
+// unchanged; the engine weights each coupon by its own accrual factor). A non-default `rule` selects ISDA
+// EOM / stub-location / roll-day-anchor generation (see ScheduleRule above).
 inline std::vector<Period> swap_periods_to(const Date& value_date, const std::string& cal_id,
                                            const Date& maturity_date, const std::string& freq_tok,
-                                           const std::string& bdc = "ModifiedFollowing", int spot_lag = 2) {
+                                           const std::string& bdc = "ModifiedFollowing", int spot_lag = 2,
+                                           const ScheduleRule& rule = {}) {
   const Date spot = spot_date(value_date, cal_id, spot_lag);
   if (maturity_date <= spot) return {{spot, maturity_date}};
   const int step_m = tok_months(freq_tok);
-  std::vector<Date> bounds{spot};
-  for (int m = step_m;; m += step_m) {
-    const Date d = adjust(cal_id, add_period(spot, std::to_string(m) + "M"), bdc);
-    if (d >= maturity_date) break;
-    bounds.push_back(d);
+
+  // Legacy fast path — taken verbatim so the default output can never drift by even one ulp of date.
+  if (rule.is_default()) {
+    std::vector<Date> bounds{spot};
+    for (int m = step_m;; m += step_m) {
+      const Date d = adjust(cal_id, add_period(spot, std::to_string(m) + "M"), bdc);
+      if (d >= maturity_date) break;
+      bounds.push_back(d);
+    }
+    bounds.push_back(maturity_date);
+    std::vector<Period> out;
+    out.reserve(bounds.size() - 1);
+    for (std::size_t i = 0; i + 1 < bounds.size(); ++i) out.emplace_back(bounds[i], bounds[i + 1]);
+    return out;
   }
+
+  // Extended ISDA path. The roll anchor and direction depend on the stub side. `dom`/`eom` describe the
+  // day-of-month the regular (interior) boundaries land on before business-day adjustment.
+  const Date anchor = (rule.side == StubSide::Back) ? spot : maturity_date;
+  const bool eom = rule.eom || (rule.eom_auto && is_month_end(anchor));
+  const int dom = rule.roll_dom > 0 ? rule.roll_dom : int(anchor.day());
+
+  // Build the UNADJUSTED interior regular boundaries, strictly between spot and maturity, ascending.
+  std::vector<Date> interior;
+  if (rule.side == StubSide::Back) {
+    for (int k = 1;; ++k) {
+      const Date base = anchor.plus_months(k * step_m);
+      const Date d = roll_in_month(base.year(), base.month(), dom, eom);
+      if (d >= maturity_date) break;
+      if (d > spot) interior.push_back(d);
+    }
+  } else {  // Front: step BACKWARD from maturity, collect descending then reverse.
+    for (int k = 1;; ++k) {
+      const Date base = anchor.plus_months(-k * step_m);
+      const Date d = roll_in_month(base.year(), base.month(), dom, eom);
+      if (d <= spot) break;
+      if (d < maturity_date) interior.push_back(d);
+    }
+    for (std::size_t i = 0, j = interior.size(); i + 1 < j; ++i, --j)
+      std::swap(interior[i], interior[j - 1]);
+  }
+
+  // LONG stub: drop the interior boundary ADJACENT to the stub end, merging the odd period into its
+  // neighbour (Back -> drop the last interior boundary; Front -> drop the first). A no-op when there is
+  // no stub to merge (no interior boundary, or maturity already coincides with the last regular date).
+  if (rule.length == StubLen::Long && !interior.empty()) {
+    if (rule.side == StubSide::Back)
+      interior.pop_back();
+    else
+      interior.erase(interior.begin());
+  }
+
+  std::vector<Date> bounds{spot};
+  for (const Date& d : interior) bounds.push_back(adjust(cal_id, d, bdc));
   bounds.push_back(maturity_date);
   std::vector<Period> out;
   out.reserve(bounds.size() - 1);

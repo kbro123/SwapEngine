@@ -15,6 +15,7 @@
 // the calibration instruments use, so a booked deal can never price under a different cashflow model than
 // the curve it is valued on was calibrated with.
 
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -64,6 +65,17 @@ struct Trade {
   // exactly as MultiCurveBook::Position uses them). A vanilla swap forecasts one and discounts another.
   int forecast_curve = 0;
   int discount_curve = 0;
+
+  // Optional booked structure (defaults empty => a plain scalar-rate, no-principal-exchange swap, and
+  // to_position() is byte-identical to before):
+  //   * fixed_rate_schedule: per-fixed-coupon contract rates for a step-up / amortizer-with-step /
+  //     structured swap. When set its size MUST equal the built fixed leg's coupon count; a CONSTANT
+  //     schedule reproduces the scalar `fixed_rate` (to FP summation order). Carried onto the Position's
+  //     fixed_rates, which routes the position to the templated fallback (off the compiled hot path).
+  //   * principal_exchanges: (date, signed amount per unit notional) notional-exchange cashflows for an
+  //     xccy / resolved trade (initial + final principal). Resolved to discount-curve time in to_position().
+  std::vector<double> fixed_rate_schedule;
+  std::vector<std::pair<build::Date, double>> principal_exchanges;
 
   // Factory for the common case: a vanilla fixed-vs-float swap. Stores the resolved effective/maturity
   // dates; `trade_date` defaults to `effective` (callers can overwrite the field afterwards).
@@ -139,6 +151,15 @@ struct Trade {
     p.fixed_coupons = std::move(fx.coupons);
     p.fixed_curve = discount_curve;
     p.fixed_rate = fixed_rate;
+
+    // Optional booked structure (both default empty -> the block leaves p byte-identical to a plain swap).
+    if (!fixed_rate_schedule.empty()) {
+      if (fixed_rate_schedule.size() != p.fixed_coupons.size())
+        throw std::invalid_argument("fixed_rate_schedule size must equal the fixed leg's coupon count");
+      p.fixed_rates = fixed_rate_schedule;  // stepped fixed rate -> routes to the templated fallback
+    }
+    for (const auto& [d, amt] : principal_exchanges)
+      p.principal_flows.emplace_back(build::curve_time(value_date, d), amt);
 
     return p;
   }

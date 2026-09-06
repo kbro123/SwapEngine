@@ -6,11 +6,39 @@
 // with Scalar = AutoDiffScalar it yields d(NPV)/d(knot forwards) in one pass (see calibration/risk).
 
 #include <cassert>
+#include <utility>
 #include <vector>
 
 #include "swaps/pricing/cashflows.hpp"
 
 namespace swaps::portfolio {
+
+// Value of a STEPPED (per-coupon) fixed leg per unit notional: Σ_i DF(pay_i)·tau_i·scale_i·rates[i]. This
+// is the generic form of `fixed_rate · annuity` with the rate folded INTO each coupon, so a booked step-up /
+// amortizer-with-step / structured fixed leg needs no new coupon struct -- only a per-coupon rate vector.
+// A CONSTANT schedule (all rates == r) equals r·annuity up to floating-point summation ORDER (Σ DFτr vs
+// r·ΣDFτ) -- i.e. ~1e-15 relative, not bitwise; callers wanting the exact scalar leave the vector empty and
+// take the annuity path. Precondition: rates.size() == leg.size() (>=1). AAD-safe: seeded from DF(pay_0).
+template <class Scalar, class DCurve>
+Scalar stepped_annuity_pv(const std::vector<pricing::FixedCoupon>& leg, const std::vector<double>& rates,
+                          const DCurve& dc) {
+  assert(!leg.empty() && rates.size() == leg.size());
+  Scalar a = dc.discount(leg[0].pay) * (leg[0].tau * leg[0].scale * rates[0]);
+  for (std::size_t i = 1; i < leg.size(); ++i)
+    a += dc.discount(leg[i].pay) * (leg[i].tau * leg[i].scale * rates[i]);
+  return a;
+}
+
+// PV of principal-exchange cashflows per unit notional: Σ_i amount_i · DF(time_i), discounted on the leg's
+// discount curve. `flows` are (discount-curve time, signed amount) pairs (amount in notional units, signed
+// from OUR perspective). Precondition: non-empty. AAD-safe: seeded from the first (curve-dependent) term.
+template <class Scalar, class DCurve>
+Scalar principal_pv(const std::vector<std::pair<double, double>>& flows, const DCurve& dc) {
+  assert(!flows.empty());
+  Scalar pv = dc.discount(flows[0].first) * flows[0].second;
+  for (std::size_t i = 1; i < flows.size(); ++i) pv += dc.discount(flows[i].first) * flows[i].second;
+  return pv;
+}
 
 struct Portfolio {
   // A position is a swap in the GENERIC coupon model: a floating leg + a fixed leg (unit-notional
@@ -71,6 +99,18 @@ struct MultiCurveBook {
     int fixed_curve = 0;                               // curve that discounts the fixed leg
     double fixed_rate = 0.0;                           // contract fixed rate (payer pays this)
 
+    // --- optional booked structure (stepped fixed rate + principal exchange) ---
+    // Per-coupon fixed rates for a STEP-UP / amortizer-with-step / structured swap. EMPTY (the default) =>
+    // the scalar `fixed_rate` applies to every coupon, byte-identical to before; when set, its size MUST
+    // equal fixed_coupons.size() and the fixed leg pays Σ DF·tau·scale·fixed_rates[i]. A stepped position is
+    // NOT W-cacheable (the compiled book's nf_ row-scale is a single scalar per position), so it rides the
+    // templated fallback -- CompiledMultiCurveBook::swap_is_compilable returns false for it.
+    std::vector<double> fixed_rates;
+    // Principal-exchange cashflows (initial / final notional exchange for xccy / resolved trades), as
+    // (discount-curve time, signed amount per unit notional) pairs discounted on `disc_curve`. EMPTY => none
+    // (byte-identical). Present => the position rides the fallback (extra dated flows the batch has no row for).
+    std::vector<std::pair<double, double>> principal_flows;
+
     // --- xccy resetting FOREIGN funding leg (Kind::Xccy only) ---
     // Its coupon notional resets to the FX forward N_i = fx_spot·DF[reset_num]/DF[reset_den], so the leg
     // genuinely depends on the bundle's xccy/basis curve (one of reset_num/reset_den) AND on fx_spot.
@@ -98,10 +138,18 @@ struct MultiCurveBook {
       return p.notional * (mtm - dom);
     }
     // Vanilla multi-curve swap, payer-of-fixed: NPV/notional = float_leg_pv(fwd, disc) − fixed_rate·annuity.
+    // Optional booked structure (stepped fixed rate / principal exchange) folds into the same per-unit core;
+    // both default empty, so the expressions below stay byte-identical to the plain swap.
     const Scalar fpv = pricing::float_leg_pv<Scalar>(p.float_coupons, C(p.fwd_curve), C(p.disc_curve));
-    if (p.fixed_coupons.empty()) return p.notional * fpv;  // float-only leg
-    const Scalar ann = pricing::annuity<Scalar>(p.fixed_coupons, C(p.fixed_curve));
-    return p.notional * (fpv - p.fixed_rate * ann);
+    Scalar core = fpv;  // seeds the derivatives (the float leg is always present for a swap)
+    if (!p.fixed_coupons.empty()) {
+      if (p.fixed_rates.empty())
+        core = core - p.fixed_rate * pricing::annuity<Scalar>(p.fixed_coupons, C(p.fixed_curve));
+      else
+        core = core - stepped_annuity_pv<Scalar>(p.fixed_coupons, p.fixed_rates, C(p.fixed_curve));
+    }
+    if (!p.principal_flows.empty()) core = core + principal_pv<Scalar>(p.principal_flows, C(p.disc_curve));
+    return p.notional * core;
   }
 
   // Total book NPV. AAD-safe: the accumulator seeds from the first position (which carries derivatives).

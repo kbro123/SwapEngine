@@ -37,6 +37,9 @@ add_executable(swaps_tests
   market_vol_surface_test.cpp
   trade_book_test.cpp
   compiled_multi_test.cpp
+  schedule_stub_eom_test.cpp
+  rfr_lag_test.cpp
+  stepped_principal_test.cpp
   aad_block_pooled_test.cpp
   asset_swap_spread_test.cpp
   derive_asset_swap_test.cpp

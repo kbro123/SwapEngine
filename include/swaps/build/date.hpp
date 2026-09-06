@@ -112,6 +112,13 @@ inline Date last_weekday(int y, unsigned month, int weekday) {
 inline Date end_of_month(int y, unsigned m) {
   return {chr::sys_days{chr::year_month_day_last{chr::year{y} / chr::month{m} / chr::last}}};
 }
+// True iff `d` is the last calendar day of its month (ISDA EOM anchor test).
+inline bool is_month_end(const Date& d) { return d.day() == end_of_month(d.year(), d.month()).day(); }
+// A boundary date in month (y,m): the last calendar day if `eom`, else day-of-month `dom` clamped to the
+// month length (Feb-31 -> Feb-28/29). This is the ISDA roll-day/EOM snap used by the schedule roller.
+inline Date roll_in_month(int y, unsigned m, int dom, bool eom) {
+  return eom ? end_of_month(y, m) : Date::ymd_clamped(y, m, unsigned(dom));
+}
 // IMM date: 3rd Wednesday of the month (dates._third_wednesday). weekday(): Wed=2.
 inline Date third_wednesday(int y, unsigned month) {
   const Date first = Date::ymd(y, month, 1);

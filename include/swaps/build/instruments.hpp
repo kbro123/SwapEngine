@@ -37,15 +37,15 @@ inline double notional_at(const std::vector<double>& ns, std::size_t i, std::siz
 }
 
 // One compounded-overnight / float coupon over [s, e] (compile._ois_coupon). DF lookups in curve time
-// (ACT/365F); accrual + pay on the instrument day count / calendar.
+// (ACT/365F); accrual + pay on the instrument day count / calendar. `lag` (default inactive) applies an
+// optional RFR observation-shift / lookback / lockout to the observation window ONLY; it leaves the payment
+// accrual `tau_pay` on the actual [s, e] span and defaults BYTE-IDENTICAL to the plain telescoped bracket.
 inline px::FloatCoupon ois_coupon(const Date& vd, const SwapConv& conv, const Date& s, const Date& e,
-                                  const std::string& dc) {
+                                  const std::string& dc, const RfrLag& lag = {}) {
   const double tau = year_frac(dc, s, e);
   const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
   px::FloatCoupon c;
-  c.obs.sub_start = {curve_time(vd, s)};
-  c.obs.sub_end = {curve_time(vd, e)};
-  c.obs.tau_index = tau;
+  c.obs = rfr_observation(vd, s, e, dc, lag);
   c.pay = curve_time(vd, pay);
   c.tau_pay = tau;
   return c;
@@ -77,7 +77,8 @@ inline cal::FixedLeg fixed_coupons(const Date& vd, const SwapConv& conv, const D
 inline cal::FloatLeg float_leg(const Date& vd, const SwapConv& conv, const Date& mat, int forecast, int disc,
                                const std::string& freq_tok, const std::string& dc,
                                int reset_num = -1, int reset_den = -1, double fx_spot = 1.0,
-                               double spread = 0.0, const std::vector<double>& notionals = {}) {
+                               double spread = 0.0, const std::vector<double>& notionals = {},
+                               const RfrLag& lag = {}) {
   cal::FloatLeg leg;
   leg.forecast = forecast;
   leg.discount = disc;
@@ -86,7 +87,7 @@ inline cal::FloatLeg float_leg(const Date& vd, const SwapConv& conv, const Date&
   leg.fx_spot = fx_spot;
   const auto periods = swap_periods_to(vd, conv.calendar, mat, freq_tok, conv.bdc, conv.spot_lag);
   for (std::size_t i = 0; i < periods.size(); ++i) {
-    px::FloatCoupon c = ois_coupon(vd, conv, periods[i].first, periods[i].second, dc);
+    px::FloatCoupon c = ois_coupon(vd, conv, periods[i].first, periods[i].second, dc, lag);
     c.spread = spread;
     c.scale = notional_at(notionals, i, periods.size());
     leg.coupons.push_back(c);

@@ -81,6 +81,87 @@ inline px::RateObservation observation(const Date& vd, const Date& start, const 
   return o;
 }
 
+// ---- RFR observation-timing conventions (Priority-2: fixing lag / lookback / lockout) --------------------
+// Advance `n` observation business days (n may be negative) using the SAME weekend-only-when-empty rule as
+// business_days(): an empty calendar means weekends only (NOT the USD-SIFMA fallback advance_bd would take).
+inline Date advance_obs_bd(const std::string& cal, Date d, int n) {
+  const int step = n >= 0 ? 1 : -1;
+  for (int left = std::abs(n); left; ) {
+    d = d.plus_days(step);
+    const bool bd = cal.empty() ? (d.weekday() < 5) : is_business_day(cal, d);
+    if (bd) --left;
+  }
+  return d;
+}
+
+// RFR observation-timing style for a compounded overnight coupon. Default None reproduces the plain single
+// telescoped bracket (byte-identical to today's ois_coupon). Mechanics (pricing/cashflows.hpp RateObservation):
+//   Shift    : OBSERVATION SHIFT -- the whole [s,e] window shifts back `days` business days for BOTH the rate
+//              observation AND the accrual. Both the DF-ratio endpoints and the accrual move together, so
+//              daily compounding still telescopes to ONE arithmetic bracket over the shifted window
+//              (compounded stays false) -- it remains W-cacheable and calibration-safe.
+//   Lookback : the rate is observed `days` business days earlier but applied over the ACTUAL day's accrual;
+//              this does NOT telescope -> compounded product, one daily bracket per business day, the forecast
+//              window looked back and the weight = actual_accrual / looked_back_curve_time.
+//   Lockout  : the last `days` business days all re-use the rate observed on the lockout-start day; does NOT
+//              telescope -> compounded product, daily brackets with the tail frozen to the lockout day's window.
+enum class RfrStyle { None, Shift, Lookback, Lockout };
+struct RfrLag {
+  RfrStyle style = RfrStyle::None;
+  int days = 0;          // business-day lag / lockout length (<=0 or style==None => plain single bracket)
+  std::string cal = "";  // observation calendar ("" => weekends only), for the daily/shift stepping
+  bool active() const { return style != RfrStyle::None && days > 0; }
+};
+
+// Build the RateObservation for a compounded overnight coupon over [s, e] on index day count `dc`, applying
+// an optional RFR observation-timing convention. `lag` inactive (the default) yields EXACTLY the plain single
+// telescoped bracket ois_coupon has always built (sub_start={ct(s)}, sub_end={ct(e)}, tau_index=tau(s,e)).
+inline px::RateObservation rfr_observation(const Date& vd, const Date& s, const Date& e,
+                                           const std::string& dc, const RfrLag& lag = {}) {
+  px::RateObservation o;
+  if (!lag.active()) {  // plain telescoped bracket -- byte-identical to ois_coupon's obs
+    o.sub_start = {curve_time(vd, s)};
+    o.sub_end = {curve_time(vd, e)};
+    o.tau_index = year_frac(dc, s, e);
+    return o;
+  }
+  if (lag.style == RfrStyle::Shift) {  // shifts the WHOLE window -> still one telescoped bracket
+    const Date ss = advance_obs_bd(lag.cal, s, -lag.days);
+    const Date ee = advance_obs_bd(lag.cal, e, -lag.days);
+    o.sub_start = {curve_time(vd, ss)};
+    o.sub_end = {curve_time(vd, ee)};
+    o.tau_index = year_frac(dc, ss, ee);  // obs-shift accrues on the shifted window
+    return o;
+  }
+  // Lookback / Lockout: a genuine daily compounded product (does NOT telescope).
+  o.compounded = true;
+  o.tau_index = year_frac(dc, s, e);
+  const auto days = business_days(s, e, lag.cal);
+  const std::size_t lock_from =
+      (lag.style == RfrStyle::Lockout && days.size() > std::size_t(lag.days))
+          ? days.size() - std::size_t(lag.days)
+          : 0;
+  for (std::size_t i = 0; i < days.size(); ++i) {
+    const Date d0 = days[i];
+    const Date d1 = (i + 1 < days.size()) ? days[i + 1] : e;  // ACTUAL accrual span of this fixing day
+    const double acc = year_frac(dc, d0, d1);
+    Date obs0 = d0, obs1 = d1;  // the observation window whose forward rate this day earns
+    if (lag.style == RfrStyle::Lookback) {
+      obs0 = advance_obs_bd(lag.cal, d0, -lag.days);
+      obs1 = advance_obs_bd(lag.cal, d1, -lag.days);
+    } else if (i >= lock_from) {  // Lockout tail: freeze to the lockout-start day's window
+      obs0 = days[lock_from];
+      obs1 = (lock_from + 1 < days.size()) ? days[lock_from + 1] : e;
+    }
+    const double ts = curve_time(vd, obs0), te = curve_time(vd, obs1), crv = te - ts;
+    const double w = crv > 0 ? acc / crv : 1.0;  // rate over the obs window reweighted to the actual accrual
+    o.sub_start.push_back(ts);
+    o.sub_end.push_back(te);
+    o.weight.push_back(w);
+  }
+  return o;
+}
+
 // A fixings-RESOLVABLE observation for a partially-started RFR contract (conventions.scheduled_observation):
 // the engine resolves realized/forecast from its fixing table via the per-day schedule.
 inline px::RateObservation scheduled_observation(const Date& vd, const Date& start, const Date& end,
