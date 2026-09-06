@@ -21,6 +21,9 @@
 #include "swaps/api/bond.hpp"                       // bonds_json (the 'bonds' verb)
 #include "swaps/api/rv.hpp"                         // bond_universe / govvie_fit / swap_spread verbs
 #include "swaps/api/exposure.hpp"                   // exposure_json (the 'exposure' verb)
+#include "swaps/api/scenario.hpp"                   // scenario_json (the 'scenario' verb)
+#include "swaps/api/pnl.hpp"                        // pnl_json (the 'pnl' explain verb)
+#include "swaps/api/vega.hpp"                       // vega_json (the 'vega' ladder verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include <type_traits>
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
@@ -940,6 +943,9 @@ std::string run_json(const std::string& request) {
 
     // Stateless EXPOSURE verb: EPE/ENE/PFE counterparty-exposure profile for a swap book off a calibrated curve.
     if (o.contains("exposure")) return exposure_json(request);
+    if (o.contains("scenario")) return scenario_json(request);  // stress/what-if over market::Scenario
+    if (o.contains("pnl")) return pnl_json(request);            // carry/roll/market P&L decomposition
+    if (o.contains("vega")) return vega_json(request);          // swaption-book vol-parameter ladder
 
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 

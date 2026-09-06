@@ -47,6 +47,7 @@ add_executable(swaps_tests
   vol_cap_stripping_test.cpp
   vol_cube_interp_test.cpp
   vol_swaption_test.cpp
+  vega_ladder_test.cpp
   vol_cms_test.cpp
   xva_exposure_test.cpp
   gamma_test.cpp
