@@ -24,6 +24,11 @@
 #include "swaps/api/scenario.hpp"                   // scenario_json (the 'scenario' verb)
 #include "swaps/api/pnl.hpp"                        // pnl_json (the 'pnl' explain verb)
 #include "swaps/api/vega.hpp"                       // vega_json (the 'vega' ladder verb)
+#include "swaps/api/inflation.hpp"                   // inflation_json (the 'inflation' ZCIS/YoY verb)
+#include "swaps/api/fx_option.hpp"                    // fx_option_json (the 'fx_option'/'fx_vol' verb)
+#include "swaps/api/bond_future.hpp"                  // bond_future_json (the 'bond_future' CTD verb)
+#include "swaps/api/scenario_grid.hpp"                // scenario_grid_json (the 'scenario_grid' P&L surface)
+#include "swaps/api/var.hpp"                          // var_json (the 'var' full-reval VaR/ES verb)
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include <type_traits>
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
@@ -1007,6 +1012,15 @@ std::string run_json(const std::string& request) {
     // Stateless ASSET_SWAP verb: par asset-swap spread(s) for bonds off a calibrated bundle (curve-space).
     if (o.contains("asset_swap")) return asset_swap_json(request);
 
+    // Stateless BOND_FUTURE verb: CTD selection, conversion factors, gross/net basis, implied repo.
+    if (o.contains("bond_future")) return bond_future_json(request);
+
+    // Stateless INFLATION verb: ZCIS/YoY breakeven-inflation curve calibration + index/breakeven output.
+    if (o.contains("inflation")) return inflation_json(request);
+
+    // Stateless FX_OPTION / FX_VOL verb: Garman-Kohlhagen vanilla FX options + delta-quoted smile.
+    if (o.contains("fx_option") || o.contains("fx_vol")) return fx_option_json(request);
+
     // Stateless RV verbs (api/rv.cpp): batched bond-universe analytics; the minimum-pricing-error govvie
     // fit (spline / Nelson-Siegel / Svensson) with the per-bond RV ladder; and the headline swap-spread
     // derivation returning the {pin, asw} asset-swap BASIS rows as instrument JSON.
@@ -1017,6 +1031,8 @@ std::string run_json(const std::string& request) {
     // Stateless EXPOSURE verb: EPE/ENE/PFE counterparty-exposure profile for a swap book off a calibrated curve.
     if (o.contains("exposure")) return exposure_json(request);
     if (o.contains("scenario")) return scenario_json(request);  // stress/what-if over market::Scenario
+    if (o.contains("scenario_grid")) return scenario_grid_json(request);  // P&L surface over a shock matrix
+    if (o.contains("var")) return var_json(request);            // full-reval VaR / Expected-Shortfall
     if (o.contains("pnl")) return pnl_json(request);            // carry/roll/market P&L decomposition
     if (o.contains("vega")) return vega_json(request);          // swaption-book vol-parameter ladder
 

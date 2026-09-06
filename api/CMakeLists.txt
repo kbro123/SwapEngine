@@ -2,7 +2,7 @@
 # risk / stream). QuantLib-FREE (it consumes the generic instrument model), but needs the vendored
 # Boost headers for Boost.JSON.
 
-add_library(swaps_api STATIC bundle_api.cpp compile.cpp generate_risk.cpp options.cpp bond.cpp rv.cpp exposure.cpp scenario.cpp pnl.cpp vega.cpp swaps_capi.cpp)
+add_library(swaps_api STATIC bundle_api.cpp compile.cpp generate_risk.cpp options.cpp bond.cpp rv.cpp exposure.cpp scenario.cpp scenario_grid.cpp var.cpp pnl.cpp vega.cpp inflation.cpp fx_option.cpp bond_future.cpp swaps_capi.cpp)
 target_link_libraries(swaps_api PUBLIC swaps)
 target_include_directories(swaps_api PUBLIC ${SWAPS_THIRD_PARTY}/boost)
 target_compile_features(swaps_api PUBLIC cxx_std_20)
@@ -31,6 +31,8 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_parity_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/exposure_netting_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/scenario_verb_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/scenario_grid_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/var_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/pnl_explain_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_compiled_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)

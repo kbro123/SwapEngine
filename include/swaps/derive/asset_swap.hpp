@@ -33,6 +33,7 @@
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/market/market.hpp"
 #include "swaps/pricing/bond.hpp"
+#include "swaps/pricing/bond_future.hpp"
 
 namespace swaps::derive {
 
@@ -91,14 +92,72 @@ struct DerivedAssetSwap {
 inline DerivedAssetSwap derive_asset_swap(const AssetSwapConvention& conv, const build::BondId& bond,
                                           const cal::Instrument& spot_swap, int factor_curve, double anchor,
                                           const market::Market& mkt, const std::string& spread_quote_id) {
-  // The convention's spread_type SELECTS the derivation. Only the yield-vs-matched-swap forms are wired
+  // The convention's spread_type SELECTS the derivation. The yield-vs-matched-swap forms are wired here
   // (HeadlineYield / MatchedMaturity share this derivation — they differ in which swap the caller matched);
-  // ParAssetSwap (endogenous) and Invoice (CTD forward yield) are declared-but-unwired: fail loudly rather
-  // than silently deriving the wrong number.
+  // Invoice (bond-future CTD FORWARD yield) has its own entry point derive_invoice_asset_swap() below, which
+  // needs the futures contract's basket + delivery data this signature does not carry; ParAssetSwap
+  // (endogenous) is still unwired. Fail loudly rather than silently deriving the wrong number.
+  if (conv.type == SwapSpreadType::Invoice)
+    throw std::invalid_argument("derive_asset_swap: use derive_invoice_asset_swap() for the Invoice spread");
   if (conv.type != SwapSpreadType::HeadlineYield && conv.type != SwapSpreadType::MatchedMaturity)
     throw std::invalid_argument("derive_asset_swap: this spread_type's derivation is not implemented yet");
   DerivedAssetSwap out;
   out.bond_yield = benchmark_yield(conv, bond, mkt);
+  out.spread = mkt.quote(spread_quote_id).mid();
+  out.rows = build::asset_swap_spread(spot_swap, factor_curve, anchor, out.bond_yield, out.spread);
+  return out;
+}
+
+// =================================================================================================
+// INVOICE spread — the bond-future CTD FORWARD yield feeds the same asset-swap basis machinery.
+// =================================================================================================
+// An INVOICE (bond-future) spread quotes the cheapest-to-deliver's FORWARD yield to the future's delivery
+// date against the matched swap — the exact analogue of the headline benchmark yield, but carried forward.
+// The CTD is chosen off the deliverable basket by max implied repo (pricing/bond_future.hpp); its forward
+// yield is its spot clean price carried to delivery at `repo` (ACT/360, interim coupons reinvested), then
+// inverted through the bond kernel as of the DELIVERY settlement. That forward yield is the pin target of
+// the SAME build::asset_swap_spread rows, so the Invoice basis buckets identically to the headline ASW.
+
+// The CTD's forward yield to `delivery`: carry its spot dirty price forward at `repo`, subtract accrued at
+// delivery, invert the resulting forward clean through the yield kernel (bond rebuilt as of delivery). The
+// futures price does NOT enter — the forward yield is a pure cash-carry number; the futures/CF only enter
+// the basket's CTD selection and the invoice/basis. Seasoned CTD (regular coupons); interim coupons in
+// (settle, delivery] are enumerated off the coupon grid and reinvested at repo.
+inline double ctd_forward_yield(const AssetSwapConvention& conv, const build::BondId& ctd,
+                                const build::Date& delivery, double repo, const market::Market& mkt) {
+  const build::Date settle = build::advance_bd(conv.settle_calendar, mkt.today(), conv.settle_lag);
+  const build::BuiltBond bb_now = build::build_bond(ctd, mkt.today(), settle);
+  const double clean_now = mkt.quote(ctd.id).mid();        // CTD live CLEAN price, per unit notional
+  const double dirty_now = clean_now + bb_now.accrued;
+  const double days = double(delivery - settle);
+  const int freq = int(bb_now.yield.conv.freq + 0.5);
+  const double cpn_per_period = ctd.coupon / double(freq);
+
+  // Carry the dirty price to delivery at repo, reinvesting any interim coupon paid in (settle, delivery].
+  double fwd_dirty = dirty_now * (1.0 + repo * days / 360.0);
+  build::Date ref_start;
+  for (const build::Date& cd : build::coupon_dates_backward(ctd.issue, ctd.maturity, freq, ref_start))
+    if (cd > settle && cd <= delivery)
+      fwd_dirty -= cpn_per_period * (1.0 + repo * double(delivery - cd) / 360.0);
+
+  // Invert the forward CLEAN price through the CTD rebuilt as of delivery (accrued + flows at delivery).
+  const build::BuiltBond bb_del = build::build_bond(ctd, delivery, delivery);
+  return pricing::bond_yield_from_clean(bb_del.yield, fwd_dirty - bb_del.accrued);
+}
+
+// Derive the Invoice-spread {pin, asw} rows: identical to derive_asset_swap but the pinned yield is the CTD
+// FORWARD yield (not a spot benchmark yield). `ctd` is the cheapest-to-deliver (typically chosen off the
+// basket via pricing::select_ctd on the conversion-factor/basis analytics); `delivery` is the futures'
+// delivery date; `repo` is the funding rate used to carry the CTD forward.
+inline DerivedAssetSwap derive_invoice_asset_swap(const AssetSwapConvention& conv, const build::BondId& ctd,
+                                                  const build::Date& delivery, double repo,
+                                                  const cal::Instrument& spot_swap, int factor_curve,
+                                                  double anchor, const market::Market& mkt,
+                                                  const std::string& spread_quote_id) {
+  if (conv.type != SwapSpreadType::Invoice)
+    throw std::invalid_argument("derive_invoice_asset_swap: convention.type must be Invoice");
+  DerivedAssetSwap out;
+  out.bond_yield = ctd_forward_yield(conv, ctd, delivery, repo, mkt);
   out.spread = mkt.quote(spread_quote_id).mid();
   out.rows = build::asset_swap_spread(spot_swap, factor_curve, anchor, out.bond_yield, out.spread);
   return out;

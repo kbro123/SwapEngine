@@ -49,6 +49,10 @@ add_executable(swaps_tests
   vol_bachelier_test.cpp
   vol_sabr_test.cpp
   vol_sabr_calibration_test.cpp
+  vol_sabr_beta_test.cpp
+  fx_black_test.cpp
+  inflation_test.cpp
+  bond_future_test.cpp
   vol_cap_stripping_test.cpp
   vol_cube_interp_test.cpp
   vol_swaption_test.cpp
