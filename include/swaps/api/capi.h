@@ -47,6 +47,11 @@ const char* swaps_session_update(void* session, const char* market_json);
  * [{"currency","t","discount","zero","forward"}, ...] (caller frees). */
 const char* swaps_session_sample(void* session, const char* times_json);
 
+/* Price a book off the session's calibrated curves (NO recalibration). `book_json` is the book_from_json
+ * schema — typed "trades" (the engine builds the legs) or explicit-coupon "positions". Returns
+ * {"npv","pv01","price_us","n"} (caller frees). */
+const char* swaps_session_price(void* session, const char* book_json);
+
 /* Release a session handle created by swaps_session_create. Safe on NULL. */
 void swaps_session_free(void* session);
 

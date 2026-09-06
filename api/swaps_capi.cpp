@@ -120,4 +120,20 @@ extern "C" const char* swaps_session_sample(void* session, const char* times_jso
   }
 }
 
+extern "C" const char* swaps_session_price(void* session, const char* book_json) {
+  if (!session || !book_json) return err_json("null arg");
+  try {
+    auto* s = static_cast<BundleSession*>(session);
+    const auto pr = s->price_portfolio_json(book_json);   // book_from_json schema, repriced off x
+    json::object o;
+    o["npv"] = pr.npv;
+    o["pv01"] = pr.pv01;
+    o["price_us"] = pr.price_us;
+    o["n"] = pr.n;
+    return dup_str(json::serialize(o));
+  } catch (const std::exception& e) {
+    return err_json(e.what());
+  }
+}
+
 extern "C" void swaps_session_free(void* session) { delete static_cast<BundleSession*>(session); }
