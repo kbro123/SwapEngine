@@ -15,6 +15,15 @@ target_link_libraries(swaps_bench PRIVATE swaps benchmark::benchmark_main)
 add_executable(bundle_scale_bench bundle_scale_bench.cpp)
 target_link_libraries(bundle_scale_bench PRIVATE swaps benchmark::benchmark_main)
 
+# Compiled multi-curve book reprice vs the templated CurveHandle path (audit U2; ours-only).
+add_executable(compiled_multi_bench compiled_multi_bench.cpp)
+target_link_libraries(compiled_multi_bench PRIVATE swaps benchmark::benchmark_main)
+
+# FX/MtM hybrid hot path: the AadBlock width-reduced AAD sweep, pooled vs the heap fallback, plus a
+# streaming tick on a mixed bundle (ours-only, R11 pooled-dual retype; not a fingerprint gate metric).
+add_executable(fx_stream_bench fx_stream_bench.cpp)
+target_link_libraries(fx_stream_bench PRIVATE swaps benchmark::benchmark_main)
+
 # Coherent parallel portfolio reprice: serial full-book vs N-slice split off one curve (ours-only).
 add_executable(portfolio_parallel_bench portfolio_parallel_bench.cpp)
 target_link_libraries(portfolio_parallel_bench PRIVATE swaps benchmark::benchmark_main)
