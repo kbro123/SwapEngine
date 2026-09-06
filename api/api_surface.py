@@ -60,6 +60,16 @@ METHODS = [
     {"name": "price_portfolio", "cpp": "price_portfolio_json", "args": [("book_json", "STR")],
      "ret": "STRUCT:PortfolioReprice", "verb": "portfolio",
      "doc": "Reprice a multi-curve+xccy book off the calibrated curves -> {npv,pv01,price_us,n}."},
+    {"name": "bind_portfolio", "cpp": None, "args": [("book_json", "STR")], "ret": "VOID", "verb": None,
+     "body": "sess_.bind_portfolio(api::book_from_json(json::parse(book_json)));",
+     "doc": "Bind a book and build its compiled W-cache reprice twin ONCE, for the streaming regime "
+            "(the book repriced every tick against the recalibrating curve). Amortizes the W build across "
+            "ticks -> pair with reprice_bound(); a one-shot reprice keeps using price_portfolio."},
+    {"name": "reprice_bound", "cpp": "reprice_bound", "args": [], "ret": "STRUCT:PortfolioReprice",
+     "verb": None,
+     "doc": "Reprice the bound book (bind_portfolio first) off the current calibrated x, reusing the cached "
+            "compiled twin -> {npv,pv01,price_us,n}. ~300x the per-tick price_portfolio on the streaming path; "
+            "npv==price_portfolio to 1e-9, pv01 to 1e-8. Rebuilds lazily after a structural bundle change."},
     {"name": "price_portfolio_risk", "cpp": "price_portfolio_risk_json",
      "args": [("book_json", "STR"), ("reg", "REG")], "ret": "STRUCT:PortfolioRisk", "verb": "portfolio_risk",
      "doc": "Book risk -> {npv, curve_grad=dP/dx, ladder=dP/dq, risk_us, n}. reg smooths the RISK operator."},
