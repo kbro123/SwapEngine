@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "reference_curve.hpp"
+#include "swaps/api/bundle_api.hpp"  // BundleSession — the cached (warm) vs one-shot (cold) reprice compare
 #include "swaps/calibration/lm.hpp"
 #include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/curve/curve_module.hpp"
@@ -95,5 +96,150 @@ static void BM_Portfolio_Ours(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_Portfolio_Ours);
+
+// ============================================================================================
+// SESSION reprice: the AMORTIZED (warm/streaming) path vs the one-shot COLD path, at desk scale.
+//
+// The audit-U2 lesson (a reverted regression): wiring the compiled multi-curve book into the ONE-SHOT
+// price_portfolio was a NET LOSS — it sped up the NPV pass (not the bottleneck) while ADDING a per-call
+// W-cache build. The win exists ONLY when that build is AMORTIZED across repeated repricings, i.e. the
+// STREAMING path where the SAME book is repriced every tick against a recalibrating curve. These two
+// benches make that concrete on an 8-curve / 26-knot bundle and the 200-swap multi-curve book of the
+// gated BM_Session_PricePortfolio:
+//   * COLD (BM_Session_Reprice_Cold) = session.price_portfolio(book) per tick — builds the double curve
+//     handles + walks the virtual CurveHandle kernel + one AAD PV01 pass EVERY call. Unchanged shipped
+//     path; must NOT regress (it is the gated baseline).
+//   * WARM (BM_Session_Reprice_Warm) = bind_portfolio(book) ONCE, then reprice_bound() per tick — the
+//     compiled W-cache twin (DF = exp(-W_all x) matvec + gathered reduce) + an ANALYTIC parallel PV01,
+//     the W built once at bind. This is the number that must BEAT cold to justify the compiled kernel.
+// QuantLib-free (ours-only); shares this binary with the QuantLib benches above but touches none of them.
+namespace sess_bench {
+
+constexpr int NC = 8;           // 1 outright + 7 spread curves (a spread chain)
+constexpr int NK = 26;          // knots per curve
+constexpr double MAX_T = 30.0;  // longest tenor (years)
+
+namespace api = swaps::api;
+namespace px = swaps::pricing;
+
+struct Legs {
+  std::vector<px::FloatCoupon> flt;
+  std::vector<px::FixedCoupon> fix;
+};
+Legs annual(double T) {
+  Legs L;
+  double prev = 0.0;
+  for (double u = 1.0; u <= T + 1e-9; u += 1.0) {
+    px::FloatCoupon c;
+    c.obs.sub_start = {prev};
+    c.obs.sub_end = {u};
+    c.obs.tau_index = u - prev;
+    c.pay = u;
+    c.tau_pay = u - prev;
+    L.flt.push_back(c);
+    L.fix.push_back({u, u - prev});
+    prev = u;
+  }
+  return L;
+}
+cal::Instrument par_inst(double T, int fc, int dc) {
+  Legs L = annual(T);
+  cal::Instrument in;
+  in.quote = cal::QuoteKind::ParRate;
+  in.fwd = {L.flt, fc, dc};
+  in.fixed = {L.fix, dc};
+  return in;
+}
+cal::Instrument basis_inst(double T, int fc, int bc, int dc) {
+  Legs L = annual(T);
+  cal::Instrument in;
+  in.quote = cal::QuoteKind::ParSpread;
+  in.fwd = {L.flt, fc, dc};
+  in.bench = {L.flt, bc, dc};
+  in.fixed = {L.fix, dc};
+  return in;
+}
+
+struct Fixture {
+  cal::BundleProblem prob;
+  Eigen::VectorXd x0;
+  swaps::portfolio::MultiCurveBook book;
+
+  Fixture() {
+    std::vector<double> meeting{0.25}, back;
+    for (int i = 1; i <= NK - 1; ++i) back.push_back(MAX_T * i / (NK - 1));
+    prob.curves.resize(NC);
+    prob.curves[0] = px::CurveStructure{.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};
+    for (int c = 1; c < NC; ++c)
+      prob.curves[c] = px::CurveStructure{.base = c - 1, .regions = swaps::curve::flat_hermite(meeting, back)};
+
+    std::vector<double> mats;
+    for (double T = 1.0; T <= MAX_T + 1e-9; T += 1.0) mats.push_back(T);
+    for (double T : mats) prob.instruments.push_back(par_inst(T, 0, 0));
+    for (int c = 1; c < NC; ++c)
+      for (double T : mats) prob.instruments.push_back(basis_inst(T, c, c - 1, 0));
+
+    Eigen::VectorXd x_true(NC * NK);
+    for (int c = 0; c < NC; ++c)
+      for (int i = 0; i < NK; ++i)
+        x_true[c * NK + i] = (c == 0) ? 0.040 + 0.0005 * i : 0.0020 + 0.0001 * i;
+    const Eigen::VectorXd r0 = prob.residuals<double>(x_true);
+    for (int i = 0; i < static_cast<int>(prob.instruments.size()); ++i) prob.instruments[i].market += r0[i];
+
+    x0.resize(NC * NK);
+    for (int c = 0; c < NC; ++c)
+      for (int i = 0; i < NK; ++i) x0[c * NK + i] = (c == 0) ? 0.040 : 0.0020;
+
+    // The 200-swap multi-curve book of BM_Session_PricePortfolio.
+    for (int i = 0; i < 200; ++i) {
+      const double T = 1.0 + (i % 30);
+      Legs L = annual(T);
+      swaps::portfolio::MultiCurveBook::Position p;
+      p.kind = swaps::portfolio::MultiCurveBook::Kind::Swap;
+      p.notional = (i % 2 ? 1.0 : -1.0) * (1.0 + 0.01 * i);
+      p.float_coupons = L.flt;
+      p.fixed_coupons = L.fix;
+      p.fwd_curve = i % NC;
+      p.disc_curve = 0;
+      p.fixed_curve = 0;
+      p.fixed_rate = 0.04;
+      book.positions.push_back(std::move(p));
+    }
+  }
+};
+
+const Fixture& fx() {
+  static const Fixture f;
+  return f;
+}
+
+}  // namespace sess_bench
+
+// COLD: the shipped one-shot path repeated (builds curves + AAD PV01 every call). The gated baseline.
+static void BM_Session_Reprice_Cold(benchmark::State& state) {
+  const auto& f = sess_bench::fx();
+  sess_bench::api::BundleSession sess(f.prob);
+  sess.calibrate(f.x0);
+  for (auto _ : state) {
+    sess_bench::api::PortfolioReprice r = sess.price_portfolio(f.book);
+    benchmark::DoNotOptimize(r.npv);
+    benchmark::DoNotOptimize(r.pv01);
+  }
+}
+BENCHMARK(BM_Session_Reprice_Cold);
+
+// WARM: bind ONCE (amortizes the W build), then reprice the cached compiled twin every tick. Must beat cold.
+static void BM_Session_Reprice_Warm(benchmark::State& state) {
+  const auto& f = sess_bench::fx();
+  sess_bench::api::BundleSession sess(f.prob);
+  sess.calibrate(f.x0);
+  sess.bind_portfolio(f.book);  // build the compiled W-cache twin ONCE, outside the loop
+  for (auto _ : state) {
+    sess_bench::api::PortfolioReprice r = sess.reprice_bound();
+    benchmark::DoNotOptimize(r.npv);
+    benchmark::DoNotOptimize(r.pv01);
+  }
+}
+BENCHMARK(BM_Session_Reprice_Warm);
 
 BENCHMARK_MAIN();

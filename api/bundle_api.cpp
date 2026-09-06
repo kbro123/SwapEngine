@@ -764,6 +764,39 @@ PortfolioReprice BundleSession::price_portfolio_json(const std::string& book_jso
   return price_portfolio(book_from_json(json::parse(book_json)));
 }
 
+// ---- CACHED (warm/streaming) portfolio reprice ---------------------------------------------------
+// bind_portfolio builds the compiled W-cache twin ONCE; reprice_bound reuses it every call. The one-time
+// W build is amortized across ticks (a live book repriced against the recalibrating curve), which is the
+// ONLY regime where the compiled kernel wins — a single cold reprice keeps paying the templated path
+// (price_portfolio), so this is a SEPARATE entry point, not a swap-in.
+void BundleSession::bind_portfolio(const pf::MultiCurveBook& book) {
+  bound_book_ = std::make_unique<pf::MultiCurveBook>(book);
+  cbook_ = std::make_unique<pf::CompiledMultiCurveBook>(prob_.curves, *bound_book_);
+}
+
+PortfolioReprice BundleSession::reprice_bound() const {
+  if (!bound_book_)
+    throw std::runtime_error("reprice_bound(): bind_portfolio() must be called first");
+  // Lazy rebuild: invalidate_engine() drops cbook_ on a structural bundle change, but keeps bound_book_.
+  if (!cbook_) cbook_ = std::make_unique<pf::CompiledMultiCurveBook>(prob_.curves, *bound_book_);
+
+  PortfolioReprice out;
+  out.n = static_cast<int>(bound_book_->positions.size());
+  if (out.n == 0) { last_price_us_ = 0.0; return out; }  // empty book: NPV/PV01 = 0, nothing to time
+
+  // Pure ENGINE pricing pass, engine-timed exactly as price_portfolio times its double NPV pass — but here
+  // the DF = exp(-W_all x) matvec + gathered coupon/annuity reduce replaces the per-coupon virtual walk.
+  const auto t0 = std::chrono::steady_clock::now();
+  out.npv = cbook_->npv(x_);
+  last_price_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+  out.price_us = last_price_us_;
+
+  // PV01: +1bp parallel-knot-shift directional derivative (analytic on the compiled half, one AAD pass on
+  // any fallback) — outside the pricing clock, matching how price_portfolio times only the NPV pass.
+  out.pv01 = cbook_->pv01(x_);
+  return out;
+}
+
 PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book, const RegSpec& reg) const {
   PortfolioRisk out;
   out.n = static_cast<int>(book.positions.size());

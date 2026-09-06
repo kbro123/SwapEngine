@@ -35,6 +35,7 @@
 
 #include <vector>
 
+#include "swaps/ad/dual.hpp"                       // ad::Dual -- the fallback PV01 forward-AAD pass
 #include "swaps/calibration/bundle_problem.hpp"   // BundleCurveSet / CurveHandle (the fallback path)
 #include "swaps/calibration/hybrid_residual.hpp"  // curves_are_noncacheable -- THE curve-level W guard
 #include "swaps/portfolio/portfolio.hpp"          // MultiCurveBook
@@ -81,6 +82,11 @@ class CompiledMultiCurveBook {
     float_.finalize();
     fixed_.finalize();
 
+    // Per-registered-time row sum of W_all (Σ_j W[k,j]) -- CONSTANT for a fixed topology. Under a parallel
+    // knot shift x -> x + ε·1, log-DF_k gains ε·rowsum_k, so DF_k's tangent is dDF_k/dε = -rowsum_k·DF_k.
+    // This is all pv01()'s compiled half needs to turn the batch's dr/dDF partials into a d(NPV)/dε.
+    if (cs_.n_times() > 0) rowsum_ = cs_.W().rowwise().sum();
+
     const int n = static_cast<int>(notional.size());
     notional_ = Eigen::Map<const Eigen::VectorXd>(notional.data(), n);
     nf_ = notional_.array() * Eigen::Map<const Eigen::VectorXd>(rate.data(), n).array();
@@ -116,6 +122,47 @@ class CompiledMultiCurveBook {
     return total;
   }
 
+  // The book's +1bp PARALLEL-shift PV01: 1e-4 · Σⱼ ∂NPV/∂xⱼ, matching the templated forward-AAD PV01
+  // (BundleSession::price_portfolio) to rounding. Allocation-free on an all-compilable book (the streaming
+  // twin's hot path); the non-cacheable minority adds a single templated AAD pass only when present.
+  //
+  // The COMPILED half is analytic -- no AAD, no per-call allocation. NPV depends on x only through
+  // DF = exp(-W_all x), and under x -> x+ε·1 the tangent of DF_k is dDF_k = -rowsum_k·DF_k (rowsum_ is
+  // constant). The directional derivative is then the batch's OWN dr/dDF partials (compiled_book.hpp)
+  // contracted with that tangent, position order shared with notional_/nf_:
+  //     ∂pv/∂DF[pay]   = (num+konst)·k                          (per coupon)
+  //     ∂pv/∂DF[s],[e] = ±DF[pay]·k·w / DF[e]{,·DF[s]/DF[e]}    (per sub-period)
+  //     ∂(−nf·ann)/∂DF[pay] = −nf·τ                             (per fixed coupon)
+  // Summing weight·tangent[·] per contribution (not forming ∂NPV/∂DF first) handles the structural DF
+  // aliasing (e_k == s_{k+1}, pay == e_k) for free -- each contribution adds its own term.
+  double pv01(const Eigen::VectorXd& x) const {
+    double g = 0.0;  // Σⱼ ∂NPV/∂xⱼ = the directional derivative along the all-ones knot direction
+    if (n_compiled() > 0) {
+      cs_.df_into(x, df_);
+      t_ = (-rowsum_.array() * df_.array()).matrix();  // parallel-shift DF tangent (reused scratch)
+      const Eigen::VectorXd& num = float_.num(df_);              // per-coupon Σ w·(DF[s]/DF[e]−1)
+      const double* __restrict DF = df_.data();
+      const double* __restrict tt = t_.data();
+      // Float coupons: the pay-column partial (num+konst)·k, weighted by the owning position's notional.
+      for (int c = 0; c < float_.n_coupons(); ++c) {
+        const int i = float_.inst[c];
+        g += notional_[i] * (num[c] + float_.konst[c]) * float_.k[c] * tt[float_.pay[c]];
+      }
+      // Float sub-periods: the forecast-curve start/end partials.
+      for (int j = 0; j < static_cast<int>(float_.subS.size()); ++j) {
+        const int c = float_.sub_cpn[j], i = float_.inst[c];
+        const int s = float_.subS[j], e = float_.subE[j];
+        const double f = notional_[i] * DF[float_.pay[c]] * float_.k[c] * float_.sub_w[j];
+        g += f * (tt[s] / DF[e] - tt[e] * DF[s] / (DF[e] * DF[e]));
+      }
+      // Fixed annuities enter NPV as −(notional·fixed_rate)·Σ τ·DF[pay]: ∂/∂DF[pay] = −nf·τ.
+      for (int i = 0; i < static_cast<int>(fixed_.pay.size()); ++i)
+        g += -nf_[fixed_.inst[i]] * fixed_.tau[i] * tt[fixed_.pay[i]];
+    }
+    if (!fallback_.positions.empty()) g += fallback_directional(x);
+    return 1e-4 * g;
+  }
+
   // True iff a Swap position's float leg fits the batch's arithmetic Σ w·(DF/DF−1) model: no compounded
   // (product-form) observation and no moment-path (fixing_step) coupon. Spreads, FX scale, realized
   // constants, weighted sub-periods and empty (fully fixed) observations are all representable.
@@ -126,6 +173,23 @@ class CompiledMultiCurveBook {
   }
 
  private:
+  // The fallback minority's contribution to Σⱼ ∂NPV/∂xⱼ: ONE templated forward-AAD pass (seed every knot
+  // with derivative 1, read the summed derivative). Heap-allocating (full-width ad::Dual), but reached
+  // ONLY for a book carrying Xccy/compounded/moment positions -- never the all-compilable streaming path.
+  double fallback_directional(const Eigen::VectorXd& x) const {
+    using Dual = swaps::ad::Dual;
+    Eigen::Matrix<Dual, Eigen::Dynamic, 1> xd(n_knots_);
+    for (int k = 0; k < n_knots_; ++k) {
+      xd[k].value() = x[k];
+      xd[k].derivatives() = Eigen::VectorXd::Unit(n_knots_, k);
+    }
+    const auto C = calibration::build_bundle_curves<Dual>(
+        specs_, [&](int c, int i) { return xd[off_[c] + i]; });
+    const auto cof = [&C](int i) -> const calibration::CurveHandle<Dual>& { return *C[i]; };
+    const Dual npv = fallback_.value<Dual>(cof);
+    return npv.derivatives().size() ? npv.derivatives().sum() : 0.0;
+  }
+
   std::vector<pricing::CurveStructure> specs_;  // owned copy (fb_curves_ references it; ctor arg may die)
   std::vector<int> off_;                        // curve -> offset of its state block in the stacked x
   int n_knots_ = 0;
@@ -141,7 +205,8 @@ class CompiledMultiCurveBook {
   MultiCurveBook fallback_;
   mutable calibration::BundleCurveSet<double> fb_curves_;
 
-  mutable Eigen::VectorXd df_, npv_;  // reusable per-reprice scratch (sized on first call)
+  Eigen::VectorXd rowsum_;             // per-registered-time Σ_j W[k,j] (constant): parallel-shift DF tangent scale
+  mutable Eigen::VectorXd df_, npv_, t_;  // reusable per-reprice scratch (df_/npv_ npv(); t_ pv01()'s DF tangent)
 };
 
 }  // namespace swaps::portfolio

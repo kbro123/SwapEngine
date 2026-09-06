@@ -93,7 +93,7 @@ if(TARGET quantlib_oracle)
 
   # The portfolio-analytics baseline: batched reprice vs QuantLib per-swap NPV loop.
   add_executable(portfolio_bench portfolio_bench.cpp)
-  target_link_libraries(portfolio_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+  target_link_libraries(portfolio_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark_main)
   target_include_directories(portfolio_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 
   # Stage 2: warm re-calibration (cached-Jacobian) vs QuantLib re-bootstrap.

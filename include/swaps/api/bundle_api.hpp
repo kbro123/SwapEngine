@@ -31,6 +31,7 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/portfolio/portfolio.hpp"  // MultiCurveBook — the batched reprice kernel
+#include "swaps/portfolio/compiled_multi.hpp"  // CompiledMultiCurveBook — the cached streaming reprice twin
 #include "swaps/pricing/fixings.hpp"
 
 namespace swaps::api {
@@ -261,6 +262,28 @@ class BundleSession {
   // Convenience for a language binding: parse a book JSON document (schema on book_from_json) and reprice.
   PortfolioReprice price_portfolio_json(const std::string& book_json) const;
 
+  // ---- CACHED (warm/streaming) portfolio reprice --------------------------------------------------
+  // Bind a book for REPEATED repricing: build & cache a portfolio::CompiledMultiCurveBook — the multi-curve
+  // W-cache twin of price_portfolio's templated kernel — ONCE, so every reprice_bound() reuses it. This is
+  // the AMORTIZED path for a live book repriced every streaming tick against the recalibrating curve: the
+  // one-time W build (DF = exp(-W_all x) compiled once from the bundle's curve structures) pays for itself
+  // across ticks, exactly as the session already amortizes engine_/reg_R_ and VolSurface amortizes a fixed
+  // cell set. The book is COPIED. The cache is dropped on any STRUCTURAL bundle change (invalidate_engine)
+  // and rebuilt lazily on the next reprice_bound(). NB: the one-shot price_portfolio() deliberately stays
+  // on the templated path — building the W-cache does NOT pay off on a single cold reprice (that was an
+  // earlier net regression), so the compiled twin is reserved for THIS cached path.
+  void bind_portfolio(const swaps::portfolio::MultiCurveBook& book);
+  // Reprice the CURRENTLY BOUND book off the current calibrated x through the cached compiled kernel and
+  // report {npv, pv01, price_us, n}. NPV rides the compiled W-cache (with the non-cacheable minority — Xccy
+  // / compounded / moment — on the templated fallback, the hybrid split); PV01 is the +1bp parallel-knot-
+  // shift directional derivative (ANALYTIC on the compiled half, one AAD pass on any fallback). price_us
+  // times the NPV pass ONLY, exactly as price_portfolio does (also cached in last_price_us()). Allocation-
+  // free on an all-compilable book — the streaming hot path. Throws if no book is bound.
+  PortfolioReprice reprice_bound() const;
+  // True once bind_portfolio() has been called (the compiled twin may be rebuilt lazily, but the bound book
+  // is retained until the next bind_portfolio()).
+  bool has_bound_portfolio() const { return static_cast<bool>(bound_book_); }
+
   // ---- batched swaption VOL CUBE reprice off the calibrated curve (the options hot path) ----------
   // Price a whole expiry x tenor x strike surface off the CURRENTLY CALIBRATED curve in one pass. The spec
   // JSON is {value_date, currency?, index?, curve?, cells:[{expiry, tenor, sabr?{alpha,rho,nu} | normal_vol?,
@@ -371,7 +394,7 @@ class BundleSession {
   // STRUCTURALLY -- today that is fixings resolution (it rewrites observation times/realized in place).
   // Mutable + const ensure: the engine is a pure cache of prob_'s structure, so const queries (jacobian)
   // may build it lazily.
-  void invalidate_engine() { engine_.reset(); reg_R_valid_ = false; }
+  void invalidate_engine() { engine_.reset(); reg_R_valid_ = false; cbook_.reset(); }
   cal::HybridBundleResidual& ensure_engine() const {
     if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);
     return *engine_;
@@ -387,6 +410,11 @@ class BundleSession {
   bool has_nonlinear_ = false;
   bool has_band_ = false;
   std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;
+  // The cached warm/streaming reprice twin (bind_portfolio/reprice_bound). bound_book_ is the copied book;
+  // cbook_ is its compiled W-cache twin, built once on bind and rebuilt lazily after invalidate_engine()
+  // drops it (a structural bundle change moves W). Mutable so the const reprice_bound() can rebuild lazily.
+  mutable std::unique_ptr<swaps::portfolio::MultiCurveBook> bound_book_;
+  mutable std::unique_ptr<swaps::portfolio::CompiledMultiCurveBook> cbook_;
   // The cached hybrid engine + tension-block cache (see ensure_engine/ensure_reg_R above).
   mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
   mutable Eigen::MatrixXd reg_R_;

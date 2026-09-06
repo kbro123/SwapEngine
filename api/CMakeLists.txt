@@ -31,7 +31,8 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_parity_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/exposure_netting_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/scenario_verb_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/pnl_explain_test.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/pnl_explain_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_compiled_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost)
   # Golden compiler-parity data (server/compile.py output), committed under tests/golden/compile/; and the
