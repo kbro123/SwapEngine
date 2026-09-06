@@ -5,6 +5,7 @@
 #ifndef SWAPS_BUILD_INSTRUMENTS_HPP
 #define SWAPS_BUILD_INSTRUMENTS_HPP
 
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,6 +19,22 @@
 namespace swaps::build {
 
 namespace cal = swaps::calibration;
+
+// Per-period notional for an amortizing / step-up / custom-notional leg. `ns` is EMPTY => unit notional
+// (1.0, byte-identical to the pre-amortization builders); size 1 => a constant notional broadcast to every
+// period; otherwise its size MUST equal the leg's accrual-period count (one notional per period). The value
+// is written to the coupon's constant PV multiplier `scale` (pricing::FloatCoupon::scale / FixedCoupon::
+// scale), which the templated kernel (float_coupon_pv / annuity) AND the W-cache batch (BundleFloatBatch /
+// BundleFixedLegs fold it into k / tau) already carry through the PV and the analytic Jacobian -- so an
+// amortizing leg needs no new struct field, only this schedule fed into the existing `scale`. (A foreign
+// converted leg that already uses `scale` for the FX spot would pre-multiply notional x fx into one value.)
+inline double notional_at(const std::vector<double>& ns, std::size_t i, std::size_t n) {
+  if (ns.empty()) return 1.0;
+  if (ns.size() == 1) return ns.front();
+  if (ns.size() != n)
+    throw std::invalid_argument("notionals: expected empty, size 1, or one entry per accrual period");
+  return ns[i];
+}
 
 // One compounded-overnight / float coupon over [s, e] (compile._ois_coupon). DF lookups in curve time
 // (ACT/365F); accrual + pay on the instrument day count / calendar.
@@ -34,52 +51,81 @@ inline px::FloatCoupon ois_coupon(const Date& vd, const SwapConv& conv, const Da
   return c;
 }
 
-inline cal::FixedLeg fixed_coupons(const Date& vd, const SwapConv& conv, const Date& mat, int disc) {
+// Fixed annuity leg to `mat`. `fixed_freq` overrides the coupon frequency (default "1Y" reproduces the old
+// hard-coded annual leg); `notionals` gives an amortizing/step-up schedule (default empty => unit notional).
+inline cal::FixedLeg fixed_coupons(const Date& vd, const SwapConv& conv, const Date& mat, int disc,
+                                   const std::string& fixed_freq = "1Y",
+                                   const std::vector<double>& notionals = {}) {
   cal::FixedLeg leg;
   leg.discount = disc;
-  for (const auto& [s, e] : swap_periods_to(vd, conv.calendar, mat, "1Y", conv.bdc, conv.spot_lag)) {
+  const auto periods = swap_periods_to(vd, conv.calendar, mat, fixed_freq, conv.bdc, conv.spot_lag);
+  for (std::size_t i = 0; i < periods.size(); ++i) {
+    const auto& [s, e] = periods[i];
     const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
     px::FixedCoupon fc;
     fc.pay = curve_time(vd, pay);
     fc.tau = year_frac(conv.fixed_dc, s, e);
+    fc.scale = notional_at(notionals, i, periods.size());
     leg.coupons.push_back(fc);
   }
   return leg;
 }
 
+// Floating leg to `mat` on `freq_tok`/`dc`. `spread` is an additive contractual float-leg spread (rate
+// units, e.g. +0.001 = +10bp) applied to every coupon; `notionals` gives an amortizing/step-up schedule.
+// Both default to today's behaviour (spread 0, unit notional) so an existing call is byte-identical.
 inline cal::FloatLeg float_leg(const Date& vd, const SwapConv& conv, const Date& mat, int forecast, int disc,
                                const std::string& freq_tok, const std::string& dc,
-                               int reset_num = -1, int reset_den = -1, double fx_spot = 1.0) {
+                               int reset_num = -1, int reset_den = -1, double fx_spot = 1.0,
+                               double spread = 0.0, const std::vector<double>& notionals = {}) {
   cal::FloatLeg leg;
   leg.forecast = forecast;
   leg.discount = disc;
   leg.reset_num = reset_num;
   leg.reset_den = reset_den;
   leg.fx_spot = fx_spot;
-  for (const auto& [s, e] : swap_periods_to(vd, conv.calendar, mat, freq_tok, conv.bdc, conv.spot_lag))
-    leg.coupons.push_back(ois_coupon(vd, conv, s, e, dc));
+  const auto periods = swap_periods_to(vd, conv.calendar, mat, freq_tok, conv.bdc, conv.spot_lag);
+  for (std::size_t i = 0; i < periods.size(); ++i) {
+    px::FloatCoupon c = ois_coupon(vd, conv, periods[i].first, periods[i].second, dc);
+    c.spread = spread;
+    c.scale = notional_at(notionals, i, periods.size());
+    leg.coupons.push_back(c);
+  }
   return leg;
 }
 
-// Par OIS/IRS swap (compile._par_swap): annual fixed vs float forecasting `fc`, discounting `disc`.
+// Par OIS/IRS swap (compile._par_swap): fixed leg (annual by default) vs float forecasting `fc`, discounting
+// `disc`. Optional: `float_spread` (additive float-leg spread, rate units), `notionals` (amortizing/step-up
+// schedule applied to BOTH legs), `fixed_freq` (fixed-leg frequency override). Defaults reproduce the old
+// annual-fixed, unit-notional, zero-spread swap byte-for-byte. NOTE: a single `notionals` vector is fed to
+// both legs, so it is one-per-period on EACH leg -- for a swap whose float and fixed period counts differ
+// (e.g. quarterly float vs annual fixed) build the legs directly with float_leg/fixed_coupons instead.
 inline cal::Instrument par_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int disc,
-                                double market) {
+                                double market, double float_spread = 0.0,
+                                const std::vector<double>& notionals = {},
+                                const std::string& fixed_freq = "1Y") {
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::ParRate;
-  ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc);
-  ins.fixed = fixed_coupons(vd, conv, mat, disc);
+  ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, float_spread,
+                      notionals);
+  ins.fixed = fixed_coupons(vd, conv, mat, disc, fixed_freq, notionals);
   ins.market = market;
   return ins;
 }
 
-// Basis swap (compile._basis_swap): quoted leg `fc` vs benchmark leg `bench`, ParSpread.
+// Basis swap (compile._basis_swap): quoted leg `fc` vs benchmark leg `bench`, ParSpread. Optional:
+// `fwd_spread` (contractual spread on the quoted/fwd leg) and `notionals` (amortizing schedule applied to
+// both float legs and the annuity). Defaults reproduce the old swap byte-for-byte.
 inline cal::Instrument basis_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int bench,
-                                  int disc, double market) {
+                                  int disc, double market, double fwd_spread = 0.0,
+                                  const std::vector<double>& notionals = {}) {
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::ParSpread;
-  ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc);
-  ins.bench = float_leg(vd, conv, mat, bench, disc, conv.float_freq_tok, conv.float_dc);
-  ins.fixed = fixed_coupons(vd, conv, mat, disc);
+  ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, fwd_spread,
+                      notionals);
+  ins.bench = float_leg(vd, conv, mat, bench, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, 0.0,
+                        notionals);
+  ins.fixed = fixed_coupons(vd, conv, mat, disc, "1Y", notionals);
   ins.market = market;
   return ins;
 }
@@ -154,15 +200,20 @@ inline cal::Instrument turn_jump(int ci, int turn_index, double market) {
 // straight to the builders, so the ground-up flow reads Index -> Convention -> Instrument object-to-object
 // instead of threading a raw SwapConv. Each just flattens via conv.resolve(). ------------------------------
 inline cal::Instrument par_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int disc,
-                                double market) {
-  return par_swap(vd, conv.resolve(), mat, fc, disc, market);
+                                double market, double float_spread = 0.0,
+                                const std::vector<double>& notionals = {},
+                                const std::string& fixed_freq = "1Y") {
+  return par_swap(vd, conv.resolve(), mat, fc, disc, market, float_spread, notionals, fixed_freq);
 }
 inline cal::Instrument basis_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int bench,
-                                  int disc, double market) {
-  return basis_swap(vd, conv.resolve(), mat, fc, bench, disc, market);
+                                  int disc, double market, double fwd_spread = 0.0,
+                                  const std::vector<double>& notionals = {}) {
+  return basis_swap(vd, conv.resolve(), mat, fc, bench, disc, market, fwd_spread, notionals);
 }
-inline cal::FixedLeg fixed_coupons(const Date& vd, const Convention& conv, const Date& mat, int disc) {
-  return fixed_coupons(vd, conv.resolve(), mat, disc);
+inline cal::FixedLeg fixed_coupons(const Date& vd, const Convention& conv, const Date& mat, int disc,
+                                   const std::string& fixed_freq = "1Y",
+                                   const std::vector<double>& notionals = {}) {
+  return fixed_coupons(vd, conv.resolve(), mat, disc, fixed_freq, notionals);
 }
 
 }  // namespace swaps::build
