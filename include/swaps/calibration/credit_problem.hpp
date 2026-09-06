@@ -39,6 +39,11 @@ struct CreditProblem {
   // discrepancy. RESIDUAL ORDER is the instruments' insertion order (Jacobian rows index off it).
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
+    // Local C1 Hermite hazard back end: reprices the strip EXACTLY (each maturity is a knot) and keeps
+    // forwards local. NOTE: a smooth hazard can overshoot into slightly negative forward hazard between
+    // knots on a NOISY / INVERTED strip, giving a mildly non-monotone survival at the long end -- a known
+    // limitation of unconstrained smooth interpolation (a positivity-constrained bootstrap is the follow-up
+    // for distressed/inverted names; a plain flat-forward layout is monotone-safe but under-fits here).
     auto hz = curve::make_modular_curve<Scalar>(curve::flat_hermite(meeting_times, back_times));
     hz.set_forwards(x);
     curve::SurvivalCurve<Scalar> surv{&hz};

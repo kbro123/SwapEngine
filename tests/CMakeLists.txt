@@ -56,6 +56,10 @@ add_executable(swaps_tests
   ndf_test.cpp
   credit_test.cpp
   bus252_daycount_test.cpp
+  conventions_property_test.cpp
+  curve_property_test.cpp
+  fx_black_oracle_test.cpp
+  rates_fx_oracle_test.cpp
   vol_cap_stripping_test.cpp
   vol_cube_interp_test.cpp
   vol_swaption_test.cpp
