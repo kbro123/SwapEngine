@@ -24,12 +24,47 @@
 #include "swaps/market/fx.hpp"
 #include "swaps/market/quote.hpp"
 #include "swaps/pricing/fixings.hpp"
+#include "swaps/vol/sabr.hpp"
 
 namespace swaps::market {
 
 namespace curve = swaps::curve;
 namespace pricing = swaps::pricing;
 namespace build = swaps::build;
+namespace vol = swaps::vol;
+
+// One cell of a named vol surface: a (expiry, tenor) grid point carrying a curve-INDEPENDENT vol model —
+// either a flat normal (Bachelier) vol, or a vol::SabrParams smile. This is exactly the surface DEFINITION
+// the vega verb already consumes as `cells` (the expiry/tenor labels are resolved onto a calibrated curve at
+// price time — curve-independent here), lifted into a value that can live inside the Market snapshot. It
+// REUSES vol::SabrParams: the SABR model itself is not rebuilt.
+struct VolCell {
+  std::string expiry;       // e.g. "1Y" — resolved to curve time by the consumer (kept as a label here)
+  std::string tenor;        // e.g. "5Y"
+  bool has_sabr = false;    // model selector: SABR smile when true, else the flat normal vol
+  double normal_vol = 0.0;  // flat Bachelier vol (has_sabr == false)
+  vol::SabrParams sabr{};   // SABR triple {alpha, rho, nu} (has_sabr == true) — the existing vol/ value type
+};
+
+// A named vol surface stored in the Market: an ordered grid of VolCells. Unlike a realized curve this is a
+// COPYABLE value (no move-only regions), so a Market clone() carries an INDEPENDENT copy — the Scenario-fork
+// invariant (mutating the fork never touches the parent) holds for vol exactly as it does for curves. NB this
+// is the market-DATA surface; the compiled/streaming api::VolSurface (BundleSession-bound, in the higher api
+// layer) is a different object that this can be the vol source for.
+class VolSurface {
+ public:
+  VolSurface() = default;
+  VolSurface& add_cell(VolCell c) {
+    cells_.push_back(std::move(c));
+    return *this;
+  }
+  const std::vector<VolCell>& cells() const { return cells_; }
+  std::vector<VolCell>& cells() { return cells_; }  // mutate vols in place (a slider tick); clone stays private
+  int n_cells() const { return static_cast<int>(cells_.size()); }
+
+ private:
+  std::vector<VolCell> cells_;
+};
 
 class Market {
  public:
@@ -65,6 +100,12 @@ class Market {
     fixings_ = std::move(f);
     return *this;
   }
+  // Add a named vol surface by NAME (the vol analogue of add_curve): the snapshot's shared vol source, so
+  // vega/scenario can name ONE surface instead of re-specifying cells inline. Re-keying overwrites.
+  Market& add_vol_surface(const std::string& name, VolSurface s) {
+    vol_surfaces_.insert_or_assign(name, std::move(s));
+    return *this;
+  }
 
   // ---- queries --------------------------------------------------------------------------------------
   const build::Date& today() const { return as_of_; }
@@ -96,6 +137,7 @@ class Market {
     m.fx_ = fx_;
     m.quotes_ = quotes_;
     m.fixings_ = fixings_;
+    m.vol_surfaces_ = vol_surfaces_;  // VolSurface is a value type: this is an independent deep copy (fork-safe)
     for (const auto& kv : curves_) m.add_curve(kv.first, kv.second.modules, kv.second.forwards);
     return m;
   }
@@ -105,6 +147,25 @@ class Market {
     auto it = quotes_.find(name);
     if (it == quotes_.end()) throw std::runtime_error("Market: no quote named '" + name + "'");
     return it->second;
+  }
+
+  // Named vol-surface lookup — mirrors the curve store (has_/by-name/names; missing name throws). A const
+  // overload for reading and a non-const for mutating a stored surface in place (a slider tick on a fork).
+  bool has_vol_surface(const std::string& name) const { return vol_surfaces_.count(name) != 0; }
+  const VolSurface& vol_surface(const std::string& name) const {
+    auto it = vol_surfaces_.find(name);
+    if (it == vol_surfaces_.end()) throw std::runtime_error("Market: no vol surface named '" + name + "'");
+    return it->second;
+  }
+  VolSurface& vol_surface(const std::string& name) {
+    auto it = vol_surfaces_.find(name);
+    if (it == vol_surfaces_.end()) throw std::runtime_error("Market: no vol surface named '" + name + "'");
+    return it->second;
+  }
+  std::vector<std::string> vol_surface_names() const {
+    std::vector<std::string> ns;
+    for (const auto& kv : vol_surfaces_) ns.push_back(kv.first);
+    return ns;
   }
 
   const std::vector<Currency>& currencies() const { return currencies_; }
@@ -135,6 +196,7 @@ class Market {
   FxMatrix fx_;
   std::map<std::string, Quote> quotes_;
   std::map<std::string, CurveEntry> curves_;  // NAMED realized curves + their inputs — the missing lookup
+  std::map<std::string, VolSurface> vol_surfaces_;  // NAMED vol surfaces — the vol analogue of the curve store
   pricing::FixingTable fixings_;
 };
 

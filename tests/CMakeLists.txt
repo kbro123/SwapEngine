@@ -34,6 +34,7 @@ add_executable(swaps_tests
   trade_csa_test.cpp
   market_scenario_test.cpp
   market_fixing_series_test.cpp
+  market_vol_surface_test.cpp
   trade_book_test.cpp
   compiled_multi_test.cpp
   aad_block_pooled_test.cpp
