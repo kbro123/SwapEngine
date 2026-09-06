@@ -946,7 +946,19 @@ std::string run_json(const std::string& request) {
     if (o.contains("compile")) {
       const std::string today = (o.contains("today") && o.at("today").is_string())
                                     ? std::string(o.at("today").as_string().c_str()) : "";
-      return json::serialize(compile_to_json(compile_spec(o.at("compile"), today)));
+      auto cr = compile_spec(o.at("compile"), today);
+      // One-shot convenience (the demo / Excel / any stateless C-ABI client): when the request ALSO
+      // carries `sample_times`, compile THEN calibrate THEN sample in a SINGLE call — so the caller sends
+      // a small composer spec and receives curve samples, never the large resolved bundle. Rewrite to the
+      // resolved `bundle` request and reuse the calibrate+sample path below (identical output shape;
+      // `regularize`/`x0`/`price` all carry through). Without `sample_times` this returns the resolved
+      // structure exactly as before — backward-compatible.
+      if (!o.contains("sample_times")) return json::serialize(compile_to_json(cr));
+      json::object req2 = o;
+      req2.erase("compile");
+      req2.erase("today");
+      req2["bundle"] = bundle_to_json(cr.bundle);
+      return run_json(json::serialize(req2));
     }
 
     // Stateless GENERATE_RISK verb: one book + N bundles -> N internally-consistent risk ladders, all off
