@@ -1,5 +1,13 @@
 [
   "regions_turn",
+  "scheme_bspline",
+  "scheme_monotone",
+  "scheme_natcubic",
+  "seed_sofr_depo",
+  "seed_sofr_ff_prime",
+  "seed_sofr_futures",
+  "seed_sofr_grid10",
+  "seed_usd_eur_xccy",
   "sofr_ff",
   "sofr_grid",
   "usd_eur_xccy"

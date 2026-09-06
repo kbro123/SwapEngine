@@ -2,32 +2,44 @@
   "bundle": {
     "curves": [
       {
-        "back": [
-          2.0082191781,
-          10.0082191781
-        ],
         "base": -1,
         "currency": 0,
-        "meeting": []
+        "regions": [
+          {
+            "knots": [
+              2.0082191781,
+              10.0082191781
+            ],
+            "scheme": "Hermite"
+          }
+        ]
       },
       {
-        "back": [
-          2.0082191781,
-          10.0082191781
-        ],
         "base": -1,
         "currency": 1,
-        "meeting": []
+        "regions": [
+          {
+            "knots": [
+              2.0082191781,
+              10.0082191781
+            ],
+            "scheme": "Hermite"
+          }
+        ]
       },
       {
-        "back": [
-          1.0,
-          5.002739726,
-          10.0082191781
-        ],
         "base": 1,
         "currency": 1,
-        "meeting": []
+        "regions": [
+          {
+            "knots": [
+              1.0,
+              5.002739726,
+              10.0082191781
+            ],
+            "scheme": "Hermite"
+          }
+        ]
       }
     ],
     "instruments": [
@@ -3251,7 +3263,7 @@
       "n_knots": 2,
       "n_quotes": 2,
       "name": "SOFR",
-      "policies": "Flat+Hermite",
+      "policies": "Hermite",
       "type": "rate"
     },
     {
@@ -3263,7 +3275,7 @@
       "n_knots": 2,
       "n_quotes": 2,
       "name": "ESTR",
-      "policies": "Flat+Hermite",
+      "policies": "Hermite",
       "type": "rate"
     },
     {
@@ -3275,7 +3287,7 @@
       "n_knots": 3,
       "n_quotes": 3,
       "name": "EUR/USD xccy",
-      "policies": "Flat+Hermite",
+      "policies": "Hermite",
       "type": "xccy"
     }
   ],

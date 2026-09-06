@@ -1,0 +1,173 @@
+{
+  "curves": [
+    {
+      "base": -1,
+      "currency": "USD",
+      "id": "sofr",
+      "index": "USD-SOFR",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "3m",
+          "has_quote": true,
+          "id": "i1",
+          "knot_region": "back",
+          "label": "3m swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 4.238395017099,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "6m",
+          "has_quote": true,
+          "id": "i2",
+          "knot_region": "back",
+          "label": "6m swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 4.212804840493,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "1y",
+          "has_quote": true,
+          "id": "i3",
+          "knot_region": "back",
+          "label": "1y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 4.184160091782,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "2y",
+          "has_quote": true,
+          "id": "i4",
+          "knot_region": "back",
+          "label": "2y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 4.066029496991,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "3y",
+          "has_quote": true,
+          "id": "i5",
+          "knot_region": "back",
+          "label": "3y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 3.982855554728,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "5y",
+          "has_quote": true,
+          "id": "i6",
+          "knot_region": "back",
+          "label": "5y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 3.888004,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "10y",
+          "has_quote": true,
+          "id": "i7",
+          "knot_region": "back",
+          "label": "10y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 3.840347,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "15y",
+          "has_quote": true,
+          "id": "i8",
+          "knot_region": "back",
+          "label": "15y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 3.879906,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "20y",
+          "has_quote": true,
+          "id": "i9",
+          "knot_region": "back",
+          "label": "20y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 3.940646,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "drift": 0.0,
+          "end": "30y",
+          "has_quote": true,
+          "id": "i10",
+          "knot_region": "back",
+          "label": "30y swap",
+          "quote_kind": "ParRate",
+          "region": "sofr-back",
+          "start": null,
+          "start_quote": 4.067225999999,
+          "type": "swap",
+          "unit": "pct"
+        }
+      ],
+      "kind": "outright",
+      "name": "SOFR",
+      "regions": [
+        {
+          "id": "sofr-back",
+          "name": "Grid",
+          "policy": "Hermite"
+        }
+      ]
+    }
+  ],
+  "smoothness": "off",
+  "value_date": "2026-09-06"
+}

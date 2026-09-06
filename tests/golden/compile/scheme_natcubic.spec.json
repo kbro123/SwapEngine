@@ -1,0 +1,101 @@
+{
+  "curves": [
+    {
+      "currency": "USD",
+      "id": "sofr",
+      "index": "USD-SOFR",
+      "instruments": [
+        {
+          "adds_knot": true,
+          "end": "2026-09-16",
+          "id": "m1",
+          "region": "front",
+          "type": "meeting"
+        },
+        {
+          "accrual": "compounded",
+          "adds_knot": false,
+          "end": "1w",
+          "has_quote": true,
+          "id": "d1",
+          "quote_kind": "Rate",
+          "region": "front",
+          "start": "0d",
+          "target": 4.3,
+          "type": "rate",
+          "unit": "pct"
+        },
+        {
+          "accrual": "averaged",
+          "adds_knot": false,
+          "end": "2026-11-01",
+          "has_quote": true,
+          "id": "f1",
+          "quote_kind": "Rate",
+          "region": "front",
+          "start": "2026-10-01",
+          "target": 4.2,
+          "type": "fut1m",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "2y",
+          "has_quote": true,
+          "id": "s2",
+          "quote_kind": "ParRate",
+          "region": "back",
+          "target": 3.8,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "5y",
+          "has_quote": true,
+          "id": "s5",
+          "quote_kind": "ParRate",
+          "region": "back",
+          "target": 3.75,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "10y",
+          "has_quote": true,
+          "id": "s10",
+          "quote_kind": "ParRate",
+          "region": "back",
+          "target": 3.85,
+          "type": "swap",
+          "unit": "pct"
+        },
+        {
+          "adds_knot": true,
+          "end": "30y",
+          "has_quote": true,
+          "id": "s30",
+          "quote_kind": "ParRate",
+          "region": "back",
+          "target": 4.0,
+          "type": "swap",
+          "unit": "pct"
+        }
+      ],
+      "name": "SOFR",
+      "regions": [
+        {
+          "id": "front",
+          "policy": "Flat"
+        },
+        {
+          "id": "back",
+          "policy": "NaturalCubic"
+        }
+      ]
+    }
+  ],
+  "smoothness": "light",
+  "value_date": "2026-07-08"
+}
