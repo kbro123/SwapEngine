@@ -37,6 +37,7 @@ def leg(d):
 def main():
     db = json.load(open(JSON))
     products, indices, bonds = db["products"], db["indices"], db.get("bonds", {})
+    calendars = db.get("calendars", {})
 
     lines = [
         "#pragma once",
@@ -70,6 +71,23 @@ def main():
         "struct BondConv {",
         "  std::string_view id, currency, calendar, day_count, frequency, stub_discount;",
         "  int settle_lag; bool final_period_simple;",
+        "};",
+        "// A HOLIDAY rule (calendars[].holidays in the JSON) — interpreted by swaps/build/calendar.hpp.",
+        "// kind: \"fixed\" (month/day, from_year 0 = always), \"nth_weekday\" (month/weekday/n),",
+        "// \"last_weekday\" (month/weekday), \"easter_offset\" (days vs Easter Sunday). weekday is Mon=0..Sun=6.",
+        "// observance: \"\" = inherit the calendar default; else \"none\" | \"sat_to_fri_sun_to_mon\" | \"sun_to_mon\".",
+        "struct HolidayRule {",
+        "  std::string_view kind;",
+        "  int month, day, weekday, n, days, from_year;",
+        "  std::string_view observance;",
+        "};",
+        "// A CALENDAR: either rule-based (rule_count > 0) or a JOIN of other calendars (closed if any leg is",
+        "// closed). `weekend_mask` bit w (Mon=0..Sun=6) marks a weekend day. Rules/joins are slices of the flat",
+        "// kHolidayRules / kCalendarJoins arrays below.",
+        "struct CalendarConv {",
+        "  std::string_view id, name, observance;",
+        "  int weekend_mask;",
+        "  std::size_t rule_begin, rule_count, join_begin, join_count;",
         "};",
         "",
         f"inline constexpr std::array<ProductConv, {len(products)}> kProducts = {{{{",
@@ -105,7 +123,38 @@ def main():
         ]) + "},")
     lines += ["}};", ""]
 
+    # Calendars: flatten every calendar's holiday rules (and join legs) into single arrays, sliced per
+    # calendar by (begin, count) — constexpr-friendly, no nested variable-length initializers.
+    rules, joins, cal_rows = [], [], []
+    for cid in sorted(calendars):
+        c = calendars[cid]
+        rb, jb = len(rules), len(joins)
+        for r in c.get("holidays", []):
+            rules.append("  {" + ", ".join([
+                sv(r["rule"]),
+                str(r.get("month", 0)), str(r.get("day", 0)), str(r.get("weekday", -1)),
+                str(r.get("n", 0)), str(r.get("days", 0)), str(r.get("from_year", 0)),
+                sv(r.get("observance")),
+            ]) + "},")
+        for jleg in c.get("join", []):
+            joins.append(f"  {sv(jleg)},")
+        mask = sum(1 << w for w in c.get("weekend", [5, 6]))
+        cal_rows.append("  {" + ", ".join([
+            sv(cid), sv(c.get("name")), sv(c.get("observance")), str(mask),
+            str(rb), str(len(rules) - rb), str(jb), str(len(joins) - jb),
+        ]) + "},")
+    lines.append(f"inline constexpr std::array<HolidayRule, {len(rules)}> kHolidayRules = {{{{")
+    lines += rules + ["}};", ""]
+    lines.append(f"inline constexpr std::array<std::string_view, {len(joins)}> kCalendarJoins = {{{{")
+    lines += joins + ["}};", ""]
+    lines.append(f"inline constexpr std::array<CalendarConv, {len(calendars)}> kCalendars = {{{{")
+    lines += cal_rows + ["}};", ""]
+
     lines += [
+        "inline std::optional<CalendarConv> calendar(std::string_view id) {",
+        "  for (const auto& c : kCalendars) if (c.id == id) return c;",
+        "  return std::nullopt;",
+        "}",
         "inline std::optional<BondConv> bond(std::string_view id) {",
         "  for (const auto& b : kBonds) if (b.id == id) return b;",
         "  return std::nullopt;",
@@ -141,7 +190,8 @@ def main():
         return
     with open(OUT, "w") as f:
         f.write(text)
-    print(f"wrote {OUT} ({len(products)} products, {len(indices)} indices, {len(bonds)} bonds)")
+    print(f"wrote {OUT} ({len(products)} products, {len(indices)} indices, {len(bonds)} bonds, "
+          f"{len(calendars)} calendars / {len(rules)} holiday rules)")
 
 
 if __name__ == "__main__":

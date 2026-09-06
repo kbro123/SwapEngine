@@ -20,6 +20,7 @@ add_executable(swaps_tests
   tension_test.cpp
   turns_test.cpp
   build_calendar_test.cpp
+  calendar_data_test.cpp
   build_instruments_test.cpp
   build_ref_data_test.cpp
   structure_fingerprint_test.cpp
@@ -33,6 +34,8 @@ add_executable(swaps_tests
   market_scenario_test.cpp
   market_fixing_series_test.cpp
   trade_book_test.cpp
+  compiled_multi_test.cpp
+  aad_block_pooled_test.cpp
   asset_swap_spread_test.cpp
   derive_asset_swap_test.cpp
   bond_yield_test.cpp

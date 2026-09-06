@@ -1,18 +1,31 @@
-// swaps::build — market calendars: rule-based holidays + business-day adjustment. Faithful transcription of
-// server/calendars.py (TARGET / US-SIFMA bond market / US Federal Reserve / EURUSD join). QuantLib-free.
+// swaps::build — market calendars: rule-based holidays + business-day adjustment. QuantLib-free.
 //
-// Calendar ids are the conventions-DB keys. USD / USD-SOFR = SIFMA US-government-securities (bond market),
-// which CLOSES Good Friday. USD-FED = Federal Reserve (Fedwire): Good Friday OPEN, and a Saturday holiday is
-// NOT observed on the preceding Friday. EURUSD = union (closed if either leg is closed).
+// The holiday RULES are DATA: conventions/conventions.json `calendars[].holidays` (codegen'd into
+// swaps/conventions_data.hpp as kCalendars/kHolidayRules by tools/gen_conventions_hpp.py). This header only
+// INTERPRETS them — fixed dates, nth/last-weekday, Easter offsets (the computus itself stays in date.hpp:
+// it is an algorithm, not data), weekend-observance shifting, and joint calendars (closed if any leg is
+// closed). Adding a market calendar is a JSON entry, not a code branch. Behavior is bit-for-bit the old
+// hard-coded transcription of server/calendars.py (build_calendar_test.cpp + calendar_data_test.cpp gate it):
+//   - USD / USD-SOFR = SIFMA US-government-securities (bond market): CLOSES Good Friday; a Saturday holiday
+//     is observed the preceding Friday, a Sunday holiday the following Monday.
+//   - USD-FED = Federal Reserve (Fedwire): Good Friday OPEN; Sunday -> Monday, Saturday NOT observed.
+//   - EUR = TARGET: fixed set, no observance shifting. EURUSD = join(USD, EUR).
+//   - Legacy quirk kept: a year's set is generated FROM that year's rules, so an observance can spill into
+//     the previous year's dates (Jan-1 on a Saturday -> Dec-31) yet is_business_day buckets by the queried
+//     date's own year, leaving that spilled Friday a business day (e.g. 2021-12-31 on USD).
+//   - Legacy fallback kept: an id with no DB entry gets the "USD" (SIFMA bond-market) rules, exactly as the
+//     old code's default branch did (Calendar{""} relied on it).
 #ifndef SWAPS_BUILD_CALENDAR_HPP
 #define SWAPS_BUILD_CALENDAR_HPP
 
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "swaps/build/date.hpp"
+#include "swaps/conventions_data.hpp"
 
 namespace swaps::build {
 
@@ -25,41 +38,65 @@ inline Date obs_sat_fri_sun_mon(const Date& d) {
 // Federal Reserve observance: Sunday -> Monday; Saturday holidays NOT taken on the Friday.
 inline Date obs_sun_mon(const Date& d) { return d.weekday() == 6 ? d.plus_days(1) : d; }
 
-// Holiday set (excluding plain weekends) for a base (non-joint) calendar in `year` (calendars._holidays).
+namespace calendar_detail {
+
+// The calendar's DB row; an unknown (or empty) id falls back to the "USD" bond-market rules — the exact
+// behavior of the pre-data code, whose default branch was the US bond calendar.
+inline const conventions::CalendarConv& db_row(std::string_view cal_id) {
+  for (const auto& c : conventions::kCalendars)
+    if (c.id == cal_id) return c;
+  for (const auto& c : conventions::kCalendars)
+    if (c.id == "USD") return c;
+  throw std::logic_error("conventions DB has no USD calendar to fall back to");
+}
+
+inline Date observe(std::string_view policy, const Date& d) {
+  if (policy == "sat_to_fri_sun_to_mon") return obs_sat_fri_sun_mon(d);
+  if (policy == "sun_to_mon") return obs_sun_mon(d);
+  if (policy == "none" || policy.empty()) return d;
+  throw std::invalid_argument("unknown observance policy: " + std::string(policy));
+}
+
+inline Date rule_date(const conventions::HolidayRule& r, int year) {
+  const std::string_view k = r.kind;
+  if (k == "fixed") return Date::ymd(year, unsigned(r.month), unsigned(r.day));
+  if (k == "nth_weekday") return nth_weekday(year, unsigned(r.month), r.weekday, r.n);
+  if (k == "last_weekday") return last_weekday(year, unsigned(r.month), r.weekday);
+  if (k == "easter_offset") return easter(year).plus_days(r.days);
+  throw std::invalid_argument("unknown holiday rule kind: " + std::string(k));
+}
+
+}  // namespace calendar_detail
+
+// Holiday set (excluding plain weekends) for a base (non-joint) calendar in `year`: `year`'s rules
+// evaluated and observance-shifted (calendars._holidays). A joint calendar returns the union of its legs.
 inline std::set<long> holidays_serial(const std::string& cal_id, int year) {
+  const auto& cal = calendar_detail::db_row(cal_id);
   std::set<long> hs;
-  const auto add = [&](const Date& x) { hs.insert(x.serial()); };
-  if (cal_id == "EUR") {  // TARGET — fixed set, no weekend-observance shifting.
-    const Date e = easter(year);
-    add(Date::ymd(year, 1, 1));
-    add(e.plus_days(-2));  // Good Friday
-    add(e.plus_days(1));   // Easter Monday
-    add(Date::ymd(year, 5, 1));
-    add(Date::ymd(year, 12, 25));
-    add(Date::ymd(year, 12, 26));
+  if (cal.join_count) {  // joint: the union of the legs' holiday sets
+    for (std::size_t j = 0; j < cal.join_count; ++j) {
+      const auto leg = holidays_serial(std::string(conventions::kCalendarJoins[cal.join_begin + j]), year);
+      hs.insert(leg.begin(), leg.end());
+    }
     return hs;
   }
-  const bool fed = (cal_id == "USD-FED");
-  const auto obs = [&](const Date& x) { return fed ? obs_sun_mon(x) : obs_sat_fri_sun_mon(x); };
-  add(obs(Date::ymd(year, 1, 1)));    // New Year
-  add(obs(Date::ymd(year, 7, 4)));    // Independence
-  add(obs(Date::ymd(year, 11, 11)));  // Veterans
-  add(obs(Date::ymd(year, 12, 25)));  // Christmas
-  if (year >= 2021) add(obs(Date::ymd(year, 6, 19)));  // Juneteenth (US federal holiday since 2021)
-  add(nth_weekday(year, 1, 0, 3));    // MLK — 3rd Monday of January
-  add(nth_weekday(year, 2, 0, 3));    // Washington's Birthday — 3rd Monday of February
-  add(last_weekday(year, 5, 0));      // Memorial Day — last Monday of May
-  add(nth_weekday(year, 9, 0, 1));    // Labor Day — 1st Monday of September
-  add(nth_weekday(year, 10, 0, 2));   // Columbus Day — 2nd Monday of October
-  add(nth_weekday(year, 11, 3, 4));   // Thanksgiving — 4th Thursday of November
-  if (!fed) add(easter(year).plus_days(-2));  // bond market (SIFMA/SOFR) closes Good Friday; the Fed does not
+  for (std::size_t i = 0; i < cal.rule_count; ++i) {
+    const auto& r = conventions::kHolidayRules[cal.rule_begin + i];
+    if (r.from_year && year < r.from_year) continue;
+    const auto policy = r.observance.empty() ? cal.observance : r.observance;
+    hs.insert(calendar_detail::observe(policy, calendar_detail::rule_date(r, year)).serial());
+  }
   return hs;
 }
 
 inline bool is_business_day(const std::string& cal_id, const Date& d) {
-  if (d.weekday() >= 5) return false;
-  if (cal_id == "EURUSD")  // union: a business day only if BOTH legs are open
-    return is_business_day("USD", d) && is_business_day("EUR", d);
+  const auto& cal = calendar_detail::db_row(cal_id);
+  if ((cal.weekend_mask >> d.weekday()) & 1) return false;
+  if (cal.join_count) {  // joint: a business day only if EVERY leg is open
+    for (std::size_t j = 0; j < cal.join_count; ++j)
+      if (!is_business_day(std::string(conventions::kCalendarJoins[cal.join_begin + j]), d)) return false;
+    return true;
+  }
   return holidays_serial(cal_id, d.year()).count(d.serial()) == 0;
 }
 

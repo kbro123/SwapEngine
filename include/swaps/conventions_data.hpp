@@ -30,6 +30,23 @@ struct BondConv {
   std::string_view id, currency, calendar, day_count, frequency, stub_discount;
   int settle_lag; bool final_period_simple;
 };
+// A HOLIDAY rule (calendars[].holidays in the JSON) — interpreted by swaps/build/calendar.hpp.
+// kind: "fixed" (month/day, from_year 0 = always), "nth_weekday" (month/weekday/n),
+// "last_weekday" (month/weekday), "easter_offset" (days vs Easter Sunday). weekday is Mon=0..Sun=6.
+// observance: "" = inherit the calendar default; else "none" | "sat_to_fri_sun_to_mon" | "sun_to_mon".
+struct HolidayRule {
+  std::string_view kind;
+  int month, day, weekday, n, days, from_year;
+  std::string_view observance;
+};
+// A CALENDAR: either rule-based (rule_count > 0) or a JOIN of other calendars (closed if any leg is
+// closed). `weekend_mask` bit w (Mon=0..Sun=6) marks a weekend day. Rules/joins are slices of the flat
+// kHolidayRules / kCalendarJoins arrays below.
+struct CalendarConv {
+  std::string_view id, name, observance;
+  int weekend_mask;
+  std::size_t rule_begin, rule_count, join_begin, join_count;
+};
 
 inline constexpr std::array<ProductConv, 12> kProducts = {{
   {"EUR-3S6S-BASIS", "EUR", "EUR", "ModifiedFollowing", 2, 0, {"", "", "", "", -1, false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", -1, true, false, false}},
@@ -59,6 +76,67 @@ inline constexpr std::array<BondConv, 2> kBonds = {{
   {"US-TREASURY-TSY", "USD", "USD", "ACT/ACT-ICMA", "6M", "simple", 1, false},
 }};
 
+inline constexpr std::array<HolidayRule, 41> kHolidayRules = {{
+  {"fixed", 1, 1, -1, 0, 0, 0, ""},
+  {"easter_offset", 0, 0, -1, 0, -2, 0, ""},
+  {"easter_offset", 0, 0, -1, 0, 1, 0, ""},
+  {"fixed", 5, 1, -1, 0, 0, 0, ""},
+  {"fixed", 12, 25, -1, 0, 0, 0, ""},
+  {"fixed", 12, 26, -1, 0, 0, 0, ""},
+  {"fixed", 1, 1, -1, 0, 0, 0, ""},
+  {"nth_weekday", 1, 0, 0, 3, 0, 0, "none"},
+  {"nth_weekday", 2, 0, 0, 3, 0, 0, "none"},
+  {"easter_offset", 0, 0, -1, 0, -2, 0, "none"},
+  {"last_weekday", 5, 0, 0, 0, 0, 0, "none"},
+  {"fixed", 6, 19, -1, 0, 0, 2021, ""},
+  {"fixed", 7, 4, -1, 0, 0, 0, ""},
+  {"nth_weekday", 9, 0, 0, 1, 0, 0, "none"},
+  {"nth_weekday", 10, 0, 0, 2, 0, 0, "none"},
+  {"fixed", 11, 11, -1, 0, 0, 0, ""},
+  {"nth_weekday", 11, 0, 3, 4, 0, 0, "none"},
+  {"fixed", 12, 25, -1, 0, 0, 0, ""},
+  {"fixed", 1, 1, -1, 0, 0, 0, ""},
+  {"nth_weekday", 1, 0, 0, 3, 0, 0, "none"},
+  {"nth_weekday", 2, 0, 0, 3, 0, 0, "none"},
+  {"last_weekday", 5, 0, 0, 0, 0, 0, "none"},
+  {"fixed", 6, 19, -1, 0, 0, 2021, ""},
+  {"fixed", 7, 4, -1, 0, 0, 0, ""},
+  {"nth_weekday", 9, 0, 0, 1, 0, 0, "none"},
+  {"nth_weekday", 10, 0, 0, 2, 0, 0, "none"},
+  {"fixed", 11, 11, -1, 0, 0, 0, ""},
+  {"nth_weekday", 11, 0, 3, 4, 0, 0, "none"},
+  {"fixed", 12, 25, -1, 0, 0, 0, ""},
+  {"fixed", 1, 1, -1, 0, 0, 0, ""},
+  {"nth_weekday", 1, 0, 0, 3, 0, 0, "none"},
+  {"nth_weekday", 2, 0, 0, 3, 0, 0, "none"},
+  {"easter_offset", 0, 0, -1, 0, -2, 0, "none"},
+  {"last_weekday", 5, 0, 0, 0, 0, 0, "none"},
+  {"fixed", 6, 19, -1, 0, 0, 2021, ""},
+  {"fixed", 7, 4, -1, 0, 0, 0, ""},
+  {"nth_weekday", 9, 0, 0, 1, 0, 0, "none"},
+  {"nth_weekday", 10, 0, 0, 2, 0, 0, "none"},
+  {"fixed", 11, 11, -1, 0, 0, 0, ""},
+  {"nth_weekday", 11, 0, 3, 4, 0, 0, "none"},
+  {"fixed", 12, 25, -1, 0, 0, 0, ""},
+}};
+
+inline constexpr std::array<std::string_view, 2> kCalendarJoins = {{
+  "USD",
+  "EUR",
+}};
+
+inline constexpr std::array<CalendarConv, 5> kCalendars = {{
+  {"EUR", "TARGET (EUR settlement)", "none", 96, 0, 6, 0, 0},
+  {"EURUSD", "Joint US-SIFMA + TARGET (FX/xccy USD side = SIFMA government-bond)", "", 96, 6, 0, 0, 2},
+  {"USD", "US SIFMA / US government securities (bond market)", "sat_to_fri_sun_to_mon", 96, 6, 12, 2, 0},
+  {"USD-FED", "US Federal Reserve (Fedwire)", "sun_to_mon", 96, 18, 11, 2, 0},
+  {"USD-SOFR", "SOFR fixing calendar (SIFMA, incl. Good Friday close)", "sat_to_fri_sun_to_mon", 96, 29, 12, 2, 0},
+}};
+
+inline std::optional<CalendarConv> calendar(std::string_view id) {
+  for (const auto& c : kCalendars) if (c.id == id) return c;
+  return std::nullopt;
+}
 inline std::optional<BondConv> bond(std::string_view id) {
   for (const auto& b : kBonds) if (b.id == id) return b;
   return std::nullopt;
