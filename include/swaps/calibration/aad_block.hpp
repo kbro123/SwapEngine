@@ -13,9 +13,13 @@
 //     to those knots' columns.
 //   * BUFFER REUSE. The seed vector's gradient basis is CONSTANT (it is the identity over the touched
 //     knots), so it is built ONCE; each call only overwrites the seed VALUES. The sub-problem, the
-//     touched-column map and the output targets are all sized once. (The per-operation gradient
-//     allocations inside Eigen's AutoDiffScalar remain -- eliminating those needs a pooled Dual type,
-//     a separate future change.)
+//     touched-column map and the output targets are all sized once.
+//   * POOLED DUAL (R11, the allocation kill). The width reduction makes the touched set small (~20),
+//     so the AAD sweep runs on ad::DualPooled<ad::kPooledMaxW> -- the gradient lives IN-OBJECT with
+//     capacity kPooledMaxW, so no per-operation heap allocation at all. Runtime semantics are
+//     byte-for-byte Dual's (dynamic length, empty-gradient-means-constant), so the pooled Jacobian is
+//     bit-identical to the heap one. A block whose touched width exceeds kPooledMaxW falls back to the
+//     heap ad::Dual path unchanged (selected once, at init).
 
 #include <Eigen/Core>
 
@@ -91,10 +95,15 @@ class AadBlock {
     }
   }
 
+  // True when the AAD sweep runs on the pooled (allocation-free) dual; false = the heap-Dual fallback
+  // (touched width > ad::kPooledMaxW, or forced for testing).
+  bool pooled() const { return pooled_; }
+
   // Build from the bundle's curves, the non-cacheable instruments, their GLOBAL residual rows, and the
   // global knot count. Determines the touched knots and pre-sizes the reusable width-reduced seed.
+  // `force_heap` pins the heap-Dual AAD path regardless of width (test knob for the pooled==heap oracle).
   void init(const std::vector<BundleCurveSpec>& curves, std::vector<Instrument> instruments,
-            std::vector<int> rows, int n_knots) {
+            std::vector<int> rows, int n_knots, bool force_heap = false) {
     n_knots_ = n_knots;
     rows_ = std::move(rows);
     sub_.curves = curves;
@@ -120,16 +129,16 @@ class AadBlock {
     }
     touched_.assign(knots.begin(), knots.end());  // sorted
 
-    // Build the width-reduced seed ONCE: gradient e_j on touched_[j], zero elsewhere. Only values change.
-    const int w = static_cast<int>(touched_.size());
-    xd_.resize(n_knots_);
-    for (int k = 0; k < n_knots_; ++k) xd_[k].derivatives() = Eigen::VectorXd::Zero(w);
-    for (int j = 0; j < w; ++j) xd_[touched_[j]].derivatives()[j] = 1.0;
+    // Select the AAD scalar ONCE: the pooled dual whenever the touched width fits its in-object gradient
+    // capacity (the width reduction makes this the overwhelmingly common case), the heap Dual otherwise.
+    // Only the selected variant's seed + curve set are built.
+    pooled_ = !force_heap && static_cast<int>(touched_.size()) <= ad::kPooledMaxW;
+    if (pooled_) build_seed(pool_);
+    else build_seed(heap_);
 
-    // Build the reusable curve objects ONCE (the structure is fixed tick to tick). Every residual/Jacobian
-    // pass overwrites their forwards IN PLACE instead of reconstructing the handles/curves each call.
+    // Build the reusable double curves ONCE (the structure is fixed tick to tick). Every residual pass
+    // overwrites their forwards IN PLACE instead of reconstructing the handles/curves each call.
     dcurves_.build(sub_.curves);
-    ducurves_.build(sub_.curves);
 
     build_df_cache();
   }
@@ -158,17 +167,8 @@ class AadBlock {
   // Only the touched columns are nonzero; the rest stay whatever the caller pre-zeroed.
   void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const {
     if (rows_.empty()) return;
-    for (int k = 0; k < n_knots_; ++k) xd_[k].value() = x[k];   // reuse the seed: values only
-    ducurves_.update([&](int c, int i) { return xd_[off_[c] + i]; });
-    const auto curve_of = [this](int i) -> const CurveHandle<ad::Dual>& { return ducurves_[i]; };
-    const int w = static_cast<int>(touched_.size());
-    for (int j = 0; j < size(); ++j) {
-      const ad::Dual rj = instrument_residual<ad::Dual>(sub_.instruments[j], curve_of);
-      J.row(rows_[j]).setZero();
-      const auto& g = rj.derivatives();
-      if (g.size() == w)
-        for (int t = 0; t < w; ++t) J(rows_[j], touched_[t]) = g[t];
-    }
+    if (pooled_) jacobian_impl(pool_, x, J, nullptr);
+    else jacobian_impl(heap_, x, J, nullptr);
   }
 
   // --- Streaming (frozen-Newton) forms: residual/Jacobian against a LIVE market q instead of the stored
@@ -191,12 +191,45 @@ class AadBlock {
   // (so the band chain-rule term (q_model − q) and the FX 1/F_model factor fall out automatically).
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
     if (rows_.empty()) return;
-    for (int k = 0; k < n_knots_; ++k) xd_[k].value() = x[k];   // reuse the seed: values only
-    ducurves_.update([&](int c, int i) { return xd_[off_[c] + i]; });
-    const auto curve_of = [this](int i) -> const CurveHandle<ad::Dual>& { return ducurves_[i]; };
+    if (pooled_) jacobian_impl(pool_, x, J, &q);
+    else jacobian_impl(heap_, x, J, &q);
+  }
+
+ private:
+  // The reusable width-reduced AAD state for one dual scalar D: the seed vector (gradient basis built
+  // once, values overwritten per call) and the reusable D-typed curve set. Exactly one variant is built
+  // at init -- pooled (D = ad::DualPooled<ad::kPooledMaxW>, allocation-free) or heap (D = ad::Dual).
+  template <class D>
+  struct AadState {
+    Eigen::Matrix<D, Eigen::Dynamic, 1> xd;  // width-reduced seed (values updated per call)
+    BundleCurveSet<D> curves;                // reusable D curves: built once, forwards updated in place
+  };
+
+  // Build the width-reduced seed ONCE: gradient e_j on touched_[j], zero (size-w) elsewhere -- the
+  // empty/sized-gradient semantics are identical for Dual and DualPooled, so both variants compute the
+  // exact same doubles in the exact same order. Only values change per call.
+  template <class D>
+  void build_seed(AadState<D>& s) {
+    const int w = static_cast<int>(touched_.size());
+    s.xd.resize(n_knots_);
+    for (int k = 0; k < n_knots_; ++k) s.xd[k].derivatives().setZero(w);
+    for (int j = 0; j < w; ++j) s.xd[touched_[j]].derivatives()[j] = 1.0;
+    s.curves.build(sub_.curves);
+  }
+
+  // The one differentiated sweep, templated on the dual scalar. `q == nullptr` differentiates the stored-
+  // mid residual (jacobian_into); otherwise the live-market residual (jacobian_vs_into). Byte-identical
+  // to the pre-template loops for D = ad::Dual.
+  template <class D>
+  void jacobian_impl(AadState<D>& s, const Eigen::VectorXd& x, Eigen::MatrixXd& J,
+                     const Eigen::VectorXd* q) const {
+    for (int k = 0; k < n_knots_; ++k) s.xd[k].value() = x[k];  // reuse the seed: values only
+    s.curves.update([&](int c, int i) { return s.xd[off_[c] + i]; });
+    const auto curve_of = [&s](int i) -> const CurveHandle<D>& { return s.curves[i]; };
     const int w = static_cast<int>(touched_.size());
     for (int j = 0; j < size(); ++j) {
-      const ad::Dual rj = instrument_residual<ad::Dual>(sub_.instruments[j], curve_of, q[rows_[j]]);
+      const D rj = q ? instrument_residual<D>(sub_.instruments[j], curve_of, (*q)[rows_[j]])
+                     : instrument_residual<D>(sub_.instruments[j], curve_of);
       J.row(rows_[j]).setZero();
       const auto& g = rj.derivatives();
       if (g.size() == w)
@@ -204,7 +237,6 @@ class AadBlock {
     }
   }
 
- private:
   // Curve roles an instrument reads (recursing through Portfolio components).
   static void collect_curves(const Instrument& ins, std::set<int>& s) {
     auto leg = [&](const FloatLeg& l) {
@@ -308,9 +340,10 @@ class AadBlock {
   std::vector<int> off_;       // per-curve global state offset (== sub_.offset(c)), hoisted at init
   std::vector<int> touched_;   // global knot indices these instruments differentiate w.r.t. (sorted)
   int n_knots_ = 0;
-  mutable Eigen::Matrix<ad::Dual, Eigen::Dynamic, 1> xd_;  // reused width-reduced seed (values updated)
-  mutable BundleCurveSet<double> dcurves_;     // reusable double curves: built once, forwards updated in place
-  mutable BundleCurveSet<ad::Dual> ducurves_;  // reusable Dual curves for the width-reduced Jacobian
+  bool pooled_ = false;  // AAD scalar selected at init: pooled (width <= kPooledMaxW) vs heap fallback
+  mutable AadState<ad::DualPooled<ad::kPooledMaxW>> pool_;  // the allocation-free sweep (built iff pooled_)
+  mutable AadState<ad::Dual> heap_;                         // the heap-Dual fallback (built iff !pooled_)
+  mutable BundleCurveSet<double> dcurves_;  // reusable double curves: built once, forwards updated in place
 
   // ---- vectorised discount cache (per curve; only for curves the block prices off) ----
   std::vector<std::vector<double>> disc_times_;  // [curve] sorted distinct query times
