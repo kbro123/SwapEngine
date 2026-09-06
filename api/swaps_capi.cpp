@@ -6,8 +6,12 @@
 #include <cstring>
 #include <exception>
 #include <string>
+#include <vector>
+
+#include <boost/json.hpp>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/api/compile.hpp"
 
 extern "C" const char* swaps_run_json(const char* req) {
   if (!req) return nullptr;
@@ -26,3 +30,94 @@ extern "C" const char* swaps_run_json(const char* req) {
 }
 
 extern "C" void swaps_string_free(const char* s) { std::free(const_cast<char*>(s)); }
+
+// ---- stateful calibrated-session handles (warm-recalibrating hosts; see capi.h) -----------------------
+namespace {
+namespace json = boost::json;
+using swaps::api::BundleSession;
+
+const char* dup_str(const std::string& s) {
+  char* buf = static_cast<char*>(std::malloc(s.size() + 1));
+  if (buf) std::memcpy(buf, s.c_str(), s.size() + 1);
+  return buf;
+}
+const char* err_json(const std::string& what) { return dup_str("{\"error\":\"" + what + "\"}"); }
+
+std::vector<double> to_vec(const json::value& v) {
+  std::vector<double> out;
+  if (v.is_array())
+    for (const auto& e : v.as_array()) out.push_back(e.to_number<double>());
+  return out;
+}
+json::array darr(const std::vector<double>& v) {
+  json::array a;
+  a.reserve(v.size());
+  for (double x : v) a.push_back(x);
+  return a;
+}
+}  // namespace
+
+extern "C" void* swaps_session_create(const char* spec_json, const char* today) {
+  if (!spec_json) return nullptr;
+  try {
+    auto cr = swaps::api::compile_spec(json::parse(spec_json), today ? today : "");
+    return static_cast<void*>(new BundleSession(std::move(cr.bundle)));
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+extern "C" const char* swaps_session_calibrate(void* session) {
+  if (!session) return err_json("null session");
+  try {
+    auto* s = static_cast<BundleSession*>(session);
+    const auto& r = s->calibrate(swaps::api::flat_x0(s->problem()));
+    if (!s->needs_recalibrate()) s->start_streaming();  // anchor the frozen-Newton warm path when eligible
+    json::object o;
+    o["rms_residual"] = r.rms_residual;
+    o["rank_deficiency"] = r.rank_deficiency;
+    o["iterations"] = r.iterations;
+    return dup_str(json::serialize(o));
+  } catch (const std::exception& e) {
+    return err_json(e.what());
+  }
+}
+
+extern "C" const char* swaps_session_update(void* session, const char* market_json) {
+  if (!session || !market_json) return err_json("null arg");
+  try {
+    auto* s = static_cast<BundleSession*>(session);
+    const std::vector<double> v = to_vec(json::parse(market_json));
+    const Eigen::VectorXd m = Eigen::Map<const Eigen::VectorXd>(v.data(), static_cast<Eigen::Index>(v.size()));
+    if (s->needs_recalibrate())
+      s->recalibrate(m);          // non-linear region: general warm re-solve
+    else
+      s->stream_update(m);        // frozen-Newton µs tick over the cached statics
+    return dup_str("{\"ok\":true}");
+  } catch (const std::exception& e) {
+    return err_json(e.what());
+  }
+}
+
+extern "C" const char* swaps_session_sample(void* session, const char* times_json) {
+  if (!session || !times_json) return err_json("null arg");
+  try {
+    auto* s = static_cast<BundleSession*>(session);
+    const std::vector<double> times = to_vec(json::parse(times_json));
+    json::array curves;
+    for (const auto& cs : s->sample(times)) {
+      json::object c;
+      c["currency"] = cs.currency;
+      c["t"] = darr(cs.t);
+      c["discount"] = darr(cs.discount);
+      c["zero"] = darr(cs.zero);
+      c["forward"] = darr(cs.forward);
+      curves.push_back(c);
+    }
+    return dup_str(json::serialize(curves));
+  } catch (const std::exception& e) {
+    return err_json(e.what());
+  }
+}
+
+extern "C" void swaps_session_free(void* session) { delete static_cast<BundleSession*>(session); }

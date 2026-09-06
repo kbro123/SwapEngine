@@ -18,8 +18,37 @@ extern "C" {
  * allocation fails. Thread-safe: no shared mutable state (each call constructs its own BundleSession). */
 const char* swaps_run_json(const char* req);
 
-/* Free a string previously returned by swaps_run_json. */
+/* Free a string previously returned by swaps_run_json (or any session call below). */
 void swaps_string_free(const char* s);
+
+/* ---- STATEFUL calibrated-session handles (for a warm-recalibrating host: the Excel add-in, .NET, ctypes) --
+ *
+ * swaps_run_json above is STATELESS — each call builds its own session and throws it away. These five
+ * functions instead hand the caller an OPAQUE HANDLE to a persistent calibrated session that OWNS the
+ * compiled DF=exp(-Wx) statics + structure fingerprint + solved knots, so re-solving to a new market is the
+ * µs WARM path (no recompile). This is the C boundary a stateful add-in (a curve1/model1 object cache) is
+ * built on. Each handle is single-threaded; do not share one across threads.
+ */
+
+/* Compile a COMPOSER SPEC (the {"compile": <spec>} JSON shape) into a persistent session. `today` supplies
+ * the value date when the spec omits one (pass NULL/"" to require it). Returns an opaque handle, or NULL on a
+ * parse/compile error. Release it with swaps_session_free. */
+void* swaps_session_create(const char* spec_json, const char* today);
+
+/* Cold-calibrate the session (and anchor its warm path). Returns a newly-allocated JSON string
+ * {"rms_residual","rank_deficiency","iterations"} (caller frees with swaps_string_free); {"error":...} on failure. */
+const char* swaps_session_calibrate(void* session);
+
+/* WARM re-solve to a new market — `market_json` is a JSON array of the quoted-instrument targets in residual
+ * order — reusing the cached statics. Returns {"ok":true} or {"error":...}. Call swaps_session_calibrate first. */
+const char* swaps_session_update(void* session, const char* market_json);
+
+/* Sample every curve at `times_json` (a JSON array of times). Returns
+ * [{"currency","t","discount","zero","forward"}, ...] (caller frees). */
+const char* swaps_session_sample(void* session, const char* times_json);
+
+/* Release a session handle created by swaps_session_create. Safe on NULL. */
+void swaps_session_free(void* session);
 
 #ifdef __cplusplus
 }
