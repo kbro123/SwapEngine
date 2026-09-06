@@ -175,7 +175,11 @@ boost::json::value instrument_to_json(const cal::Instrument& ins);
 swaps::portfolio::MultiCurveBook book_from_json(const boost::json::value& v);
 
 // A flat starting guess sized to the problem: outright curves at `level`, spread curves at 0.
-Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level = 0.02);
+// level <= 0 (the default) derives the flat level from the market itself: the mean outright
+// (ParRate/Rate) quote, clamped to [0.1%, 20%], falling back to 2% for a bundle with no outright
+// rows. Spread curves and turn deltas always seed at 0. Passing an explicit positive level keeps
+// the old fixed-level behaviour.
+Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level = 0.0);
 
 // ---- the session facade --------------------------------------------------------------------------
 class BundleSession {

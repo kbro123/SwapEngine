@@ -508,6 +508,20 @@ pf::MultiCurveBook book_from_json(const json::value& v) {
 }
 
 Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
+  if (level <= 0.0) {
+    // Derive the flat seed level FROM THE MARKET: the mean outright quote (ParRate / Rate rows). This is
+    // what makes the seed a defensible ANCHOR for rank-deficient completion (calibrate_with): an
+    // unconstrained state then reports "the average market level", not an arbitrary constant. Spread
+    // curves still seed at zero; clamped to a sane band; falls back to 2% when no outright rows exist.
+    double sum = 0.0;
+    int n = 0;
+    for (const auto& ins : prob.instruments)
+      if (ins.quote == cal::QuoteKind::ParRate || ins.quote == cal::QuoteKind::Rate) {
+        sum += ins.market;
+        ++n;
+      }
+    level = n ? std::min(0.20, std::max(1e-3, sum / n)) : 0.02;
+  }
   Eigen::VectorXd x(prob.n_knots());
   int o = 0;
   for (const auto& c : prob.curves) {
@@ -961,6 +975,7 @@ std::string run_json(const std::string& request) {
       c["rms_residual"] = res.rms_residual;
       c["stationarity"] = res.stationarity;
       c["info"] = res.info;
+      c["rank_deficiency"] = res.rank_deficiency;  // >0: the instrument set under-determines the curve
       out["calibration"] = c;
     }
     out["x"] = da(sess.x());

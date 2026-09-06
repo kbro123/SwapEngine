@@ -178,7 +178,7 @@ class StreamingCalibrator {
       // streaming analogue of what LM's damping did during the fit. 1e-10 (relative to the largest
       // pivot) cleanly separates genuine curve stiffness (~1e-3..1e-5) from numerical null (~1e-11).
       Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-      cod.setThreshold(1e-10);
+      cod.setThreshold(kRankThreshold);
       cod.compute(J);
       M_ = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
     }

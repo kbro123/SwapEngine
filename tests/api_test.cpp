@@ -639,3 +639,49 @@ TEST(BundleApi, RankDeficientBundleStreamsFinite) {
   (void)r;  // residual vs the ORIGINAL market is ~3e-5 (the shift); finiteness is the contract here
   EXPECT_LT(sess.last_drift(), 1e-3);
 }
+
+// MINIMUM-NORM completion: on a rank-deficient bundle the unpinned state lands EXACTLY at the seed (not
+// wherever the LM path wandered), rank_deficiency reports the null count, and a determined bundle is a
+// pure no-op (rank_deficiency == 0; the recovery tests above pin exactness).
+TEST(BundleApi, MinNormCalibrationPinsUnconstrainedStatesToTheSeed) {
+  Eigen::VectorXd x_true;
+  cal::BundleProblem p = build_bundle(x_true);
+  {
+    api::BundleSession sess(p);  // determined: full rank, nothing snapped
+    sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
+    EXPECT_EQ(sess.result().rank_deficiency, 0);
+  }
+  p.curves[1].regions.back().knots.push_back(20.0);  // an unpinned knot (no instrument reaches 20y)
+  api::BundleSession sess(p);
+  const double seed = 0.0123;  // deliberately distinctive
+  sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), seed));
+  EXPECT_EQ(sess.result().rank_deficiency, 1);
+  const int unpinned = p.n_knots() - 1;  // curve 1's appended last knot is the final state
+  // ~seed, not exactly: the 20y knot is only NEAR-null (Hermite derivative coupling gives the market a
+  // weak say), so the anchored optimum is the compromise — deterministic and within bp of the seed,
+  // instead of the multi-hundred-percent LM wander this guards against.
+  EXPECT_NEAR(sess.x()[unpinned], seed, 5e-4)
+      << "the null direction must sit near the seed, not at an arbitrary LM endpoint";
+  EXPECT_LT(sess.result().rms_residual, 1e-6) << "the anchored re-solve must not disturb the fit";
+}
+
+// The EXTRAPOLATION POLICY beyond the last calibration instrument: FLAT INSTANTANEOUS FORWARD (the
+// industry default). forward(t > t_last) == the last knot's fitted forward, and discounts compound at
+// that flat rate: DF(T) = DF(t_last) * exp(-f_last * (T - t_last)). Pinned here at the SESSION level so
+// pricing cash flows beyond the final instrument is a documented contract, not an accident of the
+// interpolator.
+TEST(BundleApi, FlatForwardExtrapolationBeyondTheLastInstrument) {
+  Eigen::VectorXd x_true;
+  const cal::BundleProblem p = build_bundle(x_true);  // last knot / last instrument at 10y
+  api::BundleSession sess(p);
+  sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
+  const auto s = sess.sample({10.0, 12.0, 20.0, 40.0});
+  const auto& c0 = s[0];
+  const double f_last = c0.forward[0];
+  for (std::size_t i = 1; i < c0.t.size(); ++i)
+    EXPECT_NEAR(c0.forward[i], f_last, 1e-12) << "forward must be FLAT beyond the last knot (t=" << c0.t[i] << ")";
+  EXPECT_NEAR(c0.discount[2], c0.discount[0] * std::exp(-f_last * 10.0), 1e-12)
+      << "DF(20) must compound flat off DF(10)";
+  EXPECT_NEAR(c0.discount[3], c0.discount[0] * std::exp(-f_last * 30.0), 1e-10)
+      << "DF(40) must compound flat off DF(10)";
+}

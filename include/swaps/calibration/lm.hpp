@@ -48,6 +48,14 @@ struct CalibrationResult {
   double solve_micros = 0;  // engine-measured wall time of the solve (excludes any marshalling); the
                             // caller (BundleSession) stamps this so callers report the ENGINE's own
                             // calibration time, not a language-boundary wall-clock.
+  // Number of NUMERICALLY UNCONSTRAINED state directions (n_knots - rank(J) at the solution, at the
+  // shared kRankThreshold). 0 for a well-posed problem. When > 0, `x` is the MINIMUM-NORM completion:
+  // among the least-squares optima, the one closest to the seed x0 (see calibrate_with) -- the null
+  // components sit exactly at their seed values instead of wherever the LM path wandered. A nonzero
+  // value means the INSTRUMENT SET under-determines the curve (e.g. a front knot before the first
+  // instrument, an unreached long knot): surface it to the user -- add an instrument or enable
+  // smoothing -- rather than treating the completed values as market-implied.
+  int rank_deficiency = 0;
 };
 
 // LM functor over ANY residual engine (residuals(x) + jacobian(x)), not tied to residual_engine_t --
@@ -80,6 +88,15 @@ struct AnyEngineFunctor {
 // The LM loop over a PREBUILT residual engine. Identical control flow / tolerances / result stats to
 // calibrate() below -- calibrate() IS this after constructing the engine -- but the engine's lifetime
 // belongs to the caller, so a warm caller pays construction (the W-cache build) once, not per solve.
+//
+// MINIMUM-NORM completion: if the problem is rank-deficient at the solution (rank(J) < n_knots at the
+// shared kRankThreshold), LM converges to A least-squares optimum but the null-direction components of
+// x are path-dependent garbage (they change no residual, so LM parks them wherever its trajectory
+// wandered -- forwards of -570% have been observed on an under-determined web spec). This snaps the
+// result to the optimum CLOSEST TO THE SEED: x = x0 + J⁺J(x_lm - x0), the range-space projection via
+// the same rank-thresholded complete orthogonal decomposition the streaming operator uses. For a warm
+// re-solve the "seed" is the previous solution, so unconstrained states stay put tick to tick. A
+// full-rank problem is a no-op (rank check only); the residual stats are refreshed at the snapped point.
 template <class Engine>
 CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residuals,
                                  const Eigen::VectorXd& x0) {
@@ -92,9 +109,55 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
   lm.parameters.maxfev = 4000;
   res.info = lm.minimize(res.x);
   res.iterations = lm.iter;
+  Eigen::MatrixXd J = engine.jacobian(res.x);
+
+  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
+  cod.setThreshold(kRankThreshold);
+  cod.compute(J);
+  res.rank_deficiency = n_knots - static_cast<int>(cod.rank());
+  if (res.rank_deficiency > 0) {
+    // SEED-ANCHORED re-solve (rank-deficient problems ONLY; a determined problem never enters here).
+    // A post-hoc null-space projection is NOT enough: the null combination of a nonlinear problem is
+    // x-dependent, so a large projection moves the residual at second order and a re-polish wanders
+    // back along the null. Instead re-run the SAME least squares with tiny anchor rows w·(x − x0)
+    // appended: in the null directions the anchor is the only force (they land exactly at the seed);
+    // in constrained directions its pull is (w/sigma)^2-suppressed — w = 1e-8·|max pivot| biases a
+    // genuine direction by parts-per-billion of its value. For a WARM re-solve x0 is the previous
+    // solution, so unconstrained states stay put tick to tick.
+    const double w = 1e-8 * std::abs(cod.maxPivot());
+    struct Anchored {
+      const Engine* base;
+      const Eigen::VectorXd* x0;
+      double w;
+      int nk;
+      Eigen::VectorXd residuals(const Eigen::VectorXd& x) const {
+        const auto& r0 = base->residuals(x);
+        Eigen::VectorXd r(r0.size() + nk);
+        r.head(r0.size()) = r0;
+        r.tail(nk) = w * (x - *x0);
+        return r;
+      }
+      Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
+        const Eigen::MatrixXd J0 = base->jacobian(x);
+        Eigen::MatrixXd J(J0.rows() + nk, nk);
+        J.topRows(J0.rows()) = J0;
+        J.bottomRows(nk) = w * Eigen::MatrixXd::Identity(nk, nk);
+        return J;
+      }
+    } anchored{&engine, &x0, w, n_knots};
+    AnyEngineFunctor<Anchored> af(anchored, n_knots, n_residuals + n_knots);
+    Eigen::LevenbergMarquardt<AnyEngineFunctor<Anchored>> alm(af);
+    alm.parameters.xtol = 1e-14;
+    alm.parameters.ftol = 1e-14;
+    alm.parameters.maxfev = 4000;
+    res.x = x0;  // the anchored problem is full-rank: one clean solve from the seed
+    alm.minimize(res.x);
+    res.iterations += alm.iter;
+    J = engine.jacobian(res.x);
+  }
+
   const Eigen::VectorXd r = engine.residuals(res.x);
   res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
-  const Eigen::MatrixXd J = engine.jacobian(res.x);
   res.stationarity = (J.transpose() * r).cwiseAbs().maxCoeff();
   return res;
 }

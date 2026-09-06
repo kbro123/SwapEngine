@@ -110,7 +110,7 @@ METHODS = [
     # CUSTOM irregular shapes (bespoke marshalling; still typed for pyi/excel via ret='CUSTOM')
     {"name": "calibrate", "custom": True,
      "args": [("x0", "VEC", "None"), ("reg", "REG")], "ret": "CUSTOM:dict", "verb": None,
-     "doc": "Cold calibrate -> {iterations,rms_residual,stationarity,info,solve_micros,x}."},
+     "doc": "Cold calibrate -> {iterations,rms_residual,stationarity,info,solve_micros,rank_deficiency,x}. rank_deficiency>0 = the instrument set under-determines the curve (null states sit at the seed; add an instrument or enable smoothing)."},
     {"name": "sample", "custom": True, "args": [("times", "VEC")], "ret": "CUSTOM:list", "verb": "sample_times",
      "doc": "Sample every curve on a time grid -> [{currency,t,discount,zero,forward}, ...]."},
     {"name": "set_fixings", "custom": True, "args": [("index", "STR"), ("rows", "CUSTOM:pairs")], "ret": "INT",

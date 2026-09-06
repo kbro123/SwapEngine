@@ -32,6 +32,14 @@
 
 namespace swaps::calibration {
 
+// The ONE relative rank threshold for "this direction of the state is numerically unconstrained":
+// singular values below kRankThreshold x sigma_max are treated as NULL. Shared by every consumer that
+// must behave sanely on a rank-deficient problem -- the streaming frozen-Newton operator (min-norm
+// pseudo-inverse, streaming.hpp) and calibrate()'s minimum-norm completion + rank_deficiency diagnostic
+// (lm.hpp) -- so "rank-deficient" means the same thing everywhere. 1e-10 cleanly separates genuine curve
+// stiffness (~1e-3..1e-5) from exact numerical null (~1e-11 on the measured cases).
+inline constexpr double kRankThreshold = 1e-10;
+
 // Generic engine for any Problem exposing residuals<Scalar>(x), n_residuals() (and, for streaming,
 // market()). The AAD Jacobian is templated on the problem, so the block-structured bundle Jacobian
 // falls straight out of one differentiated sweep of the stacked residual.

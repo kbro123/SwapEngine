@@ -81,7 +81,8 @@ TEST(TensionRegularizerOracle, DropsCalibrationJacobianConditionNumber) {
 TEST(TensionRegularizerOracle, FirstOrderOptimalAndDampsTheNullWander) {
   const rb::MultiCcyBundle b = rb::build_eur_curves();
 
-  const double raw_err = (cal::calibrate(b.prob, b.x0).x - b.x_true).cwiseAbs().maxCoeff();
+  const cal::CalibrationResult raw = cal::calibrate(b.prob, b.x0);
+  const double raw_err = (raw.x - b.x_true).cwiseAbs().maxCoeff();
 
   // A LIGHT tension penalty (pure curvature): strong enough to damp the null, light enough that the
   // observable directions are untouched (data residual stays near machine zero).
@@ -102,6 +103,12 @@ TEST(TensionRegularizerOracle, FirstOrderOptimalAndDampsTheNullWander) {
 
   EXPECT_LT(stat, 1e-7) << "first-order optimal on the tension-regularised objective (||Jtr||inf ~ 0)";
   EXPECT_LT(data_resid, 1e-5) << "the observable market fit is preserved (penalty acts in the null subspace)";
-  EXPECT_GT(raw_err, 1e-2) << "the unregularised basis-only trio wanders far in the null space";
-  EXPECT_LT(reg_err, raw_err / 5.0) << "the tension penalty sharply damps the null-space wander";
+  // CONTRACT CHANGE (seed-anchored rank-deficient completion, lm.hpp): the unregularised solve used to
+  // wander far along the null space (this test asserted raw_err > 1e-2 as its disease baseline).
+  // calibrate() now detects the deficiency and re-solves with a tiny seed anchor, so the SAME quantity
+  // that proved the pathology now bounds the fix: null directions stay near the seed instead of
+  // wandering. The tension penalty remains the way to choose the SMOOTHEST completion (its answer is a
+  // different, deliberate selection — smooth-consistent, not near-seed), and both fit the market rows.
+  EXPECT_GT(raw.rank_deficiency, 0) << "the basis-only trio must be REPORTED rank-deficient";
+  EXPECT_LT(raw_err, 1e-2) << "the anchored completion must not wander (the old failure mode)";
 }
