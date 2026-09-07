@@ -131,22 +131,32 @@ TEST(PortfolioInstrument, CompiledResidualAndJacobianMatchAad) {
   EXPECT_LT((eng.jacobian(x) - J_aad).cwiseAbs().maxCoeff(), 1e-7) << "compiled portfolio Jacobian == AAD";
 }
 
-// The band weight profile: floor = decay inside [lower, upper], -> 1 far outside, monotone in distance.
-TEST(BandResidual, WeightProfile) {
-  const double lo = 0.030, hi = 0.032, decay = 0.1;
-  EXPECT_NEAR(cal::band_weight<double>(0.031, lo, hi, decay), decay, 1e-12) << "mid of band = floor";
-  EXPECT_NEAR(cal::band_weight<double>(lo, lo, hi, decay), decay, 1e-12) << "on the edge = floor";
-  EXPECT_GT(cal::band_weight<double>(0.040, lo, hi, decay), 0.99) << "far above -> ~1";
-  EXPECT_GT(cal::band_weight<double>(0.020, lo, hi, decay), 0.99) << "far below -> ~1";
-  // monotone increasing as we move out of the band
-  double prev = decay;
-  for (double q = hi; q <= 0.05; q += 0.001) {
-    const double w = cal::band_weight<double>(q, lo, hi, decay);
-    EXPECT_GE(w, prev - 1e-12);
-    prev = w;
+// The Huber band residual: decay-slope pull to the mid inside [lower, upper], unit slope outside, continuous
+// at both edges, monotone with a single zero (so the squared residual is convex), and the double (r, dr/dq)
+// form agrees with the templated one.
+TEST(BandResidual, HuberProfile) {
+  const double lo = 0.030, hi = 0.032, m = 0.031, decay = 0.1;
+  EXPECT_NEAR(cal::band_residual<double>(m, m, lo, hi, decay), 0.0, 1e-15) << "zero at the mid";
+  EXPECT_NEAR(cal::band_slope(m, lo, hi, decay), decay, 1e-15) << "decay slope inside";
+  EXPECT_NEAR(cal::band_slope(hi + 1e-6, lo, hi, decay), 1.0, 1e-15) << "unit slope outside";
+  // continuity at the edges (the residual has no jump; only its slope does)
+  EXPECT_NEAR(cal::band_residual<double>(hi + 1e-12, m, lo, hi, decay), cal::band_residual<double>(hi, m, lo, hi, decay), 1e-11);
+  EXPECT_NEAR(cal::band_residual<double>(lo - 1e-12, m, lo, hi, decay), cal::band_residual<double>(lo, m, lo, hi, decay), 1e-11);
+  // monotone, and strictly steeper outside than inside
+  double prev = cal::band_residual<double>(0.020, m, lo, hi, decay);
+  for (double q = 0.020; q <= 0.042; q += 0.0001) {
+    const double r = cal::band_residual<double>(q, m, lo, hi, decay);
+    EXPECT_GE(r, prev - 1e-15);
+    const auto rd = cal::band_residual_d(q, m, lo, hi, decay);
+    EXPECT_NEAR(rd.first, r, 1e-15) << "double form == templated form at q=" << q;
+    EXPECT_NEAR(rd.second, cal::band_slope(q, lo, hi, decay), 1e-15);
+    prev = r;
   }
-  // no band (upper <= lower) -> weight 1 (plain residual)
-  EXPECT_EQ(cal::band_weight<double>(0.031, 0.0, 0.0, 1.0), 1.0);
+  // far outside: full-slope pull to the EDGE plus the decay pull to the mid (not full-slope pull to the mid)
+  EXPECT_NEAR(cal::band_residual<double>(0.040, m, lo, hi, decay), decay * (hi - m) + (0.040 - hi), 1e-15);
+  // no band (upper <= lower) -> the plain residual q − m
+  EXPECT_NEAR(cal::band_residual<double>(0.031, 0.030, 0.0, 0.0, 1.0), 0.001, 1e-15);
+  EXPECT_EQ(cal::band_slope(0.031, 0.0, 0.0, 1.0), 1.0);
 }
 
 // THE subtle one: with a banded instrument, the compiled W-cache residual AND its analytic Jacobian must

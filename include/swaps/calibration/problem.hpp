@@ -106,9 +106,10 @@ struct Instrument {
   double market = 0.0;  // the market quote, in the units of `quote` (always rate units)
 
   // Bid/offer BAND (soft calibration target). When `band_upper > band_lower` (bounds in the quote's rate
-  // units) the residual is a WEIGHTED pull to mid: r = w(q)·(q − market), with the weight w decaying from
-  // 1 outside the band down to a floor `band_decay` inside it (see band_weight()). So the solver treats
-  // any model value within [lower, upper] as ~satisfied and spends its freedom on the hard targets. The
+  // units) the residual is the HUBER band residual (band_residual()): a `band_decay`-slope pull to the mid
+  // inside [lower, upper], a unit-slope pull to the nearer EDGE outside it, continuous at the edges. So
+  // the solver treats any model value within [lower, upper] as ~satisfied and spends its freedom on the
+  // hard targets, while an overlapping instrument that cannot be hit exactly settles inside its band. The
   // default (band_upper <= band_lower, band_decay = 1) leaves the residual as the plain (q − market).
   double band_lower = 0.0, band_upper = 0.0, band_decay = 1.0;
 
@@ -181,37 +182,50 @@ struct has_turn_jump : std::false_type {};
 template <class C>
 struct has_turn_jump<C, std::void_t<decltype(std::declval<const C&>().turn_jump(0))>> : std::true_type {};
 
-// Bid/offer band weight for a model quote q (see the Instrument band fields). Returns 1 when there is no
-// band (upper <= lower). Otherwise w = decay + (1-decay)·(1 - exp(-(outside/s)^2)), where `outside` is
-// the distance of q OUTSIDE [lower, upper] (0 inside the band) and s = upper - lower. w is 1 far outside
-// the band and decays smoothly to the floor `decay` inside it; it is C1 across the edges (dw/dq -> 0 as
-// q approaches an edge from outside), so LM/AAD see no kink. Max is done by branch selection so it is
-// AAD-safe (the derivative flows through the selected term; inside the band `outside` is the constant 0).
+// Bid/offer band residual for a model quote q against market mid m (see the Instrument band fields).
+// The band exists so that OVERLAPPING instruments that cannot all be reconciled exactly (1M vs 3M futures,
+// a future vs a swap at the same pillar) can each sit off their mid within a bid/offer tolerance. The
+// residual is HUBER-shaped: a reduced-rate pull to the mid INSIDE the band, full-slope pull to the nearer
+// EDGE outside it, continuous at the edges:
+//     inside  [lower, upper] : r = decay·(q − m)
+//     above   upper          : r = decay·(upper − m) + (q − upper)
+//     below   lower          : r = decay·(lower − m) + (q − lower)
+// so dr/dq is exactly `decay` inside and exactly 1 outside, with no ramp in between. That is deliberate:
+// the previous smooth Gaussian ramp (w = decay + (1−decay)(1 − e^{−z²})) made r an S-curve whose slope
+// overshoots above 1 just outside the edge, which (a) gives the summed-squares objective MULTIPLE minima
+// along the direction the quotes barely see (two stationary fits 110 bp apart in a knot at the same
+// market, chosen by the seed), and (b) turns the Jacobian into a moving target at every edge, so the
+// frozen-Newton streamer converged, silently, to points up to 147 bp from the least-squares optimum. The
+// piecewise-linear residual is monotone with a single zero, so r² is convex in q; and its Jacobian is
+// piecewise CONSTANT (row = slope·∂q/∂x with slope ∈ {decay, 1}), which is what lets the streamer keep
+// the quote Jacobian frozen and treat a band crossing as a cheap row re-scale (streaming.hpp).
+// Far outside the band the pull is to the EDGE (plus the decay pull to mid), not to the mid at full
+// weight: continuity at the edge forces that, and it is the right reading of a bid/offer tolerance.
+// No band (upper <= lower): the plain residual q − m. AAD-safe: branch selection on q (one-sided
+// derivative exactly at an edge), constants folded so `q` is always the plain-scalar operand.
 template <class Scalar>
-Scalar band_weight(const Scalar& q, double lower, double upper, double decay) {
-  if (!(upper > lower)) return Scalar(1.0);
-  using std::exp;
-  const Scalar below = Scalar(lower) - q;   // > 0 below the band
-  const Scalar above = q - Scalar(upper);   // > 0 above the band
-  Scalar outside = below > above ? below : above;      // max(below, above)
-  if (outside < Scalar(0.0)) outside = Scalar(0.0);     // inside the band -> 0 (constant, zero derivative)
-  const Scalar z = outside / (upper - lower);
-  return Scalar(decay) + Scalar(1.0 - decay) * (Scalar(1.0) - exp(-(z * z)));
+Scalar band_residual(const Scalar& q, double market, double lower, double upper, double decay) {
+  if (!(upper > lower)) return q - Scalar(market);
+  if (q > Scalar(upper)) return q + Scalar(decay * (upper - market) - upper);
+  if (q < Scalar(lower)) return q + Scalar(decay * (lower - market) - lower);
+  return (q - Scalar(market)) * decay;
 }
 
-// Plain-double (w, dw/dq) of band_weight, for the compiled path's ANALYTIC Jacobian. MUST match
-// band_weight() above term-for-term -- a divergence would make the compiled and AAD residuals disagree
-// (the compiled_residual oracle test pins exactly this equality).
-inline std::pair<double, double> band_weight_d(double q, double lower, double upper, double decay) {
-  if (!(upper > lower)) return {1.0, 0.0};
-  const double s = upper - lower;
-  const double below = lower - q, above = q - upper;
-  const double outside = std::max(std::max(below, above), 0.0);
-  const double doutside = outside <= 0.0 ? 0.0 : (below > above ? -1.0 : 1.0);  // d outside / dq
-  const double z = outside / s, e = std::exp(-(z * z));
-  const double w = decay + (1.0 - decay) * (1.0 - e);
-  const double dw = (1.0 - decay) * e * 2.0 * z * (doutside / s);  // dw/dq = (1-decay)·e·2z·(doutside/s)
-  return {w, dw};
+// Plain-double (r, dr/dq) of band_residual, for the compiled path's residual + ANALYTIC Jacobian. MUST
+// match band_residual() above term-for-term (the compiled-vs-AAD band parity test pins the equality).
+inline std::pair<double, double> band_residual_d(double q, double market, double lower, double upper,
+                                                 double decay) {
+  if (!(upper > lower)) return {q - market, 1.0};
+  if (q > upper) return {decay * (upper - market) + (q - upper), 1.0};
+  if (q < lower) return {decay * (lower - market) + (q - lower), 1.0};
+  return {decay * (q - market), decay};
+}
+
+// The residual's slope dr/dq at model quote q: `decay` inside the band, 1 outside, 1 with no band. This is
+// the "effective weight" quote diagnostics report, and the per-row scale the streamer tracks.
+inline double band_slope(double q, double lower, double upper, double decay) {
+  if (!(upper > lower)) return 1.0;
+  return (q > upper || q < lower) ? 1.0 : decay;
 }
 
 // Model quote of an instrument, per the design §3 table. `C(role)` maps a curve role index to the
@@ -282,8 +296,9 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
 // AAD note: a fully-fixed observation (empty sub-periods) makes `Rate` a genuine CONSTANT residual
 // row with an empty derivative vector — aad_jacobian() zeroes such rows defensively. The quotient
 // transforms never hit this: DF(pay) always carries the derivatives (see float_coupon_pv).
-// A banded instrument (band_upper > band_lower) weights its residual: r = w(q)·(q − market) with w from
-// band_weight(). The band is NOT applied to FxForward (its residual is already a log-basis transform).
+// A banded instrument (band_upper > band_lower) uses the Huber band residual band_residual() (decay-slope
+// to mid inside, unit slope outside). The band is NOT applied to FxForward (its residual is already a
+// log-basis transform).
 //
 // `market` is the target quote the residual is measured against. It defaults (overload below) to the
 // instrument's stored mid `ins.market` — the calibration case — but the frozen-Newton STREAMER passes the
@@ -305,8 +320,8 @@ Scalar instrument_residual(const Instrument& ins, const CurveOf& C, double marke
   if (ins.quote == QuoteKind::Rate && !banded)
     return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + (ins.convexity - market);
   const Scalar q = instrument_model_quote<Scalar>(ins, C);
-  const Scalar raw = q - market;
-  return banded ? band_weight<Scalar>(q, ins.band_lower, ins.band_upper, ins.band_decay) * raw : raw;
+  if (banded) return band_residual<Scalar>(q, market, ins.band_lower, ins.band_upper, ins.band_decay);
+  return q - market;
 }
 // Calibration default: residual against the instrument's stored mid. Bit-identical to the pre-override
 // code (same value flows into the same expressions), so every existing caller is unchanged.

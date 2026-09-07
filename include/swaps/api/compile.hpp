@@ -56,6 +56,7 @@ struct CompileResult {
   std::vector<std::string> warnings;
   int n_knots = 0, n_residuals = 0;
   bool under_determined = false;
+  bool has_bands = false;  // any instrument carries a soft bid/offer band (floors smoothing to light)
   std::string value_date, smoothness = "light", reg_op;  // reg_op empty => null
   bool has_reg_op = false;
   double tension_sigma = 0.0;
