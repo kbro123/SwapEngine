@@ -220,3 +220,179 @@ TEST(FxSmile, BatchRepriceMatchesScalar) {
   EXPECT_NEAR(std::abs(cube.delta[2]), 0.25, 1e-6);  // by-delta call
   EXPECT_NEAR(std::abs(cube.delta[3]), 0.25, 1e-6);  // by-delta put
 }
+
+// ------------------------------------------------------------------------------------------------------
+// FOUR delta/ATM conventions (audit item #8). Frozen copies of the ORIGINAL single-convention formulas so we
+// can prove the default paths are byte-identical (EXPECT_DOUBLE_EQ) after generalisation.
+namespace {
+double frozen_gk_delta(double spot, double strike, double vol, double expiry, double r_dom, double r_for,
+                       v::CallPut cp) {
+  const double sgn = v::cp_sign(cp);
+  const double df_for = std::exp(-r_for * expiry);
+  const double stddev = vol * std::sqrt(expiry);
+  const double fwd = spot * std::exp((r_dom - r_for) * expiry);
+  if (stddev <= 0.0) return df_for * sgn * ((sgn * (fwd - strike) > 0.0) ? 1.0 : 0.0);
+  const double d1 = (std::log(fwd / strike) + 0.5 * stddev * stddev) / stddev;
+  return df_for * sgn * v::normal_cdf(sgn * d1);
+}
+double frozen_strike_from_delta(double forward, double expiry, double df_for, double vol, double delta_mag,
+                                v::CallPut cp) {
+  const double stddev = vol * std::sqrt(expiry);
+  const double d1 = v::cp_sign(cp) * v::norm_inv(delta_mag / df_for);
+  return forward * std::exp(-d1 * stddev + 0.5 * stddev * stddev);
+}
+// Reference deltas straight from the convention definitions (independent of the header's dispatch).
+double ref_delta(double spot, double strike, double vol, double expiry, double r_dom, double r_for,
+                 v::CallPut cp, v::DeltaConv conv) {
+  const double sgn = v::cp_sign(cp);
+  const double df_for = std::exp(-r_for * expiry);
+  const double stddev = vol * std::sqrt(expiry);
+  const double fwd = spot * std::exp((r_dom - r_for) * expiry);
+  const double d1 = (std::log(fwd / strike) + 0.5 * stddev * stddev) / stddev;
+  const double d2 = d1 - stddev;
+  const double disc = v::delta_is_spot(conv) ? df_for : 1.0;
+  if (!v::delta_is_pa(conv)) return disc * sgn * v::normal_cdf(sgn * d1);
+  return disc * sgn * (strike / fwd) * v::normal_cdf(sgn * d2);
+}
+}  // namespace
+
+TEST(FxDeltaConv, DefaultPathByteIdentical) {
+  // The generalised gk_delta(...,SpotUnadj), the 7-arg gk_delta, and the SpotUnadj strike inversion must all
+  // be BIT-for-BIT equal to the frozen originals (and to each other) across a strike/vol grid.
+  const double df_for = std::exp(-RF * T);
+  const double fwd = v::gk_forward<double>(S, T, RD, RF);
+  for (double K : {0.85, 1.00, 1.10, 1.25, 1.45}) {
+    for (double vol : {0.05, 0.12, 0.25}) {
+      for (auto cp : {v::CallPut::Call, v::CallPut::Put}) {
+        const double frozen = frozen_gk_delta(S, K, vol, T, RD, RF, cp);
+        EXPECT_DOUBLE_EQ(v::gk_delta<double>(S, K, vol, T, RD, RF, cp), frozen);  // 7-arg untouched
+        EXPECT_DOUBLE_EQ(v::gk_delta<double>(S, K, vol, T, RD, RF, cp, v::DeltaConv::SpotUnadj), frozen);
+      }
+    }
+  }
+  for (double vol : {0.05, 0.12, 0.25}) {
+    for (double dm : {0.10, 0.25, 0.40}) {
+      for (auto cp : {v::CallPut::Call, v::CallPut::Put}) {
+        const double frozen = frozen_strike_from_delta(fwd, T, df_for, vol, dm, cp);
+        EXPECT_DOUBLE_EQ(v::fx_strike_from_delta(fwd, T, df_for, vol, dm, cp), frozen);  // 6-arg default
+        EXPECT_DOUBLE_EQ(v::fx_strike_from_delta(fwd, T, df_for, vol, dm, cp, v::DeltaConv::SpotUnadj), frozen);
+      }
+    }
+  }
+}
+
+TEST(FxDeltaConv, DeltaIdentitiesAtBenchmark) {
+  // At one benchmark point the four deltas satisfy their defining relations: spot = df_for·forward for each
+  // {unadjusted, premium-adjusted} family, and each equals its closed-form reference.
+  const double vol = 0.12, K = 1.15;
+  const double df_for = std::exp(-RF * T);
+  for (auto cp : {v::CallPut::Call, v::CallPut::Put}) {
+    const double su = v::gk_delta<double>(S, K, vol, T, RD, RF, cp, v::DeltaConv::SpotUnadj);
+    const double fu = v::gk_delta<double>(S, K, vol, T, RD, RF, cp, v::DeltaConv::FwdUnadj);
+    const double sp = v::gk_delta<double>(S, K, vol, T, RD, RF, cp, v::DeltaConv::SpotPA);
+    const double fp = v::gk_delta<double>(S, K, vol, T, RD, RF, cp, v::DeltaConv::FwdPA);
+    EXPECT_NEAR(su, df_for * fu, 1e-14);  // spot = df_for · forward (unadjusted)
+    EXPECT_NEAR(sp, df_for * fp, 1e-14);  // spot = df_for · forward (premium-adjusted)
+    for (auto conv : {v::DeltaConv::SpotUnadj, v::DeltaConv::FwdUnadj, v::DeltaConv::SpotPA,
+                      v::DeltaConv::FwdPA})
+      EXPECT_NEAR(v::gk_delta<double>(S, K, vol, T, RD, RF, cp, conv),
+                  ref_delta(S, K, vol, T, RD, RF, cp, conv), 1e-14);
+  }
+  // gk_delta with SpotUnadj is exactly the price sensitivity ∂V/∂S (already FD-checked); forward-unadjusted
+  // is that divided by df_for — i.e. N(d1) for a call.
+  const double fu_call = v::gk_delta<double>(S, K, vol, T, RD, RF, v::CallPut::Call, v::DeltaConv::FwdUnadj);
+  const double stddev = vol * std::sqrt(T);
+  const double fwd = v::gk_forward<double>(S, T, RD, RF);
+  const double d1 = (std::log(fwd / K) + 0.5 * stddev * stddev) / stddev;
+  EXPECT_NEAR(fu_call, v::normal_cdf(d1), 1e-14);
+}
+
+TEST(FxDeltaConv, StrikeDeltaRoundTripAllConventions) {
+  // For every convention, strike -> |delta| -> strike round-trips on the OTM (market) branch: OTM call K>F,
+  // OTM put K<F -- the lower-|log-moneyness| root the premium-adjusted solver returns.
+  const double vol = 0.13;
+  const double df_for = std::exp(-RF * T);
+  const double fwd = v::gk_forward<double>(S, T, RD, RF);
+  for (auto conv : {v::DeltaConv::SpotUnadj, v::DeltaConv::FwdUnadj, v::DeltaConv::SpotPA,
+                    v::DeltaConv::FwdPA}) {
+    const double Kc = 1.15, Kp = 1.05;  // OTM call (K>F) and OTM put (K<F)
+    const double dc = std::abs(v::gk_delta<double>(S, Kc, vol, T, RD, RF, v::CallPut::Call, conv));
+    const double dp = std::abs(v::gk_delta<double>(S, Kp, vol, T, RD, RF, v::CallPut::Put, conv));
+    EXPECT_NEAR(v::fx_strike_from_delta(fwd, T, df_for, vol, dc, v::CallPut::Call, conv), Kc, 1e-9);
+    EXPECT_NEAR(v::fx_strike_from_delta(fwd, T, df_for, vol, dp, v::CallPut::Put, conv), Kp, 1e-9);
+  }
+}
+
+TEST(FxDeltaConv, PremiumAdjustedTwoStrikeBranch) {
+  // Premium-adjusted CALL delta is non-monotone in strike: it rises to an interior maximum, then falls. So a
+  // target |Δ| below the max is met by TWO strikes; the solver must return the OTM one (smaller |log-moneyness|).
+  const double vol = 0.13;
+  const double df_for = std::exp(-RF * T);
+  const double fwd = v::gk_forward<double>(S, T, RD, RF);
+  const auto pa = [&](double K) {
+    return v::gk_delta<double>(S, K, vol, T, RD, RF, v::CallPut::Call, v::DeltaConv::SpotPA);
+  };
+  // Scan log-moneyness for the maximum and the two roots of pa == target.
+  double xstar = 0.0, dmax = -1.0;
+  for (double x = -1.5; x <= 1.5; x += 1e-4) {
+    const double d = pa(fwd * std::exp(x));
+    if (d > dmax) { dmax = d; xstar = x; }
+  }
+  ASSERT_GT(dmax, 0.0);
+  const double target = 0.85 * dmax;
+  // Left (ITM, x<xstar) and right (OTM, x>xstar) roots by scanning.
+  double xL = xstar, xR = xstar;
+  for (double x = -1.5; x < xstar; x += 1e-4)
+    if (pa(fwd * std::exp(x)) >= target) { xL = x; break; }
+  for (double x = 1.5; x > xstar; x -= 1e-4)
+    if (pa(fwd * std::exp(x)) >= target) { xR = x; break; }
+  ASSERT_LT(xL, xstar);
+  ASSERT_GT(xR, xstar);
+  EXPECT_GT(std::abs(xL), std::abs(xR));  // the ITM partner is farther from the forward
+  // Both strikes genuinely share the target delta (proving the two-strike ambiguity is real).
+  EXPECT_NEAR(pa(fwd * std::exp(xL)), target, 5e-4);
+  EXPECT_NEAR(pa(fwd * std::exp(xR)), target, 5e-4);
+  // The solver returns the OTM (lower-|log-moneyness|) branch and round-trips there.
+  const double Ksol = v::fx_strike_from_delta(fwd, T, df_for, vol, target, v::CallPut::Call, v::DeltaConv::SpotPA);
+  EXPECT_NEAR(std::log(Ksol / fwd), xR, 2e-4);
+  EXPECT_LT(std::abs(std::log(Ksol / fwd)), std::abs(xL));  // NOT the deep-ITM partner
+  EXPECT_NEAR(pa(Ksol), target, 1e-9);
+}
+
+TEST(FxDeltaConv, AtmStrikeConventions) {
+  const double vol = 0.12;
+  const double fwd = v::gk_forward<double>(S, T, RD, RF);
+  // ATM-forward is K = F under either premium flag.
+  EXPECT_DOUBLE_EQ(v::fx_atm_strike(fwd, T, vol, v::AtmConv::Forward, false), fwd);
+  EXPECT_DOUBLE_EQ(v::fx_atm_strike(fwd, T, vol, v::AtmConv::Forward, true), fwd);
+  // DNS unadjusted = F·e^{+½σ²T} (byte-identical to the historical literal) and is spot-delta-neutral.
+  const double k_dns_u = v::fx_atm_strike(fwd, T, vol, v::AtmConv::DeltaNeutral, false);
+  EXPECT_DOUBLE_EQ(k_dns_u, fwd * std::exp(0.5 * vol * vol * T));
+  EXPECT_GT(k_dns_u, fwd);
+  const double dnc_u = v::gk_delta<double>(S, k_dns_u, vol, T, RD, RF, v::CallPut::Call, v::DeltaConv::SpotUnadj);
+  const double dnp_u = v::gk_delta<double>(S, k_dns_u, vol, T, RD, RF, v::CallPut::Put, v::DeltaConv::SpotUnadj);
+  EXPECT_NEAR(dnc_u + dnp_u, 0.0, 1e-12);
+  // DNS premium-adjusted = F·e^{−½σ²T} and is PA-delta-neutral.
+  const double k_dns_p = v::fx_atm_strike(fwd, T, vol, v::AtmConv::DeltaNeutral, true);
+  EXPECT_DOUBLE_EQ(k_dns_p, fwd * std::exp(-0.5 * vol * vol * T));
+  EXPECT_LT(k_dns_p, fwd);
+  const double dnc_p = v::gk_delta<double>(S, k_dns_p, vol, T, RD, RF, v::CallPut::Call, v::DeltaConv::SpotPA);
+  const double dnp_p = v::gk_delta<double>(S, k_dns_p, vol, T, RD, RF, v::CallPut::Put, v::DeltaConv::SpotPA);
+  EXPECT_NEAR(dnc_p + dnp_p, 0.0, 1e-12);
+}
+
+TEST(FxDeltaConv, SmileDefaultBuildByteIdentical) {
+  // from_delta_quotes with default conventions must reproduce the historical knots bit-for-bit.
+  const double fwd = v::gk_forward<double>(S, T, RD, RF);
+  const double df_for = std::exp(-RF * T);
+  v::FxDeltaQuotes q;
+  q.atm = 0.11; q.rr25 = -0.015; q.bf25 = 0.0030; q.has10 = true; q.rr10 = -0.028; q.bf10 = 0.0095;
+  const v::FxVolSurface a = v::FxVolSurface::from_delta_quotes(q, fwd, T, df_for);
+  const v::FxVolSurface b =
+      v::FxVolSurface::from_delta_quotes(q, fwd, T, df_for, v::DeltaConv::SpotUnadj, v::AtmConv::DeltaNeutral);
+  ASSERT_EQ(a.logm_knots().size(), b.logm_knots().size());
+  for (std::size_t i = 0; i < a.logm_knots().size(); ++i) {
+    EXPECT_DOUBLE_EQ(a.logm_knots()[i], b.logm_knots()[i]);
+    EXPECT_DOUBLE_EQ(a.vol_knots()[i], b.vol_knots()[i]);
+  }
+}

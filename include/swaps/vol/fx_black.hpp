@@ -25,7 +25,18 @@ namespace swaps::vol {
 
 enum class CallPut { Call, Put };  // FX vanilla right (call/put ON the FX rate, foreign per domestic quote).
 
+// The FOUR standard FX delta conventions. `spot` vs `forward` = whether the hedge (and the discounting of
+// N(·)) is on the spot or the forward; `unadjusted` vs `premium-adjusted` (PA) = whether the premium paid in
+// FOREIGN currency is netted out of the hedge. With F, d1, d2 as usual, for a CALL:
+//   SpotUnadj: Δ = e^{−r_f T}·N(d1)   FwdUnadj: Δ = N(d1)
+//   SpotPA   : Δ = e^{−r_f T}·(K/F)·N(d2)   FwdPA   : Δ = (K/F)·N(d2)
+// (puts: the same with sgn=−1 and N(−·)). SpotUnadj is the historical default (matches the 7-arg gk_delta).
+enum class DeltaConv { SpotUnadj, FwdUnadj, SpotPA, FwdPA };
+
 inline double cp_sign(CallPut cp) { return cp == CallPut::Call ? 1.0 : -1.0; }
+
+inline bool delta_is_spot(DeltaConv c) { return c == DeltaConv::SpotUnadj || c == DeltaConv::SpotPA; }
+inline bool delta_is_pa(DeltaConv c) { return c == DeltaConv::SpotPA || c == DeltaConv::FwdPA; }
 
 // Forward under Garman-Kohlhagen: F = S·e^{(r_d−r_f)T}.
 template <class S>
@@ -78,6 +89,31 @@ inline S gk_delta(const S& spot, const S& strike, const S& vol, double expiry, c
   if (stddev <= S(0.0)) return df_for * sgn * ((sgn * (fwd - strike) > S(0.0)) ? S(1.0) : S(0.0));
   const S d1 = (log(fwd / strike) + S(0.5) * stddev * stddev) / stddev;
   return df_for * sgn * normal_cdf(sgn * d1);
+}
+
+// Delta under ANY of the four conventions (see DeltaConv). The `conv` overload is DISTINCT from the 7-arg
+// gk_delta above (which stays byte-identical as SpotUnadj), so existing call sites are untouched. Spot forms
+// carry the e^{−r_f T} discount; premium-adjusted forms carry the (K/F)·N(±d2) premium term.
+template <class S>
+inline S gk_delta(const S& spot, const S& strike, const S& vol, double expiry, const S& r_dom,
+                  const S& r_for, CallPut cp, DeltaConv conv) {
+  using std::exp;
+  using std::log;
+  using std::sqrt;
+  const S sgn(cp_sign(cp));
+  const S df_for = exp(-r_for * S(expiry));
+  const S stddev = vol * S(sqrt(expiry));
+  const S fwd = gk_forward(spot, expiry, r_dom, r_for);
+  const S disc = delta_is_spot(conv) ? df_for : S(1.0);
+  if (stddev <= S(0.0)) {  // zero-vol / zero-expiry intrinsic limit
+    const S itm = (sgn * (fwd - strike) > S(0.0)) ? S(1.0) : S(0.0);
+    const S kf = delta_is_pa(conv) ? (strike / fwd) : S(1.0);
+    return disc * sgn * kf * itm;
+  }
+  const S d1 = (log(fwd / strike) + S(0.5) * stddev * stddev) / stddev;
+  if (!delta_is_pa(conv)) return disc * sgn * normal_cdf(sgn * d1);
+  const S d2 = d1 - stddev;
+  return disc * sgn * (strike / fwd) * normal_cdf(sgn * d2);
 }
 
 // Gamma ∂²V/∂S² = e^{−r_f T}φ(d1)/(S σ√T). Symmetric in call/put.

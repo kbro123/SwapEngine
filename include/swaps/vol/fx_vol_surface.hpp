@@ -10,9 +10,15 @@
 //   Given a target |Δ| and a vol σ:  d1 = ±Φ⁻¹(|Δ|·e^{r_f T})  (+ call, − put),
 //                                    K  = F·exp(−d1·σ√T + ½σ²T).
 //   ATM = DELTA-NEUTRAL STRADDLE (Δ_call+Δ_put=0 ⇒ d1=0):  K_ATM = F·exp(½·σ_ATM²·T).
-// (Premium-adjusted / forward-delta variants are a convention switch we can add; the unadjusted spot form is
-//  the documented default. To keep the smile arbitrage-aware the strike interp is a monotone PCHIP — no
-//  overshoot between knots — with flat extrapolation past the wings.)
+//
+// ALL FOUR delta conventions {spot,forward}×{unadjusted,premium-adjusted} are supported (see DeltaConv in
+// fx_black.hpp), plus two ATM conventions (AtmConv): DELTA-NEUTRAL STRADDLE (default) and ATM-FORWARD (K=F).
+// The unadjusted conventions invert monotonically (direct Φ⁻¹). PREMIUM-ADJUSTED delta is NON-MONOTONE in
+// strike (|Δ| = disc·(K/F)·N(±d2) has an interior maximum for a call → TWO strikes share one |Δ|): we locate
+// the maximum, then bisect on each branch and return the MARKET strike = the root with the smaller
+// |log-moneyness| (closer to the forward = the standard OTM branch). SpotUnadj + DNS is the documented
+// default, byte-identical to the historical single-convention path. To keep the smile arbitrage-aware the
+// strike interp is a monotone PCHIP — no overshoot between knots — with flat extrapolation past the wings.
 //
 // The strike<->delta conversion runs on double (it builds the grid); the interpolated vol feeds
 // vol/fx_black.hpp (Scalar-templated) for pricing/Greeks. QuantLib-free; header-only.
@@ -58,13 +64,72 @@ inline double norm_inv(double p) {
   return x;
 }
 
-// Strike at a target spot-delta magnitude |Δ|∈(0,1), given forward F, expiry T, df_for = e^{−r_f T}, vol σ.
+// The two ATM-strike conventions. DeltaNeutral (delta-neutral straddle) is the historical default.
+enum class AtmConv { DeltaNeutral, Forward };
+
+// ATM strike under an AtmConv. DNS solves Δ_call+Δ_put=0: unadjusted ⇒ d1=0 ⇒ K=F·e^{+½σ²T};
+// premium-adjusted ⇒ d2=0 ⇒ K=F·e^{−½σ²T}. ATM-forward is simply K=F. (`premium_adjusted` only matters for
+// DNS.) The unadjusted-DNS expression is written to be byte-identical to the historical F·e^{½σ²T} literal.
+inline double fx_atm_strike(double forward, double expiry, double vol, AtmConv atm, bool premium_adjusted) {
+  if (atm == AtmConv::Forward) return forward;
+  const double half = premium_adjusted ? -0.5 : 0.5;
+  return forward * std::exp(half * vol * vol * expiry);
+}
+
+// Strike at a target delta magnitude |Δ|∈(0,1) under `conv`, given forward F, expiry T, df_for = e^{−r_f T},
+// vol σ. UNADJUSTED conventions invert directly (|Δ| = disc·N(sgn·d1), disc = df_for spot / 1 forward, so
+// d1 = sgn·Φ⁻¹(|Δ|/disc), K = F·exp(−d1·σ√T + ½σ²T)). The SpotUnadj path (default) is byte-identical to the
+// historical formula. PREMIUM-ADJUSTED (|Δ| = disc·(K/F)·N(sgn·d2)) is non-monotone in K for a call: we solve
+// h(x) = e^x·N(sgn·d2) = |Δ|/disc for x = ln(K/F). We first locate the interior maximum x* (bracketed sign
+// change of h′; a put has none — h is monotone), then bisect each monotone branch and return the MARKET
+// strike = the root with the smaller |x| (log-moneyness closer to the forward, i.e. the standard OTM branch).
 inline double fx_strike_from_delta(double forward, double expiry, double df_for, double vol, double delta_mag,
-                                   CallPut cp) {
+                                   CallPut cp, DeltaConv conv = DeltaConv::SpotUnadj) {
   if (!(expiry > 0.0) || !(vol > 0.0)) throw std::invalid_argument("fx_strike_from_delta: need T,σ > 0");
   const double stddev = vol * std::sqrt(expiry);
-  const double d1 = cp_sign(cp) * norm_inv(delta_mag / df_for);
-  return forward * std::exp(-d1 * stddev + 0.5 * stddev * stddev);
+  const double sgn = cp_sign(cp);
+  const double disc = delta_is_spot(conv) ? df_for : 1.0;
+
+  if (!delta_is_pa(conv)) {  // monotone: direct inversion (SpotUnadj reproduces the historical formula)
+    const double d1 = sgn * norm_inv(delta_mag / disc);
+    return forward * std::exp(-d1 * stddev + 0.5 * stddev * stddev);
+  }
+
+  // Premium-adjusted dual-strike solve. h(x) = e^x·N(sgn·d2), d2 = (−x − ½σ²T)/(σ√T); solve h(x) = target.
+  const double target = delta_mag / disc;
+  const auto d2 = [&](double x) { return (-x - 0.5 * stddev * stddev) / stddev; };
+  const auto h = [&](double x) { return std::exp(x) * normal_cdf(sgn * d2(x)); };
+  // sign of h′(x)/e^x = N(sgn·d2) − sgn·φ(d2)/(σ√T).
+  const auto hprime = [&](double x) { return normal_cdf(sgn * d2(x)) - sgn * normal_pdf(d2(x)) / stddev; };
+  const double R = std::max(1.0, 12.0 * stddev) + 2.0;  // wide log-moneyness bracket
+  const double xlo = -R, xhi = R;
+  const auto bisect = [&](double a, double b) {  // solve h=target on a monotone, sign-bracketed [a,b]
+    double fa = h(a) - target;
+    for (int i = 0; i < 200; ++i) {
+      const double m = 0.5 * (a + b);
+      const double fm = h(m) - target;
+      if (std::abs(fm) < 1e-15 || (b - a) < 1e-15) return m;
+      if ((fa < 0.0) == (fm < 0.0)) { a = m; fa = fm; } else { b = m; }
+    }
+    return 0.5 * (a + b);
+  };
+
+  if ((hprime(xlo) < 0.0) == (hprime(xhi) < 0.0))  // monotone (put): a single root on the full range
+    return forward * std::exp(bisect(xlo, xhi));
+
+  // Interior maximum (call): bisect h′ for x*, then solve each branch and keep the lower-|moneyness| root.
+  double a = xlo, b = xhi;
+  const bool inc_lo = hprime(a) > 0.0;
+  for (int i = 0; i < 200 && (b - a) > 1e-14; ++i) {
+    const double m = 0.5 * (a + b);
+    if ((hprime(m) > 0.0) == inc_lo) a = m; else b = m;
+  }
+  const double xstar = 0.5 * (a + b);
+  if (!(h(xstar) > target)) return forward * std::exp(xstar);  // |Δ| above the achievable max → max strike
+  const double xL = bisect(xlo, xstar);   // increasing branch (deep side)
+  const double xR = bisect(xstar, xhi);   // decreasing branch (OTM side)
+  const double x = (std::abs(xL) <= std::abs(xR)) ? xL : xR;
+  return forward * std::exp(x);
 }
 
 // The market delta quotes for ONE expiry (vol terms, absolute e.g. 0.11 = 11%). rr/bf are the standard
@@ -94,8 +159,11 @@ class FxVolSurface {
     return s;
   }
 
-  // Build from interbank delta quotes. Places ATM (delta-neutral straddle) + 25d (and optional 10d) wings.
-  static FxVolSurface from_delta_quotes(const FxDeltaQuotes& q, double forward, double expiry, double df_for) {
+  // Build from interbank delta quotes. Places the ATM knot (per AtmConv) + 25d (and optional 10d) wings under
+  // the chosen delta convention. Defaults (SpotUnadj + DeltaNeutral) reproduce the historical smile exactly.
+  static FxVolSurface from_delta_quotes(const FxDeltaQuotes& q, double forward, double expiry, double df_for,
+                                        DeltaConv delta_conv = DeltaConv::SpotUnadj,
+                                        AtmConv atm_conv = AtmConv::DeltaNeutral) {
     if (!(forward > 0.0) || !(expiry > 0.0)) throw std::invalid_argument("FxVolSurface: need F,T > 0");
     FxVolSurface s;
     s.forward_ = forward;
@@ -104,17 +172,17 @@ class FxVolSurface {
     std::vector<std::pair<double, double>> pts;  // (x = ln(K/F), vol)
     const auto add = [&](double K, double vol) { pts.emplace_back(std::log(K / forward), vol); };
 
-    const double k_atm = forward * std::exp(0.5 * q.atm * q.atm * expiry);  // delta-neutral straddle
+    const double k_atm = fx_atm_strike(forward, expiry, q.atm, atm_conv, delta_is_pa(delta_conv));
     add(k_atm, q.atm);
     const double v25c = q.atm + q.bf25 + 0.5 * q.rr25;
     const double v25p = q.atm + q.bf25 - 0.5 * q.rr25;
-    add(fx_strike_from_delta(forward, expiry, df_for, v25c, 0.25, CallPut::Call), v25c);
-    add(fx_strike_from_delta(forward, expiry, df_for, v25p, 0.25, CallPut::Put), v25p);
+    add(fx_strike_from_delta(forward, expiry, df_for, v25c, 0.25, CallPut::Call, delta_conv), v25c);
+    add(fx_strike_from_delta(forward, expiry, df_for, v25p, 0.25, CallPut::Put, delta_conv), v25p);
     if (q.has10) {
       const double v10c = q.atm + q.bf10 + 0.5 * q.rr10;
       const double v10p = q.atm + q.bf10 - 0.5 * q.rr10;
-      add(fx_strike_from_delta(forward, expiry, df_for, v10c, 0.10, CallPut::Call), v10c);
-      add(fx_strike_from_delta(forward, expiry, df_for, v10p, 0.10, CallPut::Put), v10p);
+      add(fx_strike_from_delta(forward, expiry, df_for, v10c, 0.10, CallPut::Call, delta_conv), v10c);
+      add(fx_strike_from_delta(forward, expiry, df_for, v10p, 0.10, CallPut::Put, delta_conv), v10p);
     }
     std::sort(pts.begin(), pts.end());
     for (const auto& p : pts) {
@@ -169,12 +237,13 @@ class FxVolSurface {
 
   // Strike at a target spot-delta magnitude |Δ| under THIS smile (vol depends on strike -> a short fixed
   // point on the smile vol; a handful of iterations to convergence).
-  double strike_for_delta(double delta_mag, CallPut cp, int iters = 32, double tol = 1e-12) const {
+  double strike_for_delta(double delta_mag, CallPut cp, DeltaConv conv = DeltaConv::SpotUnadj, int iters = 32,
+                          double tol = 1e-12) const {
     double vol = vol_at_logm(0.0);  // seed with the ATM-ish vol
-    double K = fx_strike_from_delta(forward_, expiry_, df_for_, vol, delta_mag, cp);
+    double K = fx_strike_from_delta(forward_, expiry_, df_for_, vol, delta_mag, cp, conv);
     for (int i = 0; i < iters; ++i) {
       const double vnew = vol_at_strike(K);
-      const double Knew = fx_strike_from_delta(forward_, expiry_, df_for_, vnew, delta_mag, cp);
+      const double Knew = fx_strike_from_delta(forward_, expiry_, df_for_, vnew, delta_mag, cp, conv);
       if (std::abs(Knew - K) <= tol * K) return Knew;
       vol = vnew;
       K = Knew;
@@ -226,6 +295,7 @@ struct FxOption {
   CallPut cp = CallPut::Call;
   double notional = 1.0;        // foreign units
   bool by_delta = false;        // resolve `strike` from `delta` against the smile
+  DeltaConv delta_conv = DeltaConv::SpotUnadj;  // convention used when by_delta resolves the strike
 };
 
 // The market a surface prices against: spot + the two continuous rates.
@@ -256,7 +326,7 @@ inline FxVolCube price_fx_book(const FxSurfaceMarket& m, const FxVolSurface& sur
                                    &out.vega, &out.theta, &out.rho_dom, &out.rho_for, &out.notional_price})
     col->reserve(opts.size());
   for (const FxOption& o : opts) {
-    const double K = o.by_delta ? surf.strike_for_delta(o.delta, o.cp) : o.strike;
+    const double K = o.by_delta ? surf.strike_for_delta(o.delta, o.cp, o.delta_conv) : o.strike;
     const double vol = surf.vol_at_strike(K);
     const GkGreeks<double> g = gk_greeks<double>(m.spot, K, vol, T, m.r_dom, m.r_for, o.cp);
     out.strike.push_back(K);

@@ -32,6 +32,21 @@ bool has_num(const json::object& o, const char* k) {
   return o.contains(k) && (o.at(k).is_number() || o.at(k).is_double() || o.at(k).is_int64() ||
                            o.at(k).is_uint64());
 }
+
+// Parse a delta-convention string. Default (and every unrecognised value) = spot-unadjusted, so existing
+// requests are byte-identical. Accepts the common spellings for {spot,forward}×{unadjusted,premium-adj}.
+v::DeltaConv parse_delta_conv(const std::string& s) {
+  if (s == "forward" || s == "fwd" || s == "forward_unadj" || s == "fwd_unadj") return v::DeltaConv::FwdUnadj;
+  if (s == "spot_pa" || s == "spot_premium_adjusted" || s == "spot_premium_adj") return v::DeltaConv::SpotPA;
+  if (s == "forward_pa" || s == "fwd_pa" || s == "forward_premium_adjusted") return v::DeltaConv::FwdPA;
+  return v::DeltaConv::SpotUnadj;  // "spot", "spot_unadj", "", or anything else
+}
+
+// Parse an ATM-convention string. Default (and unrecognised) = delta-neutral straddle.
+v::AtmConv parse_atm_conv(const std::string& s) {
+  if (s == "forward" || s == "fwd" || s == "atm_forward" || s == "atmf") return v::AtmConv::Forward;
+  return v::AtmConv::DeltaNeutral;  // "dns", "delta_neutral", "straddle", "", or anything else
+}
 }  // namespace
 
 std::string fx_option_json(const std::string& request) {
@@ -48,6 +63,9 @@ std::string fx_option_json(const std::string& request) {
   const double r_dom = jd(o, "r_dom", 0.0);
   const double r_for = jd(o, "r_for", 0.0);
   const std::string pair = js(o, "pair", "");
+  // Convention switches (default = today's behaviour: spot-unadjusted delta, delta-neutral-straddle ATM).
+  const v::DeltaConv delta_conv = parse_delta_conv(js(o, "delta_convention", ""));
+  const v::AtmConv atm_conv = parse_atm_conv(js(o, "atm_convention", ""));
 
   const v::FxSurfaceMarket mkt{spot, r_dom, r_for};
   const double fwd = v::gk_forward<double>(spot, expiry, r_dom, r_for);
@@ -74,7 +92,7 @@ std::string fx_option_json(const std::string& request) {
         q.rr10 = jd(s, "rr10", 0.0);
         q.bf10 = jd(s, "bf10", 0.0);
       }
-      surf = v::FxVolSurface::from_delta_quotes(q, fwd, expiry, df_for);
+      surf = v::FxVolSurface::from_delta_quotes(q, fwd, expiry, df_for, delta_conv, atm_conv);
     }
     have_surface = true;
   } else if (has_num(o, "vol")) {
@@ -94,7 +112,7 @@ std::string fx_option_json(const std::string& request) {
       if (by_delta) {
         if (!have_surface)
           throw std::invalid_argument("fx_option: a by-delta option needs a 'surface' or 'vol' source");
-        strike = surf.strike_for_delta(jd(t, "delta", 0.25), cp);
+        strike = surf.strike_for_delta(jd(t, "delta", 0.25), cp, delta_conv);
       } else {
         strike = jd(t, "strike", fwd);
       }
