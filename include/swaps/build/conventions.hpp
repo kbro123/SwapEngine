@@ -20,6 +20,10 @@ namespace cvd = swaps::conventions;
 struct SwapConv {
   std::string calendar, bdc, fixed_dc, float_dc, float_freq_tok;
   int spot_lag = 2, pay_lag = 2;
+  // The FIXED leg's coupon frequency from the product DB ("1Y" USD/EUR/GBP/JPY OIS; "6M" SAR, "3M" AUD
+  // BBSW / CNY / ZAR ...). It used to be dropped here and every fixed leg was built annual: 4-7 bp of
+  // par-rate error on every non-annual product. par_swap/fixed_coupons/Trade default to this.
+  std::string fixed_freq_tok = "1Y";
 };
 
 inline std::string sv_str(std::string_view v) { return std::string(v); }
@@ -38,6 +42,7 @@ inline SwapConv conv_from_product(const cvd::ProductConv& p, const std::string& 
   c.spot_lag = p.spot_lag >= 0 ? p.spot_lag : 2;      // Python p.get("spot_lag", 2)
   c.pay_lag = p.payment_lag >= 0 ? p.payment_lag : 0;  // Python p.get("payment_lag", 0)
   c.float_freq_tok = p.floating.frequency.empty() ? fallback_freq : sv_str(p.floating.frequency);
+  c.fixed_freq_tok = p.fixed.frequency.empty() ? "1Y" : sv_str(p.fixed.frequency);
   return c;
 }
 

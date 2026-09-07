@@ -20,6 +20,7 @@
 #include <Eigen/Dense>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -255,9 +256,18 @@ class BundleSession {
   // risk_operator() but does not affect J (a regulariser changes M through RᵀR, never the quote Jacobian).
   Eigen::MatrixXd jacobian(const RegSpec& reg = {}) const;
 
-  // The analytic risk operator M = dx/dq = (JᵀJ + RᵀR)⁻¹ Jᵀ  (n_knots x n_residuals). Left-multiply a
-  // portfolio's d(NPV)/dx (one AAD pass) by M for a full analytic delta ladder, no bumping (CLAUDE.md #4).
+  // The analytic risk operator M = dx/dq (n_knots x n_residuals) by the implicit-function theorem on the
+  // (regularised) least-squares condition: M = pinv([J; R]) restricted to the J rows, times
+  // D = diag(−∂r/∂q). Two things the naive (JᵀJ + RᵀR)⁻¹ Jᵀ got wrong: (1) D -- a residual is NOT always
+  // q_model − q: a banded row is w(q_model)·(q_model − q) (−∂r/∂q = w, i.e. `decay` inside the band) and
+  // an FX forward is (ln F − ln q)/T (−∂r/∂q = 1/(q·T)); without D those columns were overstated by 1/decay
+  // and by q·T. (2) The pseudo-inverse is a rank-thresholded COD, so a rank-deficient bundle gives the
+  // min-norm operator on the identified directions and 0 along the null space -- a tolerance-free LDLT of a
+  // singular JᵀJ returned garbage in EVERY column, pinned knots included. Left-multiply a portfolio's
+  // d(NPV)/dx (one AAD pass) by M for a full analytic delta ladder, no bumping (CLAUDE.md #4).
   Eigen::MatrixXd risk_operator(const RegSpec& reg = {}) const;
+  // D above: −∂r_i/∂q_i per instrument at the calibrated x (1 for a hard pin).
+  Eigen::VectorXd residual_market_scale() const;
 
   // ---- batched portfolio reprice (the web "reprice N random swaps" feature) -----------------------
   // Reprice a full multi-curve + xccy book off the CURRENTLY CALIBRATED curves (the current x) and report
@@ -388,6 +398,11 @@ class BundleSession {
   const swaps::pricing::FixingTable& fixings() const { return fixings_; }
 
  private:
+  // A BOOK's fixings-resolvable coupons (a seasoned trade's accruing period, or a "positions" row that
+  // carries a fixing_schedule) are resolved against THIS session's evaluation date + fixing table before
+  // pricing. Returns a resolved copy, or nullopt when nothing in the book carries a schedule (no copy).
+  // Throws (with the index/date) when a required past fixing is missing -- never prices it as zero.
+  std::optional<swaps::portfolio::MultiCurveBook> resolve_book(const swaps::portfolio::MultiCurveBook& book) const;
   // Collect pointers to every schedule-carrying observation in prob_ (futures obs + float-leg coupons,
   // recursing into portfolio components), and resolve them against {eval_date_, fixings_}. Returns the
   // count that could not resolve (missing a past fixing). Pointers are stable: prob_ is not resized.

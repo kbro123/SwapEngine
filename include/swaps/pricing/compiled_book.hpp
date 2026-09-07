@@ -420,6 +420,16 @@ struct BundleFloatBatch {
       throw std::invalid_argument(
           "CompiledBook: compounded (RFR lookback/lockout) observation cannot use the arithmetic "
           "W-cache batch; price it through the templated kernel");
+    // Same for the MOMENT path (fixing_step > 0): its ½·step·∫f² averaging correction has no W-cache row.
+    // Silently summing only the linear term dropped 4 bp of notional on an averaged 1y coupon.
+    if (o.fixing_step > 0.0)
+      throw std::invalid_argument(
+          "CompiledBook: a fixing_step (moment-path averaged) observation cannot use the W-cache batch; "
+          "price it through the templated kernel");
+    if (!o.fixing_schedule.empty() && !o.resolved)
+      throw std::runtime_error(
+          "CompiledBook: a fixings-resolvable observation was compiled before resolution against a fixing "
+          "table (its realized part would silently be zero) -- attach fixings / set the evaluation date first");
     const bool weighted = !o.weight.empty();
     for (std::size_t j = 0; j < o.sub_start.size(); ++j)
       push_sub(cs, fc, o.sub_start[j], o.sub_end[j], weighted ? o.weight[j] : 1.0);

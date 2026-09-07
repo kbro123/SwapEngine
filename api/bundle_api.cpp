@@ -667,6 +667,11 @@ const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& 
 const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p, const RegSpec& reg) {
   if (p.n_residuals() != prob_.n_residuals())
     throw std::runtime_error("rebind: instrument count differs — the structure changed (recompile instead)");
+  // Same COUNT is not the same STRUCTURE: a bundle with the same number of instruments but different
+  // knots/tenors/regions/roles would rebind its new quotes onto the old W-cache rows (a 7y quote applied
+  // to the old 5y row). The fingerprint is the contract the header promises; enforce it.
+  if (!same_structure(p))
+    throw std::runtime_error("rebind: structure fingerprint differs — the structure changed (recompile instead)");
   for (int i = 0; i < prob_.n_residuals(); ++i) {  // the FULL quote RHS: target AND soft-quote band
     cal::Instrument& dst = prob_.instruments[i];
     const cal::Instrument& src = p.instruments[i];
@@ -748,23 +753,74 @@ Eigen::MatrixXd BundleSession::jacobian(const RegSpec& reg) const {
   return ensure_engine().jacobian(x_);  // n_res x n_knots: rows = instruments, cols = knots
 }
 
+Eigen::VectorXd BundleSession::residual_market_scale() const {
+  const auto C = cal::build_bundle_curves<double>(
+      prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });
+  const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
+  Eigen::VectorXd d = Eigen::VectorXd::Ones(prob_.n_residuals());
+  for (int i = 0; i < prob_.n_residuals(); ++i) {
+    const cal::Instrument& ins = prob_.instruments[i];
+    if (ins.quote == cal::QuoteKind::FxForward) {
+      d[i] = 1.0 / (ins.market * ins.fx_time);  // r = (ln F_model − ln q)/T
+    } else if (ins.band_upper > ins.band_lower) {
+      const double m = cal::instrument_model_quote<double>(ins, curve_of);  // r = w(q_model)·(q_model − q)
+      d[i] = cal::band_weight_d(m, ins.band_lower, ins.band_upper, ins.band_decay).first;
+    }
+  }
+  return d;
+}
+
 Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
-  const Eigen::MatrixXd J = jacobian(reg);                 // n_res x n_knots (shared with jacobian(), no desync)
-  Eigen::MatrixXd A = J.transpose() * J;                   // n_knots x n_knots
+  const Eigen::MatrixXd J = jacobian(reg);  // n_res x n_knots (shared with jacobian(), no desync)
+  const int m = static_cast<int>(J.rows()), n = static_cast<int>(J.cols());
+  // Stack the regulariser rows under J: the IFT on min ||r||² + ||Rx||² reads [J; R]ᵀ[J; R] dx = Jᵀ D dq.
+  Eigen::MatrixXd S = J;
   if (reg.on()) {
     const Eigen::MatrixXd R = reg.tension
                                   ? cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)
                                   : cal::second_difference_operator(prob_, reg.lambda, reg.curves);
-    A.noalias() += R.transpose() * R;
+    S.resize(m + R.rows(), n);
+    S << J, R;
   }
-  const Eigen::MatrixXd Ainv = A.ldlt().solve(Eigen::MatrixXd::Identity(A.rows(), A.rows()));
-  return Ainv * J.transpose();  // n_knots x n_res  = dx/dq
+  // Rank-thresholded pseudo-inverse (the SAME kRankThreshold the streamer and LM use): min-norm on the
+  // identified directions, exactly (SᵀS)⁻¹Sᵀ when S has full column rank, and never a singular solve.
+  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
+  cod.setThreshold(cal::kRankThreshold);
+  cod.compute(S);
+  const Eigen::MatrixXd P = cod.pseudoInverse();  // n_knots x (n_res + n_reg)
+  return P.leftCols(m) * residual_market_scale().asDiagonal();  // n_knots x n_res = dx/dq
 }
 
-PortfolioReprice BundleSession::price_portfolio(const pf::MultiCurveBook& book) const {
+std::optional<pf::MultiCurveBook> BundleSession::resolve_book(const pf::MultiCurveBook& book) const {
+  bool any = false;
+  for (const auto& p : book.positions) {
+    for (const auto& c : p.float_coupons) any = any || !c.obs.fixing_schedule.empty();
+    for (const auto& c : p.mtm_coupons) any = any || !c.obs.fixing_schedule.empty();
+  }
+  if (!any) return std::nullopt;
+  pf::MultiCurveBook out = book;
+  const px::PricingContext ctx{eval_date_, &fixings_};
+  for (auto& p : out.positions) {
+    for (auto* leg : {&p.float_coupons, &p.mtm_coupons})
+      for (auto& c : *leg) {
+        if (c.obs.fixing_schedule.empty()) continue;
+        try {
+          px::resolve_into(c.obs, ctx);
+        } catch (const px::MissingFixing& e) {
+          throw std::runtime_error(std::string("book: a seasoned coupon needs a past fixing the session does not "
+                                               "have (set_fixings / set_evaluation_date): ") + e.what());
+        }
+      }
+  }
+  return out;
+}
+
+PortfolioReprice BundleSession::price_portfolio(const pf::MultiCurveBook& book_in) const {
   PortfolioReprice out;
-  out.n = static_cast<int>(book.positions.size());
+  out.n = static_cast<int>(book_in.positions.size());
   if (out.n == 0) { last_price_us_ = 0.0; return out; }  // empty book: NPV/PV01 = 0, nothing to time
+  const auto resolved = resolve_book(book_in);          // seasoned coupons: realized part from the fixings
+  const pf::MultiCurveBook& book = resolved ? *resolved : book_in;
 
   // ---- pure ENGINE pricing pass (double), engine-timed -- no marshalling inside the clock ----------
   // Build the double curve handles off the CALIBRATED x, then value every position through the pricing
@@ -806,7 +862,8 @@ PortfolioReprice BundleSession::price_portfolio_json(const std::string& book_jso
 // ONLY regime where the compiled kernel wins — a single cold reprice keeps paying the templated path
 // (price_portfolio), so this is a SEPARATE entry point, not a swap-in.
 void BundleSession::bind_portfolio(const pf::MultiCurveBook& book) {
-  bound_book_ = std::make_unique<pf::MultiCurveBook>(book);
+  const auto resolved = resolve_book(book);  // seasoned coupons: realized part from the fixings
+  bound_book_ = std::make_unique<pf::MultiCurveBook>(resolved ? *resolved : book);
   cbook_ = std::make_unique<pf::CompiledMultiCurveBook>(prob_.curves, *bound_book_);
 }
 
@@ -833,9 +890,9 @@ PortfolioReprice BundleSession::reprice_bound() const {
   return out;
 }
 
-PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book, const RegSpec& reg) const {
+PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book_in, const RegSpec& reg) const {
   PortfolioRisk out;
-  out.n = static_cast<int>(book.positions.size());
+  out.n = static_cast<int>(book_in.positions.size());
   const int nk = prob_.n_knots();
   const int nr = prob_.n_residuals();
   if (out.n == 0) {  // empty book: nothing to reprice or risk
@@ -844,6 +901,8 @@ PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book
     last_risk_us_ = 0.0;
     return out;
   }
+  const auto resolved = resolve_book(book_in);  // seasoned coupons: realized part from the fixings
+  const pf::MultiCurveBook& book = resolved ? *resolved : book_in;
 
   // The risk operator M = dx/dq (n_knots x n_res). Its FORMATION (the calibration-Jacobian solve) is book-
   // INDEPENDENT, so it sits OUTSIDE the engine clock, mirroring how price_portfolio times only the book pass.
@@ -953,6 +1012,12 @@ void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
 
 const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_market) {
   if (!stream_) throw std::runtime_error("start_streaming() must be called first");
+  // Eigen's size asserts are compiled out under -DNDEBUG, so a wrong-length market would be a silent
+  // heap over-read/over-write inside the residual kernel (recalibrate() already checks; this must too).
+  if (new_market.size() != prob_.n_residuals())
+    throw std::runtime_error("stream_update: market length does not match the instrument count");
+  if (!new_market.allFinite())
+    throw std::runtime_error("stream_update: market contains a non-finite quote");
   const auto t0 = std::chrono::steady_clock::now();
   const cal::StreamTick tick = stream_->update(new_market);
   last_solve_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();

@@ -37,14 +37,21 @@ struct CreditProblem {
 
   // r(x): build the hazard curve from x, wrap it as a survival curve, price each instrument's par-spread
   // discrepancy. RESIDUAL ORDER is the instruments' insertion order (Jacobian rows index off it).
+  // Hazard-curve layout: PIECEWISE-FLAT hazard over every knot -- the ISDA standard-model shape. A smooth
+  // (Hermite) hazard between knots overshoots into NEGATIVE hazard on ORDINARY humped / inverted strips
+  // (1y100/3y250/5y150/7y140/10y130: h(10y) = -20%, 16% of the default mass negative), i.e. a non-monotone
+  // survival and a negative default density. Flat is monotone by construction, reprices the strip exactly
+  // (one free hazard per maturity), and is a linear map of the knots (W-cacheable). One layout, shared by
+  // the residual (calibration) and the read-out (api/credit.cpp) so the two can never diverge.
+  std::vector<curve::CurveModule> hazard_layout() const {
+    std::vector<double> knots = meeting_times;
+    knots.insert(knots.end(), back_times.begin(), back_times.end());
+    return curve::flat_hermite(knots, {});
+  }
+
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    // Local C1 Hermite hazard back end: reprices the strip EXACTLY (each maturity is a knot) and keeps
-    // forwards local. NOTE: a smooth hazard can overshoot into slightly negative forward hazard between
-    // knots on a NOISY / INVERTED strip, giving a mildly non-monotone survival at the long end -- a known
-    // limitation of unconstrained smooth interpolation (a positivity-constrained bootstrap is the follow-up
-    // for distressed/inverted names; a plain flat-forward layout is monotone-safe but under-fits here).
-    auto hz = curve::make_modular_curve<Scalar>(curve::flat_hermite(meeting_times, back_times));
+    auto hz = curve::make_modular_curve<Scalar>(hazard_layout());
     hz.set_forwards(x);
     curve::SurvivalCurve<Scalar> surv{&hz};
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());

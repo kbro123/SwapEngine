@@ -118,6 +118,7 @@ class Linear {
     // FOLLOWING: pin a leading node to the incoming boundary (in.time,in.value) for the C0 join (unchanged).
     const bool lead = !in.has_predecessor;
     const int N = lead ? n : n + 1;
+    if (N < 2) throw std::invalid_argument("Linear: needs >= 2 nodes (a LEADING region needs >= 2 knots)");  // PATCH
     t_.resize(N);
     y_.resize(N);
     I_.resize(N);
@@ -181,6 +182,7 @@ class NaturalCubic {
     // phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 continuity (as before).
     const bool lead = !in.has_predecessor;
     const int N = lead ? n : n + 1;
+    if (N < 2) throw std::invalid_argument("NaturalCubic: needs >= 2 nodes (a LEADING region needs >= 2 knots)");  // PATCH
     xs_.resize(N);
     ys_.resize(N);
     if (lead) {
@@ -195,7 +197,10 @@ class NaturalCubic {
     std::vector<double> h(nseg);
     for (int i = 0; i < nseg; ++i) h[i] = xs_[i + 1] - xs_[i];
 
-    std::vector<Scalar> M(N, Scalar(0.0));  // natural: M[0]=M[N-1]=0; Thomas on the interior
+    // natural: M[0]=M[N-1]=0; Thomas on the interior. WIDTH-PRESERVING zero (ys_[0]*0.0), not Scalar(0.0):
+    // for a Dual, Scalar(0.0) has an EMPTY derivative vector and Eigen's expr(empty)+expr(M) is UB (it drops
+    // the derivatives silently for N==2 and asserts in a debug build for N>=3).
+    std::vector<Scalar> M(N, ys_[0] * 0.0);
     if (nseg >= 2) {
       const int k = nseg - 1;
       std::vector<double> lower(k), diag(k), upper(k);
@@ -282,6 +287,7 @@ class Hermite {
     // no phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 (unchanged).
     const bool lead = !in.has_predecessor;
     const int N = lead ? n : n + 1;
+    if (N < 2) throw std::invalid_argument("Hermite: needs >= 2 nodes (a LEADING region needs >= 2 knots)");  // PATCH
     xs_.resize(N);
     ys_.resize(N);
     if (lead) {
@@ -497,13 +503,13 @@ class MonotoneCubic {
         if (m[i] * S[0] > 0.0)
           correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[0]));
         else
-          correction = Scalar(0.0);
+          correction = m[i] * 0.0;  // PATCH: width-preserving zero (Scalar(0.0) is an EMPTY dual -> size mismatch)
         if (correction != m[i]) m[i] = correction;
       } else if (i == N - 1) {
         if (m[i] * S[N - 2] > 0.0)
           correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[N - 2]));
         else
-          correction = Scalar(0.0);
+          correction = m[i] * 0.0;  // PATCH: width-preserving zero (Scalar(0.0) is an EMPTY dual -> size mismatch)
         if (correction != m[i]) m[i] = correction;
       } else {
         pm = (S[i - 1] * h[i] + S[i] * h[i - 1]) / (h[i - 1] + h[i]);
@@ -525,7 +531,7 @@ class MonotoneCubic {
         if (m[i] * pm > 0.0)
           correction = m[i] / abs(m[i]) * smin(abs(m[i]), M);
         else
-          correction = Scalar(0.0);
+          correction = m[i] * 0.0;  // PATCH: width-preserving zero (Scalar(0.0) is an EMPTY dual -> size mismatch)
         if (correction != m[i]) m[i] = correction;
       }
     }
@@ -616,7 +622,10 @@ class BSpline {
     // Whole-region integral, for out() and flat extrapolation. Seed from the first segment so the
     // accumulator carries derivatives (AAD SAFETY, top of this header).
     region_int_ = gauss2(brk_[0], brk_[1]);
-    for (std::size_t k = 1; k + 1 < brk_.size(); ++k) region_int_ += gauss2(brk_[k], brk_[k + 1]);
+    Ibrk_.resize(brk_.size());
+    Ibrk_[0] = region_int_ * 0.0;  // width-preserving zero
+    Ibrk_[1] = region_int_;
+    for (std::size_t k = 1; k + 1 < brk_.size(); ++k) { region_int_ += gauss2(brk_[k], brk_[k + 1]); Ibrk_[k + 1] = region_int_; }
   }
 
   Scalar forward(double t) const {
@@ -632,14 +641,9 @@ class BSpline {
     const double te = s_.back();
     const Scalar base = I0_ + cp_.front() * (t0_ - pre_t_);  // integral accumulated up to t0_
     if (t >= te) return base + region_int_ + deboor(te) * (t - te);
-    Scalar acc = base;  // base carries the front's derivatives
-    for (std::size_t k = 0; k + 1 < brk_.size(); ++k) {
-      const double lo = brk_[k], hi = brk_[k + 1];
-      if (t <= lo) break;
-      acc += gauss2(lo, t < hi ? t : hi);
-      if (t <= hi) break;
-    }
-    return acc;
+    // PATCH: cumulative breakpoint integrals + one partial-segment gauss2 (O(log n) instead of O(n) de Boors)
+    const std::size_t k = static_cast<std::size_t>(std::upper_bound(brk_.begin(), brk_.end(), t) - brk_.begin()) - 1;
+    return base + Ibrk_[k] + gauss2(brk_[k], t);
   }
   Boundary<Scalar> out() const {
     const Scalar base = I0_ + cp_.front() * (t0_ - pre_t_);  // include the flat pre-segment (leading)
@@ -711,7 +715,7 @@ class BSpline {
   }
 
   std::vector<double> s_, tau_, brk_;
-  std::vector<Scalar> cp_;
+  std::vector<Scalar> cp_, Ibrk_;
   double t0_ = 0.0;    // clamped B-spline domain start (== first knot when leading, in.time when following)
   double pre_t_ = 0.0;  // start of the flat pre-segment (in.time); == t0_ (zero-length) for a following region
   Scalar I0_{0.0}, region_int_{0.0};
@@ -754,7 +758,11 @@ inline double coshm2(double x) {
   const double ax = std::abs(x);
   if (ax < 0.5) {
     const double x2 = x * x;
-    double s = 1.0 / 6227020800.0;  // x¹²/12!
+    // Terms to x¹⁴/14!: the truncation error at the 0.5 branch point is then x¹⁶/16! ≈ 3e-16 RELATIVE to
+    // x⁴/24 (the series used to stop at x¹²/12! with a 1/13! coefficient and no x¹⁰ term: 1e-7 relative).
+    double s = 1.0 / 87178291200.0;  // x¹⁴/14!
+    s = s * x2 + 1.0 / 479001600.0;  // x¹²/12!
+    s = s * x2 + 1.0 / 3628800.0;    // x¹⁰/10!
     s = s * x2 + 1.0 / 40320.0;     // x⁸/8!
     s = s * x2 + 1.0 / 720.0;       // x⁶/6!
     s = s * x2 + 1.0 / 24.0;        // x⁴/4!
@@ -863,6 +871,7 @@ class Tension {
     // no phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 (unchanged).
     const bool lead = !in.has_predecessor;
     const int N = lead ? n : n + 1;
+    if (N < 2) throw std::invalid_argument("Tension: needs >= 2 nodes (a LEADING region needs >= 2 knots)");  // PATCH
     xs_.resize(N);
     ys_.resize(N);
     if (lead) {
@@ -881,7 +890,7 @@ class Tension {
     //   Ã_{i,i-1} = p(σ,h_{i-1}),  Ã_{i,i} = q(σ,h_{i-1}) + q(σ,h_i),  Ã_{i,i+1} = p(σ,h_i),
     //   B̃_i = (y_{i+1}-y_i)/h_i - (y_i-y_{i-1})/h_{i-1}   (linear in y).
     // p,q → natural-cubic h/6, h/3 as σ→0 (tension_detail), so z → the natural-cubic moments exactly.
-    z_.assign(N, Scalar(0.0));
+    z_.assign(N, ys_[0] * 0.0);  // width-preserving zero (Scalar(0.0) is an EMPTY dual; see NaturalCubic)
     if (nseg >= 2) {
       const int k = nseg - 1;  // interior unknowns z[1..N-2]
       std::vector<double> lower(k), diag(k), upper(k);

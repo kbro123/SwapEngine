@@ -102,9 +102,11 @@ struct Trade {
 
   // ---- THE KEY METHOD -----------------------------------------------------------------------------------
   // Materialize this booked deal into the fast valuation Position the reprice kernel consumes. The coupon
-  // schedules are built with the SAME build::float_leg / build::fixed_coupons builders the calibration
-  // instruments use (par_swap), rolled from spot(value_date) under `conv` to `maturity` — so a trade can
-  // never price on a different cashflow model than the curve it is valued against was calibrated with.
+  // schedules use the SAME coupon model as the calibration instruments (build::float_leg_from /
+  // build::fixed_coupons_from share ois_coupon and the period roller with par_swap) but are rolled from the
+  // trade's own EFFECTIVE date under `conv` to `maturity`: settled periods are dropped and an already-
+  // accruing period is fixings-resolvable (the session resolves it against its fixing table before
+  // pricing). A spot-start trade (effective == spot(value_date)) is byte-identical to the old spot roll.
   //
   // FIELD-BY-FIELD mapping onto portfolio::MultiCurveBook::Position (whose value() prices a swap as
   // notional * (float_leg_pv(fwd,disc) - fixed_rate * annuity(fixed)), i.e. payer-of-fixed per unit
@@ -138,16 +140,18 @@ struct Trade {
     p.kind = portfolio::MultiCurveBook::Kind::Swap;
     p.notional = signed_notional();
 
-    // Floating leg: forecast on our forecast role, discount on our discount role.
+    // Floating leg: forecast on our forecast role, discount on our discount role. Rolled from the booked
+    // EFFECTIVE date (float_leg_from): settled periods dropped, the accruing period fixings-resolvable.
     build::cal::FloatLeg fl =
-        build::float_leg(value_date, conv, maturity, forecast_curve, discount_curve,
-                         conv.float_freq_tok, conv.float_dc);
+        build::float_leg_from(value_date, conv, effective, maturity, forecast_curve, discount_curve,
+                              conv.float_freq_tok, conv.float_dc, index);
     p.float_coupons = std::move(fl.coupons);
     p.fwd_curve = forecast_curve;
     p.disc_curve = discount_curve;
 
-    // Fixed leg: annual coupons discounted on the same (discount) curve, carrying the contract rate.
-    build::cal::FixedLeg fx = build::fixed_coupons(value_date, conv, maturity, discount_curve);
+    // Fixed leg: the PRODUCT's fixed frequency (conv.fixed_freq_tok), rolled from `effective`, discounted on
+    // the same (discount) curve, carrying the contract rate.
+    build::cal::FixedLeg fx = build::fixed_coupons_from(value_date, conv, effective, maturity, discount_curve);
     p.fixed_coupons = std::move(fx.coupons);
     p.fixed_curve = discount_curve;
     p.fixed_rate = fixed_rate;

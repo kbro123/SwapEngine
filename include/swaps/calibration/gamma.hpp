@@ -35,6 +35,7 @@
 #include "swaps/ad/reverse.hpp"
 #include "swaps/calibration/jacobian.hpp"       // aad_jacobian (the IFT sensitivity's J)
 #include "swaps/calibration/problem.hpp"        // CalibrationProblem
+#include "swaps/calibration/risk.hpp"           // ift_operator (the shared, rank-safe dx/dq)
 #include "swaps/curve/curve_module.hpp"
 
 namespace swaps::calibration {
@@ -91,9 +92,7 @@ inline Eigen::MatrixXd curve_gamma(const CalibrationProblem& prob, const Eigen::
 // the SAME operator risk.hpp uses for the delta ladder (there applied as J * (J^T J)^{-1} * dNPV/dx).
 // Shape: n_knots x n_residuals.
 inline Eigen::MatrixXd ift_quote_sensitivity(const CalibrationProblem& prob, const Eigen::VectorXd& x) {
-  const Eigen::MatrixXd J = aad_jacobian(prob, x);         // n_resid x n_knots
-  const Eigen::MatrixXd JtJ = J.transpose() * J;           // n_knots x n_knots
-  return JtJ.ldlt().solve(J.transpose());                  // (J^T J)^{-1} J^T  ->  n_knots x n_resid
+  return ift_operator(prob, x);  // risk.hpp: rank-safe J⁺ times D = diag(−∂r/∂q); one operator, one place
 }
 
 // Market-space GAMMA (Gauss-Newton transport): H_q = S^T H_x S, over all market quotes.

@@ -95,21 +95,91 @@ inline cal::FloatLeg float_leg(const Date& vd, const SwapConv& conv, const Date&
   return leg;
 }
 
-// Par OIS/IRS swap (compile._par_swap): fixed leg (annual by default) vs float forecasting `fc`, discounting
-// `disc`. Optional: `float_spread` (additive float-leg spread, rate units), `notionals` (amortizing/step-up
-// schedule applied to BOTH legs), `fixed_freq` (fixed-leg frequency override). Defaults reproduce the old
-// annual-fixed, unit-notional, zero-spread swap byte-for-byte. NOTE: a single `notionals` vector is fed to
-// both legs, so it is one-per-period on EACH leg -- for a swap whose float and fixed period counts differ
-// (e.g. quarterly float vs annual fixed) build the legs directly with float_leg/fixed_coupons instead.
+// ---- BOOKED-trade legs: rolled from the trade's EFFECTIVE date, not from spot ----------------------------
+// A seasoned (or forward-starting) deal's coupon dates are anchored at its own effective date. Rolling a
+// booked trade from today's spot (what the calibration builders above do, correctly, for a NEW par swap)
+// invents a different contract: wrong coupon dates, the elapsed part of the current period lost, a wrong
+// final stub (-17.6% NPV on a 2020-effective 10y measured against the true schedule). These builders:
+//   * roll `freq_tok` from `effective` to `maturity` (swap_periods_between), then
+//   * DROP every period whose PAYMENT date is on/before the value date (already settled), and
+//   * for a period that is ALREADY ACCRUING (start < value date) attach a fixings-resolvable observation:
+//     overnight index -> one FixingDay per business day (scheduled_observation, compounded); term/IBOR
+//     index -> ONE fixing at (start − fixing_lag) covering the whole period. The session resolves these
+//     against its fixing table before pricing (realized part from real fixings, the rest forecast); an
+//     unresolved one is refused by the kernels, never priced as zero.
+inline cal::FloatLeg float_leg_from(const Date& vd, const SwapConv& conv, const Date& effective, const Date& mat,
+                                    int forecast, int disc, const std::string& freq_tok, const std::string& dc,
+                                    const std::string& index, double spread = 0.0,
+                                    const std::vector<double>& notionals = {}) {
+  cal::FloatLeg leg;
+  leg.forecast = forecast;
+  leg.discount = disc;
+  const auto periods = swap_periods_between(effective, conv.calendar, mat, freq_tok, conv.bdc);
+  const Index ix(index);
+  const bool overnight = index.empty() ? true : ix.is_overnight();  // no DB entry: assume an RFR (compounded)
+  for (std::size_t i = 0; i < periods.size(); ++i) {
+    const auto& [s, e] = periods[i];
+    const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
+    if (!(pay > vd)) continue;  // settled: nothing left to value
+    px::FloatCoupon c;
+    if (s < vd) {  // accruing: realized part from fixings, forecast part from the curve
+      if (overnight) {
+        c.obs = scheduled_observation(vd, s, e, "compounded", dc, conv.calendar, index);
+      } else {
+        const Date fixing = advance_bd(conv.calendar, s, -ix.fixing_lag());
+        const double tau = year_frac(dc, s, e, conv.calendar);
+        c.obs.fixing_index = index;
+        c.obs.tau_index = tau;
+        c.obs.fixing_schedule.push_back(px::FixingDay{ordinal(fixing), tau, curve_time(vd, s), curve_time(vd, e), 1.0});
+      }
+      c.pay = curve_time(vd, pay);
+      c.tau_pay = year_frac(dc, s, e, conv.calendar);
+    } else {
+      c = ois_coupon(vd, conv, s, e, dc);
+    }
+    c.spread = spread;
+    c.scale = notional_at(notionals, i, periods.size());
+    leg.coupons.push_back(c);
+  }
+  return leg;
+}
+
+inline cal::FixedLeg fixed_coupons_from(const Date& vd, const SwapConv& conv, const Date& effective, const Date& mat,
+                                        int disc, const std::string& fixed_freq = "",
+                                        const std::vector<double>& notionals = {}) {
+  cal::FixedLeg leg;
+  leg.discount = disc;
+  const auto periods = swap_periods_between(effective, conv.calendar, mat,
+                                            fixed_freq.empty() ? conv.fixed_freq_tok : fixed_freq, conv.bdc);
+  for (std::size_t i = 0; i < periods.size(); ++i) {
+    const auto& [s, e] = periods[i];
+    const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
+    if (!(pay > vd)) continue;  // settled
+    px::FixedCoupon fc;
+    fc.pay = curve_time(vd, pay);
+    fc.tau = year_frac(conv.fixed_dc, s, e, conv.calendar);  // the FULL coupon is still owed (dirty value)
+    fc.scale = notional_at(notionals, i, periods.size());
+    leg.coupons.push_back(fc);
+  }
+  return leg;
+}
+
+// Par OIS/IRS swap (compile._par_swap): fixed leg on the PRODUCT's fixed frequency (conv.fixed_freq_tok,
+// from the conventions DB; annual for USD/EUR/GBP/JPY OIS, semi/quarterly for SAR/AUD/CNY/ZAR ...) vs float
+// forecasting `fc`, discounting `disc`. Optional: `float_spread` (additive float-leg spread, rate units),
+// `notionals` (amortizing/step-up schedule applied to BOTH legs), `fixed_freq` (an explicit fixed-leg
+// frequency override; "" = the product's). NOTE: a single `notionals` vector is fed to both legs, so it is
+// one-per-period on EACH leg -- for a swap whose float and fixed period counts differ (e.g. quarterly float
+// vs annual fixed) build the legs directly with float_leg/fixed_coupons instead.
 inline cal::Instrument par_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int disc,
                                 double market, double float_spread = 0.0,
                                 const std::vector<double>& notionals = {},
-                                const std::string& fixed_freq = "1Y") {
+                                const std::string& fixed_freq = "") {
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::ParRate;
   ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, float_spread,
                       notionals);
-  ins.fixed = fixed_coupons(vd, conv, mat, disc, fixed_freq, notionals);
+  ins.fixed = fixed_coupons(vd, conv, mat, disc, fixed_freq.empty() ? conv.fixed_freq_tok : fixed_freq, notionals);
   ins.market = market;
   return ins;
 }

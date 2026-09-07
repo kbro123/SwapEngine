@@ -133,7 +133,7 @@ std::string credit_json(const std::string& request) {
   const cal::CalibrationResult res = cal::calibrate(prob, x0);
 
   // Project off the calibrated hazard curve (double).
-  auto hz = curve::make_modular_curve<double>(curve::flat_hermite(prob.meeting_times, prob.back_times));
+  auto hz = curve::make_modular_curve<double>(prob.hazard_layout());  // the SAME layout the residual used
   hz.set_forwards(res.x);
   const curve::SurvivalCurve<double> surv{&hz};
 
@@ -158,6 +158,11 @@ std::string credit_json(const std::string& request) {
   out["survival"] = vecf(survival_v);
   out["hazard_curve"] = vecf(hazard_v);
   out["default_density"] = vecf(density_v);
+  // The minimum KNOT hazard: < 0 means the quoted strip itself implies a negative forward default
+  // intensity between two maturities (an arbitrageable strip) -- with the piecewise-flat layout that is
+  // the strip's own message, not an interpolation artefact. Surfaced so a caller never reads a
+  // non-monotone survival without a flag.
+  out["min_hazard"] = hazard_knots.empty() ? 0.0 : *std::min_element(hazard_knots.begin(), hazard_knots.end());
   out["par_spreads"] = vecf(fitted);
   out["recovery"] = recovery;
   out["stationarity"] = res.stationarity;

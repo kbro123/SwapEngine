@@ -55,6 +55,7 @@ add_executable(swaps_tests
   bond_future_test.cpp
   ndf_test.cpp
   credit_test.cpp
+  bug_hunt_2026_09_test.cpp
   bus252_daycount_test.cpp
   conventions_property_test.cpp
   curve_property_test.cpp

@@ -200,7 +200,11 @@ inline SabrVolGrad sabr_vol_gradient(double forward, double strike, double expir
   n.value() = p.nu;    n.derivatives() = Eigen::VectorXd::Unit(3, 2);
   F.value() = forward; F.derivatives() = Eigen::VectorXd::Zero(3);
   K.value() = strike;  K.derivatives() = Eigen::VectorXd::Zero(3);
-  const ad::Dual v = sabr_normal_vol<ad::Dual>(F, K, expiry, a, r, n);
+  // beta is a CONSTANT here (no derivative), but it must be PASSED: the template's default is beta = 0,
+  // which silently returned the beta=0 gradient for a beta=0.5 smile (d_alpha 6x off).
+  ad::Dual b;
+  b.value() = p.beta; b.derivatives() = Eigen::VectorXd::Zero(3);
+  const ad::Dual v = sabr_normal_vol<ad::Dual>(F, K, expiry, a, r, n, b);
   return {v.derivatives()[0], v.derivatives()[1], v.derivatives()[2]};
 }
 

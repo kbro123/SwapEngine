@@ -187,7 +187,7 @@ cal::CalibrationResult calibrate_cds(const std::vector<double>& mats, const std:
   mean /= static_cast<double>(spreads.size());
   const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(prob.n_knots(), mean / (1.0 - R));
   const cal::CalibrationResult res = cal::calibrate(prob, x0);
-  hz_out = curve::make_modular_curve<double>(curve::flat_hermite(prob.meeting_times, prob.back_times));
+  hz_out = curve::make_modular_curve<double>(prob.hazard_layout());  // the layout the residual used
   hz_out.set_forwards(res.x);
   return res;
 }

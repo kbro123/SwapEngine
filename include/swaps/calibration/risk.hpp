@@ -2,10 +2,13 @@
 // Analytic bucketed risk via AAD + the implicit-function theorem (CLAUDE.md §1, north-star #4).
 //
 // The calibration fixes the knot forwards x by r(x, q) = 0 (square) / min ||r(x,q)||^2, where q are
-// the market quotes (rate units; residual_i = model_i(x) - q_i, so dr/dq = -I). By the IFT the
-// solution's sensitivity to the quotes is
-//     dx/dq = (J^T J)^{-1} J^T          (Gauss-Newton; = J^{-1} when square)
-// with J = dr/dx the calibration Jacobian we ALREADY have from AAD. For any portfolio output NPV,
+// the market quotes (rate units). By the IFT the solution's sensitivity to the quotes is
+//     dx/dq = J⁺ · D,   J⁺ = (J^T J)^{-1} J^T (Gauss-Newton; = J^{-1} when square),  D = diag(−∂r/∂q)
+// with J = dr/dx the calibration Jacobian we ALREADY have from AAD. D is the identity for a hard pin
+// (r = model − q) but NOT in general: a banded row is w(q_model)·(q_model − q) (−∂r/∂q = w) and an FX
+// forward is (ln F − ln q)/T (−∂r/∂q = 1/(q·T)); dropping D overstated those columns by 1/decay and by
+// q·T. J⁺ is a rank-thresholded pseudo-inverse (kRankThreshold, shared with LM/streaming), never a
+// tolerance-free LDLT of a possibly-singular JᵀJ. For any portfolio output NPV,
 //     d(NPV)/dq = d(NPV)/dx * dx/dq
 // where d(NPV)/dx is one more AAD pass. So the FULL bucketed delta ladder over all quotes costs one
 // calibration + one AAD gradient + one small linear solve -- no bump-and-reprice, and no bump noise.
@@ -16,9 +19,37 @@
 
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/residual_engine.hpp"  // kRankThreshold
 #include "swaps/curve/curve_module.hpp"
 
 namespace swaps::calibration {
+
+// D = diag(−∂r_i/∂q_i) at x for a single-curve problem (see the header note).
+inline Eigen::VectorXd residual_market_scale(const CalibrationProblem& prob, const Eigen::VectorXd& x) {
+  auto c = curve::make_modular_curve<double>(curve::flat_hermite(prob.meeting_times, prob.back_times));
+  c.set_forwards(x);
+  const auto curve_of = [&c](int) -> const curve::ModularCurve<double>& { return c; };
+  Eigen::VectorXd d = Eigen::VectorXd::Ones(prob.n_residuals());
+  for (int i = 0; i < prob.n_residuals(); ++i) {
+    const Instrument& ins = prob.instruments[i];
+    if (ins.quote == QuoteKind::FxForward) {
+      d[i] = 1.0 / (ins.market * ins.fx_time);
+    } else if (ins.band_upper > ins.band_lower) {
+      const double m = instrument_model_quote<double>(ins, curve_of);
+      d[i] = band_weight_d(m, ins.band_lower, ins.band_upper, ins.band_decay).first;
+    }
+  }
+  return d;
+}
+
+// The IFT quote-sensitivity operator dx/dq = J⁺ D  (n_knots x n_residuals), rank-safe.
+inline Eigen::MatrixXd ift_operator(const CalibrationProblem& prob, const Eigen::VectorXd& x) {
+  const Eigen::MatrixXd J = aad_jacobian(prob, x);  // n_resid x n_knots
+  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
+  cod.setThreshold(kRankThreshold);
+  cod.compute(J);
+  return cod.pseudoInverse() * residual_market_scale(prob, x).asDiagonal();
+}
 
 // One AAD pass for d(NPV)/dx off the calibration curve, in a caller-chosen forward-AAD scalar.
 template <class Scalar, class Portfolio>
@@ -43,11 +74,8 @@ Eigen::VectorXd bucketed_delta(const CalibrationProblem& prob, const Eigen::Vect
                                                              ad::seed_pooled<ad::kPooledMaxW>(x))
           : book_curve_grad<ad::Dual>(prob, x, pf, ad::seed(x));
 
-  // J = dr/dx (analytic), then chain through the IFT.
-  const Eigen::MatrixXd J = aad_jacobian(prob, x);      // n_resid x n_knots
-  const Eigen::MatrixXd JtJ = J.transpose() * J;        // n_knots x n_knots
-  const Eigen::VectorXd a = JtJ.ldlt().solve(dnpv_dx);  // (J^T J)^{-1} dnpv_dx
-  return J * a;                                          // length n_resid = d(NPV)/dq per quote
+  // Chain through the IFT: d(NPV)/dq = (dx/dq)ᵀ d(NPV)/dx = (J⁺ D)ᵀ dnpv_dx.
+  return ift_operator(prob, x).transpose() * dnpv_dx;  // length n_resid = d(NPV)/dq per quote
 }
 
 }  // namespace swaps::calibration
