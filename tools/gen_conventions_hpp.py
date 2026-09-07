@@ -75,10 +75,12 @@ def main():
         "// A HOLIDAY rule (calendars[].holidays in the JSON) — interpreted by swaps/build/calendar.hpp.",
         "// kind: \"fixed\" (month/day, from_year 0 = always), \"nth_weekday\" (month/weekday/n),",
         "// \"last_weekday\" (month/weekday), \"easter_offset\" (days vs Easter Sunday). weekday is Mon=0..Sun=6.",
+        "// from_year/to_year bound the years a rule applies (0 = open-ended); a tabulated per-year holiday",
+        "// (lunar / Islamic / announced) is a \"fixed\" rule with from_year==to_year==that year.",
         "// observance: \"\" = inherit the calendar default; else \"none\" | \"sat_to_fri_sun_to_mon\" | \"sun_to_mon\".",
         "struct HolidayRule {",
         "  std::string_view kind;",
-        "  int month, day, weekday, n, days, from_year;",
+        "  int month, day, weekday, n, days, from_year, to_year;",
         "  std::string_view observance;",
         "};",
         "// A CALENDAR: either rule-based (rule_count > 0) or a JOIN of other calendars (closed if any leg is",
@@ -134,6 +136,7 @@ def main():
                 sv(r["rule"]),
                 str(r.get("month", 0)), str(r.get("day", 0)), str(r.get("weekday", -1)),
                 str(r.get("n", 0)), str(r.get("days", 0)), str(r.get("from_year", 0)),
+                str(r.get("to_year", 0)),
                 sv(r.get("observance")),
             ]) + "},")
         for jleg in c.get("join", []):

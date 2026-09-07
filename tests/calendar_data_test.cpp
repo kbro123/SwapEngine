@@ -107,11 +107,12 @@ TEST(CalendarData, ObservanceYearBucketQuirk) {
 // (Mon-Fri) that are NOT business days in each year must equal this table, captured ONCE from the
 // pre-migration implementation. A new DB calendar must extend the table (the test fails loudly otherwise).
 TEST(CalendarData, ExhaustiveYearlyHolidayCounts) {
-  // The first five rows are the pre-migration hand-verified counts (US/EUR desks). The G20 rows below were
-  // captured from the data-defined rules in conventions.json: exact for the fixed/weekend structure, and a
-  // pinned baseline for the approximated lunar/announced EM holidays (Spring Festival, Seollal/Chuseok, the
-  // Islamic Eids, Indian festivals) -- they lock the calendars as a change-detector, not an oracle. (SAR's
-  // ~55 reflects its Fri/Sat weekend: every Friday is a non-business weekday under Mon-Fri counting.)
+  // The first five rows are the pre-migration hand-verified counts (US/EUR desks). The G20 rows are the
+  // counts the data-defined rules produce. The EM lunar/Islamic/astronomical holidays (Spring Festival,
+  // Seollal/Chuseok, the Eids, JP equinoxes) are TABULATED per year for 2025-2035 (computed from the
+  // Chinese/Korean lunisolar calendars, the Umm al-Qura Islamic calendar, and the equinox formula — see
+  // tools/gen_em_holidays.py), so 2024 and 2036 (outside the window) show only the fixed national holidays.
+  // (SAR's ~55 reflects its Fri/Sat weekend: every Friday is a non-business weekday under Mon-Fri counting.)
   const std::map<std::string, std::vector<int>> golden = {
       // 2024 2025 2026 2027 2028 2029 2030 2031 2032 2033 2034 2035 2036
       {"USD",      {12, 12, 12, 12, 11, 12, 12, 12, 12, 11, 12, 12, 12}},
@@ -124,16 +125,16 @@ TEST(CalendarData, ExhaustiveYearlyHolidayCounts) {
       {"BRL",      { 9,  9, 12, 10, 12, 12,  9,  9, 10,  9, 12, 12,  9}},
       {"CAD",      {11, 11, 10, 10,  8, 11, 11, 11, 10,  9,  9, 11, 11}},
       {"CHF",      {10, 10,  8,  5,  8, 10, 10, 10,  6,  6,  9, 10, 10}},
-      {"CNY",      {10,  7,  7,  8,  8,  9,  9,  7,  7,  7,  8,  9,  7}},
+      {"CNY",      { 5, 10,  9,  6,  7,  9, 10,  8,  5,  7,  8,  8,  5}},
       {"GBP",      { 8,  8,  7,  7,  7,  8,  8,  8,  7,  6,  8,  8,  8}},
-      {"IDR",      { 4,  4,  6,  4,  5,  6,  4,  4,  4,  3,  5,  6,  4}},
+      {"IDR",      { 4,  6,  8,  6,  6,  9,  6,  6,  7,  6,  8,  6,  4}},
       {"INR",      { 5,  5,  5,  3,  5,  5,  4,  5,  3,  4,  6,  5,  5}},
-      {"JPY",      {17, 17, 17, 16, 14, 16, 16, 17, 17, 16, 14, 16, 16}},
-      {"KRW",      {10,  8,  5,  5, 10, 10, 10,  8,  4,  7, 10, 10,  9}},
+      {"JPY",      {15, 17, 17, 17, 15, 16, 16, 17, 17, 16, 14, 16, 14}},
+      {"KRW",      { 7, 12,  9,  8, 13, 11, 12, 14,  7, 11, 12, 12,  7}},
       {"MXN",      { 9,  9,  9,  7,  7,  8,  9,  9,  7,  6,  7,  8,  9}},
       {"RUB",      {12, 10, 10,  9, 10, 11, 11, 10,  9,  9, 10, 11, 10}},
-      {"SAR",      {55, 55, 54, 55, 53, 53, 55, 55, 55, 52, 53, 53, 55}},
-      {"TRY",      { 8,  8,  8,  7,  4,  6,  8,  8,  7,  4,  4,  6,  8}},
+      {"SAR",      {53, 57, 56, 60, 55, 57, 59, 56, 60, 57, 57, 57, 53}},
+      {"TRY",      { 6, 10, 10, 11,  6, 12, 11, 10, 13,  8,  9,  9,  6}},
       {"ZAR",      {11, 11, 10, 10, 10, 11, 11, 11, 10,  9, 11, 11, 11}},
   };
   ASSERT_EQ(cvd::kCalendars.size(), golden.size()) << "conventions DB gained/lost a calendar: extend the golden table";

@@ -83,6 +83,7 @@ inline std::set<long> holidays_serial(const std::string& cal_id, int year) {
   for (std::size_t i = 0; i < cal.rule_count; ++i) {
     const auto& r = conventions::kHolidayRules[cal.rule_begin + i];
     if (r.from_year && year < r.from_year) continue;
+    if (r.to_year && year > r.to_year) continue;   // a per-year dated holiday: from_year==to_year==Y
     const auto policy = r.observance.empty() ? cal.observance : r.observance;
     hs.insert(calendar_detail::observe(policy, calendar_detail::rule_date(r, year)).serial());
   }
