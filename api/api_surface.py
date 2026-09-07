@@ -138,6 +138,7 @@ PROPS = [
     ("streaming", "BOOL"), ("last_risk_us", "SCALAR"), ("last_solve_us", "SCALAR"),
     ("last_price_us", "SCALAR"), ("stream_avg_us", "SCALAR"), ("stream_ticks", "INT"),
     ("last_newton_steps", "INT"), ("last_refreshes", "INT"), ("last_drift", "SCALAR"),
+    ("last_converged", "BOOL"), ("last_rescales", "INT"),
 ]
 # props whose C++ getter lives on BundleSession vs is derived from problem()
 PROP_CPP = {
@@ -149,6 +150,7 @@ PROP_CPP = {
     "last_price_us": "sess_.last_price_us()", "stream_avg_us": "sess_.stream_avg_us()",
     "stream_ticks": "sess_.stream_ticks()", "last_newton_steps": "sess_.last_newton_steps()",
     "last_refreshes": "sess_.last_refreshes()", "last_drift": "sess_.last_drift()",
+    "last_converged": "sess_.last_converged()", "last_rescales": "sess_.last_rescales()",
 }
 
 # ---- module-level free functions --------------------------------------------------------------------

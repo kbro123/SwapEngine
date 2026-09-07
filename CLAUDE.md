@@ -474,9 +474,17 @@ measured levers (the order matters — measure before optimising, CLAUDE.md disc
 For a **live pricer to sharp clients**, a stale price is a free option — so the default streaming mode
 is `exact`: **iterate the cached `M = J⁻¹` as a frozen-Newton *preconditioner* to convergence every
 tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not a single linear extrapolation.
-- The fixed point is `r = 0` **for any invertible `M`**, so every tick lands on the EXACT solution
-  (round-trip `‖model_rates(x) − q‖∞ ≈ 1e-12`, machine-exact) regardless of `M`'s accuracy. `M` only
-  sets the convergence *rate* `ρ = ‖I − M·J(x)‖` (measured: ~0.04 at 10 bp of drift → ~3 steps/tick).
+- For a **square, full-rank** problem the fixed point is `r = 0` **for any invertible `M`**, so every tick
+  lands on the EXACT solution (round-trip `‖model_rates(x) − q‖∞ ≈ 1e-12`, machine-exact) regardless of
+  `M`'s accuracy; `M` only sets the convergence *rate* `ρ = ‖I − M·J(x)‖` (measured: ~0.04 at 10 bp of
+  drift → ~3 steps/tick). For an **over-determined / banded / regularised** problem the fixed point is
+  `J_refᵀ r = 0`, which equals the least-squares condition `J(x)ᵀ r = 0` only while `J(x) == J_ref`: the
+  answer is exact to second order in the drift (≤0.015 bp at 30 bp for plain par rows), and the streamer
+  keeps it that way with (a) a drift-triggered refresh (`Options::refresh_drift`, 10 bp; square problems
+  are exempt) and (b) band-edge tracking — a banded row's slope is exactly `decay` inside / `1` outside
+  (the Huber band, `problem.hpp band_residual`), so a crossing re-scales that frozen row and re-factorises
+  `M` (tens of µs, `StreamTick::rescales`) instead of leaving `J` a 10x moving target. A tick that hits its
+  refresh cap reports `converged = false` and is NOT committed. Pinned in `tests/streaming_band_test.cpp`.
 - **The Jacobian is recomputed only on genuine staleness** — when frozen-Newton needs more than
   `max_frozen` steps — NOT on a drift envelope. That staleness envelope is ~30 bp of curve move (a
   level move; `tools/jacobian_staleness.cpp` measures `ρ` vs move size) vs the linear path's 0.35 bp,
@@ -536,7 +544,7 @@ readers (pricer threads) take a consistent `snapshot(out)` LOCK-FREE and price o
   worker: as drift passes `prefetch_drift` it `request`s an M at the current x; the worker computes J+M off
   the critical path (its OWN engine — compiled engines have per-instance scratch, not shareable); when a
   refresh fires the tick `try_take`s the ready M and swaps it in (~µs) instead of computing inline.
-  **Correctness is FREE:** frozen-Newton's fixed point is `r=0` for ANY invertible M, so a slightly-stale
+  **Correctness is FREE (square problems):** frozen-Newton's fixed point is `r=0` for ANY invertible M, so a slightly-stale
   background M is exact — it only sets the convergence rate; a too-stale one merely triggers another
   refresh (bounded by `max_refresh`). No accuracy is traded. Gates: `tests/streaming_test.cpp`
   `PrefetchIsExactMatchesSyncAndFires` (round-trip 2e-12, matches the sync path to 2e-11, 263/384 refreshes

@@ -735,7 +735,7 @@ std::string BundleSession::quote_diagnostics_json() const {
       d["upper"] = ins.band_upper;
       d["decay"] = ins.band_decay;
       d["in_band"] = (ins.band_lower <= m && m <= ins.band_upper);
-      d["weight"] = cal::band_weight_d(m, ins.band_lower, ins.band_upper, ins.band_decay).first;
+      d["weight"] = cal::band_slope(m, ins.band_lower, ins.band_upper, ins.band_decay);  // decay in, 1 out
     } else {
       d["in_band"] = false;
       d["weight"] = 1.0;  // hard pin — full-weight residual, no band
@@ -763,10 +763,12 @@ Eigen::VectorXd BundleSession::residual_market_scale() const {
     if (ins.quote == cal::QuoteKind::FxForward) {
       d[i] = 1.0 / (ins.market * ins.fx_time);  // r = (ln F_model − ln q)/T
     } else if (ins.band_upper > ins.band_lower) {
-      const double m = cal::instrument_model_quote<double>(ins, curve_of);  // r = w(q_model)·(q_model − q)
-      d[i] = cal::band_weight_d(m, ins.band_lower, ins.band_upper, ins.band_decay).first;
+      // Huber band (problem.hpp band_residual): the market mid enters only through the decay·(q − m) pull,
+      // on every side of the band (the edges are absolute levels), so −∂r/∂q_market = decay everywhere.
+      d[i] = ins.band_decay;
     }
   }
+  (void)curve_of;
   return d;
 }
 
@@ -1026,6 +1028,10 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
   last_newton_steps_ = tick.newton_steps;
   last_refreshes_ = tick.refreshes;
   last_drift_ = tick.drift;
+  last_converged_ = tick.converged;
+  last_rescales_ = tick.rescales;
+  // A non-converged tick (refresh cap) is not committed by the streamer either: current() is still the
+  // last converged solution, so x_ never carries a half-solved curve. The caller sees last_converged().
   x_ = stream_->current();
   return x_;
 }

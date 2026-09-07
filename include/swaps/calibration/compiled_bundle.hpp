@@ -184,8 +184,8 @@ class CompiledBundleResidual {
   const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& mr = model_rates(x);  // model_rates fills out_; res_ (a distinct member) holds r
     res_ = mr - q;
-    for (const auto& b : band_)  // banded rows: r = w(q_model)·(q_model - q)
-      res_[b.row] *= band_weight_d(mr[b.row], b.lower, b.upper, b.decay).first;
+    for (const auto& b : band_)  // banded rows: the Huber band residual (problem.hpp band_residual)
+      res_[b.row] = band_residual_d(mr[b.row], q[b.row], b.lower, b.upper, b.decay).first;
     // FX rows: the residual is the implied-basis discrepancy (ln F_model − ln q)/T in RATE units, NOT the
     // raw outright difference F − q. (FX rows are never banded, so this cleanly overwrites mr − q.)
     for (const auto& f : fx_rows_) {
@@ -255,15 +255,14 @@ class CompiledBundleResidual {
       G(f.row, f.idx_num) += 1.0 / (DF[f.idx_num] * f.fx_time);
       G(f.row, f.idx_den) += -1.0 / (DF[f.idx_den] * f.fx_time);
     }
-    // Band chain rule: r = w(q)·(q-market) => dr/dx = (w + w'·(q-market))·dq/dx. Scale each banded row's
-    // dr/dDF (G) by that scalar before the W matmul (the matmul is linear, so scaling commutes). Turn
-    // rows have a zero G row (no DF dependence), so scaling them here is a no-op -- their band factor is
-    // applied to the DIRECT ∂δ/∂x entry below instead.
+    // Band chain rule: dr/dx = (dr/dq)·dq/dx with dr/dq = decay inside the band, 1 outside (the Huber
+    // residual, problem.hpp). Scale each banded row's dr/dDF (G) by that slope before the W matmul (the
+    // matmul is linear, so scaling commutes). Turn rows have a zero G row (no DF dependence), so scaling
+    // them here is a no-op -- their band factor is applied to the DIRECT ∂δ/∂x entry below instead.
     for (std::size_t k = 0; k < band_.size(); ++k) {
       const Band& b = band_[k];
       const int i = static_cast<int>(k);
-      const std::pair<double, double> wd = band_weight_d(qb_[i], b.lower, b.upper, b.decay);
-      G.row(b.row) *= (wd.first + wd.second * (qb_[i] - q[b.row]));  // (q_model - q), q = the live market
+      G.row(b.row) *= band_residual_d(qb_[i], q[b.row], b.lower, b.upper, b.decay).second;
     }
     // SUPPORT-BLOCKED product replacing the dense -(G·diag(DF))·W GEMM: J.row(r) = -Σ_{t ∈ sup(r)}
     // G(r,t)·DF[t]·W.row(t). G's nonzeros per row are exactly the row's registered times (recorded once
@@ -289,14 +288,13 @@ class CompiledBundleResidual {
     Eigen::MatrixXd J = Jt_.transpose();
     // TURN rows: r = (banded) (δ − market) with δ = weight·x[state index] -- LINEAR in x, and independent
     // of every DF, so its Jacobian is a single DIRECT entry ∂r/∂x[state index], not part of the W matmul.
-    // The band chain-rule factor (w + w'·(δ − market)) multiplies that entry (matches residuals_vs).
+    // The band slope dr/dq (decay inside, 1 outside) multiplies that entry (matches residuals_vs).
     for (const auto& t : turn_rows_) {
       double factor = t.weight;
       for (const auto& b : band_)
         if (b.row == t.row) {
           const double qm = t.weight * x[t.state_index];  // the model quote for this row (== mr[t.row])
-          const std::pair<double, double> wd = band_weight_d(qm, b.lower, b.upper, b.decay);
-          factor *= (wd.first + wd.second * (qm - q[t.row]));
+          factor *= band_residual_d(qm, q[t.row], b.lower, b.upper, b.decay).second;
           break;
         }
       J(t.row, t.state_index) += factor;

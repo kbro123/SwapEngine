@@ -682,6 +682,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   for (const auto& cs : R.bundle.curves) R.n_knots += cs.n_knots();  // interp knots + one δ per turn
   R.n_residuals = int(R.bundle.instruments.size());
   R.under_determined = R.n_residuals < R.n_knots;
+  for (const auto& ins : R.bundle.instruments)
+    if (ins.band_upper > ins.band_lower) R.has_bands = true;  // mirrors compile.py's has_bands
   if (R.under_determined)
     R.warnings.push_back("Under-determined: " + std::to_string(R.n_residuals) + " quotes for " +
                          std::to_string(R.n_knots) + " knots — smoothness regularization keeps it well-posed.");
@@ -749,6 +751,7 @@ json::value compile_to_json(const CompileResult& r) {
   out["reg_op"] = r.has_reg_op ? json::value(r.reg_op) : json::value(nullptr);
   out["tension_sigma"] = r.tension_sigma;
   out["under_determined"] = r.under_determined;
+  out["has_bands"] = r.has_bands;
   out["value_date"] = r.value_date;
   out["currency_codes"] = json::array(r.currency_codes.begin(), r.currency_codes.end());
 

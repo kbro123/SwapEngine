@@ -241,8 +241,8 @@ class BundleSession {
 
   // Per-instrument calibration diagnostics, so a SOFT (banded) fit is never silent: for each residual
   // instrument, its model quote vs target, and — when it carries a bid/offer band — whether the model
-  // landed INSIDE the band and the effective in-band residual weight (band_weight, 1 outside decaying to
-  // band_decay inside). A hard pin reports in_band=false, weight=1, residual≈0. JSON array, one entry per
+  // landed INSIDE the band and the residual's slope there (band_slope: band_decay inside, 1 outside).
+  // A hard pin reports in_band=false, weight=1, residual≈0. JSON array, one entry per
   // instrument in residual order:
   //   [{"model","target","residual","soft","in_band","weight"[,"lower","upper","decay"]}, ...]
   std::string quote_diagnostics_json() const;
@@ -376,6 +376,11 @@ class BundleSession {
   int last_newton_steps() const { return last_newton_steps_; }
   int last_refreshes() const { return last_refreshes_; }
   double last_drift() const { return last_drift_; }
+  // Health of the LAST tick: did the frozen-Newton corrector reach step_tol? A tick that hit the refresh
+  // cap is reported here and NOT committed (x() keeps the last converged curve). `last_rescales` counts
+  // band-edge crossings handled by the cheap frozen-row re-scale (no Jacobian recompute) this tick.
+  bool last_converged() const { return last_converged_; }
+  int last_rescales() const { return last_rescales_; }
 
   // ---- fixings as pricing context (E2) -----------------------------------------------------------
   // Any observation carrying a fixing_schedule is RESOLVED from this session's fixing table against the
@@ -459,6 +464,8 @@ class BundleSession {
   int last_newton_steps_ = 0;
   int last_refreshes_ = 0;
   double last_drift_ = 0;
+  bool last_converged_ = true;
+  int last_rescales_ = 0;
 
   // ---- vol-cube reprice caches (populated by the const price_vol_cube_json; mutable so it stays const) ----
   // The swaption schedules are CURVE-INDEPENDENT, so they are built once per cell and reused across reprices

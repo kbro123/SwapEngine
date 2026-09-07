@@ -35,10 +35,10 @@ inline Eigen::VectorXd residual_market_scale(const CalibrationProblem& prob, con
     if (ins.quote == QuoteKind::FxForward) {
       d[i] = 1.0 / (ins.market * ins.fx_time);
     } else if (ins.band_upper > ins.band_lower) {
-      const double m = instrument_model_quote<double>(ins, curve_of);
-      d[i] = band_weight_d(m, ins.band_lower, ins.band_upper, ins.band_decay).first;
+      d[i] = ins.band_decay;  // Huber band: −∂r/∂q_market = decay on every side (problem.hpp band_residual)
     }
   }
+  (void)curve_of;
   return d;
 }
 
