@@ -11,6 +11,7 @@
 #include <boost/json.hpp>
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include "swaps/api/bundle_api.hpp"
@@ -203,6 +204,91 @@ TEST(BundleApi, RebindCarriesTheFullQuoteRhsWarm) {
   cal::BundleProblem bigger = p;  // an extra instrument IS structural -> rebind rejects it
   bigger.instruments.push_back(p.instruments.back());
   EXPECT_THROW(sess.rebind(bigger), std::runtime_error);
+
+  cal::BundleProblem moved = p;  // SAME count, different knots: also structural -> rebind must reject it
+  moved.curves[0].regions.back().knots.back() += 0.25;  // (it used to rebind the new quotes onto old rows)
+  EXPECT_FALSE(sess.same_structure(moved));
+  EXPECT_THROW(sess.rebind(moved), std::runtime_error);
+}
+
+// The risk operator dx/dq must equal bump-and-recalibrate for EVERY row kind. A banded row's residual is
+// w(q_model)·(q_model − q), so −∂r/∂q = w (= `decay` inside the band), NOT 1: the operator used to
+// overstate that column by exactly 1/decay (10x at decay 0.1). Hard-pin columns are unchanged.
+TEST(BundleApi, RiskOperatorMatchesBumpAndRecalibrateOnBandedRows) {
+  Eigen::VectorXd x_true;
+  cal::BundleProblem p = build_bundle(x_true);
+  cal::Instrument& banded = p.instruments[4];  // the 4y swap on curve 0, quoted with a soft band
+  banded.band_lower = banded.market - 0.002;
+  banded.band_upper = banded.market + 0.002;
+  banded.band_decay = 0.1;
+  api::BundleSession sess(p);
+  sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
+  const Eigen::MatrixXd M = sess.risk_operator();
+  ASSERT_EQ(M.rows(), p.n_knots());
+  ASSERT_EQ(M.cols(), p.n_residuals());
+  Eigen::VectorXd q(p.n_residuals());
+  for (int i = 0; i < p.n_residuals(); ++i) q[i] = p.instruments[i].market;
+  const double h = 1e-7;
+  for (int j : {4, 5}) {  // banded column and a hard-pin neighbour
+    Eigen::VectorXd qp = q, qm = q;
+    qp[j] += h;
+    qm[j] -= h;
+    sess.recalibrate(qp);
+    const Eigen::VectorXd xp = sess.x();
+    sess.recalibrate(qm);
+    const Eigen::VectorXd xm = sess.x();
+    sess.recalibrate(q);
+    const Eigen::VectorXd fd = (xp - xm) / (2 * h);
+    const double scale = std::max(1.0, fd.cwiseAbs().maxCoeff());
+    EXPECT_LT((M.col(j) - fd).cwiseAbs().maxCoeff() / scale, 1e-5) << "column " << j;
+  }
+}
+
+// On a rank-deficient bundle the operator must stay finite and still match bump-and-recalibrate on the
+// identified directions (both are min-norm / seed-anchored); a tolerance-free LDLT of the singular JᵀJ
+// used to return garbage in every column.
+TEST(BundleApi, RiskOperatorIsRankSafe) {
+  Eigen::VectorXd x_true;
+  cal::BundleProblem p = build_bundle(x_true);
+  p.instruments.erase(p.instruments.begin() + 6);  // drop the 10y swap: curve 0's last knot is unpinned
+  api::BundleSession sess(p);
+  sess.calibrate(x_true + Eigen::VectorXd::Constant(p.n_knots(), 1e-4));
+  const Eigen::MatrixXd M = sess.risk_operator();
+  ASSERT_TRUE(M.allFinite());
+  EXPECT_LT(M.cwiseAbs().maxCoeff(), 1e3);
+  Eigen::VectorXd q(p.n_residuals());
+  for (int i = 0; i < p.n_residuals(); ++i) q[i] = p.instruments[i].market;
+  const double h = 1e-7;
+  const int j = 2;  // the 1y swap on curve 0: fully identified
+  Eigen::VectorXd qp = q, qm = q;
+  qp[j] += h;
+  qm[j] -= h;
+  sess.recalibrate(qp);
+  const Eigen::VectorXd xp = sess.x();
+  sess.recalibrate(qm);
+  const Eigen::VectorXd xm = sess.x();
+  const Eigen::VectorXd fd = (xp - xm) / (2 * h);
+  const double scale = std::max(1.0, fd.cwiseAbs().maxCoeff());
+  EXPECT_LT((M.col(j) - fd).cwiseAbs().maxCoeff() / scale, 1e-4);
+}
+
+// stream_update validates its input: a wrong-length or non-finite market must throw, never be handed to
+// the residual kernel (Eigen's size asserts are compiled out in release -> silent heap over-read).
+TEST(BundleApi, StreamUpdateRejectsBadMarkets) {
+  Eigen::VectorXd x_true;
+  const cal::BundleProblem p = build_bundle(x_true);
+  api::BundleSession sess(p);
+  sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
+  sess.start_streaming();
+  Eigen::VectorXd q(p.n_residuals());
+  for (int i = 0; i < p.n_residuals(); ++i) q[i] = p.instruments[i].market;
+  EXPECT_NO_THROW(sess.stream_update(q));
+  EXPECT_THROW(sess.stream_update(Eigen::VectorXd::Zero(p.n_residuals() + 1)), std::runtime_error);
+  EXPECT_THROW(sess.stream_update(Eigen::VectorXd::Zero(p.n_residuals() - 1)), std::runtime_error);
+  Eigen::VectorXd bad = q;
+  bad[0] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(sess.stream_update(bad), std::runtime_error);
+  EXPECT_NO_THROW(sess.stream_update(q));  // the session is still usable after a rejected tick
 }
 
 // The warm-engine cache: a session compiles its hybrid engine ONCE and every later solve — regularized

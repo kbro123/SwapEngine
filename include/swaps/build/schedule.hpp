@@ -118,11 +118,24 @@ struct ScheduleRule {
 // ending the final period EXACTLY at maturity_date (a short final stub — the legacy behaviour, byte-for-byte
 // unchanged; the engine weights each coupon by its own accrual factor). A non-default `rule` selects ISDA
 // EOM / stub-location / roll-day-anchor generation (see ScheduleRule above).
+inline std::vector<Period> swap_periods_between(const Date& spot, const std::string& cal_id,
+                                                const Date& maturity_date, const std::string& freq_tok,
+                                                const std::string& bdc = "ModifiedFollowing",
+                                                const ScheduleRule& rule = {});
+
 inline std::vector<Period> swap_periods_to(const Date& value_date, const std::string& cal_id,
                                            const Date& maturity_date, const std::string& freq_tok,
                                            const std::string& bdc = "ModifiedFollowing", int spot_lag = 2,
                                            const ScheduleRule& rule = {}) {
-  const Date spot = spot_date(value_date, cal_id, spot_lag);
+  return swap_periods_between(spot_date(value_date, cal_id, spot_lag), cal_id, maturity_date, freq_tok, bdc, rule);
+}
+
+// The same roll from an ARBITRARY start date (`spot` here is just the first accrual start): what a BOOKED
+// trade needs -- its periods are anchored at its own effective date, which for a seasoned or forward-
+// starting deal is not today's spot. swap_periods_to is exactly this with start = spot(value_date).
+inline std::vector<Period> swap_periods_between(const Date& spot, const std::string& cal_id,
+                                                const Date& maturity_date, const std::string& freq_tok,
+                                                const std::string& bdc, const ScheduleRule& rule) {
   if (maturity_date <= spot) return {{spot, maturity_date}};
   const int step_m = tok_months(freq_tok);
 

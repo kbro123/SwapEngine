@@ -136,7 +136,7 @@ class CompiledBundleResidual {
     band_.clear();
     for (int row = 0; row < n_gen_; ++row) {
       const Instrument& ins = p.instruments[row];
-      if (ins.band_upper > ins.band_lower)
+      if (ins.band_upper > ins.band_lower && ins.quote != QuoteKind::FxForward)  // FX rows are never banded
         band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
     }
     // The DF memo (df_x_) keys on x alone -- DF = exp(-Wx) is quote-independent -- so it stays valid.
@@ -329,7 +329,10 @@ class CompiledBundleResidual {
       const Instrument& ins = p.instruments[row];
       // A bid/offer band re-weights this row's residual (r = w(q)·(q-market)); the weight is a per-row
       // scalar post-transform, so the row stays on the W-cache path. Captured here, applied below.
-      if (ins.band_upper > ins.band_lower)
+      // NOT for an FX forward: its residual is the log-basis transform, which the templated
+      // instrument_residual never bands -- banding it here (residual AND Jacobian row) made the compiled
+      // and AAD paths disagree on a banded FX pin.
+      if (ins.band_upper > ins.band_lower && ins.quote != QuoteKind::FxForward)
         band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
       register_at(ins, row, 1.0, p.curves);
     }

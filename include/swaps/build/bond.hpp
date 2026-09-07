@@ -84,10 +84,13 @@ inline std::vector<Date> coupon_dates_backward(const Date& issue, const Date& ma
   if (maturity <= issue) throw std::invalid_argument("bond maturity must be after issue");
   const int step_m = 12 / freq;
   std::vector<Date> cpn;
+  // Every date is offset from MATURITY (the anchor), never chained from the previous date: plus_months
+  // clamps the day-of-month, so chaining would turn Aug-31 -> Feb-28 -> Aug-28 and lose month-end (and
+  // Feb-29) coupon dates for good. Matches QuantLib's Schedule(Backward) on month-end Treasuries.
   Date d = maturity;
-  while (d > issue) {
+  for (int k = 1; d > issue; ++k) {
     cpn.push_back(d);
-    d = d.plus_months(-step_m);
+    d = maturity.plus_months(-step_m * k);
   }
   ref_start = d;  // the (possibly virtual) coupon date at/before issue = first period's reference start
   std::reverse(cpn.begin(), cpn.end());
@@ -206,7 +209,19 @@ inline BuiltBond when_issued_bond(const Date& value_date, const Date& dated, con
   if (settle < dated) throw std::invalid_argument("settlement before the dated date");
   if (!(settle < first_coupon))
     throw std::invalid_argument("settlement on/after first coupon: use fixed_rate_bond (regular regime)");
-  const Date quasi_prev = first_coupon.plus_months(-step_m);  // start of the first coupon's quasi-period
+  // Coupon dates are offsets from MATURITY (never chained, and never from first_coupon: Feb-28 + 6M is
+  // Aug-28 under day clamping, while Aug-31 − 6M·k reproduces Feb-28/29 AND Aug-31). Walk back until we
+  // pass first_coupon; the walk must land ON first_coupon or the two are not on a common grid.
+  std::vector<Date> cd;  // coupon dates: first_coupon, +period, ..., maturity
+  for (int k = 0;; ++k) {
+    const Date d = maturity.plus_months(-step_m * k);
+    if (d < first_coupon) break;
+    cd.push_back(d);
+  }
+  std::reverse(cd.begin(), cd.end());
+  if (cd.empty() || cd.front() != first_coupon)
+    throw std::invalid_argument("first_coupon and maturity are not on a common frequency grid");
+  const Date quasi_prev = maturity.plus_months(-step_m * static_cast<int>(cd.size()));  // first quasi-period start
   if (dated < quasi_prev)
     throw std::invalid_argument("long first coupon (dated before prior quasi-coupon) not yet supported");
 
@@ -216,10 +231,6 @@ inline BuiltBond when_issued_bond(const Date& value_date, const Date& dated, con
   const double w0 = double(first_coupon - settle) / E;    // discount exponent to the first coupon (= s − a)
   const double cpn = coupon / double(freq);
 
-  std::vector<Date> cd;  // coupon dates: first_coupon, +period, ..., maturity
-  for (Date d = first_coupon; d <= maturity; d = d.plus_months(step_m)) cd.push_back(d);
-  if (cd.empty() || cd.back() != maturity)
-    throw std::invalid_argument("first_coupon and maturity are not on a common frequency grid");
   const int N = static_cast<int>(cd.size());
 
   BuiltBond out;

@@ -101,7 +101,11 @@ inline double fx_strike_from_delta(double forward, double expiry, double df_for,
   const auto h = [&](double x) { return std::exp(x) * normal_cdf(sgn * d2(x)); };
   // sign of h′(x)/e^x = N(sgn·d2) − sgn·φ(d2)/(σ√T).
   const auto hprime = [&](double x) { return normal_cdf(sgn * d2(x)) - sgn * normal_pdf(d2(x)) / stddev; };
-  const double R = std::max(1.0, 12.0 * stddev) + 2.0;  // wide log-moneyness bracket
+  // Log-moneyness bracket: wide, but CAPPED so d2(±R) = ∓(R ± ½σ²T)/(σ√T) stays within ~35 standard
+  // deviations. Beyond that N(d2) and φ(d2) underflow to EXACTLY 0.0, hprime(+R) == 0.0 is not "< 0", and
+  // the branch/bracket logic below misfires (it used to return the deep-ITM root K = |Δ|·F for every PA
+  // call with σ√T < 0.078 -- i.e. at ordinary G10 vols). 35 sd covers any quotable delta (1Δ is 2.3 sd).
+  const double R = std::min(std::max(1.0, 12.0 * stddev) + 2.0, 35.0 * stddev + 0.5 * stddev * stddev);
   const double xlo = -R, xhi = R;
   const auto bisect = [&](double a, double b) {  // solve h=target on a monotone, sign-bracketed [a,b]
     double fa = h(a) - target;
@@ -114,22 +118,21 @@ inline double fx_strike_from_delta(double forward, double expiry, double df_for,
     return 0.5 * (a + b);
   };
 
-  if ((hprime(xlo) < 0.0) == (hprime(xhi) < 0.0))  // monotone (put): a single root on the full range
-    return forward * std::exp(bisect(xlo, xhi));
+  // The branch is decided by the OPTION TYPE, not by probing h′ at the bracket ends (which underflow):
+  // a PA PUT's |Δ| = e^x·N(−d2) is monotone in K (one root); a PA CALL's |Δ| = e^x·N(d2) rises then falls.
+  if (cp == CallPut::Put) return forward * std::exp(bisect(xlo, xhi));
 
-  // Interior maximum (call): bisect h′ for x*, then solve each branch and keep the lower-|moneyness| root.
+  // Interior maximum (call): h′ > 0 at −R and < 0 at +R by construction, so bisect h′ for x*.
   double a = xlo, b = xhi;
-  const bool inc_lo = hprime(a) > 0.0;
   for (int i = 0; i < 200 && (b - a) > 1e-14; ++i) {
     const double m = 0.5 * (a + b);
-    if ((hprime(m) > 0.0) == inc_lo) a = m; else b = m;
+    if (hprime(m) > 0.0) a = m; else b = m;
   }
   const double xstar = 0.5 * (a + b);
   if (!(h(xstar) > target)) return forward * std::exp(xstar);  // |Δ| above the achievable max → max strike
-  const double xL = bisect(xlo, xstar);   // increasing branch (deep side)
-  const double xR = bisect(xstar, xhi);   // decreasing branch (OTM side)
-  const double x = (std::abs(xL) <= std::abs(xR)) ? xL : xR;
-  return forward * std::exp(x);
+  // Market convention (and QuantLib's BlackDeltaCalculator): the strike is the root to the RIGHT of the
+  // delta maximum -- the OTM/decreasing branch. The left root is the deep-ITM strike nobody quotes.
+  return forward * std::exp(bisect(xstar, xhi));
 }
 
 // The market delta quotes for ONE expiry (vol terms, absolute e.g. 0.11 = 11%). rr/bf are the standard

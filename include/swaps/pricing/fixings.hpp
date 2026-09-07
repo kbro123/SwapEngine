@@ -167,6 +167,7 @@ inline void resolve_into(RateObservation& obs, const PricingContext& ctx) {
   obs.sub_start = r.sub_start;
   obs.sub_end = r.sub_end;
   obs.weight = r.weight;
+  obs.resolved = true;  // the kernels may now price it (see RateObservation::resolved)
 }
 
 // ---- A context-bound observation: resolves on attach + re-resolves whenever the table updates -------

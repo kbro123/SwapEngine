@@ -6,6 +6,7 @@
 // with Scalar = AutoDiffScalar it yields d(NPV)/d(knot forwards) in one pass (see calibration/risk).
 
 #include <cassert>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -134,7 +135,23 @@ struct MultiCurveBook {
       const Scalar mtm = pricing::xccy_mtm_leg_pv<Scalar>(
           p.mtm_coupons, p.fx_spot, C(p.mtm_fwd_curve), C(p.mtm_disc_curve),
           C(p.mtm_reset_num), C(p.mtm_reset_den));
-      const Scalar dom = pricing::float_leg_pv<Scalar>(p.float_coupons, C(p.fwd_curve), C(p.disc_curve));
+      Scalar dom = pricing::float_leg_pv<Scalar>(p.float_coupons, C(p.fwd_curve), C(p.disc_curve));
+      // The mtm leg above carries its notional exchanges (each period's DF(e) − DF(s), re-set to the FX
+      // forward). The DOMESTIC leg must carry ITS exchanges too -- constant notional: −DF(s₀) at the first
+      // accrual start, +DF(e_N) at the last accrual end -- or a value-neutral zero-basis swap prices at
+      // −(1 − DF(T)) of notional. Explicit `principal_flows` (per unit notional, signed as received on the
+      // domestic leg) take precedence; otherwise the exchanges sit on the leg's own accrual window.
+      if (!p.principal_flows.empty()) {
+        dom = dom + principal_pv<Scalar>(p.principal_flows, C(p.disc_curve));
+      } else if (!p.float_coupons.empty()) {
+        const auto& first = p.float_coupons.front().obs;
+        const auto& last = p.float_coupons.back().obs;
+        if (first.sub_start.empty() || last.sub_end.empty())
+          throw std::runtime_error(
+              "Xccy position: a fully-fixed domestic coupon has no accrual window to place the notional "
+              "exchange on; supply principal_flows explicitly");
+        dom = dom + (C(p.disc_curve).discount(last.sub_end.back()) - C(p.disc_curve).discount(first.sub_start.front()));
+      }
       return p.notional * (mtm - dom);
     }
     // Vanilla multi-curve swap, payer-of-fixed: NPV/notional = float_leg_pv(fwd, disc) − fixed_rate·annuity.

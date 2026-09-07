@@ -91,6 +91,11 @@ struct RateObservation {
   // only during resolution, never on the price/W-cache hot path.
   std::string fixing_index;
   std::vector<FixingDay> fixing_schedule;
+  // Set by resolve_into() once the schedule above has been split into realized/forecast against a fixing
+  // table. A schedule-carrying observation that is NOT resolved has empty sub-periods and realized = 0 --
+  // it would price its whole period at a zero rate -- so the pricing kernels refuse it (see float_coupon_pv
+  // / CompiledBook::push_obs) instead of returning a silent zero.
+  bool resolved = false;
 };
 
 // One floating coupon: an observation, discounted at its own pay date on its own accrual basis.
@@ -226,6 +231,13 @@ template <class Scalar, class FCurve, class DCurve>
 Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc) {
   assert(c.obs.tau_index > 0.0);
   const RateObservation& o = c.obs;
+  // A fixings-resolvable coupon that has NOT been resolved has empty sub-periods and realized 0 /
+  // realized_factor 1: every branch below would price its whole period at a zero rate. Refuse it FIRST
+  // (before the compounded early-return), never return that silent zero.
+  if (!o.fixing_schedule.empty() && !o.resolved)
+    throw std::runtime_error(
+        "float_coupon_pv: a fixings-resolvable coupon was priced before resolution against a fixing table "
+        "(its realized part would silently be zero) -- attach fixings / set the evaluation date first");
   // COMPOUNDED (product) mode -- separate from the arithmetic k-form below so the hot OIS path is
   // untouched. pv = DF(pay) · ((realized_factor·∏(1+r_k dt_k) − 1) + spread·tau_index) · (tau_pay/tau_index).
   if (o.compounded) {
@@ -255,7 +267,9 @@ Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc)
 // PV of a floating leg for unit notional.
 template <class Scalar, class FCurve, class DCurve>
 Scalar float_leg_pv(const std::vector<FloatCoupon>& leg, const FCurve& fc, const DCurve& dc) {
-  assert(!leg.empty());
+  // An empty leg is worth nothing -- it must NOT dereference leg[0] (the assert is compiled out in
+  // release, where this was a null read). Reachable from a JSON book with "float_coupons": [].
+  if (leg.empty()) return Scalar(0.0);
   Scalar pv = float_coupon_pv<Scalar>(leg[0], fc, dc);
   for (std::size_t i = 1; i < leg.size(); ++i) pv += float_coupon_pv<Scalar>(leg[i], fc, dc);
   return pv;
@@ -278,9 +292,16 @@ Scalar float_leg_pv(const std::vector<FloatCoupon>& leg, const FCurve& fc, const
 template <class Scalar, class FCurve, class DCurve, class NumCurve, class DenCurve>
 Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, const FCurve& fc,
                        const DCurve& dc, const NumCurve& numc, const DenCurve& denc) {
-  assert(!leg.empty());
+  if (leg.empty()) return Scalar(0.0);
   auto contrib = [&](const FloatCoupon& c) -> Scalar {
-    assert(!c.obs.sub_start.empty());
+    // A FULLY-FIXED coupon (every fixing realized -> resolve() strips its observation window) has no
+    // sub_start/sub_end to place the notional exchanges on. Only the observation window is stored, so the
+    // exchange dates are unknown here; refuse loudly rather than read .front() of an empty vector (which
+    // was a segfault in release during every payment-lag window of an xccy position).
+    if (c.obs.sub_start.empty() || c.obs.sub_end.empty())
+      throw std::runtime_error(
+          "xccy_mtm_leg_pv: a fully-fixed MtM coupon has no observation window to place its notional "
+          "exchanges on (accrual dates are not carried on FloatCoupon yet)");
     const double s = c.obs.sub_start.front(), e = c.obs.sub_end.back();
     const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;  // notional fixes at the period start
     const Scalar N = fx_spot * (numc.discount(reset) / denc.discount(reset));  // FX-forward notional
@@ -294,7 +315,7 @@ Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, cons
 // Annuity per unit rate and unit notional: Σ DF_dc(pay_i) · tau_i · scale_i (scale = FX spot, default 1).
 template <class Scalar, class DCurve>
 Scalar annuity(const std::vector<FixedCoupon>& leg, const DCurve& dc) {
-  assert(!leg.empty());
+  if (leg.empty()) return Scalar(0.0);  // no coupons, no annuity (never dereference leg[0] in release)
   Scalar a = dc.discount(leg[0].pay) * (leg[0].tau * leg[0].scale);
   for (std::size_t i = 1; i < leg.size(); ++i) a += dc.discount(leg[i].pay) * (leg[i].tau * leg[i].scale);
   return a;

@@ -105,7 +105,7 @@ TEST(Credit, CalibrateCdsStripRecoversSpreads) {
   EXPECT_LT(res.stationarity, 1e-8);
   EXPECT_EQ(res.rank_deficiency, 0);
 
-  auto hz = curve::make_modular_curve<double>(curve::flat_hermite(prob.meeting_times, prob.back_times));
+  auto hz = curve::make_modular_curve<double>(prob.hazard_layout());  // the layout the residual used
   hz.set_forwards(res.x);
   const curve::SurvivalCurve<double> surv{&hz};
   for (std::size_t i = 0; i < mats.size(); ++i)

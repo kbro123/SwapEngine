@@ -30,7 +30,8 @@ inline double thirty_us(const Date& d1, const Date& d2) {
 // the (d1,d2) year_frac signature; the ICMA variant (which NEEDS the coupon reference period) is a
 // separate free function below.
 inline double act_act_isda(const Date& d1, const Date& d2) {
-  if (d2 <= d1) return -act_act_isda(d2, d1);
+  if (d2 == d1) return 0.0;  // NOT `<=`: equal dates would recurse forever (stack overflow)
+  if (d2 < d1) return -act_act_isda(d2, d1);
   const int y1 = d1.year(), y2 = d2.year();
   auto is_leap = [](int y) { return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0); };
   if (y1 == y2) return (d2 - d1) / (is_leap(y1) ? 366.0 : 365.0);

@@ -57,7 +57,10 @@ class ThreadPool {
       for (int i = 0; i < count; ++i) fn(i);
       return;
     }
-    std::atomic<int> remaining{count};
+    // `remaining` is decremented UNDER done_m. With an atomic decremented outside the lock, the waiter's
+    // predicate could observe 0 and return -- destroying done_m/done_cv on this stack frame -- before the
+    // last worker locked done_m to notify: a lock on a destroyed mutex (EINVAL -> std::terminate).
+    int remaining = count;
     std::mutex done_m;
     std::condition_variable done_cv;
     {
@@ -65,15 +68,13 @@ class ThreadPool {
       for (int i = 0; i < count; ++i)
         tasks_.push([i, &fn, &remaining, &done_m, &done_cv] {
           fn(i);
-          if (remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            std::lock_guard<std::mutex> dl(done_m);  // pair with the waiter's lock so the notify is not lost
-            done_cv.notify_one();
-          }
+          std::lock_guard<std::mutex> dl(done_m);
+          if (--remaining == 0) done_cv.notify_one();
         });
     }
     cv_.notify_all();
     std::unique_lock<std::mutex> lk(done_m);
-    done_cv.wait(lk, [&] { return remaining.load(std::memory_order_acquire) == 0; });
+    done_cv.wait(lk, [&] { return remaining == 0; });
   }
 
  private:
