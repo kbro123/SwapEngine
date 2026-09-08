@@ -12,7 +12,7 @@ cd "${ROOT}"
 LOGDIR="${HOME}/Library/Logs/swapengine-nightly"; mkdir -p "${LOGDIR}"
 DAY="$(date +%F)"; LOG="${LOGDIR}/${DAY}.log"; SUM="${LOGDIR}/${DAY}.md"
 export SWAPS_TIMING_ASSERTS=1
-export SWAPS_PERF_ARGS="--reps 5 --min-time 0.5 --max-load 3.0"   # this desktop idles at ~2-3 with the Claude app open
+export SWAPS_PERF_ARGS="--reps 5 --min-time 0.5"
 {
   echo "# SwapEngine nightly — ${DAY} ($(git rev-parse --short HEAD), branch $(git rev-parse --abbrev-ref HEAD))"
   echo; echo "- started: $(date -u +%FT%TZ)  load: $(uptime | sed 's/.*load averages*: //')"

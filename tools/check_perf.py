@@ -12,8 +12,10 @@ Integrity (P10):
   * Baselines are keyed by a machine+toolchain fingerprint (tools/fingerprint.sh) that includes the
     QuantLib reference's toolchain. Comparing across fingerprints is refused.
   * Timings are the MIN over --reps repetitions (load-robust estimator), each of --min-time seconds.
-  * The gate REFUSES to run on a loaded machine (1-min load average > --max-load) instead of warning:
-    a warning nobody reads is not a gate. --force-load runs anyway but disables --update.
+  * The gate REFUSES to run on a busy machine (CPU busier than --max-busy % over a 2 s sample; the 1-min
+    load average is printed as a diagnostic only — on macOS it counts I/O-wait threads and is not a
+    contention measure) instead of warning: a warning nobody reads is not a gate. --force-load runs anyway
+    but disables --update.
 
 Usage:
   check_perf.py --build BUILD --baselines FILE --targets FILE            # the gate (exit 0 iff all pass)
@@ -24,6 +26,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -75,6 +78,26 @@ def load_avg():
     try:
         return os.getloadavg()[0]
     except (AttributeError, OSError):
+        return float("nan")
+
+
+def cpu_busy_pct(sample_s=2.0):
+    """Instantaneous CPU busy % (100 - idle). On macOS the 1-min load average counts threads in I/O wait
+    (Spotlight, iCloud, dasd) and sat at 4-8 with the CPU 97% idle on 2026-09-08 — useless as a quiesce test.
+    A short direct sample of CPU idle is what actually predicts benchmark contention."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.check_output(["/usr/bin/top", "-l", "2", "-n", "0", "-s", str(int(sample_s))],
+                                          text=True, stderr=subprocess.DEVNULL)
+            idle = [float(m) for m in re.findall(r"CPU usage:.*?([\d.]+)% idle", out)]
+            return 100.0 - idle[-1] if idle else float("nan")
+        def snap():
+            with open("/proc/stat") as f:
+                v = [int(x) for x in f.readline().split()[1:]]
+            return sum(v), v[3] + v[4]
+        t0, i0 = snap(); time.sleep(sample_s); t1, i1 = snap()
+        return 100.0 * (1.0 - (i1 - i0) / max(1, t1 - t0))
+    except Exception:
         return float("nan")
 
 
@@ -138,7 +161,8 @@ def main():
     ap.add_argument("--headroom", type=float, default=1.3)
     ap.add_argument("--min-time", default="0.5")
     ap.add_argument("--reps", type=int, default=5)
-    ap.add_argument("--max-load", type=float, default=2.0, help="refuse to run above this 1-min load average")
+    ap.add_argument("--max-busy", type=float, default=15.0, help="refuse to run if the CPU is more than this %% busy (2 s sample)")
+    ap.add_argument("--max-load", type=float, default=None, help="(legacy) also refuse above this 1-min load average; off by default — macOS load counts I/O-wait threads")
     ap.add_argument("--force-load", action="store_true", help="run under load anyway (disables --update)")
     ap.add_argument("--only", nargs="*", help="metric keys to run (default: all)")
     ap.add_argument("--record", help="write the full measurement + verdicts to this JSON file")
@@ -154,13 +178,14 @@ def main():
     fp = fingerprint()
     key = fp["key"]
     la = load_avg()
+    busy = cpu_busy_pct()
     print(f">> fingerprint {key}  ({fp['cpu']}, {fp['isa']} {fp['arch_flag']}, {fp['compiler']})")
     print(f">> quantlib toolchain: {fp.get('quantlib_toolchain', 'unknown')}")
-    print(f">> load average (1 min): {la:.2f}  (max {args.max_load})")
-    quiesced = not (la > args.max_load)
+    print(f">> cpu busy (2 s sample): {busy:.1f}%  (max {args.max_busy}%)   load average (1 min, diagnostic): {la:.2f}")
+    quiesced = not (busy > args.max_busy) and not (args.max_load is not None and la > args.max_load)
     if not quiesced:
         if not args.force_load:
-            print("!! machine is loaded — refusing to run the perf gate (use --force-load to run anyway; "
+            print("!! machine is busy — refusing to run the perf gate (use --force-load to run anyway; "
                   "results will not be eligible for --update).")
             return 2
         print("!! running under load (--force-load): numbers are NOT authoritative; --update disabled.")
@@ -182,6 +207,7 @@ def main():
         m["fingerprint"] = {k: fp[k] for k in fp if k != "key"}
         m["captured_utc"] = os.environ.get("SWAPS_CAPTURE_UTC", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         m["load_avg_at_capture"] = round(la, 2)
+        m["cpu_busy_pct_at_capture"] = round(busy, 1)
         m["reps"] = args.reps
         m["min_time_s"] = float(args.min_time)
         m.setdefault("notes", "Captured by tools/check_perf.py --update (min-of-reps, quiesced).")
@@ -244,7 +270,7 @@ def main():
 
     if args.record:
         with open(args.record, "w") as f:
-            json.dump({"fingerprint": fp, "load_avg": la, "quiesced": quiesced, "reps": args.reps,
+            json.dump({"fingerprint": fp, "load_avg": la, "cpu_busy_pct": busy, "quiesced": quiesced, "reps": args.reps,
                        "min_time_s": float(args.min_time), "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        "metrics": meas, "verdicts": verdicts}, f, indent=2)
     print()
