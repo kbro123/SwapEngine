@@ -1,0 +1,94 @@
+{
+  "_comment": [
+    "Absolute desk-scale performance targets (PRINCIPLES.md P9b). A metric FAILS the gate when ours_ns",
+    "exceeds its target_ns. Targets only ever RATCHET DOWN (edit by hand, in a commit that says why);",
+    "check_perf.py --propose-targets prints suggestions from the current run. Metrics absent here are",
+    "flagged NO-TARGET (not a failure) until one is set."
+  ],
+  "targets": {
+    "curve_build": {
+      "target_ns": 656000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "risk_full_jacobian": {
+      "target_ns": 121000,
+      "note": "initial = 2026-09-04 baseline x1.3; ratchets DOWN only"
+    },
+    "portfolio_analytics": {
+      "target_ns": 105000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "warm_recalibration": {
+      "target_ns": 23000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "bond_sweep": {
+      "target_ns": 4500000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "bond_book": {
+      "target_ns": 528000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "vol_cube_warm": {
+      "target_ns": 13300,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "vol_cube_cold": {
+      "target_ns": 1502000,
+      "note": "initial = 2026-09-04 baseline x1.3; ratchets DOWN only"
+    },
+    "session_rebind": {
+      "target_ns": 16520000,
+      "note": "13.6 ms today is a full LM, not a warm path; E6.2 target: <= 1 ms. Ratchets down only."
+    },
+    "stream_tick": {
+      "target_ns": 230000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "bundle_jacobian": {
+      "target_ns": 564000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "price_portfolio": {
+      "target_ns": 18642000,
+      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+    },
+    "warm_recal_10bp": {
+      "target_ns": 60000,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "session_cold": {
+      "target_ns": 31933000,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "session_rebind_tension": {
+      "target_ns": 27757000,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "bundle_cold_joint": {
+      "target_ns": 28767000,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "bundle_residual": {
+      "target_ns": 41300,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "book_compiled": {
+      "target_ns": 29900,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "fx_hybrid_jacobian": {
+      "target_ns": 42400,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "fx_aad_block_jacobian": {
+      "target_ns": 38200,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "fx_stream_tick": {
+      "target_ns": 114000,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    }
+  }
+}

@@ -1,4 +1,5 @@
-// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// @consistency-test — QuantLib-LINKED SELF-CONSISTENCY test (QuantLib builds the reference market; the
+// engine is compared to ITSELF / hand formulas, not to a QuantLib number). DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Stage-2 gate: cached-Jacobian warm re-calibration must match the full LM re-solve for realistic
 // market perturbations. The WarmCalibrator freezes J0 at the base solution and takes a couple of

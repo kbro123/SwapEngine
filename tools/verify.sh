@@ -34,6 +34,7 @@ for arg in "$@"; do
 done
 
 pass_oracle="SKIP"
+pass_lit="SKIP"
 pass_correctness="SKIP"
 pass_perf="SKIP"
 rc=0
@@ -51,10 +52,11 @@ echo ">> building (-j${JOBS})"
 "${CMAKE}" --build "${BUILD_DIR}" -j "${JOBS}" || { echo "build failed"; exit 1; }
 
 # ---- Oracle-test guard ------------------------------------------------------
-# The QuantLib cashflow-for-cashflow validators must not be silently deleted or gutted in a refactor.
-# Cheap check, so it runs even in --bench-only. See tools/check_oracle_tests.sh + tests/ORACLE_TESTS.md.
-echo ">> oracle-test guard"
-if bash "${ROOT}/tools/check_oracle_tests.sh"; then
+# The oracle + consistency registries (tests/CMakeLists.txt) must not be deleted, gutted or shrunk, and the
+# QuantLib-linked binaries must actually exist (QuantLib absent used to silently drop 135 tests).
+# See tools/check_oracle_tests.sh + tests/ORACLE_TESTS.md + tests/oracle_assertions.lock.
+echo ">> oracle-test guard (registries + assertion lock + built binaries)"
+if bash "${ROOT}/tools/check_oracle_tests.sh" --build "${BUILD_DIR}"; then
   pass_oracle="PASS"
 else
   pass_oracle="FAIL"; rc=1
@@ -75,6 +77,19 @@ else
   pass_conv="FAIL"; rc=1
 fi
 rm -f "${_conv_tmp}"
+
+# ---- No-literal-conventions guard (PRINCIPLES.md P2) ------------------------
+# No market-convention literal (currency/index/calendar id, day count, frequency, lag, recovery, contract
+# spec, silent fallback default) may appear in include/ or api/. tools/check_no_literals.allow holds the
+# vocabulary-dispatch permissions plus the adoption-day RATCHET (existing hits, to be burned down in E2);
+# any NEW hit fails here. Cheap, runs even in --bench-only.
+echo ">> no-literal-conventions guard"
+if python3 "${ROOT}/tools/check_no_literals.py" --allow "${ROOT}/tools/check_no_literals.allow" >/dev/null; then
+  pass_lit="PASS"
+else
+  python3 "${ROOT}/tools/check_no_literals.py" --allow "${ROOT}/tools/check_no_literals.allow" | tail -20
+  pass_lit="FAIL"; rc=1
+fi
 
 # ---- API-descriptor sync guard: run_json's generated dispatch must match api/api_surface.py ----------
 echo ">> api-dispatch sync guard"
@@ -106,15 +121,14 @@ fi
 # blocking, but it is committed and normally present.)
 if [ "${TEST_ONLY}" -eq 0 ]; then
   echo ">> performance gate"
-  if [ -f "${ROOT}/tools/check_perf.py" ]; then
-    if python3 "${ROOT}/tools/check_perf.py" --build "${BUILD_DIR}" --baselines "${ROOT}/baselines/baselines.json"; then
-      pass_perf="PASS"
-    else
-      pass_perf="FAIL"; rc=1
-    fi
+  # PRINCIPLES.md P9: self-baseline + absolute targets; refuses to run under load (exit 2 = not run = FAIL).
+  mkdir -p "${BUILD_DIR}/perf"
+  if python3 "${ROOT}/tools/check_perf.py" --build "${BUILD_DIR}" \
+       --baselines "${ROOT}/baselines/baselines.json" --targets "${ROOT}/baselines/targets.json" \
+       --record "${BUILD_DIR}/perf/last_run.json" ${SWAPS_PERF_ARGS:-}; then
+    pass_perf="PASS"
   else
-    echo "   (tools/check_perf.py missing — perf gate skipped)"
-    pass_perf="SKIP"
+    pass_perf="FAIL"; rc=1
   fi
 fi
 
@@ -123,6 +137,7 @@ echo ""
 echo "========== VERIFY SUMMARY =========="
 printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
 printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
+printf "  %-20s %s\n" "no-literal guard:" "${pass_lit}"
 printf "  %-20s %s\n" "api-dispatch sync:" "${pass_disp}"
 printf "  %-20s %s\n" "correctness gate:" "${pass_correctness}"
 printf "  %-20s %s\n" "performance gate:" "${pass_perf}"

@@ -1,49 +1,67 @@
 #!/usr/bin/env python3
-"""Performance gate: run the benchmarks, compare to the fingerprint-keyed baseline, enforce policy.
+"""Performance gate — PRINCIPLES.md P9/P10 (ratified 2026-09-08).
 
-Rules (CLAUDE.md sections 3 & 4):
-  * Baselines are keyed by a machine+toolchain fingerprint (tools/fingerprint.sh). We REFUSE to
-    compare across fingerprints -- a Kaby Lake AVX2 number and an M-series / AVX-512 number are not
-    comparable, and silently comparing them would manufacture a fake speedup.
-  * A metric passes iff  speedup = quantlib_ns / ours_ns  >=  thresholds.min_speedup_vs_quantlib
-    (this ratio is load-robust: both sides are measured back to back) AND we have not self-regressed
-    beyond thresholds.max_self_regression vs the committed ours_ns for this fingerprint.
+The engine is gated against ITSELF and against ABSOLUTE desk-scale TARGETS, never against QuantLib:
+
+  HARD  self-baseline   ours_ns <= max_self_regression (1.25) x committed ours_ns for THIS fingerprint
+  HARD  absolute target ours_ns <= baselines/targets.json[metric].target_ns   (targets only ratchet DOWN)
+  INFO  reference       QuantLib (and any other reference BM) timings + speedups are printed and recorded,
+                        never gated. They inform the commercial story; publish losses as well as wins.
+
+Integrity (P10):
+  * Baselines are keyed by a machine+toolchain fingerprint (tools/fingerprint.sh) that includes the
+    QuantLib reference's toolchain. Comparing across fingerprints is refused.
+  * Timings are the MIN over --reps repetitions (load-robust estimator), each of --min-time seconds.
+  * The gate REFUSES to run on a loaded machine (1-min load average > --max-load) instead of warning:
+    a warning nobody reads is not a gate. --force-load runs anyway but disables --update.
 
 Usage:
-  check_perf.py --build BUILD --baselines FILE        # the gate (exit 0 iff all metrics pass)
-  check_perf.py --build BUILD --baselines FILE --update  # re-capture this fingerprint's baseline
+  check_perf.py --build BUILD --baselines FILE --targets FILE            # the gate (exit 0 iff all pass)
+  check_perf.py ... --update                                             # re-capture THIS fingerprint's baseline
+  check_perf.py ... --propose-targets [--headroom 1.3]                   # print target suggestions
+  check_perf.py ... --record OUT.json                                    # also write the full measurement
 """
 import argparse
 import json
 import os
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-# metric key -> (benchmark executable, QuantLib BM name, our BM name)
-# A QuantLib BM name of None marks an OURS-ONLY metric: there is no "faster than QuantLib" story (e.g. a
-# swaption reprice has no expensive QL baseline the way risk-bumping does), so it is gated on SELF-REGRESSION
-# vs its own committed baseline only — no speedup floor. Its threshold block omits min_speedup_vs_quantlib.
+# metric key -> (benchmark executable, OURS BM name, REFERENCE BM name or None)
+# The reference BM (QuantLib etc.) is informational only. Every metric is gated on self-baseline + target.
 METRICS = {
-    "curve_build":         ("curve_build_bench", "BM_CurveBuild_QuantLib",   "BM_CurveBuild_Ours"),
-    "risk_full_jacobian":  ("risk_bench",        "BM_Risk_QuantLib_Bump",    "BM_Risk_Ours_Analytic"),
-    "portfolio_analytics": ("portfolio_bench",   "BM_Portfolio_QuantLib",    "BM_Portfolio_Ours"),
-    "warm_recalibration":  ("warm_bench",        "BM_WarmRecal_QuantLib",    "BM_WarmRecal_Ours"),
-    "bond_sweep":          ("bond_sweep_bench",  "BM_BondSweep_QuantLib",    "BM_BondSweep_Ours"),
-    "bond_book":           ("bond_sweep_bench",  "BM_BondBook_QuantLib",     "BM_BondBook_Ours"),
-    "vol_cube_warm":       ("vol_cube_bench",    None,                       "BM_VolCube_Warm"),
-    "vol_cube_cold":       ("vol_cube_bench",    None,                       "BM_VolCube_Cold"),
-    # The SHIPPED session warm paths at desk scale (8-curve spread chain). Ours-only, self-regression
-    # gated: a regression to per-call engine reconstruction (or the reg path falling back to per-iteration
-    # AAD) shows up here directly, where the product actually pays it.
-    "session_rebind":      ("session_warm_bench", None,                      "BM_Session_RebindWarm"),
-    "stream_tick":         ("session_warm_bench", None,                      "BM_Session_StreamTick"),
-    # The per-LM-iteration bundle Jacobian (8x26 desk scale) and the shipped multi-curve book reprice --
-    # the two audit targets (U1/U2). Ours-only, self-regression gated.
-    "bundle_jacobian":     ("bundle_scale_bench", None,                      "BM_BundleScale_OneJacobian"),
-    "price_portfolio":     ("session_warm_bench", None,                      "BM_Session_PricePortfolio"),
+    # --- calibration kernels (single curve, 23x23; QuantLib GlobalBootstrap is the reference) ---
+    "curve_build":          ("curve_build_bench",   "BM_CurveBuild_Ours",              "BM_CurveBuild_QuantLib"),
+    "risk_full_jacobian":   ("risk_bench",          "BM_Risk_Ours_Analytic",           "BM_Risk_QuantLib_Bump"),
+    "portfolio_analytics":  ("portfolio_bench",     "BM_Portfolio_Ours",               "BM_Portfolio_QuantLib"),
+    "warm_recalibration":   ("warm_bench",          "BM_WarmRecal_Ours",               "BM_WarmRecal_QuantLib"),
+    "warm_recal_10bp":      ("warm_bench",          "BM_WarmRecal_Ours_10bp",          "BM_WarmRecal_QuantLib_10bp"),
+    # --- bonds ---
+    "bond_sweep":           ("bond_sweep_bench",    "BM_BondSweep_Ours",               "BM_BondSweep_QuantLib"),
+    "bond_book":            ("bond_sweep_bench",    "BM_BondBook_Ours",                "BM_BondBook_QuantLib"),
+    # --- options ---
+    "vol_cube_warm":        ("vol_cube_bench",      "BM_VolCube_Warm",                 None),
+    "vol_cube_cold":        ("vol_cube_bench",      "BM_VolCube_Cold",                 None),
+    # --- the SHIPPED session paths at desk scale (8-curve spread chain, 26 knots/curve) ---
+    "session_cold":         ("session_warm_bench",  "BM_Session_ColdBuildCalibrate",   None),
+    "session_rebind":       ("session_warm_bench",  "BM_Session_RebindWarm",           None),
+    "session_rebind_tension": ("session_warm_bench", "BM_Session_RebindTensionWarm",   None),
+    "stream_tick":          ("session_warm_bench",  "BM_Session_StreamTick",           None),
+    "price_portfolio":      ("session_warm_bench",  "BM_Session_PricePortfolio",       None),
+    # --- bundle kernels at desk scale ---
+    "bundle_cold_joint":    ("bundle_scale_bench",  "BM_BundleScale_ColdJoint",        None),
+    "bundle_residual":      ("bundle_scale_bench",  "BM_BundleScale_OneResidual",      None),
+    "bundle_jacobian":      ("bundle_scale_bench",  "BM_BundleScale_OneJacobian",      None),
+    # --- compiled book (the reprice_bound kernel) ---
+    "book_compiled":        ("compiled_multi_bench", "BM_MultiCurveBook_Compiled",     "BM_MultiCurveBook_Templated"),
+    # --- FX/MtM hybrid tier ---
+    "fx_hybrid_jacobian":   ("fx_stream_bench",     "BM_FxStream_HybridJacobian",      None),
+    "fx_aad_block_jacobian": ("fx_stream_bench",    "BM_FxStream_AadBlockJacobian",    "BM_FxStream_AadBlockJacobianHeap"),
+    "fx_stream_tick":       ("fx_stream_bench",     "BM_FxStream_StreamTick",          None),
 }
 UNIT_NS = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
 
@@ -53,128 +71,184 @@ def fingerprint():
     return json.loads(out)
 
 
+def load_avg():
+    try:
+        return os.getloadavg()[0]
+    except (AttributeError, OSError):
+        return float("nan")
+
+
 def run_bench(build, exe, min_time, reps):
+    """Run one benchmark executable; return {BM name: min real_time in ns over repetitions}."""
     path = os.path.join(build, "bench", exe)
     if not os.path.exists(path):
-        raise FileNotFoundError(f"benchmark not built: {path} (run cmake --build first)")
-    cmd = [path, "--benchmark_format=json", f"--benchmark_min_time={min_time}s"]
-    if reps > 1:
-        cmd += [f"--benchmark_repetitions={reps}", "--benchmark_report_aggregates_only=true"]
+        raise FileNotFoundError(f"benchmark not built: {path} (run cmake --build; is QuantLib present?)")
+    cmd = [path, "--benchmark_format=json", f"--benchmark_min_time={min_time}s",
+           f"--benchmark_repetitions={reps}", "--benchmark_report_aggregates_only=false"]
     data = json.loads(subprocess.check_output(cmd, text=True))
-    times = {}  # base BM name -> real_time in ns (median if aggregated)
+    times = {}
     for b in data["benchmarks"]:
+        if b.get("run_type", "iteration") != "iteration":
+            continue  # skip mean/median/stddev aggregates; we take the MIN over repetitions ourselves
         name = b["name"]
-        if reps > 1:
-            if not name.endswith("_median"):
-                continue
-            name = name[: -len("_median")]
-        times[name] = b["real_time"] * UNIT_NS[b["time_unit"]]
+        ns = b["real_time"] * UNIT_NS[b["time_unit"]]
+        times[name] = min(times.get(name, float("inf")), ns)
     return times
 
 
-def measure(build, min_time, reps):
-    """Return {metric: {'quantlib_ns':.., 'ours_ns':.., 'speedup':..}}."""
-    result = {}
-    for key, (exe, ql_name, ours_name) in METRICS.items():
-        t = run_bench(build, exe, min_time, reps)
-        if ours_name not in t:
-            raise KeyError(f"{exe}: expected {ours_name}, got {list(t)}")
-        ours = t[ours_name]
-        if ql_name is None:  # ours-only: self-regression gated, no speedup
-            result[key] = {"quantlib_ns": None, "ours_ns": round(ours), "speedup": None}
+def measure(build, min_time, reps, only=None):
+    """Return {metric: {'ours_ns', 'reference_ns', 'speedup'}} running each executable ONCE."""
+    by_exe = {}
+    for key, (exe, ours, ref) in METRICS.items():
+        if only and key not in only:
             continue
-        if ql_name not in t:
-            raise KeyError(f"{exe}: expected {ql_name} and {ours_name}, got {list(t)}")
-        ql = t[ql_name]
-        result[key] = {"quantlib_ns": round(ql), "ours_ns": round(ours), "speedup": round(ql / ours, 2)}
+        by_exe.setdefault(exe, []).append((key, ours, ref))
+    result = {}
+    for exe, items in by_exe.items():
+        t = run_bench(build, exe, min_time, reps)
+        for key, ours, ref in items:
+            if ours not in t:
+                raise KeyError(f"{exe}: expected {ours}, got {sorted(t)}")
+            o = t[ours]
+            r = t.get(ref) if ref else None
+            result[key] = {"ours_ns": round(o),
+                           "reference_ns": (round(r) if r is not None else None),
+                           "reference_bm": ref,
+                           "speedup": (round(r / o, 2) if r is not None else None)}
     return result
+
+
+def fmt_ns(ns):
+    if ns is None:
+        return "      —"
+    if ns >= 1e6:
+        return f"{ns/1e6:8.2f} ms"
+    if ns >= 1e3:
+        return f"{ns/1e3:8.1f} us"
+    return f"{ns:8.0f} ns"
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", required=True)
     ap.add_argument("--baselines", required=True)
-    ap.add_argument("--update", action="store_true", help="rewrite this fingerprint's baseline")
+    ap.add_argument("--targets", default=os.path.join(ROOT, "baselines", "targets.json"))
+    ap.add_argument("--update", action="store_true", help="rewrite this fingerprint's baseline (quiesced only)")
+    ap.add_argument("--propose-targets", action="store_true")
+    ap.add_argument("--headroom", type=float, default=1.3)
     ap.add_argument("--min-time", default="0.5")
-    ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--reps", type=int, default=5)
+    ap.add_argument("--max-load", type=float, default=2.0, help="refuse to run above this 1-min load average")
+    ap.add_argument("--force-load", action="store_true", help="run under load anyway (disables --update)")
+    ap.add_argument("--only", nargs="*", help="metric keys to run (default: all)")
+    ap.add_argument("--record", help="write the full measurement + verdicts to this JSON file")
     args = ap.parse_args()
 
     with open(args.baselines) as f:
         base = json.load(f)
+    targets = {}
+    if os.path.exists(args.targets):
+        with open(args.targets) as f:
+            targets = json.load(f).get("targets", {})
+
     fp = fingerprint()
     key = fp["key"]
-    print(f">> fingerprint {key}  ({fp['cpu']}, {fp['isa']}, {fp['compiler']})")
+    la = load_avg()
+    print(f">> fingerprint {key}  ({fp['cpu']}, {fp['isa']} {fp['arch_flag']}, {fp['compiler']})")
+    print(f">> quantlib toolchain: {fp.get('quantlib_toolchain', 'unknown')}")
+    print(f">> load average (1 min): {la:.2f}  (max {args.max_load})")
+    quiesced = not (la > args.max_load)
+    if not quiesced:
+        if not args.force_load:
+            print("!! machine is loaded — refusing to run the perf gate (use --force-load to run anyway; "
+                  "results will not be eligible for --update).")
+            return 2
+        print("!! running under load (--force-load): numbers are NOT authoritative; --update disabled.")
 
-    print(">> running benchmarks ...")
-    meas = measure(args.build, args.min_time, args.reps)
+    print(f">> running benchmarks (min over {args.reps} reps x {args.min_time}s) ...")
+    t0 = time.time()
+    meas = measure(args.build, args.min_time, args.reps, set(args.only) if args.only else None)
+    print(f">> done in {time.time()-t0:.0f}s")
 
+    # ---- --update ----
     if args.update:
+        if not quiesced:
+            print("!! --update refused: machine not quiesced.")
+            return 2
+        if args.only:
+            print("!! --update refused with --only (baselines must be captured together).")
+            return 2
         m = base["machines"].setdefault(key, {})
-        m["fingerprint"] = {k: fp[k] for k in
-                            ("arch", "os", "cpu", "physical_cores", "isa", "doubles_per_register",
-                             "compiler", "arch_flag")}
-        # timestamp is passed by the caller's environment to stay reproducible-friendly
-        m["captured_utc"] = os.environ.get("SWAPS_CAPTURE_UTC", m.get("captured_utc", "unknown"))
-        m.setdefault("notes", "Captured by tools/check_perf.py --update.")
+        m["fingerprint"] = {k: fp[k] for k in fp if k != "key"}
+        m["captured_utc"] = os.environ.get("SWAPS_CAPTURE_UTC", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        m["load_avg_at_capture"] = round(la, 2)
+        m["reps"] = args.reps
+        m["min_time_s"] = float(args.min_time)
+        m.setdefault("notes", "Captured by tools/check_perf.py --update (min-of-reps, quiesced).")
         m["metrics"] = {mk: dict(mv) for mk, mv in meas.items()}
-        # keep any metric-specific extras (e.g. book_size) that were already there
-        for mk in m["metrics"]:
-            prev = base["machines"].get(key, {}).get("metrics", {}).get(mk, {})
-            for extra in ("book_size",):
-                if extra in prev:
-                    m["metrics"][mk][extra] = prev[extra]
         with open(args.baselines, "w") as f:
             json.dump(base, f, indent=2)
             f.write("\n")
         print(f">> baseline updated for fingerprint {key}")
-        return 0
 
-    # ---- gate ----
+    # ---- --propose-targets ----
+    if args.propose_targets:
+        print(f"\n  proposed targets (ours_ns x {args.headroom}, rounded up; edit baselines/targets.json by hand):")
+        for mk, mv in meas.items():
+            cur = targets.get(mk, {}).get("target_ns")
+            prop = int(mv["ours_ns"] * args.headroom)
+            note = "" if cur is None else (f"  current {cur:,}" + ("  (RATCHET DOWN)" if prop < cur else ""))
+            print(f"    {mk:<24}{prop:>14,}{note}")
+
+    # ---- the gate ----
     if key not in base["machines"]:
-        print(f"!! no committed baseline for fingerprint {key}.")
-        print("   Refusing to compare across fingerprints. Re-baseline with:")
-        print("     SWAPS_CAPTURE_UTC=$(date -u +%FT%TZ) ./tools/check_perf.py "
-              f"--build {args.build} --baselines {args.baselines} --update")
+        print(f"!! no committed baseline for fingerprint {key}. Refusing to compare across fingerprints.")
+        print("   Re-baseline (quiesced) with:  ./tools/check_perf.py --build BUILD --baselines FILE --update")
         return 1
-
     committed = base["machines"][key]["metrics"]
-    thr = base["thresholds"]
-    # The HARD gate is the load-robust speedup. Self-regression on absolute ns is load-sensitive on a
-    # noisy box, so exceeding max_self_regression only WARNS; only a GROSS regression (a real code
-    # problem, not load) hard-fails.
-    GROSS = 2.0
+    max_regr = float(base.get("policy", {}).get("max_self_regression", 1.25))
+
     print()
-    print(f"  {'metric':<22}{'speedup':>9}{'need>=':>8}{'ours_ns':>13}{'baseline':>13}{'regr':>7}  result")
+    print(f"  {'metric':<24}{'ours':>12}{'baseline':>12}{'regr':>7}{'target':>12}  result")
     ok = True
-    warned = False
-    for key_m, mv in meas.items():
-        t = thr[key_m]
-        need = t.get("min_speedup_vs_quantlib")  # None for ours-only (self-regression gated) metrics
-        max_regr = t["max_self_regression"]
-        base_ours = committed.get(key_m, {}).get("ours_ns")
-        speed_ok = (mv["speedup"] is None) or (need is None) or (mv["speedup"] >= need)
-        regr = (mv["ours_ns"] / base_ours) if base_ours else float("nan")
-        gross_regr = base_ours is not None and regr > GROSS
-        row_ok = speed_ok and not gross_regr
+    verdicts = {}
+    for mk, mv in meas.items():
+        ours = mv["ours_ns"]
+        b = committed.get(mk, {}).get("ours_ns")
+        tgt = targets.get(mk, {}).get("target_ns")
+        regr = (ours / b) if b else None
+        flags = []
+        if b is None:
+            flags.append("NO-BASELINE")
+        elif regr > max_regr:
+            flags.append(f"REGRESSED>{max_regr}x")
+        if tgt is None:
+            flags.append("NO-TARGET")
+        elif ours > tgt:
+            flags.append("ABOVE-TARGET")
+        row_ok = not any(f.startswith(("REGRESSED", "ABOVE")) for f in flags)
         ok = ok and row_ok
-        if not speed_ok:
-            flag = "SLOW"
-        elif gross_regr:
-            flag = "REGRESSED"
-        elif base_ours is not None and regr > max_regr:
-            flag = "pass(warn)"
-            warned = True
-        else:
-            flag = "PASS"
-        sp = "     —  " if mv["speedup"] is None else f"{mv['speedup']:>8.2f}x"
-        nd = "     — " if need is None else f"{need:>7.1f}x"
-        print(f"  {key_m:<22}{sp}{nd}{mv['ours_ns']:>13,}"
-              f"{(base_ours or 0):>13,}{regr:>6.2f}x  {flag}")
-    if warned:
-        print(f"  (warn: ours_ns above baseline*max_self_regression -- likely machine load; "
-              f"speedups still pass. Re-baseline quiesced to clear.)")
+        verdicts[mk] = {"ok": row_ok, "flags": flags, "regr": regr, "target_ns": tgt}
+        print(f"  {mk:<24}{fmt_ns(ours):>12}{fmt_ns(b):>12}"
+              f"{(f'{regr:5.2f}x' if regr else '    — '):>7}{fmt_ns(tgt):>12}  "
+              f"{'PASS' if row_ok else 'FAIL'}{(' ' + ','.join(flags)) if flags else ''}")
+
+    # ---- informational reference table ----
+    refs = [(mk, mv) for mk, mv in meas.items() if mv["reference_ns"] is not None]
+    if refs:
+        print("\n  reference (informational, NOT gated):")
+        print(f"  {'metric':<24}{'reference':>12}{'ours':>12}{'speedup':>9}  reference BM")
+        for mk, mv in refs:
+            print(f"  {mk:<24}{fmt_ns(mv['reference_ns']):>12}{fmt_ns(mv['ours_ns']):>12}"
+                  f"{mv['speedup']:>8.2f}x  {mv['reference_bm']}")
+
+    if args.record:
+        with open(args.record, "w") as f:
+            json.dump({"fingerprint": fp, "load_avg": la, "quiesced": quiesced, "reps": args.reps,
+                       "min_time_s": float(args.min_time), "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "metrics": meas, "verdicts": verdicts}, f, indent=2)
     print()
-    print("PERF GATE: " + ("PASS" if ok else "FAIL"))
+    print("PERF GATE: " + ("PASS" if ok else "FAIL") + ("" if quiesced else "  (under load — not authoritative)"))
     return 0 if ok else 1
 
 

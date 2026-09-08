@@ -1,4 +1,5 @@
-// @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
+// @consistency-test — QuantLib-LINKED SELF-CONSISTENCY test (QuantLib builds the reference market; the
+// engine is compared to ITSELF / hand formulas, not to a QuantLib number). DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Stage 4 adoption guard: the reference market is built as GENERIC Instruments
 // (reference_curve.hpp build_problem / build_square_problem). This pins the DATE fact that made the

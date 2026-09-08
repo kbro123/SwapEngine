@@ -7,12 +7,36 @@
 set -euo pipefail
 
 CXX_BIN="${CXX:-c++}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-case "$(uname -m)" in
-  arm64|aarch64) ARCH_FLAG="-mcpu=native" ;;
-  x86_64)        ARCH_FLAG="-march=native" ;;
-  *)             ARCH_FLAG="" ;;
-esac
+# The arch flag is the ENGINE'S flag (cmake/DetectISA.cmake), read from the archprobe that
+# tools/bootstrap_deps.sh configures (or from the engine's own build tree). Never re-derived here: the old
+# hard-coded -march=native reported "AVX-512" while the engine was built AVX2 (2026-07-29 .. 2026-09-08).
+ARCH_FLAG=""
+for probe in "${ROOT}/third_party/.archprobe/arch_flags.txt" "${ROOT}/build/generated/swaps/simd_config.hpp"; do
+  [ -f "${probe}" ] || continue
+  case "${probe}" in
+    *arch_flags.txt) ARCH_FLAG="$(tr -d '[:space:]' < "${probe}")" ;;
+    *simd_config.hpp) ARCH_FLAG="$(sed -n 's/.*arch_flags = "\([^"]*\)".*/\1/p' "${probe}")" ;;
+  esac
+  [ -n "${ARCH_FLAG}" ] && break
+done
+if [ -z "${ARCH_FLAG}" ]; then
+  case "$(uname -m)" in   # last resort (no configured build anywhere): the pre-2026-09 behaviour
+    arm64|aarch64) ARCH_FLAG="-mcpu=native" ;;
+    x86_64)        ARCH_FLAG="-march=native" ;;
+  esac
+fi
+
+# The QuantLib reference's toolchain, recorded by bootstrap_deps.sh. Folded into the key so a QuantLib built
+# with another compiler/flags than the engine can never be silently compared (it happened: clang 16 /
+# AVX-512 QuantLib vs clang 21 / AVX2 engine, 2026-08-29 .. 2026-09-08).
+QL_TC_FILE="${ROOT}/third_party/quantlib/install/TOOLCHAIN.json"
+if [ -f "${QL_TC_FILE}" ]; then
+  QL_TC="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["quantlib"]+"|"+d["compiler"]+"|"+d["flags"])' "${QL_TC_FILE}")"
+else
+  QL_TC="unknown"
+fi
 
 # CPU brand
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -46,7 +70,7 @@ fi
 
 # Short, stable key. Deliberately includes the compiler: changing compilers
 # invalidates baselines just as surely as changing CPUs.
-KEY_RAW="$(uname -m)|${CPU}|${ISA}|${COMPILER}|${ARCH_FLAG}"
+KEY_RAW="$(uname -m)|${CPU}|${ISA}|${COMPILER}|${ARCH_FLAG}|ql:${QL_TC}"
 KEY="$(printf '%s' "${KEY_RAW}" | shasum -a 256 2>/dev/null | cut -c1-12)"
 
 cat <<EOF
@@ -60,6 +84,7 @@ cat <<EOF
   "doubles_per_register": ${W},
   "fma": ${FMA},
   "compiler": "${COMPILER}",
-  "arch_flag": "${ARCH_FLAG}"
+  "arch_flag": "${ARCH_FLAG}",
+  "quantlib_toolchain": "${QL_TC}"
 }
 EOF

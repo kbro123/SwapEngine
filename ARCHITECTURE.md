@@ -228,4 +228,18 @@ Lives in `tests/`, never in `include/`: `spread_reference.hpp` (`swaps::testing:
 calibrate jointly via `SpreadHandle`), and the `reference_*.hpp` QuantLib market builders. See
 `tests/ORACLE_TESTS.md` for the oracle-test policy.
 
+## The gates (what `tools/verify.sh` actually checks — PRINCIPLES.md P9)
+
+| Step | Tool | What fails it |
+|---|---|---|
+| build | cmake/ninja | QuantLib absent (fatal unless `-DSWAPS_ALLOW_NO_ORACLE=ON`, which marks the build non-gated) |
+| oracle/consistency registry | `tools/check_oracle_tests.sh --build` | a registered file missing / wrong banner / oracle without QuantLib / fewer `TEST`s or `EXPECT`s than `tests/oracle_assertions.lock` / a QuantLib-linked binary missing or listing fewer tests than locked. `tools/selftest_guards.sh` proves it trips. |
+| conventions sync | `tools/gen_conventions_hpp.py --stdout` diff | `conventions.json` edited without regenerating `conventions_data.hpp` |
+| no-literal conventions | `tools/check_no_literals.py` | any NEW currency/index/calendar/day-count/frequency/lag/recovery literal or silent fallback in `include/` or `api/` (existing ones are a ratchet in `tools/check_no_literals.allow`, burned down in E2) |
+| api-dispatch sync | `tools/gen_dispatch.py --stdout` diff | descriptor edited without regenerating the dispatch |
+| correctness | ctest: `swaps_tests`, `swaps_allocfree_tests`, `swaps_api_tests`, `swaps_oracle_tests` (engine vs QuantLib numbers), `swaps_consistency_tests` (QuantLib-linked self-consistency) | any red test; timing/scheduler assertions run only with `SWAPS_TIMING_ASSERTS=1` (nightly) |
+| performance | `tools/check_perf.py` | `ours_ns > 1.25 × baseline` for this fingerprint (`baselines/baselines.json`, key = CPU + ISA + engine arch flag + compiler + **QuantLib toolchain**) or `ours_ns > target` (`baselines/targets.json`, ratchets down only); refuses to run above load 2.0. QuantLib numbers are printed as an informational reference, never gated. |
+
+Enforcement: `.githooks/pre-push` (`tools/install_hooks.sh`) runs the guards + `verify.sh --test-only`; `.github/workflows/ci.yml` builds and runs the QuantLib-free binaries on every push; `tools/nightly.sh` (launchd, `tools/install_nightly.sh`) runs the full gate quiesced and writes `baselines/NIGHTLY.md`. Flags have one source of truth, `cmake/DetectISA.cmake`, probed by `tools/archprobe` for `bootstrap_deps.sh` (QuantLib is built with the engine's exact flags) and `fingerprint.sh`.
+
 > **Performance:** see [`OPTIMIZATION.md`](OPTIMIZATION.md) for how the calibration/streaming path was made fast (the W-cache, hybrid AAD, frozen-Newton streaming, alloc-free/SIMD hot path) and the repeatable optimization playbook.

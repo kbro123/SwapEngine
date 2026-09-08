@@ -1,0 +1,44 @@
+# CI — PRINCIPLES.md P9 enforcement on every push / PR.
+#
+# This job builds the QuantLib-FREE binaries (swaps_tests, swaps_allocfree_tests, swaps_api_tests) with
+# system Eigen/gtest/benchmark/boost and runs them, plus the cheap codegen/registry guards. It configures
+# with -DSWAPS_ALLOW_NO_ORACLE=ON and therefore is NOT a gated build: the QuantLib oracle + consistency
+# binaries and the perf gate run in the nightly job on the quiesced reference machine (tools/nightly.sh),
+# whose summary is published as baselines/NIGHTLY.md. A green badge here means "compiles and the
+# QuantLib-free gate is green on Linux/GCC"; it does not mean "oracle-verified".
+#
+# NOTE: written 2026-09-08 without a runner to test on — the first push will show whether the apt package
+# set below satisfies CMake's find_package calls (gtest/benchmark/Eigen3 configs on ubuntu-24.04 do).
+name: ci
+on:
+  push:
+    branches: ["main", "e1-*", "e2-*", "e3-*", "e4-*", "e5-*", "e6-*"]
+  pull_request:
+jobs:
+  quantlib-free-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build cmake g++ libeigen3-dev libgtest-dev libbenchmark-dev libboost-dev python3
+          # api/ is guarded on the VENDORED boost path; point it at the system headers.
+          mkdir -p third_party && ln -sfn /usr/include third_party/boost
+          test -f third_party/boost/boost/json.hpp
+      - name: guards (codegen drift + oracle registry, no build needed)
+        run: |
+          python3 tools/gen_conventions_hpp.py --stdout | diff -q - include/swaps/conventions_data.hpp
+          python3 tools/gen_dispatch.py --stdout | diff -q - api/run_json_dispatch.gen.inc
+          bash tools/check_oracle_tests.sh
+          bash tools/selftest_guards.sh
+      - name: configure (non-gated: no QuantLib on the runner)
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSWAPS_ALLOW_NO_ORACLE=ON -DSWAPS_BUILD_BENCH=OFF
+      - name: build
+        run: cmake --build build -j "$(nproc)"
+      - name: test (QuantLib-free binaries)
+        run: ctest --test-dir build --output-on-failure -j "$(nproc)"

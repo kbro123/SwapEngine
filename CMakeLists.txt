@@ -100,7 +100,14 @@ if(QUANTLIB_LIB AND QUANTLIB_INCLUDE)
   target_link_libraries(quantlib_oracle INTERFACE ${QUANTLIB_LIB})
   message(STATUS "QuantLib oracle: ${QUANTLIB_LIB}")
 else()
-  message(WARNING "QuantLib not found — run ./tools/bootstrap_deps.sh (oracle/baseline targets disabled)")
+  # PRINCIPLES.md P9: the correctness gate cannot pass with QuantLib absent. Its absence used to be a
+  # WARNING that silently dropped the oracle binary (135 tests) and every reference bench.
+  option(SWAPS_ALLOW_NO_ORACLE "Configure without QuantLib (NOT a gated build; oracle tests + reference benches disabled)" OFF)
+  if(SWAPS_ALLOW_NO_ORACLE)
+    message(WARNING "QuantLib not found — SWAPS_ALLOW_NO_ORACLE=ON: this build is NOT gate-eligible")
+  else()
+    message(FATAL_ERROR "QuantLib not found (expected ${QL_ROOT}). Run ./tools/bootstrap_deps.sh, or pass -DSWAPS_ALLOW_NO_ORACLE=ON for a non-gated build.")
+  endif()
 endif()
 
 # ---- Test & benchmark trees (guarded so a fresh clone still configures) -----

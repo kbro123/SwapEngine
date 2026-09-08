@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# pre-push — PRINCIPLES.md P9 enforcement (installed by tools/install_hooks.sh; git config core.hooksPath).
+# Runs the cheap guards + the correctness gate. The perf gate runs in the nightly job (quiesced machine),
+# not here — but a push with a red ctest, a gutted oracle, stale codegen or a missing QuantLib is refused.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
+if [ "${SWAPS_SKIP_HOOKS:-0}" = "1" ]; then echo "pre-push: SWAPS_SKIP_HOOKS=1 — skipping (say why in the commit)"; exit 0; fi
+echo "pre-push: verify.sh --test-only"
+bash tools/verify.sh --test-only
+bash tools/selftest_guards.sh

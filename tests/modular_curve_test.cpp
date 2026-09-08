@@ -1,3 +1,6 @@
+// @oracle-test — QuantLib prices swaps/futures off OUR Hermite curve through the YieldTermStructure adapter
+// (engine number vs QuantLib number, curve_rel). DO NOT DELETE OR WEAKEN without reproducing the comparison.
+// (Orphaned from every CMake target 2026-09-04 .. 2026-09-08; re-registered in swaps_oracle_tests.)
 // Two guarantees for the curve-composition layer:
 //
 //  (a) The RUNTIME builder reproduces the compile-time one. A ModularCurve assembled from
@@ -19,7 +22,6 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"

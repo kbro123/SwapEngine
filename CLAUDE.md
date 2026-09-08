@@ -10,7 +10,10 @@ Guidance for Claude Code when working in this repository. Read this first, every
 > part of "done", exactly like updating a test. Likewise keep the two oracle registries honest:
 > `tests/ORACLE_TESTS.md` and the `swaps_oracle_tests` list are enforced by `tools/check_oracle_tests.sh`.
 
-## 0. Design principles (the North Star — every change must hold these)
+## 0. Design principles
+
+> **The law is [`PRINCIPLES.md`](PRINCIPLES.md) (P0–P13, ratified 2026-09-08).** The bullets below are the
+> original statement kept for history; where they disagree with `PRINCIPLES.md`, `PRINCIPLES.md` wins.
 
 - **Generic building blocks, not special cases.** There is ONE curve type — `ModularCurve` = an ordered
   list of interpolation REGIONS. The schemes {Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline,
@@ -36,18 +39,15 @@ Guidance for Claude Code when working in this repository. Read this first, every
 
 ## 1. What this project is
 
-SwapsEngine is a high-performance **extension of QuantLib** that replaces its two slowest workflows
-— swap-curve calibration and bulk swap analytics — with a globally-calibrated, AAD-differentiated,
-vectorized implementation, while **reusing** QuantLib for everything else.
+SwapsEngine is a high-performance, QuantLib-free curve-calibration and streaming-analytics engine:
+globally-calibrated, AAD-differentiated, vectorized, with its own data-driven calendars/schedules/
+conventions (`build/`, `conventions/conventions.json`).
 
-**QuantLib IS a linked dependency of the shipped engine.** We reuse its base functionality wholesale
-— calendars, day counters, `Schedule`, instrument definitions (`OvernightIndexedSwap`, SOFR futures,
-rate helpers), quotes, conventions. We do **not** reimplement calendars or schedule generation. Our
-value-add is narrow and deep: the calibration solve and the bulk-pricing math.
-
-QuantLib is **also** still the correctness **oracle** and the speed **baseline** — its native
-`IterativeBootstrap`/`GlobalBootstrap` and its per-swap `NPV()` loop are exactly what we must beat,
-compiled with the same compiler and flags (§3 perf-gate integrity).
+**QuantLib is NOT a dependency of the shipped engine** (`api/`, the C ABI and the web binding link only
+Eigen + Boost.JSON). QuantLib is the correctness **oracle** (tests) and an informational speed
+**reference** (bench, non-gating — PRINCIPLES.md P8/P9), compiled with the engine's exact toolchain (§3
+perf-gate integrity). The historical statement that QuantLib "IS a linked dependency" (phases 0–3, when
+`ql/extract.hpp` fed the kernels) is superseded; `ql/` is test-only.
 
 ### The division of labour (the core architectural rule)
 - **Reused from QuantLib (setup, done once, not differentiable):** calendars, day counts, schedules,
@@ -211,8 +211,10 @@ combine into prices.** Exploit this — it is the whole optimization thesis:
 - **The calibration Jacobian is ANALYTIC (no AAD in the hot path).** `CompiledResidual::jacobian`
   computes `J = ∂r/∂x = -(∂r/∂DF · diag(DF))·W`: the per-instrument `∂r/∂DF` (analytic, sparse)
   scattered, then one `W` matmul. Matches AAD to 1e-15, ~15× faster (25 µs vs 373 µs) — this is what
-  makes the streaming Jacobian *refresh* cheap. AAD is now used in exactly one place: producing `W`
-  once (`integral_weight_matrix`), which works generically for any linear region policy.
+  makes the streaming Jacobian *refresh* cheap. AAD has exactly TWO remaining roles (PRINCIPLES.md P3):
+  producing `W` once (`integral_weight_matrix`, generic for any linear region policy), and the pooled
+  `AadBlock` tier for the rows the W-cache cannot express (value-dependent schemes, MtM funding legs,
+  FX-in-portfolio) — `HybridBundleResidual` composes the two and the tier of every row is fingerprinted.
 - **Extending/re-wrapping QuantLib is allowed where it unlocks this.** QuantLib instruments recompute
   per-coupon on every pricing call; our wrapper computes `W` once (reusing QuantLib only to build the
   schedule) and reprices by matrix algebra. Reimplement/extend the hot parts; reuse the rest.
@@ -247,13 +249,17 @@ rates and par swap rates must match QuantLib. Two oracles:
 
 - **Rule: never regress correctness. A failing correctness test blocks the checkpoint. No exceptions.**
 
-### Performance gate (Google Benchmark, `bench/`)
-- Curve-build time, batch-analytics time, and AAD-risk time are compared against QuantLib baselines
-  stored in `baselines/baselines.json`.
-- The gate **fails if we are not measurably faster than QuantLib** by the agreed thresholds, and also
-  fails on self-regression vs our own committed baseline.
-- **Rule: every commit that changes engine code must include or refresh a benchmark proving the
-  speedup. If the performance gate fails, do not commit the change as an improvement.**
+### Performance gate (Google Benchmark, `bench/`) — policy per PRINCIPLES.md P9
+- **Gated against ourselves and against absolute targets, not against QuantLib.** `tools/check_perf.py`
+  FAILS a metric if (a) `ours_ns > 1.25 × committed baseline` for this fingerprint (`baselines/baselines.json`,
+  min-of-N repetitions, load-checked), or (b) `ours_ns > target` in `baselines/targets.json` (desk-scale
+  absolute targets; they only ratchet DOWN). There is no advisory band: exceeding either is a failure.
+- QuantLib (and, nightly, QuantLib+XAD / rateslib) numbers are an **informational reference table** —
+  printed, published with losses as well as wins, never gating. (History: 2026-07-10 → 2026-09-08 the gate
+  hard-failed only on a QuantLib-speedup floor set 7–25× below measured and a 2× gross self-slowdown; the
+  self-regression band was advisory. Superseded.)
+- **Rule: every commit that touches a hot path includes or refreshes a native C++ benchmark. Perf tests
+  are never routed through JSON or a web layer. If the gate fails, the change is not an improvement.**
 
 **Curve-build is benchmarked against `GlobalBootstrap`, not `IterativeBootstrap`** — this is the
 honest same-algorithm-class comparison, and it is a settled decision, do not re-litigate it:
@@ -276,9 +282,11 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
 
 ### Perf-gate integrity (how we keep the benchmark honest)
 - **QuantLib must be compiled from source with the SAME compiler and the SAME optimization flags
-  as our engine** (`-O3 -march=native`). Never benchmark our tuned build against a generically-
-  compiled QuantLib package/bottle — that measures compiler flags, not our algorithm, and inflates
-  the speedup. `third_party/` builds QuantLib with our flags for exactly this reason.
+  as our engine.** The flags have ONE source of truth — `cmake/DetectISA.cmake` (today on this machine:
+  `-O3 -DNDEBUG -fno-math-errno -march=x86-64-v3`, AVX-512 deliberately off) — probed by
+  `tools/archprobe` for `bootstrap_deps.sh` and `fingerprint.sh`; the QuantLib toolchain is recorded in
+  `third_party/quantlib/install/TOOLCHAIN.json` and is PART of the baseline fingerprint. Never benchmark
+  against a generically-compiled QuantLib package/bottle.
 - Baselines in `baselines/baselines.json` are **keyed by a machine+toolchain fingerprint**
   (`./tools/fingerprint.sh` → CPU, ISA, compiler, arch flag). The perf gate **must refuse to compare
   measurements across different fingerprint keys** and instead demand a re-baseline. A Kaby Lake
@@ -368,9 +376,9 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 
 ## 5. Coding standards
 
-- **C++20. Links QuantLib.** The engine reuses QuantLib types for calendars/schedules/instruments.
-  The *hot, differentiable kernels* (curve, pricing, residuals, batched analytics) are **header-only
-  and templated on the scalar type** (`double` for pricing, `AutoDiffScalar<…>` for AAD) — never
+- **C++20. The shipped engine does NOT link QuantLib** (tests and reference benches do). Calendars/
+  schedules/instruments come from `build/` + the conventions DB. The *hot, differentiable kernels*
+  (curve, pricing, residuals, batched analytics) are **header-only and templated on the scalar type** (`double` for pricing, `AutoDiffScalar<…>` for AAD) — never
   hard-code `double` there. Extract dates/accruals from QuantLib **once** at setup; keep QuantLib
   objects and virtual dispatch **out of the hot loop** (that per-coupon loop is exactly the baseline
   we are beating).
@@ -382,7 +390,9 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
   rather than silently running at the wrong width.
 - Pad the swap dimension of portfolio matrices to `padded_count<Scalar>(P)` so batched loops need
   no scalar remainder path.
-- Hot paths: **no heap allocation in inner loops**, no `virtual` dispatch, no UB. Prefer Eigen fixed/
+- Hot paths: **no heap allocation in inner loops** (the scope of this claim is exactly what the T4
+  invariant tests prove — `tests/alloc_free_test.cpp` today covers `residuals()` only), no `virtual`
+  dispatch, no UB. Prefer Eigen fixed/
   dynamic matrices with contiguous storage. Keep data layout SoA-friendly for vectorization.
 - Vectorize with Eigen expressions; **avoid per-swap `for` loops** in analytics — that is the point.
 - Determinism: results must be reproducible run-to-run (mind FP contraction/`-ffast-math`; do not

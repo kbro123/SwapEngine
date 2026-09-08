@@ -27,15 +27,24 @@ BENCH_VER=1.8.4
 BOOST_VER=1.84.0
 QL_VER=1.35
 
-# Optimization flags — MUST match what CMakeLists.txt/cmake/DetectISA.cmake give the engine,
-# or the perf comparison against QuantLib is invalid (CLAUDE.md §3).
-# Arch flag is host-detected: x86_64 -> -march=native, arm64 -> -mcpu=native.
-case "$(uname -m)" in
-  arm64|aarch64) ARCH_FLAG="-mcpu=native" ;;
-  x86_64)        ARCH_FLAG="-march=native" ;;
-  *)             ARCH_FLAG="" ;;
-esac
-OPT_FLAGS="-O3 ${ARCH_FLAG} -DNDEBUG"
+# Optimization flags — MUST match what CMakeLists.txt/cmake/DetectISA.cmake give the engine, or the
+# perf reference against QuantLib is invalid (PRINCIPLES.md, perf-gate integrity). There is ONE source of
+# truth for the arch flag: cmake/DetectISA.cmake. It is probed below (after cmake/ninja are available) by
+# configuring tools/archprobe with this compiler — never re-derived here by hand.
+# (History: this script hard-coded -march=native while the engine moved to -march=x86-64-v3 on 2026-07-29;
+#  the mismatch went unnoticed until 2026-09-08. Hence the probe.)
+RELEASE_FLAGS="-O3 -DNDEBUG -fno-math-errno"   # == CMAKE_CXX_FLAGS_RELEASE in CMakeLists.txt
+OPT_FLAGS=""                                    # set by probe_arch_flags after step 2
+probe_arch_flags() {
+  local dir="${TP}/.archprobe"
+  rm -rf "${dir}"
+  "${CMAKE}" -S "${ROOT}/tools/archprobe" -B "${dir}" -G Ninja -DCMAKE_MAKE_PROGRAM="${NINJA}" \
+    -DCMAKE_BUILD_TYPE=Release ${SWAPS_ENABLE_AVX512:+-DSWAPS_ENABLE_AVX512=${SWAPS_ENABLE_AVX512}} \
+    >"${dir}.log" 2>&1 || die "archprobe configure failed (see ${dir}.log)"
+  ARCH_FLAG="$(tr -d '[:space:]' < "${dir}/arch_flags.txt")"
+  OPT_FLAGS="${RELEASE_FLAGS} ${ARCH_FLAG}"
+  log "engine flags (from cmake/DetectISA.cmake): ${OPT_FLAGS}  [$(tr -d '[:space:]' < "${dir}/isa_name.txt")]"
+}
 
 BOOST_USCORE="${BOOST_VER//./_}"
 
@@ -89,6 +98,9 @@ if [ ! -x "${TOOLS}/bin/ninja" ]; then
 fi
 NINJA="${TOOLS}/bin/ninja"
 log "ninja: $("${NINJA}" --version)"
+
+# ---- 2b. The engine's exact optimisation flags (single source: cmake/DetectISA.cmake) ----
+probe_arch_flags
 
 # ---- 3. Eigen (header-only) --------------------------------------------------
 if [ ! -d "${TP}/eigen/Eigen" ]; then
@@ -149,6 +161,12 @@ if [ ! -f "${QL_STATIC_LIB}" ]; then
     rm -rf "${TP}/quantlib/src"; mkdir -p "${TP}/quantlib/src"
     tar xzf "${DL}/quantlib.tar.gz" -C "${TP}/quantlib/src" --strip-components=1
   fi
+  # QuantLib 1.35 + libc++ 26 (clang 21): in ql/errors.cpp the unqualified call format(file, line, ...)
+  # finds std::format by ADL on std::string and fails (consteval format-string). Qualify the call to the
+  # file's own anonymous-namespace helper (::format disables ADL). Fixed upstream after 1.35; idempotent sed.
+  sed -i '' -e 's/std::runtime_error(format(/std::runtime_error(::format(/g' \
+            -e 's/make_shared<std::string>(format(/make_shared<std::string>(::format(/g' \
+            "${TP}/quantlib/src/ql/errors.cpp"
   log "building QuantLib ${QL_VER} with: ${OPT_FLAGS} -j${JOBS}  (~20-40 min on 4 cores)"
   # Resume-friendly: only discard the build tree if it was configured differently
   # (e.g. an older shared-library config). A partial QuantLib build is ~30 min of
@@ -168,6 +186,16 @@ if [ ! -f "${QL_STATIC_LIB}" ]; then
     -DBOOST_ROOT="${TP}/boost" -DBoost_INCLUDE_DIR="${TP}/boost" \
     -DQL_BUILD_EXAMPLES=OFF -DQL_BUILD_TEST_SUITE=OFF -DQL_BUILD_BENCHMARK=OFF
   "${CMAKE}" --build "${TP}/quantlib/build" --target install -j "${JOBS}"
+  # Record the toolchain QuantLib was built with. tools/fingerprint.sh folds this into the perf-baseline
+  # key, so a QuantLib built with a different compiler/flags than the engine can never be silently compared.
+  cat > "${TP}/quantlib/install/TOOLCHAIN.json" <<EOT
+{
+  "quantlib": "${QL_VER}",
+  "compiler": "$("${CXX_BIN}" --version | head -1)",
+  "flags": "${OPT_FLAGS}",
+  "built_utc": "$(date -u +%FT%TZ)"
+}
+EOT
 fi
 log "quantlib: third_party/quantlib/install (static, built with ${OPT_FLAGS})"
 
