@@ -3,7 +3,7 @@
 // Two paired metrics, both over the SAME universe of seasoned semiannual treasuries, both built from the
 // SAME QuantLib (same compiler, same flags — perf-gate integrity, §3):
 //
-//   bond_sweep  YIELD space.  Ours: BondUniverse::yields_from_clean — ONE batched Newton across the whole
+//   ust_5000_clean_to_yield_sweep   YIELD space.  Ours: BondUniverse::yields_from_clean — ONE batched Newton across the whole
 //               universe, Horner over the coupon polynomial (FMAs, one pow(v,w) per bond per iteration).
 //               QuantLib: BondFunctions::yield bond-for-bond. Each of its NewtonSafe iterations walks the
 //               Leg TWICE (CashFlows::npv for the residual, modifiedDuration for the derivative), and each
@@ -27,7 +27,7 @@
 //                                 its solver's stopping behaviour, and is the honest kernel-vs-kernel
 //                                 number. Quote BOTH; never quote the first alone.
 //
-//   bond_book   CURVE space.  Ours: CompiledBondBook::dirty_prices(x) — DF = exp(-Wx), gathered flows,
+//   ust_5000_curve_book_dirty_price  CURVE space.  Ours: CompiledBondBook::dirty_prices(x) — DF = exp(-Wx), gathered flows,
 //               sparse per-bond reduction. QuantLib: a per-bond Bond::dirtyPrice() off a
 //               DiscountingBondEngine on the SAME discount factors (the handle is relinked each iteration
 //               so QuantLib cannot serve cached NPVs).
@@ -259,7 +259,7 @@ void our_yields(const Fixture& f, int n) {
 
 }  // namespace
 
-// ================= gate metric: bond_sweep (yield space, B = kGate) =================
+// ================= gate metric: ust_5000_clean_to_yield_sweep (yield space, B = kGate) =================
 
 static void BM_BondSweep_QuantLib(benchmark::State& state) {
   const auto& f = fx();
@@ -287,7 +287,7 @@ static void BM_BondSweep_QuantLibTuned(benchmark::State& state) {
 }
 BENCHMARK(BM_BondSweep_QuantLibTuned);
 
-// ================= gate metric: bond_book (curve space, B = kGate) =================
+// ================= gate metric: ust_5000_curve_book_dirty_price (curve space, B = kGate) =================
 
 static void BM_BondBook_QuantLib(benchmark::State& state) {
   const auto& f = fx();

@@ -1,5 +1,5 @@
 // Portfolio-analytics baseline: our vectorized CompiledPortfolio reprice vs QuantLib's per-swap
-// NPV() loop, both off the SAME calibrated curve (CLAUDE.md §3, portfolio_analytics >= 10x).
+// NPV() loop, both off the SAME calibrated curve (gate metric sofr_23k_book1000_ois_reprice; QuantLib is the informational reference).
 //
 // Repricing a large book as the curve moves is the real-time workload. QuantLib walks every swap's
 // coupons through its object model each reprice; we do DF = exp(-Wx) then gathered elementwise

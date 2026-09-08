@@ -1,5 +1,5 @@
 // Risk-ladder baseline: our analytic bucketed delta (AAD + implicit-function theorem) vs QuantLib
-// bump-and-reprice. This is the largest expected win (CLAUDE.md §3, risk_full_jacobian >= 20x).
+// bump-and-reprice. This is the largest expected win (gate metric sofr_23k_risk_ladder_23q_book9; QuantLib is the informational reference).
 //
 // Both start from an already-calibrated curve and compute the full delta ladder over all 23 market
 // quotes for a swap portfolio:

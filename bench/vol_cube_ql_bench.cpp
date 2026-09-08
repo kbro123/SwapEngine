@@ -213,7 +213,7 @@ BENCHMARK(BM_VolSurface_QuantLib);
 
 // QuantLib the way most users actually price a swaption surface: its INSTRUMENT machinery — MakeVanillaSwap +
 // Swaption + BachelierSwaptionEngine + .NPV() per point, with the schedule build, observer graph and engine
-// dispatch that entails. This is the apples-to-apples for our swap-side wins (portfolio_analytics beats QL's
+// dispatch that entails. This is the apples-to-apples for our swap-side wins (sofr_23k_book1000_ois_reprice beats QL's
 // per-object path ~279x); it shows the object-construction overhead our batched SoA path avoids. (The lean
 // bachelierBlackFormula arm above is the other bound — QL's tightest possible analytic loop.)
 static void BM_VolSurface_QuantLib_Objects(benchmark::State& state) {

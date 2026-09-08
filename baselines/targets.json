@@ -6,87 +6,87 @@
     "flagged NO-TARGET (not a failure) until one is set."
   ],
   "targets": {
-    "curve_build": {
+    "sofr_23k_square_cold_calibrate": {
       "target_ns": 656000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "risk_full_jacobian": {
+    "sofr_23k_risk_ladder_23q_book9": {
       "target_ns": 121000,
       "note": "initial = 2026-09-04 baseline x1.3; ratchets DOWN only"
     },
-    "portfolio_analytics": {
+    "sofr_23k_book1000_ois_reprice": {
       "target_ns": 105000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "warm_recalibration": {
+    "sofr_23k_warm_recal_0p3bp": {
       "target_ns": 23000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "bond_sweep": {
+    "ust_5000_clean_to_yield_sweep": {
       "target_ns": 4500000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "bond_book": {
+    "ust_5000_curve_book_dirty_price": {
       "target_ns": 528000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "vol_cube_warm": {
+    "sofr_swaption_cube17_sabr_reprice_warm": {
       "target_ns": 13300,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "vol_cube_cold": {
+    "sofr_swaption_cube17_cold_calibrate_price": {
       "target_ns": 1502000,
       "note": "initial = 2026-09-04 baseline x1.3; ratchets DOWN only"
     },
-    "session_rebind": {
+    "chain8x26_session_rebind": {
       "target_ns": 16520000,
       "note": "13.6 ms today is a full LM, not a warm path; E6.2 target: <= 1 ms. Ratchets down only."
     },
-    "stream_tick": {
+    "chain8x26_session_stream_tick": {
       "target_ns": 230000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "bundle_jacobian": {
+    "chain8x26_kernel_one_jacobian": {
       "target_ns": 564000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "price_portfolio": {
+    "chain8x26_book200_price_portfolio_oneshot": {
       "target_ns": 18642000,
       "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
     },
-    "warm_recal_10bp": {
+    "sofr_23k_warm_recal_10bp": {
       "target_ns": 60000,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "session_cold": {
+    "chain8x26_session_cold_build_calibrate": {
       "target_ns": 31933000,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "session_rebind_tension": {
+    "chain8x26_session_rebind_tension_reg": {
       "target_ns": 27757000,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "bundle_cold_joint": {
+    "chain8x26_kernel_cold_joint_lm": {
       "target_ns": 28767000,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "bundle_residual": {
+    "chain8x26_kernel_one_residual": {
       "target_ns": 41300,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "book_compiled": {
+    "chain8x26_book200_compiled_reprice": {
       "target_ns": 29900,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "fx_hybrid_jacobian": {
+    "usd_eur_xccy_3c8k_hybrid_jacobian": {
       "target_ns": 42400,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "fx_aad_block_jacobian": {
+    "usd_eur_xccy_3c8k_aad_block_jacobian": {
       "target_ns": 38200,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     },
-    "fx_stream_tick": {
+    "usd_eur_xccy_3c8k_stream_tick": {
       "target_ns": 114000,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
     }

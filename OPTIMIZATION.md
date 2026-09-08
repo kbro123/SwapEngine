@@ -19,8 +19,10 @@ drifting market every tick** at microsecond latency for streaming. Two regimes w
 
 You cannot optimize what you do not measure, and a "faster" change that trips the oracle is a regression.
 
-- **Perf gate** (`tools/verify.sh` → `bench/`): four benchmarks — `curve_build`, `risk_full_jacobian`,
-  `portfolio_analytics`, `warm_recalibration` — each with a `need>=` speedup floor and a `regr` factor vs a
+- **Perf gate** (`tools/verify.sh` → `bench/`): 21 metrics named by WHAT they build (`tools/check_perf.py --describe`),
+  e.g. `sofr_23k_square_cold_calibrate`, `sofr_23k_risk_ladder_23q_book9`, `chain8x26_session_stream_tick` — since
+  2026-09-08 gated on self-baseline (1.25×) + absolute targets (PRINCIPLES.md P9); the text below predates that and
+  describes the original QuantLib-floor gate with a `need>=` speedup floor and a `regr` factor vs a
   recorded baseline, gated on a **CPU fingerprint** (so baselines are comparable). Runs on every change.
 - **Engine-stamped timing** (`379ed54`): the session stamps `last_solve_us` + a streaming running average
   *inside* the engine, around the pure compute — so we measure the kernel, not Python/marshalling overhead.
@@ -93,10 +95,10 @@ bumping (O(n_knots) re-prices) is never used for calibration or risk.
 
 | benchmark | speedup vs naive | notable |
 |---|---|---|
-| `curve_build` | ~30× | cold calibrate |
-| `risk_full_jacobian` | ~36× | analytic vs bump |
-| `portfolio_analytics` | ~279× | SoA + SIMD batched reprice |
-| `warm_recalibration` | ~60× | frozen-Newton streaming |
+| `sofr_23k_square_cold_calibrate` (was `curve_build`) | ~30× | cold calibrate |
+| `sofr_23k_risk_ladder_23q_book9` (was `risk_full_jacobian`) | ~36× (now ~150×; informational) | analytic vs bump |
+| `sofr_23k_book1000_ois_reprice` (was `portfolio_analytics`) | ~279× | SoA + SIMD batched reprice |
+| `sofr_23k_warm_recal_0p3bp` (was `warm_recalibration`) | ~60× (50× like-for-like) | frozen-Newton streaming |
 
 FX + MtM cross-currency streaming: **~130µs → ~13µs per tick** once fully W-cacheable.
 

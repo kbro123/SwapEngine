@@ -273,7 +273,7 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   risk, so it is not our target. Say so openly; never quote a curve-build win over it.
 - The **largest** win is the risk ladder: our AAD + implicit-function-theorem gives the full bucketed
   delta from one calibration; QuantLib bumps-and-reprices (one full re-bootstrap per quote). That is
-  the `risk_full_jacobian` gate (≥20×). See `bench/curve_build_bench.cpp`.
+  the `sofr_23k_risk_ladder_23q_book9` metric (reference ~150×, informational). See `bench/curve_build_bench.cpp`.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
 - Discount factors / par rates vs QuantLib: `rel <= 1e-10`.

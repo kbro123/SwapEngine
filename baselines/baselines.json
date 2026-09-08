@@ -10,7 +10,8 @@
     "2x gross self-slowdown; the 1.25x self-regression band was advisory. Machines 52e94be82bc4 / a8c9a844826e /",
     "86d5211c2c03 below were captured under that regime (mean-of-3, some under load) and are kept as history.",
     "86d5211c2c03 paired a clang-21 engine with a clang-16 / AVX-512 QuantLib (fingerprint did not see the",
-    "QuantLib build) \u2014 its reference speedups are NOT like-for-like."
+    "QuantLib build) \u2014 its reference speedups are NOT like-for-like.",
+    "2026-09-08: metric keys renamed to say WHAT is built (market_size_operation); tools/check_perf.py --describe prints the full descriptions."
   ],
   "policy": {
     "max_self_regression": 1.25,
@@ -21,21 +22,36 @@
   "_retired_quantlib_floors": {
     "note": "the pre-2026-09-08 min_speedup_vs_quantlib floors, retired (informational only now)",
     "floors": {
-      "curve_build": 3.0,
-      "risk_full_jacobian": 20.0,
-      "portfolio_analytics": 10.0,
-      "warm_recalibration": 5.0,
-      "bond_sweep": 50.0,
-      "bond_book": 20.0
+      "sofr_23k_square_cold_calibrate": 3.0,
+      "sofr_23k_risk_ladder_23q_book9": 20.0,
+      "sofr_23k_book1000_ois_reprice": 10.0,
+      "sofr_23k_warm_recal_0p3bp": 5.0,
+      "ust_5000_clean_to_yield_sweep": 50.0,
+      "ust_5000_curve_book_dirty_price": 20.0
     }
   },
   "metric_descriptions": {
-    "curve_build": "Global-LM calibration of a square curve (23 instruments, 23 knots): ours (AAD Jacobian + templated kernel) vs QuantLib GlobalBootstrap (numerical Jacobian + object pricing)",
-    "risk_full_jacobian": "Full bucketed delta ladder (our AAD + implicit-function-theorem vs QuantLib bump-and-reprice)",
-    "portfolio_analytics": "Par rate + NPV + PV01 across a large swap portfolio (batched vs per-swap loop)",
-    "warm_recalibration": "Stage 2: re-calibrate after a small (in-envelope) market tick -- ours (cached-Jacobian, auto envelope detection) vs QuantLib IterativeBootstrap re-bootstrap",
-    "bond_sweep": "Bond universe price->YTM sweep, 5000 seasoned semiannual treasuries: ours (one batched Newton, Horner over the coupon polynomial) vs QuantLib BondFunctions::yield bond-for-bond. NB QuantLib's default path is inflated by a solver artifact (IrrFinder::derivative returns modified duration, not dP/dy, so NewtonSafe is handed a derivative ~P times too small and mostly bisects: 63 leg walks per bond, measured). The threshold is set below the ratio against the HARDER BM_BondSweep_QuantLibTuned baseline (same QuantLib pricing, correctly-scaled Newton, ~4 iterations), so this gate does not rest on that artifact.",
-    "bond_book": "Curve-space bond book, 5000 bonds: ours (DF = exp(-Wx), gathered flows, sparse per-bond reduction) vs a per-bond QuantLib Bond::dirtyPrice() off a DiscountingBondEngine on the SAME discount factors (handle relinked each iteration so QuantLib cannot serve cached NPVs). No solver is involved on either side."
+    "sofr_23k_square_cold_calibrate": "USD SOFR single curve, 23 knots (6 FOMC meeting dates flat-forward + 17 spline knots), SQUARE: 23 instruments (1M averaging + 3M compounded SOFR futures, OIS to 30y) at the knot pillars, eval 2026-07-08. Cold global LM from a flat 3.5% start. Reference: QuantLib GlobalBootstrap (same algorithm class), never IterativeBootstrap.",
+    "sofr_23k_risk_ladder_23q_book9": "Same SOFR 23-knot curve, already calibrated: full bucketed delta ladder over all 23 market quotes for a 9-swap OIS book. Ours = one AAD gradient + calibration Jacobian + one solve (rank-safe COD since 2026-09-07). Reference: QuantLib bump each quote / re-bootstrap (IterativeBootstrap, one-sided) / reprice.",
+    "sofr_23k_book1000_ois_reprice": "1000 OIS swaps off the SOFR 23-knot curve: par rate + NPV + PV01 as batched DF=exp(-Wx) algebra (W prebuilt). Reference: QuantLib per-swap NPV() loop, handle relinked each iteration so it must reprice.",
+    "sofr_23k_warm_recal_0p3bp": "SOFR 23-knot curve: warm cached-Jacobian re-solve after a \u00b10.3 bp move on EVERY quote (alternating sign). Reference: QuantLib IterativeBootstrap re-bootstrap after the IDENTICAL move (futures as -100\u00b7dq price points). Like-for-like since 2026-09-08.",
+    "sofr_23k_warm_recal_10bp": "As above at \u00b110 bp \u2014 outside the frozen-Jacobian envelope, so ours pays a Jacobian refresh. The honest big-move number.",
+    "ust_5000_clean_to_yield_sweep": "5000 seasoned semiannual US Treasuries, clean price \u2192 yield: ours = one batched Newton (Horner over the coupon polynomial) vs QuantLib BondFunctions::yield bond-for-bond (its default path is inflated by a solver artifact; the tuned baseline is also reported in the bench).",
+    "ust_5000_curve_book_dirty_price": "The same 5000 UST book dirty-priced off a calibrated curve: ours = DF=exp(-Wx) + gathered flows + sparse per-bond reduction vs a per-bond QuantLib DiscountingBondEngine on the SAME discount factors.",
+    "sofr_swaption_cube17_sabr_reprice_warm": "SOFR bundle (bench/fixtures/sofr_bundle.json, mid-2026, 1 curve, 9 instruments) already calibrated: reprice a 17-cell SABR swaption surface (a \u00b1150 bp 1Y\u00d75Y smile with 21 strikes + a 4\u00d74 ATM expiry\u00d7tenor grid) with NO recalibration \u2014 one curve sample + a Bachelier/SABR pass. The live vol-surface number.",
+    "sofr_swaption_cube17_cold_calibrate_price": "Same 17-cell cube, but construct the session from JSON, calibrate the SOFR bundle, then price \u2014 the one-shot verb cost (Excel / fresh run_json).",
+    "chain8x26_session_cold_build_calibrate": "DESK-SCALE SYNTHETIC SPREAD CHAIN: 8 curves (curve 0 outright + 7 spread curves each over the previous), 26 knots per curve (1 front + 25 back), annual par/basis pillars to 30y (annual coupons, ACT/ACT-style year fractions, no calendars) \u2014 208 knots, 208 rows. BundleSession built from JSON + cold joint LM.",
+    "chain8x26_session_rebind": "Same 8\u00d726 chain: BundleSession::rebind (new quotes, same structure) \u2014 TODAY a full LM re-solve (13.6 ms), not a warm path; E6.2 target \u2264 1 ms.",
+    "chain8x26_session_rebind_tension_reg": "Same rebind with the tension-energy regulariser on (the SDK default): cached RegularizedEngine path.",
+    "chain8x26_session_stream_tick": "Same 8\u00d726 chain: one BundleSession::stream_update tick (frozen-Jacobian Newton to convergence on the compiled W-cache engine) after a small quote move.",
+    "chain8x26_book200_price_portfolio_oneshot": "200-swap multi-curve book spread across all 8 forecast curves of the chain, ONE-SHOT price_portfolio (templated virtual-handle path, no bind) \u2014 NPV + AAD PV01.",
+    "chain8x26_book200_compiled_reprice": "The same 200-swap book on the CompiledMultiCurveBook twin (what reprice_bound uses per tick): one DF=exp(-W_all x) matvec + gathered reduce, flipping between two curve states. Reference row: the templated virtual-handle path.",
+    "chain8x26_kernel_cold_joint_lm": "Kernel-level (no session/JSON) cold joint LM on the 8\u00d726 chain via the HybridBundleResidual.",
+    "chain8x26_kernel_one_residual": "One residual evaluation of the 8\u00d726 chain on the compiled W-cache engine (208 rows).",
+    "chain8x26_kernel_one_jacobian": "One analytic support-blocked Jacobian of the 8\u00d726 chain (208\u00d7208) \u2014 the per-LM-iteration cost.",
+    "usd_eur_xccy_3c8k_hybrid_jacobian": "USD + EUR + EURUSD-xccy bundle, 3 curves \u00d7 8 knots, with genuinely NON-W-cacheable rows: FX forwards nested inside Portfolio instruments and MtM xccy basis swaps with a 2-day funding-leg payment lag (fx spot 1.10). HybridBundleResidual::jacobian (AAD block dominates).",
+    "usd_eur_xccy_3c8k_aad_block_jacobian": "The AadBlock forward-AAD sweep of the same bundle in isolation, pooled duals (touched width 24 \u2264 kPooledMaxW=48). Reference row: the force-heap Dual fallback (the before/after of the DualPooled retype).",
+    "usd_eur_xccy_3c8k_stream_tick": "One StreamingCalibrator tick on the same USD/EUR/xccy hybrid bundle."
   },
   "machines": {
     "52e94be82bc4": {
@@ -52,22 +68,22 @@
       "captured_utc": "2026-07-10T21:44:25Z",
       "notes": "Captured by tools/check_perf.py --update (3 reps, benchmark_min_time=0.5s), machine load ~3. The speedup RATIOS are load-robust (both sides timed together); the absolute ns are not authoritative until re-captured on a quiesced machine.",
       "metrics": {
-        "curve_build": {
+        "sofr_23k_square_cold_calibrate": {
           "quantlib_ns": 16045515,
           "ours_ns": 2443929,
           "speedup": 6.57
         },
-        "risk_full_jacobian": {
+        "sofr_23k_risk_ladder_23q_book9": {
           "quantlib_ns": 19139246,
           "ours_ns": 482227,
           "speedup": 39.69
         },
-        "portfolio_analytics": {
+        "sofr_23k_book1000_ois_reprice": {
           "quantlib_ns": 22347676,
           "ours_ns": 152779,
           "speedup": 146.27
         },
-        "warm_recalibration": {
+        "sofr_23k_warm_recal_0p3bp": {
           "quantlib_ns": 1108773,
           "ours_ns": 55384,
           "speedup": 20.02
@@ -88,32 +104,32 @@
       "captured_utc": "2026-07-29T21:31:25Z",
       "notes": "AVX2 re-baseline (2026-07-29). The `isa` field below reflects the CPU capability (AVX-512), but the engine now BUILDS with AVX2 (256-bit / 4-wide Eigen packets) by default: SWAPS_ENABLE_AVX512 is OFF (cmake/DetectISA.cmake), because heavy AVX-512 DOWNCLOCKS this Intel core and measured SLOWER for the engine's small matrices -- curve_build 813->584us (-28%), risk_full_jacobian 826->497us (-40%), portfolio/warm ~flat. -march=native tuning minus the 512-bit width. Captured by check_perf.py --update (3 reps) with some background load (a concurrent compile); the speedup RATIOS are load-robust, absolute ns best-effort. Turn SWAPS_ENABLE_AVX512=ON to re-test on a core where AVX-512 does not throttle (e.g. AMD Zen4).",
       "metrics": {
-        "curve_build": {
+        "sofr_23k_square_cold_calibrate": {
           "quantlib_ns": 16069341,
           "ours_ns": 583751,
           "speedup": 27.53
         },
-        "risk_full_jacobian": {
+        "sofr_23k_risk_ladder_23q_book9": {
           "quantlib_ns": 17356290,
           "ours_ns": 496789,
           "speedup": 34.94
         },
-        "portfolio_analytics": {
+        "sofr_23k_book1000_ois_reprice": {
           "quantlib_ns": 24367274,
           "ours_ns": 93468,
           "speedup": 260.7
         },
-        "warm_recalibration": {
+        "sofr_23k_warm_recal_0p3bp": {
           "quantlib_ns": 1078080,
           "ours_ns": 20842,
           "speedup": 51.73
         },
-        "vol_cube_warm": {
+        "sofr_swaption_cube17_sabr_reprice_warm": {
           "quantlib_ns": null,
           "ours_ns": 11336,
           "speedup": null
         },
-        "vol_cube_cold": {
+        "sofr_swaption_cube17_cold_calibrate_price": {
           "quantlib_ns": null,
           "ours_ns": 1932766,
           "speedup": null
@@ -134,62 +150,62 @@
       "captured_utc": "2026-09-04T19:22:38Z",
       "notes": "Captured by tools/check_perf.py --update.",
       "metrics": {
-        "curve_build": {
+        "sofr_23k_square_cold_calibrate": {
           "quantlib_ns": 15493925,
           "ours_ns": 524266,
           "speedup": 29.55
         },
-        "risk_full_jacobian": {
+        "sofr_23k_risk_ladder_23q_book9": {
           "quantlib_ns": 16756049,
           "ours_ns": 92903,
           "speedup": 180.36
         },
-        "portfolio_analytics": {
+        "sofr_23k_book1000_ois_reprice": {
           "quantlib_ns": 21639672,
           "ours_ns": 83965,
           "speedup": 257.72
         },
-        "warm_recalibration": {
+        "sofr_23k_warm_recal_0p3bp": {
           "quantlib_ns": 983834,
           "ours_ns": 18643,
           "speedup": 52.77
         },
-        "bond_sweep": {
+        "ust_5000_clean_to_yield_sweep": {
           "quantlib_ns": 2579783305,
           "ours_ns": 3832881,
           "speedup": 673.07
         },
-        "bond_book": {
+        "ust_5000_curve_book_dirty_price": {
           "quantlib_ns": 30424075,
           "ours_ns": 426896,
           "speedup": 71.27
         },
-        "vol_cube_warm": {
+        "sofr_swaption_cube17_sabr_reprice_warm": {
           "quantlib_ns": null,
           "ours_ns": 10488,
           "speedup": null
         },
-        "vol_cube_cold": {
+        "sofr_swaption_cube17_cold_calibrate_price": {
           "quantlib_ns": null,
           "ours_ns": 1154697,
           "speedup": null
         },
-        "session_rebind": {
+        "chain8x26_session_rebind": {
           "quantlib_ns": null,
           "ours_ns": 12707156,
           "speedup": null
         },
-        "stream_tick": {
+        "chain8x26_session_stream_tick": {
           "quantlib_ns": null,
           "ours_ns": 188498,
           "speedup": null
         },
-        "bundle_jacobian": {
+        "chain8x26_kernel_one_jacobian": {
           "quantlib_ns": null,
           "ours_ns": 450207,
           "speedup": null
         },
-        "price_portfolio": {
+        "chain8x26_book200_price_portfolio_oneshot": {
           "quantlib_ns": null,
           "ours_ns": 14690374,
           "speedup": null
@@ -215,127 +231,127 @@
       "min_time_s": 0.5,
       "notes": "Captured by tools/check_perf.py --update (min-of-reps, quiesced).",
       "metrics": {
-        "curve_build": {
+        "sofr_23k_square_cold_calibrate": {
           "ours_ns": 504267,
           "reference_ns": 15408873,
           "reference_bm": "BM_CurveBuild_QuantLib",
           "speedup": 30.56
         },
-        "risk_full_jacobian": {
+        "sofr_23k_risk_ladder_23q_book9": {
           "ours_ns": 109048,
           "reference_ns": 16175727,
           "reference_bm": "BM_Risk_QuantLib_Bump",
           "speedup": 148.34
         },
-        "portfolio_analytics": {
+        "sofr_23k_book1000_ois_reprice": {
           "ours_ns": 80506,
           "reference_ns": 21268661,
           "reference_bm": "BM_Portfolio_QuantLib",
           "speedup": 264.19
         },
-        "warm_recalibration": {
+        "sofr_23k_warm_recal_0p3bp": {
           "ours_ns": 17630,
           "reference_ns": 883549,
           "reference_bm": "BM_WarmRecal_QuantLib",
           "speedup": 50.12
         },
-        "warm_recal_10bp": {
+        "sofr_23k_warm_recal_10bp": {
           "ours_ns": 46100,
           "reference_ns": 1017430,
           "reference_bm": "BM_WarmRecal_QuantLib_10bp",
           "speedup": 22.07
         },
-        "bond_sweep": {
+        "ust_5000_clean_to_yield_sweep": {
           "ours_ns": 3461221,
           "reference_ns": 2573313838,
           "reference_bm": "BM_BondSweep_QuantLib",
           "speedup": 743.47
         },
-        "bond_book": {
+        "ust_5000_curve_book_dirty_price": {
           "ours_ns": 405586,
           "reference_ns": 27578377,
           "reference_bm": "BM_BondBook_QuantLib",
           "speedup": 68.0
         },
-        "vol_cube_warm": {
+        "sofr_swaption_cube17_sabr_reprice_warm": {
           "ours_ns": 10167,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "vol_cube_cold": {
+        "sofr_swaption_cube17_cold_calibrate_price": {
           "ours_ns": 1190119,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "session_cold": {
+        "chain8x26_session_cold_build_calibrate": {
           "ours_ns": 24563764,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "session_rebind": {
+        "chain8x26_session_rebind": {
           "ours_ns": 13580007,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "session_rebind_tension": {
+        "chain8x26_session_rebind_tension_reg": {
           "ours_ns": 21351214,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "stream_tick": {
+        "chain8x26_session_stream_tick": {
           "ours_ns": 176890,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "price_portfolio": {
+        "chain8x26_book200_price_portfolio_oneshot": {
           "ours_ns": 14339421,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "bundle_cold_joint": {
+        "chain8x26_kernel_cold_joint_lm": {
           "ours_ns": 22128444,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "bundle_residual": {
+        "chain8x26_kernel_one_residual": {
           "ours_ns": 31706,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "bundle_jacobian": {
+        "chain8x26_kernel_one_jacobian": {
           "ours_ns": 433487,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "book_compiled": {
+        "chain8x26_book200_compiled_reprice": {
           "ours_ns": 22988,
           "reference_ns": 701565,
           "reference_bm": "BM_MultiCurveBook_Templated",
           "speedup": 30.52
         },
-        "fx_hybrid_jacobian": {
+        "usd_eur_xccy_3c8k_hybrid_jacobian": {
           "ours_ns": 32547,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
-        "fx_aad_block_jacobian": {
+        "usd_eur_xccy_3c8k_aad_block_jacobian": {
           "ours_ns": 29360,
           "reference_ns": 160816,
           "reference_bm": "BM_FxStream_AadBlockJacobianHeap",
           "speedup": 5.48
         },
-        "fx_stream_tick": {
+        "usd_eur_xccy_3c8k_stream_tick": {
           "ours_ns": 87395,
           "reference_ns": null,
           "reference_bm": null,

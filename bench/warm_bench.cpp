@@ -13,7 +13,7 @@
 // time and ours cannot short-circuit on an unchanged input). Futures quotes are PRICE points
 // (100·(1−rate)), so a +dq rate move is a −100·dq price move.
 //
-// check_perf.py gates warm_recalibration / warm_recal_10bp on OURS (self-baseline + target); the QuantLib
+// check_perf.py gates sofr_23k_warm_recal_0p3bp / sofr_23k_warm_recal_10bp on OURS (self-baseline + target); the QuantLib
 // numbers are the informational reference. Run on a quiesced machine.
 
 #include <benchmark/benchmark.h>

@@ -64,7 +64,7 @@ if(TARGET quantlib_oracle)
   target_include_directories(xccy_bundle_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 
   # Swaption vol-surface reprice: ours (batched SoA) vs QuantLib's per-cell analytic path. QuantLib-paired
-  # speedup metric (vol_cube_warm); links swaps_api for BundleSession + the SOFR bundle fixture.
+  # reference bench (NOT the gated sofr_swaption_cube17_* metrics, which are ours-only in vol_cube_bench); links swaps_api for BundleSession + the SOFR bundle fixture.
   add_executable(vol_cube_ql_bench vol_cube_ql_bench.cpp)
   target_link_libraries(vol_cube_ql_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark_main)
   target_include_directories(vol_cube_ql_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)

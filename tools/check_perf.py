@@ -38,33 +38,33 @@ ROOT = os.path.dirname(HERE)
 # The reference BM (QuantLib etc.) is informational only. Every metric is gated on self-baseline + target.
 METRICS = {
     # --- calibration kernels (single curve, 23x23; QuantLib GlobalBootstrap is the reference) ---
-    "curve_build":          ("curve_build_bench",   "BM_CurveBuild_Ours",              "BM_CurveBuild_QuantLib"),
-    "risk_full_jacobian":   ("risk_bench",          "BM_Risk_Ours_Analytic",           "BM_Risk_QuantLib_Bump"),
-    "portfolio_analytics":  ("portfolio_bench",     "BM_Portfolio_Ours",               "BM_Portfolio_QuantLib"),
-    "warm_recalibration":   ("warm_bench",          "BM_WarmRecal_Ours",               "BM_WarmRecal_QuantLib"),
-    "warm_recal_10bp":      ("warm_bench",          "BM_WarmRecal_Ours_10bp",          "BM_WarmRecal_QuantLib_10bp"),
+    "sofr_23k_square_cold_calibrate": ("curve_build_bench",   "BM_CurveBuild_Ours",              "BM_CurveBuild_QuantLib"),
+    "sofr_23k_risk_ladder_23q_book9": ("risk_bench",          "BM_Risk_Ours_Analytic",           "BM_Risk_QuantLib_Bump"),
+    "sofr_23k_book1000_ois_reprice": ("portfolio_bench",     "BM_Portfolio_Ours",               "BM_Portfolio_QuantLib"),
+    "sofr_23k_warm_recal_0p3bp": ("warm_bench",          "BM_WarmRecal_Ours",               "BM_WarmRecal_QuantLib"),
+    "sofr_23k_warm_recal_10bp": ("warm_bench",          "BM_WarmRecal_Ours_10bp",          "BM_WarmRecal_QuantLib_10bp"),
     # --- bonds ---
-    "bond_sweep":           ("bond_sweep_bench",    "BM_BondSweep_Ours",               "BM_BondSweep_QuantLib"),
-    "bond_book":            ("bond_sweep_bench",    "BM_BondBook_Ours",                "BM_BondBook_QuantLib"),
+    "ust_5000_clean_to_yield_sweep": ("bond_sweep_bench",    "BM_BondSweep_Ours",               "BM_BondSweep_QuantLib"),
+    "ust_5000_curve_book_dirty_price": ("bond_sweep_bench",    "BM_BondBook_Ours",                "BM_BondBook_QuantLib"),
     # --- options ---
-    "vol_cube_warm":        ("vol_cube_bench",      "BM_VolCube_Warm",                 None),
-    "vol_cube_cold":        ("vol_cube_bench",      "BM_VolCube_Cold",                 None),
+    "sofr_swaption_cube17_sabr_reprice_warm": ("vol_cube_bench",      "BM_VolCube_Warm",                 None),
+    "sofr_swaption_cube17_cold_calibrate_price": ("vol_cube_bench",      "BM_VolCube_Cold",                 None),
     # --- the SHIPPED session paths at desk scale (8-curve spread chain, 26 knots/curve) ---
-    "session_cold":         ("session_warm_bench",  "BM_Session_ColdBuildCalibrate",   None),
-    "session_rebind":       ("session_warm_bench",  "BM_Session_RebindWarm",           None),
-    "session_rebind_tension": ("session_warm_bench", "BM_Session_RebindTensionWarm",   None),
-    "stream_tick":          ("session_warm_bench",  "BM_Session_StreamTick",           None),
-    "price_portfolio":      ("session_warm_bench",  "BM_Session_PricePortfolio",       None),
+    "chain8x26_session_cold_build_calibrate": ("session_warm_bench",  "BM_Session_ColdBuildCalibrate",   None),
+    "chain8x26_session_rebind": ("session_warm_bench",  "BM_Session_RebindWarm",           None),
+    "chain8x26_session_rebind_tension_reg": ("session_warm_bench", "BM_Session_RebindTensionWarm",   None),
+    "chain8x26_session_stream_tick": ("session_warm_bench",  "BM_Session_StreamTick",           None),
+    "chain8x26_book200_price_portfolio_oneshot": ("session_warm_bench",  "BM_Session_PricePortfolio",       None),
     # --- bundle kernels at desk scale ---
-    "bundle_cold_joint":    ("bundle_scale_bench",  "BM_BundleScale_ColdJoint",        None),
-    "bundle_residual":      ("bundle_scale_bench",  "BM_BundleScale_OneResidual",      None),
-    "bundle_jacobian":      ("bundle_scale_bench",  "BM_BundleScale_OneJacobian",      None),
+    "chain8x26_kernel_cold_joint_lm": ("bundle_scale_bench",  "BM_BundleScale_ColdJoint",        None),
+    "chain8x26_kernel_one_residual": ("bundle_scale_bench",  "BM_BundleScale_OneResidual",      None),
+    "chain8x26_kernel_one_jacobian": ("bundle_scale_bench",  "BM_BundleScale_OneJacobian",      None),
     # --- compiled book (the reprice_bound kernel) ---
-    "book_compiled":        ("compiled_multi_bench", "BM_MultiCurveBook_Compiled",     "BM_MultiCurveBook_Templated"),
+    "chain8x26_book200_compiled_reprice": ("compiled_multi_bench", "BM_MultiCurveBook_Compiled",     "BM_MultiCurveBook_Templated"),
     # --- FX/MtM hybrid tier ---
-    "fx_hybrid_jacobian":   ("fx_stream_bench",     "BM_FxStream_HybridJacobian",      None),
-    "fx_aad_block_jacobian": ("fx_stream_bench",    "BM_FxStream_AadBlockJacobian",    "BM_FxStream_AadBlockJacobianHeap"),
-    "fx_stream_tick":       ("fx_stream_bench",     "BM_FxStream_StreamTick",          None),
+    "usd_eur_xccy_3c8k_hybrid_jacobian": ("fx_stream_bench",     "BM_FxStream_HybridJacobian",      None),
+    "usd_eur_xccy_3c8k_aad_block_jacobian": ("fx_stream_bench",    "BM_FxStream_AadBlockJacobian",    "BM_FxStream_AadBlockJacobianHeap"),
+    "usd_eur_xccy_3c8k_stream_tick": ("fx_stream_bench",     "BM_FxStream_StreamTick",          None),
 }
 UNIT_NS = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
 
@@ -166,6 +166,7 @@ def main():
     ap.add_argument("--force-load", action="store_true", help="run under load anyway (disables --update)")
     ap.add_argument("--only", nargs="*", help="metric keys to run (default: all)")
     ap.add_argument("--record", help="write the full measurement + verdicts to this JSON file")
+    ap.add_argument("--describe", action="store_true", help="print what each metric builds/measures (from baselines.json) and exit")
     args = ap.parse_args()
 
     with open(args.baselines) as f:
@@ -174,6 +175,11 @@ def main():
     if os.path.exists(args.targets):
         with open(args.targets) as f:
             targets = json.load(f).get("targets", {})
+
+    if args.describe:
+        for mk in METRICS:
+            print(f"{mk}\n    {base.get('metric_descriptions', {}).get(mk, '(no description)')}\n")
+        return 0
 
     fp = fingerprint()
     key = fp["key"]
@@ -224,7 +230,7 @@ def main():
             cur = targets.get(mk, {}).get("target_ns")
             prop = int(mv["ours_ns"] * args.headroom)
             note = "" if cur is None else (f"  current {cur:,}" + ("  (RATCHET DOWN)" if prop < cur else ""))
-            print(f"    {mk:<24}{prop:>14,}{note}")
+            print(f"    {mk:<44}{prop:>14,}{note}")
 
     # ---- the gate ----
     if key not in base["machines"]:
@@ -235,7 +241,7 @@ def main():
     max_regr = float(base.get("policy", {}).get("max_self_regression", 1.25))
 
     print()
-    print(f"  {'metric':<24}{'ours':>12}{'baseline':>12}{'regr':>7}{'target':>12}  result")
+    print(f"  {'metric':<44}{'ours':>12}{'baseline':>12}{'regr':>7}{'target':>12}  result")
     ok = True
     verdicts = {}
     for mk, mv in meas.items():
@@ -255,7 +261,7 @@ def main():
         row_ok = not any(f.startswith(("REGRESSED", "ABOVE")) for f in flags)
         ok = ok and row_ok
         verdicts[mk] = {"ok": row_ok, "flags": flags, "regr": regr, "target_ns": tgt}
-        print(f"  {mk:<24}{fmt_ns(ours):>12}{fmt_ns(b):>12}"
+        print(f"  {mk:<44}{fmt_ns(ours):>12}{fmt_ns(b):>12}"
               f"{(f'{regr:5.2f}x' if regr else '    — '):>7}{fmt_ns(tgt):>12}  "
               f"{'PASS' if row_ok else 'FAIL'}{(' ' + ','.join(flags)) if flags else ''}")
 
@@ -263,9 +269,9 @@ def main():
     refs = [(mk, mv) for mk, mv in meas.items() if mv["reference_ns"] is not None]
     if refs:
         print("\n  reference (informational, NOT gated):")
-        print(f"  {'metric':<24}{'reference':>12}{'ours':>12}{'speedup':>9}  reference BM")
+        print(f"  {'metric':<44}{'reference':>12}{'ours':>12}{'speedup':>9}  reference BM")
         for mk, mv in refs:
-            print(f"  {mk:<24}{fmt_ns(mv['reference_ns']):>12}{fmt_ns(mv['ours_ns']):>12}"
+            print(f"  {mk:<44}{fmt_ns(mv['reference_ns']):>12}{fmt_ns(mv['ours_ns']):>12}"
                   f"{mv['speedup']:>8.2f}x  {mv['reference_bm']}")
 
     if args.record:
