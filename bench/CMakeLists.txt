@@ -128,3 +128,9 @@ add_custom_target(bench
   DEPENDS swaps_bench
   COMMENT "Running performance benchmarks -> ${CMAKE_BINARY_DIR}/bench.json"
 )
+
+# E3.1 hot-path census: per production path, allocations/bytes/frees per call via libmalloc's logger hook
+# (every allocation in the process, not Eigen-only) + time. Plain executable (no google-benchmark), ours-only.
+add_executable(hotpath_census hotpath_census.cpp)
+target_link_libraries(hotpath_census PRIVATE swaps swaps_api)
+target_compile_definitions(hotpath_census PRIVATE SOFR_BUNDLE_JSON="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sofr_bundle.json")
