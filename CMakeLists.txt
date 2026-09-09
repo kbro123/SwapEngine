@@ -124,6 +124,12 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/api/CMakeLists.txt AND EXISTS ${SWAPS_THIR
   add_subdirectory(api)
 endif()
 
+# QuantLib calendar dump (tools/calendars_from_ql.py regenerates the tabulated calendars from it).
+if(TARGET quantlib_oracle)
+  add_executable(ql_calendars_dump tools/ql_calendars_dump.cpp)
+  target_link_libraries(ql_calendars_dump PRIVATE quantlib_oracle)
+endif()
+
 if(SWAPS_BUILD_TESTS AND GTest_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt)
   add_subdirectory(tests)
 endif()

@@ -85,7 +85,7 @@ void add_calendar(cvd::Registry& R, std::string_view id, const json::object& c) 
     for (const auto& w : c.at("weekend").as_array()) mask |= 1 << static_cast<int>(w.to_number<double>());
   else
     throw std::invalid_argument("conventions: calendar '" + std::string(id) + "' needs 'weekend' (e.g. [5,6])");
-  row.weekend_mask = mask;
+  row.weekend_mask = mask; row.sandwich = jb(c, "sandwich");
   std::vector<cvd::HolidayRule> rules;
   if (c.contains("holidays") && c.at("holidays").is_array())
     for (const auto& hv : c.at("holidays").as_array()) {
@@ -93,7 +93,7 @@ void add_calendar(cvd::Registry& R, std::string_view id, const json::object& c) 
       cvd::HolidayRule r{};
       r.kind = js(h, "rule"); r.month = ji(h, "month", 0); r.day = ji(h, "day", 0); r.weekday = ji(h, "weekday", -1);
       r.n = ji(h, "n", 0); r.days = ji(h, "days", 0); r.from_year = ji(h, "from_year", 0); r.to_year = ji(h, "to_year", 0);
-      r.observance = js(h, "observance");
+      r.observance = js(h, "observance"); r.except_first_friday = jb(h, "except_first_friday");
       if (r.kind.empty()) throw std::invalid_argument("conventions: calendar '" + std::string(id) + "' holiday needs 'rule'");
       rules.push_back(r);
     }

@@ -117,6 +117,7 @@ if(TARGET quantlib_oracle)
     conventions_test.cpp
     tension_oracle_test.cpp
     turns_oracle_test.cpp
+    calendar_ql_oracle_test.cpp
   )
   target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
   target_include_directories(swaps_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

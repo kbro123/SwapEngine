@@ -112,6 +112,7 @@ def main():
         "  std::string_view kind;",
         "  int month, day, weekday, n, days, from_year, to_year;",
         "  std::string_view observance;",
+        "  bool except_first_friday;  // SIFMA Good Friday: no closure when it is the first Friday of the month",
         "};",
         "// A CALENDAR: either rule-based (rule_count > 0) or a JOIN of other calendars (closed if any leg is",
         "// closed). `weekend_mask` bit w (Mon=0..Sun=6) marks a weekend day. Rules/joins are slices of the flat",
@@ -120,6 +121,7 @@ def main():
         "  std::string_view id, name, observance;",
         "  int weekend_mask;",
         "  std::size_t rule_begin, rule_count, join_begin, join_count;",
+        "  bool sandwich;  // Japan: a weekday between two holidays is a holiday",
         "};",
         "",
         f"inline constexpr std::array<ProductConv, {len(products)}> kProducts = {{{{",
@@ -227,6 +229,7 @@ def main():
                 str(r.get("n", 0)), str(r.get("days", 0)), str(r.get("from_year", 0)),
                 str(r.get("to_year", 0)),
                 sv(r.get("observance")),
+                "true" if r.get("except_first_friday") else "false",
             ]) + "},")
         for jleg in c.get("join", []):
             joins.append(f"  {sv(jleg)},")
@@ -234,6 +237,7 @@ def main():
         cal_rows.append("  {" + ", ".join([
             sv(cid), sv(c.get("name")), sv(c.get("observance")), str(mask),
             str(rb), str(len(rules) - rb), str(jb), str(len(joins) - jb),
+            "true" if c.get("sandwich") else "false",
         ]) + "},")
     lines.append(f"inline constexpr std::array<HolidayRule, {len(rules)}> kHolidayRules = {{{{")
     lines += rules + ["}};", ""]

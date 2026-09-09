@@ -150,7 +150,7 @@ TEST(ConventionsProperty, EveryBondConventionIsStructurallyValid) {
 // ---------------------------------------------------------------------------------------------------
 // CALENDARS: the weekend mask of every calendar is well-formed (1 or 2 weekend days, none past Sunday),
 // and is_business_day is STABLE across a multi-year day-by-day sweep — no exceptions, deterministic, and
-// a masked weekend day is NEVER a business day. This is the property behind every schedule the DB drives.
+// a masked weekend day is a business day ONLY when a working_day rule names it (China). This is the property behind every schedule the DB drives.
 // ---------------------------------------------------------------------------------------------------
 TEST(ConventionsProperty, WeekendMasksWellFormedAndBusinessDayStableAcrossYears) {
   ASSERT_GT(db::kCalendars.size(), 0u);
@@ -170,9 +170,19 @@ TEST(ConventionsProperty, WeekendMasksWellFormedAndBusinessDayStableAcrossYears)
       const bool biz = bd::is_business_day(id, d);
       // deterministic: a second identical query agrees.
       EXPECT_EQ(biz, bd::is_business_day(id, d)) << id << " non-deterministic on serial " << d.serial();
-      // a masked weekend weekday is never a business day.
-      if ((cal.weekend_mask >> d.weekday()) & 1)
-        EXPECT_FALSE(biz) << id << " reports weekend weekday " << d.weekday() << " as a business day";
+      // a masked weekend weekday is never a business day — UNLESS a "working_day" rule names that exact date
+      // (China's adjusted working weekends, verified day-by-day against QuantLib in calendar_ql_oracle_test).
+      if ((cal.weekend_mask >> d.weekday()) & 1) {
+        bool working = false;
+        for (std::size_t i = cal.rule_begin; i < cal.rule_begin + cal.rule_count; ++i) {
+          const auto& r = db::kHolidayRules[i];
+          if (r.kind == "working_day" && r.month == int(d.month()) && r.day == int(d.day()) &&
+              (r.from_year == 0 || d.year() >= r.from_year) && (r.to_year == 0 || d.year() <= r.to_year))
+            working = true;
+        }
+        EXPECT_EQ(biz, working) << id << " reports weekend weekday " << d.weekday() << " (" << bd::iso(d)
+                                << ") as " << (biz ? "a business day with no working_day rule" : "closed despite a working_day rule");
+      }
     }
   }
 }

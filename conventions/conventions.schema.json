@@ -76,6 +76,8 @@
               "none",
               "sat_to_fri_sun_to_mon",
               "sun_to_mon",
+              "weekend_to_next_weekday",
+              "sun_to_next_weekday",
               ""
             ]
           },
@@ -95,7 +97,11 @@
                     "fixed",
                     "nth_weekday",
                     "last_weekday",
-                    "easter_offset"
+                    "easter_offset",
+                    "weekday_before",
+                    "vernal_equinox",
+                    "autumnal_equinox",
+                    "working_day"
                   ]
                 },
                 "month": {
@@ -123,14 +129,28 @@
                   "enum": [
                     "none",
                     "sat_to_fri_sun_to_mon",
-                    "sun_to_mon"
+                    "sun_to_mon",
+                    "weekend_to_next_weekday",
+                    "sun_to_next_weekday"
                   ]
                 },
                 "note": {
                   "type": "string"
+                },
+                "except_first_friday": {
+                  "type": "boolean"
+                },
+                "source": {
+                  "type": "string"
                 }
               }
             }
+          },
+          "sandwich": {
+            "type": "boolean"
+          },
+          "oracle_coverage_year": {
+            "type": "integer"
           }
         },
         "allOf": [
