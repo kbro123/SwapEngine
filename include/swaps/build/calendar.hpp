@@ -19,6 +19,10 @@
 #define SWAPS_BUILD_CALENDAR_HPP
 
 #include <algorithm>
+#include <array>
+#include <map>
+#include <mutex>
+#include <shared_mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -164,6 +168,40 @@ inline bool is_working_weekend_day(const conventions::CalendarView& view, const 
   return false;
 }
 
+namespace calendar_detail {
+// The closed weekdays of ONE (calendar, year) as a bitmap over the year's days, built once from
+// holidays_serial(cal_id, year) — exactly the set is_business_day consulted per call before 2026-09-09, when
+// every business-day query re-evaluated the whole year's rules (schedule building runs thousands of queries;
+// the swaption-cube cold build doubled). Keyed by the registry generation, so a runtime `conventions` add or
+// clear_overlay invalidates it. Weekends, working weekend days and joins are handled by the caller.
+struct YearClosed {
+  long jan1 = 0;
+  std::array<unsigned char, 366> closed{};
+};
+inline const YearClosed& year_closed(const std::string& cal_id, int year) {
+  static std::shared_mutex mu;
+  static unsigned long gen = 0;
+  static std::map<std::pair<std::string, int>, YearClosed> cache;
+  const unsigned long g = conventions::Registry::instance().generation();
+  const auto key = std::make_pair(cal_id, year);
+  {
+    std::shared_lock lk(mu);
+    if (gen == g)
+      if (auto it = cache.find(key); it != cache.end()) return it->second;
+  }
+  std::unique_lock lk(mu);
+  if (gen != g) { cache.clear(); gen = g; }
+  if (auto it = cache.find(key); it != cache.end()) return it->second;
+  YearClosed y;
+  y.jan1 = Date::ymd(year, 1, 1).serial();
+  for (long sv : holidays_serial(cal_id, year)) {
+    const long k = sv - y.jan1;
+    if (k >= 0 && k < 366) y.closed[static_cast<std::size_t>(k)] = 1;  // the year's own days only (as before)
+  }
+  return cache.emplace(key, y).first->second;
+}
+}  // namespace calendar_detail
+
 inline bool is_business_day(const std::string& cal_id, const Date& d) {
   const auto view = calendar_detail::db_row(cal_id);
   const auto& cal = view.row;
@@ -173,7 +211,8 @@ inline bool is_business_day(const std::string& cal_id, const Date& d) {
       if (!is_business_day(std::string(view.joins[j]), d)) return false;
     return true;
   }
-  return holidays_serial(cal_id, d.year()).count(d.serial()) == 0;
+  const auto& y = calendar_detail::year_closed(cal_id, d.year());
+  return !y.closed[static_cast<std::size_t>(d.serial() - y.jan1)];
 }
 
 inline Date roll(const std::string& cal_id, Date d, int step) {

@@ -129,6 +129,7 @@ class Registry {
     o.fixed = own(p.fixed); o.floating = own(p.floating); o.other = own(p.other);
     products_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_index(const IndexConv& i) {
     std::unique_lock lk(mu_);
@@ -137,6 +138,7 @@ class Registry {
     o.calendar = intern(i.calendar); o.par_product = intern(i.par_product); o.tenor = intern(i.tenor);
     indices_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_bond(const BondConv& b) {
     std::unique_lock lk(mu_);
@@ -145,6 +147,7 @@ class Registry {
     o.frequency = intern(b.frequency); o.stub_discount = intern(b.stub_discount);
     bonds_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_currency(const CurrencyConv& c) {
     std::unique_lock lk(mu_);
@@ -154,6 +157,7 @@ class Registry {
     o.repo_day_count = intern(c.repo_day_count);
     currencies_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_credit_product(const CreditConv& c) {
     std::unique_lock lk(mu_);
@@ -162,6 +166,7 @@ class Registry {
     o.frequency = intern(c.frequency); o.roll = intern(c.roll);
     credit_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_bond_future(const BondFutureConv& f) {
     std::unique_lock lk(mu_);
@@ -170,6 +175,7 @@ class Registry {
     o.deliverable_convention = intern(f.deliverable_convention); o.repo_day_count = intern(f.repo_day_count); o.delivery = intern(f.delivery);
     bond_futures_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_fx_pair(const FxPairConv& f) {
     std::unique_lock lk(mu_);
@@ -179,6 +185,7 @@ class Registry {
     o.xccy_product = intern(f.xccy_product); o.forward_product = intern(f.forward_product);
     fx_pairs_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_fixing_source(const FixingSourceConv& s) {
     std::unique_lock lk(mu_);
@@ -186,6 +193,7 @@ class Registry {
     o.id = intern(s.id); o.provider = intern(s.provider); o.series = intern(s.series); o.start = intern(s.start); o.granularity = intern(s.granularity);
     fixing_sources_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_inflation_index(const InflationIndexConv& x) {
     std::unique_lock lk(mu_);
@@ -194,6 +202,7 @@ class Registry {
     o.interpolation = intern(x.interpolation); o.frequency = intern(x.frequency);
     inflation_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_cb_schedule(const CbScheduleConv& c, std::vector<long> meetings) {
     std::unique_lock lk(mu_);
@@ -202,6 +211,7 @@ class Registry {
     o.begin = 0; o.count = meetings.size();
     cb_schedules_.push_back(o); cb_meetings_.push_back(std::move(meetings));
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   void add_calendar(const CalendarConv& c, const std::vector<HolidayRule>& rules,
                     const std::vector<std::string_view>& joins) {
@@ -217,6 +227,7 @@ class Registry {
     cal_rules_.push_back(std::move(rs));
     cal_joins_.push_back(std::move(js));
     overlay_n_.fetch_add(1, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
   // Drop every runtime entry (tests; a session reset). The baked defaults are untouched.
   void clear_overlay() {
@@ -226,6 +237,7 @@ class Registry {
     credit_.clear(); bond_futures_.clear(); fx_pairs_.clear(); cb_schedules_.clear(); cb_meetings_.clear();
     fixing_sources_.clear(); inflation_.clear();
     overlay_n_.store(0, std::memory_order_release);
+    gen_.fetch_add(1, std::memory_order_release);
   }
 
   // ---- listings (the `list_conventions` verb): baked ids and overlay ids per family ----------------------
@@ -242,6 +254,9 @@ class Registry {
   Listing list_fixing_sources() const { Listing L; for (const auto& s : kFixingSources) L.baked.emplace_back(s.id); { std::shared_lock lk(mu_); for (const auto& s : fixing_sources_) L.overlay.emplace_back(s.id); } return L; }
   Listing list_inflation_indices() const { Listing L; for (const auto& x : kInflationIndices) L.baked.emplace_back(x.id); { std::shared_lock lk(mu_); for (const auto& x : inflation_) L.overlay.emplace_back(x.id); } return L; }
   int overlay_size() const { return overlay_n_.load(std::memory_order_acquire); }
+  // Monotone count of registry mutations (add_* and clear_overlay): the key that invalidates derived caches
+  // (build/calendar.hpp's per-year holiday bitmaps).
+  unsigned long generation() const { return gen_.load(std::memory_order_acquire); }
 
  private:
   Registry() = default;
@@ -280,6 +295,7 @@ class Registry {
   std::vector<FixingSourceConv> fixing_sources_;
   std::vector<InflationIndexConv> inflation_;
   std::atomic<int> overlay_n_{0};
+  std::atomic<unsigned long> gen_{0};
 };
 
 // ---- the lookup API every consumer uses -------------------------------------------------------------

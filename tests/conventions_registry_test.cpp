@@ -202,3 +202,17 @@ TEST_F(RegistryFixture, FixingSourcesAndInflationIndicesAreDataAndRuntimeExtensi
   EXPECT_EQ(listed.at("inflation").as_object().at("overlay").as_array().size(), 1u);
   EXPECT_GE(listed.at("fixing_sources").as_object().at("baked").as_array().size(), 5u);
 }
+
+TEST_F(RegistryFixture, CalendarOverrideInvalidatesTheHolidayCacheImmediately) {
+  // is_business_day caches each (calendar, year) closed-day bitmap keyed by the registry generation; a runtime
+  // override of an EXISTING calendar must be seen by the very next query, and clear_overlay must restore it.
+  const b::Date d = b::Date::from_iso("2026-07-09");  // a Thursday, open on TARGET
+  EXPECT_TRUE(b::is_business_day("EUR", d));
+  api::conventions_json(R"({"conventions": {"calendars": {"EUR": {"name": "override", "weekend": [5, 6], "observance": "none",
+    "holidays": [{"rule": "fixed", "month": 7, "day": 9}]}}}})");
+  EXPECT_FALSE(b::is_business_day("EUR", d));                              // the override, not the cached bitmap
+  EXPECT_TRUE(b::is_business_day("EUR", b::Date::from_iso("2026-12-25")));  // the override REPLACES the row
+  api::conventions_json(R"({"conventions": {"clear_overlay": true}})");
+  EXPECT_TRUE(b::is_business_day("EUR", d));
+  EXPECT_FALSE(b::is_business_day("EUR", b::Date::from_iso("2026-12-25")));
+}
