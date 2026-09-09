@@ -37,6 +37,7 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/pnl_explain_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_compiled_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/hotpath_shapes_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compiled_mtm_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/conventions_registry_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost ${CMAKE_SOURCE_DIR}/bench/fixtures)

@@ -205,6 +205,12 @@ struct BundleFloatBatch {
   Eigen::SparseMatrix<double> R_sub;    // n_coupons x n_subs, values = w_k
   // Per coupon.
   Eigen::VectorXi pay, inst;                       // inst = owning instrument; pay < 0 for futures
+  // MtM (FX-reset-notional) coupons (2026-09-09): value = R·(A + DF[dE] − DF[dS]) with R = DF[rN]·INV[rD] the
+  // notional reset ratio at the reset time (numerator / denominator discount curves) and A the ordinary coupon
+  // DF[pay]·(num + konst)·k; dS/dE are the accrual start/end on the DISCOUNT curve (the notional exchanges).
+  // -1 on every entry for a constant-notional coupon. The exact templated pricing::xccy_mtm_leg_pv form — a
+  // product of registered DFs, hence W-cacheable with hand-written partials (no "negligible term" shortcut).
+  Eigen::VectorXi rN, rD, dS, dE;
   Eigen::VectorXd konst, k, realized, inv_tau, convexity;
   Eigen::SparseMatrix<double> R_cpn;               // n_inst x n_coupons, 0/1
   int n_inst = 0;
@@ -272,6 +278,7 @@ struct BundleFloatBatch {
 
   int n_coupons() const { return n_cpn_; }
   int size() const { return n_inst; }
+  bool has_mtm() const { return has_mtm_; }
   static constexpr int reduce_layout() { return SWAPS_REDUCE_LAYOUT; }
 
   // --- generic registration -------------------------------------------------------------------
@@ -285,6 +292,26 @@ struct BundleFloatBatch {
       // unchanged because scale rides inside k as a constant.
       push_coupon(cs.reg(dc, c.pay), c.obs.realized + c.spread * c.obs.tau_index,
                   c.tau_pay / c.obs.tau_index * c.scale, c.obs.realized, 1.0 / c.obs.tau_index, 0.0);
+    }
+    ++n_inst;
+  }
+  // One instrument = one MtM (FX-resettable-notional) funding leg: coupons forecast `fc`, discount `dc`, notional
+  // fx·DF[num](reset)/DF[den](reset) with reset = coupon.reset_time (>= 0) else the period start. fx_spot is NOT
+  // folded in (the XccyMtmBasis quote divides it out: mtm/(fx·ann)); the caller scales if it wants the raw PV.
+  void add_mtm(CompiledCurveSet& cs, int fc, int dc, int num, int den, const std::vector<FloatCoupon>& leg) {
+    for (const auto& c : leg) {
+      if (c.obs.sub_start.empty() || c.obs.sub_end.empty())
+        throw std::runtime_error(
+            "CompiledBook: a fully-fixed MtM coupon has no observation window to place its notional exchanges on "
+            "(accrual dates are not carried on FloatCoupon yet)");  // identical to pricing::xccy_mtm_leg_pv
+      const double s = c.obs.sub_start.front(), e = c.obs.sub_end.back();
+      const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;
+      push_obs(cs, fc, c.obs);
+      push_coupon(cs.reg(dc, c.pay), c.obs.realized + c.spread * c.obs.tau_index,
+                  c.tau_pay / c.obs.tau_index * c.scale, c.obs.realized, 1.0 / c.obs.tau_index, 0.0);
+      rn_.back() = cs.reg(num, reset); rd_.back() = cs.reg(den, reset);
+      ds_.back() = cs.reg(dc, s);      de_.back() = cs.reg(dc, e);
+      has_mtm_ = true;
     }
     ++n_inst;
   }
@@ -308,6 +335,7 @@ struct BundleFloatBatch {
     realized = detail::to_vec(rz_);
     inv_tau = detail::to_vec(it_);
     convexity = detail::to_vec(cv_);
+    rN = detail::to_vec(rn_); rD = detail::to_vec(rd_); dS = detail::to_vec(ds_); dE = detail::to_vec(de_);
     R_sub = build(sc_, sw_, n_cpn_);
     R_cpn = build(row_, std::vector<double>(row_.size(), 1.0), n_inst);
     // Segment offsets: coupons of one instrument and sub-periods of one coupon are contiguous by construction
@@ -339,6 +367,17 @@ struct BundleFloatBatch {
   // ("cannot identify array bounds": data-dependent gather indices) — verified with -Rpass-analysis on
   // 2026-09-09; the earlier "auto-vectorized gather" comments were wrong. With the reciprocal they are
   // load/multiply bound, which is close to the scalar floor; explicit SIMD is an E4.D decision.
+  // coupon vector -> per-instrument PV under the configured reduce layout (segment-sum or the sparse reference).
+  const Eigen::VectorXd& reduce_coupons(const Eigen::VectorXd& coupon) const {
+    if (SWAPS_REDUCE_LAYOUT >= 1) {
+      pv_res_.resize(n_inst);
+      const int* __restrict cb = cpn_begin_.data(); const double* __restrict cc = coupon.data(); double* __restrict out = pv_res_.data();
+      for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += cc[c]; out[i] = acc; }
+      return pv_res_;
+    }
+    pv_res_.noalias() = R_cpn * coupon;
+    return pv_res_;
+  }
   const Eigen::VectorXd& inverse_of(const Eigen::VectorXd& DF) const {
     inv_scratch_ = DF.cwiseInverse();  // alloc-free after first sizing
     return inv_scratch_;
@@ -380,6 +419,25 @@ struct BundleFloatBatch {
     // exactly one materialized pass, as it did before this generalization.
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv() needs pay dates: this is a futures batch");
     Eigen::VectorXd& coupon = coupon_;  // reuse the per-batch scratch (no per-tick allocation)
+    if (has_mtm_) {  // MtM coupons: R·(A + DF[dE] − DF[dS]); constant-notional coupons in the same batch: A
+      const Eigen::VectorXd& nm = num(DF, INV);
+      coupon.resize(n_cpn_);
+      const double* __restrict df = DF.data();
+      const double* __restrict iv = INV.data();
+      const int* __restrict p = pay.data();
+      const double* __restrict nn = nm.data();
+      const double* __restrict kk = konst.data();
+      const double* __restrict kv = k.data();
+      const int* __restrict rn = rN.data(); const int* __restrict rdn = rD.data();
+      const int* __restrict dsn = dS.data(); const int* __restrict den = dE.data();
+      double* __restrict out = coupon.data();
+      for (int i = 0; i < n_cpn_; ++i) {
+        double v = df[p[i]] * (nn[i] + kk[i]) * kv[i];
+        if (rn[i] >= 0) v = (v + df[den[i]] - df[dsn[i]]) * (df[rn[i]] * iv[rdn[i]]);
+        out[i] = v;
+      }
+      return reduce_coupons(coupon);
+    }
     if (SWAPS_REDUCE_LAYOUT >= 1) {  // SEGMENT: each coupon's gather-product accumulates into its instrument's slot
       pv_res_.setZero(n_inst);
       const double* __restrict df = DF.data();
@@ -462,7 +520,16 @@ struct BundleFloatBatch {
       const double* __restrict kk = konst.data();
       const double* __restrict kv = k.data();
       double* __restrict out = coupon.data();
-      if (cpn_is_plain)
+      if (has_mtm_) {
+        const double* __restrict iv = inverse_of(DF).data();
+        const int* __restrict rn = rN.data(); const int* __restrict rdn = rD.data();
+        const int* __restrict dsn = dS.data(); const int* __restrict den = dE.data();
+        for (int i = 0; i < n_cpn_; ++i) {
+          double v = df[p[i]] * (nn[i] + kk[i]) * kv[i];
+          if (rn[i] >= 0) v = (v + df[den[i]] - df[dsn[i]]) * (df[rn[i]] * iv[rdn[i]]);
+          out[i] = v;
+        }
+      } else if (cpn_is_plain)
         for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * nn[i];
       else
         for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (nn[i] + kk[i]) * kv[i];
@@ -564,6 +631,40 @@ struct BundleFloatBatch {
   void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, const Eigen::VectorXd& INV,
                      Mat& d, int row0, double sign) const {
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "d_pv_from_num() needs pay dates");
+    if (has_mtm_) {
+      // MtM coupon i: value = R·(A + DF[dE] − DF[dS]), R = DF[rN]·INV[rD], A = DF[pay]·(num+konst)·k.
+      //   ∂/∂DF[pay] = R·(num+konst)·k;  ∂/∂DF[s],[e] = R·(the ordinary A partials);  ∂/∂DF[dE] = +R;  ∂/∂DF[dS] = −R;
+      //   ∂/∂DF[rN] = value·INV[rN];      ∂/∂DF[rD] = −value·INV[rD].     (aliased indices accumulate via +=)
+      rmul_.resize(n_cpn_);
+      for (int i = 0; i < n_cpn_; ++i) rmul_[i] = rN[i] >= 0 ? DF[rN[i]] * INV[rD[i]] : 1.0;
+      for (int i = 0; i < n_cpn_; ++i) {
+        const double R = rmul_[i];
+        const double A = DF[pay[i]] * (num_cpn[i] + konst[i]) * k[i];
+        d(row0 + inst[i], pay[i]) += sign * R * (num_cpn[i] + konst[i]) * k[i];
+        if (rN[i] >= 0) {
+          const double value = R * (A + DF[dE[i]] - DF[dS[i]]);
+          d(row0 + inst[i], dE[i]) += sign * R;
+          d(row0 + inst[i], dS[i]) += -sign * R;
+          d(row0 + inst[i], rN[i]) += sign * value * INV[rN[i]];
+          d(row0 + inst[i], rD[i]) += -sign * value * INV[rD[i]];
+        }
+      }
+      for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
+        const int i = sub_cpn[j], s = subS[j], e = subE[j];
+        const double f = sign * rmul_[i] * DF[pay[i]] * k[i] * sub_w[j];
+        const double ie = INV[e];
+        d(row0 + inst[i], s) += f * ie;
+        d(row0 + inst[i], e) += -f * DF[s] * ie * ie;
+      }
+      for (const auto& mc : moments_) {  // (moment coupons inside an MtM batch: same log-bracket swap, scaled by R)
+        const int i = mc.cpn, s = subS[mc.sub], e = subE[mc.sub];
+        const double f = sign * rmul_[i] * DF[pay[i]] * k[i] * sub_w[mc.sub];
+        const double ie = INV[e];
+        d(row0 + inst[i], s) += -f * ie + f * INV[s];
+        d(row0 + inst[i], e) += f * DF[s] * ie * ie - f * ie;
+      }
+      return;
+    }
     for (int i = 0; i < n_cpn_; ++i)
       d(row0 + inst[i], pay[i]) += sign * (num_cpn[i] + konst[i]) * k[i];
     for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
@@ -591,7 +692,8 @@ struct BundleFloatBatch {
   void moment_direct_pv(const Eigen::VectorXd& DF, double sign, Add&& add) const {
     for (const auto& mc : moments_) {
       const int i = mc.cpn;
-      const double f = sign * DF[pay[i]] * k[i] * sub_w[mc.sub];
+      const double R = (has_mtm_ && rN[i] >= 0) ? DF[rN[i]] / DF[rD[i]] : 1.0;
+      const double f = sign * R * DF[pay[i]] * k[i] * sub_w[mc.sub];
       for (int j = 0; j < static_cast<int>(mc.support.size()); ++j) add(inst[i], mc.support[j], f * mc.dmom[j]);
     }
   }
@@ -700,6 +802,7 @@ struct BundleFloatBatch {
     it_.push_back(inv_tau);
     cv_.push_back(conv);
     row_.push_back(n_inst);
+    rn_.push_back(-1); rd_.push_back(-1); ds_.push_back(-1); de_.push_back(-1);
     ++n_cpn_;
   }
   static Eigen::SparseMatrix<double> build(const std::vector<int>& row, const std::vector<double>& val,
@@ -714,12 +817,14 @@ struct BundleFloatBatch {
 
   int n_cpn_ = 0;
   std::vector<int> ss_, se_, sc_, p_, row_;
+  std::vector<int> rn_, rd_, ds_, de_;                     // MtM reset / notional-exchange indices (-1 = none)
+  bool has_mtm_ = false;
   std::vector<int> cpn_begin_, sub_begin_;                // segment offsets (coupons of an instrument; subs of a coupon)
   std::vector<double> sw_, konst_, k_, rz_, it_, cv_;
   // Per-batch reusable scratch (sized on first use) so pv/num/rate never allocate in the hot loop.
   // Each returns a const ref into these; because gen_pos_/gen_neg_ are distinct batch objects, two
   // results (one per batch) are simultaneously live in model_rates without aliasing.
-  mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_, inv_scratch_;
+  mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_, inv_scratch_, rmul_;
   mutable std::vector<MomentCoupon> moments_;  // per-coupon precomputed quadratic forms (set_state fills mom/dmom)
   mutable bool state_set_ = false;
   mutable Eigen::VectorXd state_x_;  // set_state memo key

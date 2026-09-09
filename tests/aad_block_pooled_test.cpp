@@ -68,7 +68,7 @@ cal::Instrument fx_portfolio_inst(double T) {
   wrap.combination = {{1.0, fx}};
   return wrap;
 }
-// MtM xccy basis with a payment-lagged funding leg -> mtm_funding_term_negligible rejects -> AAD block.
+// MtM xccy basis whose funding coupons carry the compounded PRODUCT observation -> AAD block (a plain MtM leg compiles).
 cal::Instrument mtm_basis_inst(double T) {
   Legs Le = annual(T);
   Legs Lu = annual(T, PAY_LAG);
@@ -81,6 +81,9 @@ cal::Instrument mtm_basis_inst(double T) {
   in.mtm.reset_num = EURUSD;
   in.mtm.reset_den = USD;
   in.mtm.fx_spot = FX_SPOT;
+  // Since 2026-09-09 an MtM leg is W-cacheable; this fixture needs a GENUINELY non-cacheable MtM-shaped row for the
+  // AAD block, so its funding coupons carry the compounded PRODUCT form (single sub-period: same value, AAD route).
+  for (auto& c : in.mtm.coupons) c.obs.compounded = true;
   return in;
 }
 

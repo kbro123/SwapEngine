@@ -60,12 +60,14 @@ inline bool curves_are_noncacheable(const std::vector<BundleCurveSpec>& curves) 
 inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<BundleCurveSpec>& curves) {
   if (has_compounded_obs(ins)) return true;
   // A MtM basis is cacheable only if its FX-reset funding term is NUMERICALLY negligible on the real
-  // rolled-out cashflows (mtm_funding_term_negligible prices it) -- robust to lags/convexity/CSA, not a
-  // structural pattern-match.
-  if (ins.quote == QuoteKind::XccyMtmBasis) return !mtm_funding_term_negligible(ins, curves);
+  // (until 2026-09-09 a numeric "funding term negligible" test decided this; the batch now prices the leg exactly)
+  // An MtM xccy basis row is W-cacheable EXACTLY since 2026-09-09 (BundleFloatBatch::add_mtm prices the resetting
+  // notional as a product of registered DFs); only an incomplete MtM leg (no reset roles) stays on AAD.
+  if (ins.quote == QuoteKind::XccyMtmBasis)
+    return ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0;
   if (ins.quote == QuoteKind::Portfolio)
     for (const auto& c : ins.combination)
-      if (c.instrument.quote == QuoteKind::FxForward || c.instrument.quote == QuoteKind::XccyMtmBasis ||
+      if (c.instrument.quote == QuoteKind::FxForward ||
           c.instrument.quote == QuoteKind::ZeroCouponRate ||
           instrument_is_noncacheable(c.instrument, curves))
         return true;

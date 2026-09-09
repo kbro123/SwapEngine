@@ -41,8 +41,8 @@ struct FloatLeg {
   int discount = 0;  // curve that DISCOUNTS this leg's payments
   // MtM (mark-to-market cross-currency) notional-reset roles. -1/-1 => a plain constant-notional leg
   // (the default). When set, this is an FX-resettable leg whose coupon notional is
-  // fx_spot · DF[reset_num](reset)/DF[reset_den](reset) -- priced by pricing::xccy_mtm_leg_pv on the
-  // AAD/templated path (a curve-dependent notional is not a single exp(-Wx), so it is never W-cached).
+  // fx_spot · DF[reset_num](reset)/DF[reset_den](reset) -- priced by pricing::xccy_mtm_leg_pv on the templated
+  // path and, since 2026-09-09, EXACTLY on the W-cache too (BundleFloatBatch::add_mtm: a product of registered DFs).
   int reset_num = -1;   // FX-forward NUMERATOR (foreign) discount curve role
   int reset_den = -1;   // FX-forward DENOMINATOR (domestic) discount curve role
   double fx_spot = 1.0;  // FX spot for the notional reset
@@ -65,7 +65,7 @@ enum class QuoteKind {
                   // the band residual applies to the TRANSFORMED quote.
   // Cross-currency (multi-currency). BOTH are W-cacheable in their STANDARD form (compiled_bundle.hpp):
   // a standalone FxForward's log-residual is affine in x (constant Jacobian row), and a MtM basis with a
-  // PAR funding leg collapses to the ParSpread quotient (the data-driven mtm_funding_term_negligible
+  // funding leg is priced EXACTLY on the W-cache since 2026-09-09 (BundleFloatBatch::add_mtm; the retired mtm_funding_term_negligible
   // guard proves the dropped term is 0). Only the non-standard cases -- an FX/MtM NESTED in a Portfolio,
   // or a MtM whose funding term is genuinely nonzero (payment lag / averaging convexity / CSA discount)
   // -- ride the width-reduced AAD block of the hybrid engine (hybrid_residual.hpp).

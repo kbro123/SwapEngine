@@ -277,7 +277,7 @@ inline Shape fx_xccy() {  // USD SOFR + EUR ESTR + EUR-in-USD collateral curve: 
     k2.push_back(p.instruments.back().fixed.coupons.back().pay);
   }
   p.curves = {detail::spec(k0), detail::spec(k1), detail::spec(k2)};
-  return detail::make("fx_xccy", "USD SOFR + EUR ESTR + EUR-in-USD: 5 FX forwards + 8 MtM xccy basis rows", std::move(p), false);
+  return detail::make("fx_xccy", "USD SOFR + EUR ESTR + EUR-in-USD: 5 FX forwards + 8 MtM xccy basis rows", std::move(p), true);  // compiled since 2026-09-09
 }
 inline Shape desk() {  // everything at once: 5 curves, every quote kind, bands, a turn, butterflies
   cal::BundleProblem p;
@@ -307,7 +307,7 @@ inline Shape desk() {  // everything at once: 5 curves, every quote kind, bands,
   p.instruments.push_back(detail::butterfly(p, 1, 4, 6));
   p.instruments.push_back(detail::butterfly(p, 4, 6, 11));
   p.curves = {s0, detail::spec(k1, 0), detail::spec(k2), detail::spec(k3), detail::spec(k4, 2)};
-  return detail::make("desk", "5 curves: SOFR (banded, turn, butterflies) + FF basis & averaged futures + ESTR + EUR-in-USD (FX/xccy) + EURIBOR", std::move(p), false,
+  return detail::make("desk", "5 curves: SOFR (banded, turn, butterflies) + FF basis & averaged futures + ESTR + EUR-in-USD (FX/xccy) + EURIBOR", std::move(p), true,
                       [](Shape& s) {
                         auto& ins = s.prob.instruments;
                         for (int i = 0; i < 12; ++i) { ins[i].band_lower = ins[i].market - 1e-4; ins[i].band_upper = ins[i].market + 1e-4; ins[i].band_decay = 0.5; }

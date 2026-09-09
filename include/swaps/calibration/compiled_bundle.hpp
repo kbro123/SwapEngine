@@ -50,7 +50,8 @@ class CompiledBundleResidual {
     gen_pos_.finalize();
     gen_neg_.finalize();
     gen_fixed_.finalize();
-    has_moment_ = gen_pos_.has_moment() || gen_neg_.has_moment() || gen_rate_.has_moment();
+    gen_mtm_.finalize();
+    has_moment_ = gen_pos_.has_moment() || gen_neg_.has_moment() || gen_rate_.has_moment() || gen_mtm_.has_moment();
     gen_rate_.finalize();
 
     // Jacobian scratch buffers, sized ONCE here and reused (setZero) every call -- no per-iteration
@@ -80,6 +81,13 @@ class CompiledBundleResidual {
       add_float(gen_pos_, q_rows_);
       add_float(gen_neg_, q_rows_);
       add_float(gen_rate_, r_rows_);
+      add_float(gen_mtm_, q_rows_);
+      for (int i = 0; i < gen_mtm_.n_coupons(); ++i)  // the MtM coupon's reset ratio and notional exchanges
+        if (gen_mtm_.rN[i] >= 0) {
+          const int r = q_rows_[gen_mtm_.inst[i]].row;
+          sup[r].push_back(gen_mtm_.rN[i]); sup[r].push_back(gen_mtm_.rD[i]);
+          sup[r].push_back(gen_mtm_.dS[i]); sup[r].push_back(gen_mtm_.dE[i]);
+        }
       for (int i = 0; i < static_cast<int>(gen_fixed_.pay.size()); ++i)
         sup[q_rows_[gen_fixed_.inst[i]].row].push_back(gen_fixed_.pay[i]);
       for (const auto& f : fx_rows_) {
@@ -150,16 +158,24 @@ class CompiledBundleResidual {
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;  // valid whenever df_at(x) is (same memo)
-    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); }
+    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); gen_mtm_.set_state(x); }
     out_.setZero(n_residuals());  // ACCUMULATE: a portfolio row sums its components' weighted quotes; a
                                   // plain row has one entry with weight 1 (0 + 1·q == q, bit-identical).
     if (!q_rows_.empty()) {
       const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);  // refs into DISTINCT batch objects,
       const Eigen::VectorXd& pp = gen_pos_.pv(DF, INV);     // so all three are simultaneously live
       const Eigen::VectorXd& pn = gen_neg_.pv(DF, INV);
-      for (std::size_t j = 0; j < q_rows_.size(); ++j) {
-        const int i = static_cast<int>(j);
-        out_[q_rows_[j].row] += q_rows_[j].weight * (pp[i] - pn[i]) / ann[i];
+      if (gen_mtm_.has_mtm()) {  // + the MtM funding leg (already divided by fx_spot: R is the bare reset ratio)
+        const Eigen::VectorXd& pm = gen_mtm_.pv(DF, INV);
+        for (std::size_t j = 0; j < q_rows_.size(); ++j) {
+          const int i = static_cast<int>(j);
+          out_[q_rows_[j].row] += q_rows_[j].weight * (pp[i] - pn[i] + pm[i]) / ann[i];
+        }
+      } else {
+        for (std::size_t j = 0; j < q_rows_.size(); ++j) {
+          const int i = static_cast<int>(j);
+          out_[q_rows_[j].row] += q_rows_[j].weight * (pp[i] - pn[i]) / ann[i];
+        }
       }
     }
     // Zero-coupon rows: the ParRate quotient just accumulated is transformed in place (standalone rows only,
@@ -212,7 +228,7 @@ class CompiledBundleResidual {
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;
-    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); }
+    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); gen_mtm_.set_state(x); }
     // Capture the model quotes for banded rows BEFORE the batch scratch below is overwritten.
     if (!band_.empty()) {
       const Eigen::VectorXd& mr = model_rates(x);
@@ -234,6 +250,7 @@ class CompiledBundleResidual {
       const Eigen::VectorXd& num_pos = gen_pos_.num(DF, INV);
       const Eigen::VectorXd& num_neg = gen_neg_.num(DF, INV);
       num_.noalias() = gen_pos_.pv_from_num(num_pos, DF) - gen_neg_.pv_from_num(num_neg, DF);
+      if (gen_mtm_.has_mtm()) { num_mtm_ = gen_mtm_.num(DF, INV); num_ += gen_mtm_.pv_from_num(num_mtm_, DF); }
       const Eigen::VectorXd& num = num_;
       const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);
       dnum_.setZero();
@@ -242,6 +259,7 @@ class CompiledBundleResidual {
       pricing::RowMatrixXd& dann = dann_;
       gen_pos_.d_pv_from_num(num_pos, DF, INV, dnum, 0, 1.0);
       gen_neg_.d_pv_from_num(num_neg, DF, INV, dnum, 0, -1.0);
+      if (gen_mtm_.has_mtm()) gen_mtm_.d_pv_from_num(num_mtm_, DF, INV, dnum, 0, 1.0);
       gen_fixed_.d_annuity(dann, 0);
       for (int j = 0; j < nq; ++j)  // d(num/ann) = dnum/ann - num·dann/ann²; accumulate (portfolio rows)
         G.row(q_rows_[j].row) +=
@@ -312,6 +330,8 @@ class CompiledBundleResidual {
       gen_pos_.moment_direct_pv(DF, 1.0, [&](int bi, int j, double v) {
         const auto& s = q_rows_[bi]; J(s.row, j) += s.weight * row_scale_[s.row] * v / ann_keep_[bi]; });
       gen_neg_.moment_direct_pv(DF, -1.0, [&](int bi, int j, double v) {
+        const auto& s = q_rows_[bi]; J(s.row, j) += s.weight * row_scale_[s.row] * v / ann_keep_[bi]; });
+      gen_mtm_.moment_direct_pv(DF, 1.0, [&](int bi, int j, double v) {
         const auto& s = q_rows_[bi]; J(s.row, j) += s.weight * row_scale_[s.row] * v / ann_keep_[bi]; });
       gen_rate_.moment_direct_rate([&](int bi, int j, double v) {
         const auto& s = r_rows_[bi]; J(s.row, j) += s.weight * row_scale_[s.row] * v; });
@@ -388,19 +408,17 @@ class CompiledBundleResidual {
       return;
     }
     if (ins.quote == QuoteKind::XccyMtmBasis) {
-      // The FX-reset-notional term is NUMERICALLY negligible (mtm_funding_term_negligible prices the real
-      // rolled-out funding cashflows -- value AND gradient -- and confirms it), so the MtM basis quote
-      // (pv_self − pv_fx)/ann + mtm/(fx_spot·ann) collapses to the ParSpread quotient (pv_self − pv_fx)/ann
-      // = (+pv_fwd − pv_bench)/annuity -- exactly the pos/neg/fixed batches (sign is the ParSpread's mirror:
-      // pos = the SELF leg, neg = the FOREIGN-index leg). A payment lag, averaging convexity or non-native
-      // (CSA) funding discount makes the term nonzero -> this rejects and the instrument uses the AAD engine.
-      if (weight != 1.0 || !mtm_funding_term_negligible(ins, curves))
-        throw std::invalid_argument(
-            "CompiledBundleResidual: MtM-xccy with a non-negligible FX-reset funding term (payment lag / "
-            "averaging convexity / non-native CSA discounting) is not W-cacheable; use the AAD engine");
+      // EXACT (2026-09-09; until then the FX-reset funding term had to be numerically negligible and was
+      // dropped, else the row went to AAD): the MtM basis quote (pv_self − pv_fx)/ann + mtm/(fx_spot·ann) is the
+      // quotient of the pos/neg batches PLUS the MtM batch, whose coupons are the product of registered DFs
+      // R·(A + DF[e] − DF[s]) with R = DF[num](reset)/DF[den](reset) — W-cacheable with hand-written partials
+      // (BundleFloatBatch::add_mtm / d_pv_from_num). Linear in the row weight, so it composes inside a Portfolio.
+      if (ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0)
+        throw std::invalid_argument("CompiledBundleResidual: an XccyMtmBasis row needs a complete MtM leg (forecast/discount/reset_num/reset_den)");
       gen_pos_.add(cs_, ins.fwd.forecast, ins.fwd.discount, ins.fwd.coupons);         // + pv_self
       gen_neg_.add(cs_, ins.bench.forecast, ins.bench.discount, ins.bench.coupons);   // − pv_fx
       gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);                     // annuity
+      gen_mtm_.add_mtm(cs_, ins.mtm.forecast, ins.mtm.discount, ins.mtm.reset_num, ins.mtm.reset_den, ins.mtm.coupons);
       q_rows_.push_back({row, weight});
       return;
     }
@@ -435,6 +453,7 @@ class CompiledBundleResidual {
     else
       gen_neg_.add(cs_, 0, 0, no_leg);  // ParRate: nothing subtracted
     gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);
+    gen_mtm_.add(cs_, 0, 0, no_leg);  // keeps the MtM batch index-aligned with the quotient rows (empty here)
     q_rows_.push_back({row, weight});
   }
 
@@ -442,7 +461,7 @@ class CompiledBundleResidual {
   pricing::CompiledCurveSet cs_;
   // The ONE generic block (design §3): ParRate/ParSpread share the pos/neg float pair + fixed annuity;
   // Rate futures use the rate batch.
-  pricing::BundleFloatBatch gen_pos_, gen_neg_, gen_rate_;
+  pricing::BundleFloatBatch gen_pos_, gen_neg_, gen_rate_, gen_mtm_;  // gen_mtm_: MtM funding legs, index-aligned with q_rows_
   pricing::BundleFixedLegs gen_fixed_;
   // Batch position -> (residual row, weight). A plain instrument is one batch entry with weight 1 on its
   // own row; a Portfolio's components are several batch entries that ACCUMULATE (weighted) onto the ONE
@@ -471,7 +490,7 @@ class CompiledBundleResidual {
   bool has_moment_ = false;                    // any batch carries moment-path coupons (set_state + direct terms)
   mutable Eigen::VectorXd row_scale_, ann_keep_, num_keep_;  // jacobian_vs scratch for the moment direct terms
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
-  mutable Eigen::VectorXd qb_, num_;   // jacobian_vs scratch: banded model quotes, quotient numerator
+  mutable Eigen::VectorXd qb_, num_, num_mtm_;   // jacobian_vs scratch: banded model quotes, quotient numerator, MtM numerator
   // ROW-MAJOR: every fill site (the d_* scatters, the per-row G assembly, the band row
   // scaling) and the product's G(r,t) reads are row-local, so row-major makes them contiguous
   // (a col-major .row() expression is strided by n_res -- it dominated the fill cost).

@@ -113,8 +113,8 @@ struct FloatCoupon {
   double scale = 1.0;
   // MtM (mark-to-market cross-currency) FX-RESET observation time for this coupon's notional. < 0 => use
   // the period start (obs.sub_start.front()). Only consulted by xccy_mtm_leg_pv, whose notional
-  // N = fx_spot · DF_num(reset_time)/DF_den(reset_time) is CURVE-DEPENDENT (a DF ratio of two curves), so
-  // an MtM leg is NOT a single exp(-Wx) and rides the AAD/templated path, not the W-cache (§2 guard).
+  // N = fx_spot · DF_num(reset_time)/DF_den(reset_time) is CURVE-DEPENDENT (a DF ratio of two curves) — a
+  // product of registered DFs like every other coupon, so it rides the W-cache (BundleFloatBatch::add_mtm).
   double reset_time = -1.0;
 };
 
