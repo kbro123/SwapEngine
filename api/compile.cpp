@@ -166,9 +166,21 @@ void apply_band(cal::Instrument& obj, const json::object& ins, const std::string
 
 // resolve a token to (date, curve-time), throwing CompileError with context on a bad token.
 struct RT { b::Date date; double t; };
-RT resolve_time(const std::string& tok, const b::Date& vd, bool roll, const std::string& ctx) {
+// The date conventions a CURVE resolves its instrument tokens under: its index's product (calendar, bdc,
+// spot lag), or for an xccy curve the pair's XCCY-MTM product. No literal fallback (P2).
+struct DateConv { std::string calendar, bdc; int spot_lag = -1; };
+DateConv date_conv_for_curve(const json::object& c) {
+  const std::string pair = get_s(c, "pair");
+  if (!pair.empty() && get_s(c, "index").empty()) {
+    const b::XccyConv x = b::xccy_conv(pair);
+    return {x.calendar, x.bdc, x.spot_lag};
+  }
+  const b::SwapConv sc = b::swap_conv(get_s(c, "currency"), get_s(c, "index"));
+  return {sc.calendar, sc.bdc, sc.spot_lag};
+}
+RT resolve_time(const std::string& tok, const b::Date& vd, bool roll, const DateConv& dc, const std::string& ctx) {
   try {
-    const b::Date d = b::resolve(tok, vd, roll);
+    const b::Date d = b::resolve(tok, vd, dc.calendar, roll ? dc.bdc : std::string("Unadjusted"), dc.spot_lag);
     return {d, b::curve_time(vd, d)};
   } catch (const std::exception& e) {
     throw CompileError(ctx + ": " + e.what());
@@ -181,13 +193,13 @@ struct Resolved {
   bool has_sd = false, has_ed = false;
   b::Date sd, ed;
 };
-Resolved resolve_instrument(const json::object& ins, const b::Date& vd,
+Resolved resolve_instrument(const json::object& ins, const b::Date& vd, const DateConv& dc,
                             const std::optional<std::string>& start_override, const std::string& ctx) {
   const std::string type = get_s(ins, "type");
   const bool roll = !(type == "fut1m" || type == "fut3m");
   Resolved r;
   if (present(ins, "end")) {
-    const RT e = resolve_time(get_s(ins, "end"), vd, roll, ctx);
+    const RT e = resolve_time(get_s(ins, "end"), vd, roll, dc, ctx);
     r.ed = e.date; r.t_end = e.t; r.has_ed = true;
   } else {
     r.t_end = get_d(ins, "time", 0.0);
@@ -195,7 +207,7 @@ Resolved resolve_instrument(const json::object& ins, const b::Date& vd,
   if (get_s(ins, "quote_kind") == "Rate") {
     std::optional<std::string> start_tok = start_override ? start_override : opt_str(ins, "start");
     if (start_tok) {
-      const RT s = resolve_time(*start_tok, vd, roll, ctx);
+      const RT s = resolve_time(*start_tok, vd, roll, dc, ctx);
       r.sd = s.date; r.t_start = s.t; r.has_sd = true;
     } else {
       r.t_start = get_d(ins, "span_start", 0.0);
@@ -207,14 +219,14 @@ Resolved resolve_instrument(const json::object& ins, const b::Date& vd,
 // Chain a curve's QUOTED meetings into consecutive inter-meeting OIS spans (compile._chained_meeting_starts):
 // {ins_key -> start token} where the token is the previous quoted meeting's ISO date ("0d" for the first).
 std::unordered_map<std::string, std::string> chained_meeting_starts(const json::array& insts,
-                                                                    const b::Date& vd) {
+                                                                    const b::Date& vd, const DateConv& dc) {
   struct Q { double te; std::string ed_iso, iid; };
   std::vector<Q> quoted;
   for (std::size_t j = 0; j < insts.size(); ++j) {
     const auto& ins = insts[j].as_object();
     if (get_s(ins, "type") == "meeting" && get_b(ins, "has_quote", false) && present(ins, "end")) {
       try {
-        const b::Date ed = b::resolve(get_s(ins, "end"), vd, true);  // meeting roll = spot 'following'
+        const b::Date ed = b::resolve(get_s(ins, "end"), vd, dc.calendar, dc.bdc, dc.spot_lag);  // meeting date, adjusted on the index calendar
         quoted.push_back({b::curve_time(vd, ed), b::iso(ed), ins_key(ins, j)});
       } catch (const std::exception&) { /* skip unresolvable, like Python */ }
     }
@@ -333,7 +345,7 @@ TurnWindow turn_window(const json::object& ins, const b::Date& vd, const std::st
   const std::string tok = present(ins, "date") ? get_s(ins, "date") : get_s(ins, "end");
   b::Date raw;
   try {
-    raw = b::resolve(tok, vd, false);  // the entered calendar date, unadjusted
+    raw = b::resolve(tok, vd, "NONE", "Unadjusted", 0);  // the entered calendar date, unadjusted
   } catch (const std::exception& e) {
     throw CompileError(ctx + ": " + e.what());
   }
@@ -452,7 +464,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     const json::array empty_arr;
     const json::array& insts = (cp->contains("instruments") && cp->at("instruments").is_array())
                                    ? cp->at("instruments").as_array() : empty_arr;
-    const auto starts_map = chained_meeting_starts(insts, value_date);
+    const DateConv dconv = date_conv_for_curve(*cp);
+    const auto starts_map = chained_meeting_starts(insts, value_date, dconv);
     for (std::size_t j = 0; j < insts.size(); ++j) {
       const auto& ins = insts[j].as_object();
       const std::string iid = ins_key(ins, j);
@@ -460,7 +473,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
       if (auto it = starts_map.find(iid); it != starts_map.end()) ov = it->second;
       const std::string ctx =
           get_s(*cp, "name", "?") + " \xC2\xB7 " + get_s(ins, "label", get_s(ins, "type", "?").c_str());
-      resolved[{cid, iid}] = resolve_instrument(ins, value_date, ov, ctx);
+      resolved[{cid, iid}] = resolve_instrument(ins, value_date, dconv, ov, ctx);
     }
   }
 
@@ -498,7 +511,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         if (i.contains("knots") && i.at("knots").is_array())
           for (const auto& ke : i.at("knots").as_array()) {
             const auto& k = ke.as_object();
-            const RT kt = resolve_time(get_s(k, "end"), value_date, true, cname + " \xC2\xB7 portfolio knot");
+            const RT kt = resolve_time(get_s(k, "end"), value_date, true, date_conv_for_curve(c), cname + " \xC2\xB7 portfolio knot");
             KnotItem it;
             it.t = std::round(kt.t * 1e10) / 1e10;
             it.region = opt_str(k, "region");
@@ -605,7 +618,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         if (ins.contains("components") && ins.at("components").is_array())
           for (const auto& ce : ins.at("components").as_array()) {
             const auto& comp = ce.as_object();
-            const RT ct = resolve_time(get_s(comp, "end"), value_date, true, cname + " \xC2\xB7 portfolio component");
+            const RT ct = resolve_time(get_s(comp, "end"), value_date, true, date_conv_for_curve(c), cname + " \xC2\xB7 portfolio component");
             if (ct.t <= 0)
               throw CompileError("Portfolio component on '" + cname + "' needs a future tenor.");
             cal::WeightedInstrument wi;

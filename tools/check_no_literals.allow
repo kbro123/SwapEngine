@@ -11,6 +11,10 @@ include/swaps/build/conventions.hpp DBID  ^XCCY-MTM-$   # the product-id SCHEME 
 api/credit.cpp                      JSONDEF  ^(recovery=cp\.recovery_default|premium_freq=1\.0 / py|recovery=recovery)$   # defaults ARE the DB row (credit.cds_products[]) / the verb-level value
 api/bond_future.cpp                 JSONDEF  ^(notional_coupon|round_months)=fut\.   # defaults ARE the DB contract row (bond_futures[])
 api/compile.cpp                     CONV     ^Preceding$   # a TURN window starts on the last business day on/before the turn date — the turn's definition, not a market choice
+include/swaps/build/calendar.hpp    CONV  ^Unadjusted$   # ISDA bdc vocabulary dispatch in adjust() ("no adjustment")
+api/compile.cpp                     CONV  ^Unadjusted$   # roll=false (futures contract dates / the raw turn date) maps to the ISDA "Unadjusted" bdc
+api/compile.cpp                     DBID  ^NONE$         # the explicit no-calendar id for an AS-ENTERED date (the turn window is then placed on the index calendar)
+api/compile.cpp                     NUM   lag-default    # DateConv.spot_lag = -1 = UNRESOLVED sentinel (date_conv_for_curve always sets it)
 
-# ---- RATCHET (adopted 2026-09-08 with 130 entries; 68 after E2 step 1; re-baselined after step 2). Every line below is an EXISTING class-A/B hit to be REMOVED in E2 step 3, not a permission. ----
-include/swaps/build/schedule.hpp:23  NUM  weekend\-hardwired
+# ---- RATCHET (adopted 2026-09-08 with 130 entries; 68 after E2.1; 1 after E2 step 2; 0 after E2.6). ----
+

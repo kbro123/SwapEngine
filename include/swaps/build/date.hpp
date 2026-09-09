@@ -31,11 +31,15 @@ struct Date {
     const unsigned last = unsigned(chr::year_month_day_last{chr::year{y} / chr::month{m} / chr::last}.day());
     return ymd(y, m, day < last ? day : last);
   }
-  static Date from_iso(const std::string& s) {  // "YYYY-MM-DD"
-    if (s.size() != 10 || s[4] != '-' || s[7] != '-')
-      throw std::invalid_argument("date must be YYYY-MM-DD, got " + s);
-    return ymd(std::stoi(s.substr(0, 4)), unsigned(std::stoi(s.substr(5, 2))),
-               unsigned(std::stoi(s.substr(8, 2))));
+  static Date from_iso(const std::string& s) {  // "YYYY-MM-DD", STRICT: digits only and a real calendar date
+    bool ok = s.size() == 10 && s[4] == '-' && s[7] == '-';
+    for (std::size_t i = 0; ok && i < 10; ++i)
+      if (i != 4 && i != 7 && !(s[i] >= '0' && s[i] <= '9')) ok = false;
+    if (!ok) throw std::invalid_argument("date must be YYYY-MM-DD, got '" + s + "'");
+    const chr::year_month_day ymd{chr::year{std::stoi(s.substr(0, 4))}, chr::month{unsigned(std::stoi(s.substr(5, 2)))},
+                                  chr::day{unsigned(std::stoi(s.substr(8, 2)))}};
+    if (!ymd.ok()) throw std::invalid_argument("not a calendar date: '" + s + "'");  // 2024-02-30, month 13 ...
+    return {chr::sys_days{ymd}};
   }
 
   chr::year_month_day ymd_() const { return chr::year_month_day{d}; }
@@ -73,27 +77,55 @@ inline std::string iso(const Date& x) {
   return std::string(buf);
 }
 
-// Add an ISO period token ('3M','6M','1Y','2W','5D') unadjusted (calendars._add_period).
-inline Date add_period(const Date& d, const std::string& tok) {
-  if (tok.empty()) throw std::invalid_argument("bad period token");
-  const char unit = std::toupper(tok.back());
-  const int n = std::stoi(tok.substr(0, tok.size() - 1));
-  switch (unit) {
-    case 'D': return d.plus_days(n);
-    case 'W': return d.plus_weeks(n);
-    case 'M': return d.plus_months(n);
-    case 'Y': return d.plus_months(12 * n);
-    default: throw std::invalid_argument("bad period token: " + tok);
+// A period/frequency STEP: whole months and/or whole days. '3M' -> {3,0}; '1Y6M' -> {18,0}; '28D' -> {0,28};
+// '2W1D' -> {0,15}. STRICT parsing (a 2026-09 audit found '1Y6M' silently read as 1M, '-6M' and '0M' accepted,
+// '1e1M' parsed by stod): every component is <digits><unit>, units D/W/M/Y in any order, nothing else.
+struct Step {
+  int months = 0;
+  int days = 0;
+  bool zero() const { return months == 0 && days == 0; }
+};
+inline Step parse_step(const std::string& tok) {
+  std::string t;
+  for (char c : tok) if (!std::isspace((unsigned char)c)) t.push_back(c);
+  if (t.empty()) throw std::invalid_argument("empty period token");
+  Step st;
+  std::size_t i = 0;
+  while (i < t.size()) {
+    std::size_t j = i;
+    while (j < t.size() && t[j] >= '0' && t[j] <= '9') ++j;
+    if (j == i || j == t.size()) throw std::invalid_argument("bad period token: '" + tok + "' (want e.g. 3M, 1Y6M, 28D, 2W)");
+    if (j - i > 6) throw std::invalid_argument("period count too large in '" + tok + "'");
+    const int n = std::stoi(t.substr(i, j - i));
+    switch (std::toupper((unsigned char)t[j])) {
+      case 'D': st.days += n; break;
+      case 'W': st.days += 7 * n; break;
+      case 'M': st.months += n; break;
+      case 'Y': st.months += 12 * n; break;
+      default: throw std::invalid_argument("bad period unit in '" + tok + "' (D/W/M/Y)");
+    }
+    i = j + 1;
   }
+  return st;
 }
-
-// Whole months in a frequency token (calendars._tok_months): '3M'->3, '1Y'->12.
+// Apply k steps (k may be negative). Months first (day-clamped), then days.
+inline Date plus_step(const Date& d, const Step& st, int k = 1) {
+  return d.plus_months(st.months * k).plus_days(st.days * k);
+}
+// Add an ISO period token unadjusted (calendars._add_period).
+inline Date add_period(const Date& d, const std::string& tok) { return plus_step(d, parse_step(tok)); }
+// A frequency token as a step ('3M', '28D', '1W'). `tok_months` is the months-only form for callers that
+// need a monthly grid (bond coupons); it throws on a day-based frequency instead of guessing.
+inline Step tok_step(const std::string& tok) {
+  const Step st = parse_step(tok);
+  if (st.zero()) throw std::invalid_argument("frequency must be positive, got '" + tok + "'");
+  if (st.months && st.days) throw std::invalid_argument("frequency mixes months and days: '" + tok + "'");
+  return st;
+}
 inline int tok_months(const std::string& tok) {
-  const char unit = std::toupper(tok.back());
-  const int n = std::stoi(tok.substr(0, tok.size() - 1));
-  if (unit == 'M') return n;
-  if (unit == 'Y') return 12 * n;
-  throw std::invalid_argument("frequency must be whole months/years, got " + tok);
+  const Step st = tok_step(tok);
+  if (st.days) throw std::invalid_argument("frequency must be whole months/years here, got '" + tok + "'");
+  return st.months;
 }
 
 // The n-th `weekday` (Mon=0) of a month, n>=1 (calendars._nth_weekday).

@@ -57,7 +57,7 @@ TEST(Bus252, BrlCdiParSwapAccrual) {
   ASSERT_EQ(conv.calendar, "BRL");
   ASSERT_EQ(conv.fixed_dc, "BUS/252");
   ASSERT_EQ(conv.float_dc, "BUS/252");
-  const b::Date mat = b::resolve("2y", vd);
+  const b::Date mat = b::resolve("2y", vd, "NONE", "Following", 0);
 
   // Fixed leg: annual BUS/252 coupons, each ~1 year of business days.
   const auto fixed = b::fixed_coupons(vd, conv, mat, 0);

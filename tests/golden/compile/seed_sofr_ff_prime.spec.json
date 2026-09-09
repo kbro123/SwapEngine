@@ -20,7 +20,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "0d",
-          "start_quote": 4.213946,
+          "start_quote": 4.211905,
           "type": "rate",
           "unit": "pct"
         },
@@ -36,7 +36,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "3m",
-          "start_quote": 4.127814,
+          "start_quote": 4.126038,
           "type": "rate",
           "unit": "pct"
         },
@@ -52,7 +52,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "6m",
-          "start_quote": 4.052101,
+          "start_quote": 4.050564,
           "type": "rate",
           "unit": "pct"
         },
@@ -68,7 +68,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "9m",
-          "start_quote": 3.986287,
+          "start_quote": 3.98408,
           "type": "rate",
           "unit": "pct"
         },
@@ -83,7 +83,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.053209,
+          "start_quote": 4.052777,
           "type": "swap",
           "unit": "pct"
         },
@@ -98,7 +98,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.974303,
+          "start_quote": 3.973897,
           "type": "swap",
           "unit": "pct"
         },
@@ -113,7 +113,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.882736,
+          "start_quote": 3.88247,
           "type": "swap",
           "unit": "pct"
         },
@@ -128,7 +128,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.8448,
+          "start_quote": 3.844652,
           "type": "swap",
           "unit": "pct"
         },
@@ -143,7 +143,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.837312,
+          "start_quote": 3.837264,
           "type": "swap",
           "unit": "pct"
         },
@@ -158,7 +158,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.877536,
+          "start_quote": 3.877547,
           "type": "swap",
           "unit": "pct"
         },
@@ -173,7 +173,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.938719,
+          "start_quote": 3.938703,
           "type": "swap",
           "unit": "pct"
         },
@@ -188,7 +188,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.065702,
+          "start_quote": 4.065655,
           "type": "swap",
           "unit": "pct"
         }
@@ -227,7 +227,7 @@
           "quote_kind": "Rate",
           "region": "ff-front",
           "start": "0d",
-          "start_quote": 4.17333,
+          "start_quote": 4.171273,
           "type": "rate",
           "unit": "pct"
         },
@@ -243,7 +243,7 @@
           "quote_kind": "Rate",
           "region": "ff-front",
           "start": "3m",
-          "start_quote": 4.086474,
+          "start_quote": 4.084683,
           "type": "rate",
           "unit": "pct"
         },
@@ -259,7 +259,7 @@
           "quote_kind": "Rate",
           "region": "ff-front",
           "start": "6m",
-          "start_quote": 4.010006,
+          "start_quote": 4.008454,
           "type": "rate",
           "unit": "pct"
         },
@@ -275,7 +275,7 @@
           "quote_kind": "Rate",
           "region": "ff-front",
           "start": "9m",
-          "start_quote": 3.943446,
+          "start_quote": 3.941198,
           "type": "rate",
           "unit": "pct"
         },
@@ -291,7 +291,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 4.433024,
+          "start_quote": 4.433437,
           "type": "basis",
           "unit": "bp"
         },
@@ -307,7 +307,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 4.571538,
+          "start_quote": 4.572362,
           "type": "basis",
           "unit": "bp"
         },
@@ -323,7 +323,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 4.853757,
+          "start_quote": 4.854875,
           "type": "basis",
           "unit": "bp"
         },
@@ -339,7 +339,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 5.134583,
+          "start_quote": 5.136095,
           "type": "basis",
           "unit": "bp"
         },
@@ -355,7 +355,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 5.545172,
+          "start_quote": 5.546088,
           "type": "basis",
           "unit": "bp"
         },
@@ -371,7 +371,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 6.19324,
+          "start_quote": 6.194074,
           "type": "basis",
           "unit": "bp"
         },
@@ -387,7 +387,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 6.790977,
+          "start_quote": 6.791379,
           "type": "basis",
           "unit": "bp"
         },
@@ -403,7 +403,7 @@
           "quote_kind": "ParSpread",
           "region": "ff-back",
           "start": null,
-          "start_quote": 7.822641,
+          "start_quote": 7.822686,
           "type": "basis",
           "unit": "bp"
         }
@@ -442,7 +442,7 @@
           "quote_kind": "Rate",
           "region": "prime-front",
           "start": "0d",
-          "start_quote": 7.174659,
+          "start_quote": 7.172586,
           "type": "rate",
           "unit": "pct"
         },
@@ -458,7 +458,7 @@
           "quote_kind": "Rate",
           "region": "prime-front",
           "start": "3m",
-          "start_quote": 7.08669,
+          "start_quote": 7.084885,
           "type": "rate",
           "unit": "pct"
         },
@@ -474,7 +474,7 @@
           "quote_kind": "Rate",
           "region": "prime-front",
           "start": "6m",
-          "start_quote": 7.010563,
+          "start_quote": 7.008998,
           "type": "rate",
           "unit": "pct"
         },
@@ -490,7 +490,7 @@
           "quote_kind": "Rate",
           "region": "prime-front",
           "start": "9m",
-          "start_quote": 6.943498,
+          "start_quote": 6.942129,
           "type": "rate",
           "unit": "pct"
         },
@@ -506,7 +506,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -312.608538,
+          "start_quote": -312.607203,
           "type": "basis",
           "unit": "bp"
         },
@@ -522,7 +522,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -312.341493,
+          "start_quote": -312.354357,
           "type": "basis",
           "unit": "bp"
         },
@@ -538,7 +538,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -312.045429,
+          "start_quote": -312.060599,
           "type": "basis",
           "unit": "bp"
         },
@@ -554,7 +554,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -311.929891,
+          "start_quote": -311.945806,
           "type": "basis",
           "unit": "bp"
         },
@@ -570,7 +570,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -311.898085,
+          "start_quote": -311.905365,
           "type": "basis",
           "unit": "bp"
         },
@@ -586,7 +586,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -312.002405,
+          "start_quote": -312.007013,
           "type": "basis",
           "unit": "bp"
         },
@@ -602,7 +602,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -312.172928,
+          "start_quote": -312.174459,
           "type": "basis",
           "unit": "bp"
         },
@@ -618,7 +618,7 @@
           "quote_kind": "ParSpread",
           "region": "prime-back",
           "start": null,
-          "start_quote": -312.530478,
+          "start_quote": -312.530334,
           "type": "basis",
           "unit": "bp"
         }

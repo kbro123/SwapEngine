@@ -57,7 +57,7 @@ TEST_F(RegistryFixture, BasisAnnuityFollowsTheQuotedLegNotAnAnnualLiteral) {
   const b::SwapConv sar = b::swap_conv("SAR", "SAR-SAIBOR-3M");
   EXPECT_EQ(sar.fixed_freq_tok, "6M");
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const b::Date mat = b::resolve("2Y", vd, false);
+  const b::Date mat = b::resolve("2Y", vd, "NONE", "Unadjusted", 0);
   const auto par = b::par_swap(vd, sar, mat, 0, 0, 0.04);
   const auto bas = b::basis_swap(vd, sar, mat, 0, 1, 0, 0.0010);
   EXPECT_EQ(par.fixed.coupons.size(), 4u);                       // 6M fixed leg over 2y
@@ -95,7 +95,7 @@ TEST_F(RegistryFixture, ConventionsVerbAddsACurrencyCalendarIndexAndProductUsedB
   EXPECT_EQ(c.pay_lag, 1);
   EXPECT_EQ(c.fixed_freq_tok, "3M");
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const auto ins = b::par_swap(vd, c, b::resolve("1Y", vd, false), 0, 0, 0.03);
+  const auto ins = b::par_swap(vd, c, b::resolve("1Y", vd, "NONE", "Unadjusted", 0), 0, 0, 0.03);
   EXPECT_EQ(ins.fixed.coupons.size(), 4u);  // quarterly, from the added product
 
   // Listed, and distinguishable from the baked defaults.

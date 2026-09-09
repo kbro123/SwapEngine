@@ -91,7 +91,7 @@ std::string swaption_json(const std::string& request) {
       // fixed leg to `tenor`.
       if (expiry.empty() || tenor.empty())
         throw std::invalid_argument("swaption: each trade needs a non-empty 'expiry' and 'tenor'");
-      const b::Date expiry_date = b::resolve(expiry, vd);  // throws on an unrecognized expiry token
+      const b::Date expiry_date = b::resolve(expiry, vd, conv.calendar, conv.bdc, 0);  // throws on an unrecognized expiry token
       const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
       const double tenor_years = conventions::period_years(tenor);  // 0 for an unrecognized token
       if (!(tenor_years > 0.0))
@@ -259,7 +259,7 @@ VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
     key += std::to_string(spec.curve); key += '|'; key += c.expiry; key += '|'; key += c.tenor;
     auto it = vol_sched_cache_.find(key);
     if (it == vol_sched_cache_.end()) {
-      const b::Date expiry_date = b::resolve(c.expiry, vd);
+      const b::Date expiry_date = b::resolve(c.expiry, vd, conv.calendar, conv.bdc, 0);
       const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
       const double tenor_years = conventions::period_years(c.tenor);
       if (!(tenor_years > 0.0))
@@ -399,7 +399,7 @@ VolSurface::VolSurface(const VolCubeSpec& spec) : curve_(spec.curve), defs_(spec
   for (const VolCubeCell& c : spec.cells) {
     if (c.expiry.empty() || c.tenor.empty())
       throw std::invalid_argument("vol_surface: each cell needs a non-empty 'expiry' and 'tenor'");
-    const b::Date expiry_date = b::resolve(c.expiry, vd);
+    const b::Date expiry_date = b::resolve(c.expiry, vd, conv.calendar, conv.bdc, 0);
     const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
     const double tenor_years = conventions::period_years(c.tenor);
     if (!(tenor_years > 0.0))

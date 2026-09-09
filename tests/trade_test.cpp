@@ -17,7 +17,7 @@ TEST(Trade, VanillaPayerSwapToPosition) {
   // ~spot effective, 10y maturity (the builders roll their own schedule from spot(value_date); effective
   // is the booked record and, for a spot-start swap, equals that spot).
   const b::Date effective = b::spot_date(value_date, conv.calendar, conv.spot_lag);
-  const b::Date maturity = b::resolve("10Y", value_date);
+  const b::Date maturity = b::resolve("10Y", value_date, "NONE", "Following", 0);
 
   const tr::Trade t = tr::Trade::vanilla_swap(
       /*id=*/"USD-SOFR-10Y-001", /*notional=*/100e6, /*pay=*/tr::Pay::Fixed,
@@ -46,7 +46,7 @@ TEST(Trade, VanillaPayerSwapToPosition) {
 TEST(Trade, ReceiverFlipsTheNotionalSign) {
   const b::Date value_date = b::Date::from_iso("2026-01-15");
   const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
-  const b::Date maturity = b::resolve("10Y", value_date);
+  const b::Date maturity = b::resolve("10Y", value_date, "NONE", "Following", 0);
 
   // Same deal, but we RECEIVE fixed: NPV = fixed - float = -(float - fixed), so the payer-of-fixed kernel
   // sees a negative notional.

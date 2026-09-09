@@ -61,7 +61,7 @@ CellSchedule cell_schedule(const std::string& expiry, const std::string& tenor, 
                            const b::SwapConv& conv) {
   if (expiry.empty() || tenor.empty())
     throw std::invalid_argument("vega: each cell/swaption needs a non-empty 'expiry' and 'tenor'");
-  const b::Date expiry_date = b::resolve(expiry, vd);
+  const b::Date expiry_date = b::resolve(expiry, vd, conv.calendar, conv.bdc, 0);
   const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
   const double tenor_years = conventions::period_years(tenor);
   if (!(tenor_years > 0.0))

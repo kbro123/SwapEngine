@@ -49,7 +49,7 @@ TEST(ScheduleStubEom, DefaultIsByteIdenticalToLegacy) {
   const int spot_lag = 2;
   for (const char* tenor : {"1y", "2y", "5y", "7y", "10y", "18m", "30y"}) {
     for (const char* freq : {"3M", "6M", "1Y"}) {
-      const b::Date mat = b::resolve(tenor, vd);
+      const b::Date mat = b::resolve(tenor, vd, "NONE", "Following", 0);
       const auto oracle = legacy_periods(vd, cal, mat, freq, bdc, spot_lag);
       const auto no_arg = b::swap_periods_to(vd, cal, mat, freq, bdc, spot_lag);
       const auto def_rule = b::swap_periods_to(vd, cal, mat, freq, bdc, spot_lag, b::ScheduleRule{});

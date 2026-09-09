@@ -55,8 +55,8 @@ struct Tenor {
 
   // Resolve to a calendar date. ALWAYS delegates to the parity-tested free function so a Tenor is a pure
   // wrapper over the existing path — identical behaviour for normalized and special tokens alike.
-  Date resolve(const Date& value_date, bool roll = true) const {
-    return swaps::build::resolve(token_, value_date, roll);
+  Date resolve(const Date& value_date, const std::string& cal_id, const std::string& bdc, int spot_lag) const {
+    return swaps::build::resolve(token_, value_date, cal_id, bdc, spot_lag);
   }
 
   // Approximate act/365-ish size for sorting / coupon sizing (mirrors conventions::period_years:

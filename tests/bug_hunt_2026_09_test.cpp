@@ -253,11 +253,11 @@ TEST(BugHunt, FixedLegFrequencyComesFromTheProduct) {
   const bld::SwapConv conv = bld::conv_from_product(*p);
   EXPECT_EQ(conv.fixed_freq_tok, "6M");
   const bld::Date vd = bld::Date::ymd(2026, 9, 9);
-  const cal::Instrument sw = bld::par_swap(vd, conv, bld::resolve("5Y", vd), 0, 0, 0.04);
+  const cal::Instrument sw = bld::par_swap(vd, conv, bld::resolve("5Y", vd, "NONE", "Following", 0), 0, 0, 0.04);
   EXPECT_EQ(sw.fixed.coupons.size(), 10u);  // semi-annual over 5y
   EXPECT_EQ(sw.fwd.coupons.size(), 20u);    // quarterly float
   // An explicit override still wins.
-  EXPECT_EQ(bld::par_swap(vd, conv, bld::resolve("5Y", vd), 0, 0, 0.04, 0.0, {}, "1Y").fixed.coupons.size(), 5u);
+  EXPECT_EQ(bld::par_swap(vd, conv, bld::resolve("5Y", vd, "NONE", "Following", 0), 0, 0, 0.04, 0.0, {}, "1Y").fixed.coupons.size(), 5u);
 }
 
 // 14. A seasoned trade rolls from its EFFECTIVE date. With a zero payment lag, a 7y trade struck two years

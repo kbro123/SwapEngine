@@ -267,9 +267,9 @@ std::string swap_spread_json(const std::string& request) {
   const int factor_curve = static_cast<int>(jd(o, "factor_curve", 1.0));
   const std::string tenor = js(o, "tenor");
   if (tenor.empty()) throw std::invalid_argument("swap_spread: missing swap 'tenor' (e.g. 5Y)");
-  const b::Date mat = b::resolve(tenor, vd);
-  const cal::Instrument spot_swap =
-      b::par_swap(vd, b::Index(index_id).par_convention(), mat, swap_curve, swap_curve, 0.0);
+  const b::SwapConv sconv = b::Index(index_id).par_convention().resolve();
+  const b::Date mat = b::resolve(tenor, vd, sconv.calendar, sconv.bdc, sconv.spot_lag);  // tenor from SPOT on the index calendar
+  const cal::Instrument spot_swap = b::par_swap(vd, sconv, mat, swap_curve, swap_curve, 0.0);
   const double anchor = jd(o, "anchor", b::curve_time(vd, mat));
 
   // The market snapshot: the benchmark's clean price + the quoted spread, keyed for the derive layer.

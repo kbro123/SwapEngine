@@ -14,7 +14,7 @@ namespace {
 tr::Trade usd_swap(const std::string& id, double notional, tr::Pay pay, double rate, const char* maturity) {
   const b::Date vd = b::Date::from_iso("2026-09-01");
   return tr::Trade::vanilla_swap(id, notional, pay, rate, "USD", "USD-SOFR",
-                                 b::resolve("0d", vd), b::resolve(maturity, vd),
+                                 b::resolve("0d", vd, "NONE", "Following", 0), b::resolve(maturity, vd, "NONE", "Following", 0),
                                  /*forecast_role=*/0, /*discount_role=*/0);
 }
 }  // namespace

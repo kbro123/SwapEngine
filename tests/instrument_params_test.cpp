@@ -47,7 +47,7 @@ const std::vector<double> kKnots{0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
 
 // (i) At the defaults, the builders touch nothing: no spread, unit notional, annual fixed leg.
 TEST(InstrumentParams, DefaultsAreByteIdentical) {
-  const b::Date mat = b::resolve("5y", kVd);
+  const b::Date mat = b::resolve("5y", kVd, "NONE", "Following", 0);
   const cal::Instrument ins = b::par_swap(kVd, sofr(), mat, 0, 0, 0.02);
   ASSERT_EQ(ins.fwd.coupons.size(), 5u);
   ASSERT_EQ(ins.fixed.coupons.size(), 5u);  // default fixed_freq "1Y"
@@ -70,7 +70,7 @@ TEST(InstrumentParams, DefaultsAreByteIdentical) {
 // (ii) A +10bp floating-leg spread raises the par swap's model quote by ~10bp on a flat curve (float and
 // fixed share the annual ACT/360 SOFR schedule, so the annuity ratio is 1 and the shift is exact).
 TEST(InstrumentParams, FloatSpreadRaisesParRate) {
-  const b::Date mat = b::resolve("5y", kVd);
+  const b::Date mat = b::resolve("5y", kVd, "NONE", "Following", 0);
   const auto flat = curve_from(kKnots, std::vector<double>(kKnots.size(), 0.03));
   const double q0 = model_quote(b::par_swap(kVd, sofr(), mat, 0, 0, 0.0), flat);
   const double q1 = model_quote(b::par_swap(kVd, sofr(), mat, 0, 0, 0.0, /*float_spread=*/0.0010), flat);
@@ -80,7 +80,7 @@ TEST(InstrumentParams, FloatSpreadRaisesParRate) {
 // (ii) An amortizing (declining) notional lowers a floating leg's PV vs a bullet leg — a sign-guaranteed
 // direction on any positive-rate curve (each period's notional <= 1).
 TEST(InstrumentParams, AmortizingLowersLegPv) {
-  const b::Date mat = b::resolve("5y", kVd);
+  const b::Date mat = b::resolve("5y", kVd, "NONE", "Following", 0);
   const auto flat = curve_from(kKnots, std::vector<double>(kKnots.size(), 0.03));
   const auto conv = sofr();
   const auto bullet = b::float_leg(kVd, conv, mat, 0, 0, conv.float_freq_tok, conv.float_dc);
@@ -96,7 +96,7 @@ TEST(InstrumentParams, AmortizingLowersLegPv) {
 // (ii) On an UPWARD-sloping curve, tilting the notional toward the later (higher-rate) coupons raises the
 // par rate: a strictly ordered, sign-safe check that the amortization schedule moves the par swap quote.
 TEST(InstrumentParams, NotionalTiltMovesParRate) {
-  const b::Date mat = b::resolve("5y", kVd);
+  const b::Date mat = b::resolve("5y", kVd, "NONE", "Following", 0);
   const auto up = curve_from(kKnots, {0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.06});
   const double q_decl =
       model_quote(b::par_swap(kVd, sofr(), mat, 0, 0, 0.0, 0.0, {1.0, 0.8, 0.6, 0.4, 0.2}), up);
@@ -107,14 +107,14 @@ TEST(InstrumentParams, NotionalTiltMovesParRate) {
 
 // (ii) Fixed-frequency override: default is annual; "6M" doubles the fixed coupon count.
 TEST(InstrumentParams, FixedFrequencyOverride) {
-  const b::Date mat = b::resolve("5y", kVd);
+  const b::Date mat = b::resolve("5y", kVd, "NONE", "Following", 0);
   EXPECT_EQ(b::fixed_coupons(kVd, sofr(), mat, 0).coupons.size(), 5u);
   EXPECT_EQ(b::fixed_coupons(kVd, sofr(), mat, 0, "6M").coupons.size(), 10u);
 }
 
 // (ii) Payment lag (carried on the convention, exposed on every builder) shifts pay times later.
 TEST(InstrumentParams, PaymentLagShiftsPayTimes) {
-  const b::Date mat = b::resolve("5y", kVd);
+  const b::Date mat = b::resolve("5y", kVd, "NONE", "Following", 0);
   b::SwapConv c0 = sofr();
   c0.pay_lag = 0;
   b::SwapConv c5 = sofr();
@@ -132,10 +132,10 @@ TEST(InstrumentParams, PaymentLagShiftsPayTimes) {
 TEST(InstrumentParams, CompiledEqualsTemplatedWithSpreadAndNotional) {
   cal::CalibrationProblem prob;
   prob.back_times = {0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0};
-  prob.instruments.push_back(b::par_swap(kVd, sofr(), b::resolve("2y", kVd), 0, 0, 0.030, /*spread=*/0.0005));
+  prob.instruments.push_back(b::par_swap(kVd, sofr(), b::resolve("2y", kVd, "NONE", "Following", 0), 0, 0, 0.030, /*spread=*/0.0005));
   prob.instruments.push_back(
-      b::par_swap(kVd, sofr(), b::resolve("5y", kVd), 0, 0, 0.035, 0.0, {1.0, 0.8, 0.6, 0.4, 0.2}));
-  prob.instruments.push_back(b::par_swap(kVd, sofr(), b::resolve("7y", kVd), 0, 0, 0.040));  // plain
+      b::par_swap(kVd, sofr(), b::resolve("5y", kVd, "NONE", "Following", 0), 0, 0, 0.035, 0.0, {1.0, 0.8, 0.6, 0.4, 0.2}));
+  prob.instruments.push_back(b::par_swap(kVd, sofr(), b::resolve("7y", kVd, "NONE", "Following", 0), 0, 0, 0.040));  // plain
 
   const cal::CompiledResidual cr(prob);
   ASSERT_EQ(cr.n_residuals(), prob.n_residuals());

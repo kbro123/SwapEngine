@@ -51,9 +51,9 @@ TEST(Tenor, ResolveMatchesFreeFunction) {
   const b::Date vd = b::Date::from_iso("2026-09-01");
   for (const std::string tok : {"3M", "1Y", "2W"}) {
     const b::Tenor t(tok);
-    EXPECT_EQ(t.resolve(vd).serial(), b::resolve(tok, vd).serial()) << "tok=" << tok;
+    EXPECT_EQ(t.resolve(vd, "NONE", "Following", 0).serial(), b::resolve(tok, vd, "NONE", "Following", 0).serial()) << "tok=" << tok;
     // and unrolled behaviour matches too
-    EXPECT_EQ(t.resolve(vd, false).serial(), b::resolve(tok, vd, false).serial()) << "tok=" << tok;
+    EXPECT_EQ(t.resolve(vd, "NONE", "Unadjusted", 0).serial(), b::resolve(tok, vd, "NONE", "Unadjusted", 0).serial()) << "tok=" << tok;
   }
 }
 
@@ -64,11 +64,11 @@ TEST(Tenor, SpecialTokenDelegatesIdentically) {
   EXPECT_TRUE(imm.is_special());
   EXPECT_EQ(imm.token(), "U27");
   EXPECT_EQ(imm.to_string(), "U27");
-  EXPECT_EQ(imm.resolve(vd).serial(), b::resolve("U27", vd).serial());
+  EXPECT_EQ(imm.resolve(vd, "NONE", "Following", 0).serial(), b::resolve("U27", vd, "NONE", "Following", 0).serial());
 
   const b::Tenor on("ON");
   EXPECT_TRUE(on.is_special());
-  EXPECT_EQ(on.resolve(vd).serial(), b::resolve("ON", vd).serial());
+  EXPECT_EQ(on.resolve(vd, "NONE", "Following", 0).serial(), b::resolve("ON", vd, "NONE", "Following", 0).serial());
 }
 
 TEST(Tenor, EqualityAndOrderingNormalized) {

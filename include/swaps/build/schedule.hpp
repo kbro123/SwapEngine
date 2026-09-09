@@ -1,8 +1,9 @@
-// swaps::build — token resolution + curve time + rolled schedule generation. Transcribes server/dates.py
-// (token -> date, weekend-only "following"; IMM) and server/calendars.py (curve_time, spot_date,
-// swap_periods_to, the full-calendar schedule roller). Two roll behaviours are reproduced FAITHFULLY: token
-// resolution uses the POC weekend-only roll (dates._following); schedule interior boundaries use the full
-// business-day adjust (calendars.adjust) — matching the Python compiler exactly.
+// swaps::build — token resolution + curve time + rolled schedule generation (server/dates.py + calendars.py
+// parity). Since 2026-09-09 token resolution is CALENDAR-AWARE and anchored at SPOT (PRINCIPLES.md P2): a
+// tenor "5Y" is spot(value_date, calendar, spot_lag) + 5Y, business-day-adjusted under `bdc` on the product's
+// calendar; ON/TN are 1/2 business days; ISO dates are adjusted; IMM codes are contract dates (never rolled).
+// The old weekend-only "following" roll from the value date is expressible as data (calendar "NONE", bdc
+// "Following", spot_lag 0) and is what the synthetic tests ask for explicitly.
 #ifndef SWAPS_BUILD_SCHEDULE_HPP
 #define SWAPS_BUILD_SCHEDULE_HPP
 
@@ -18,10 +19,9 @@
 
 namespace swaps::build {
 
-// Weekend-only "following" roll (dates._following). NOT holiday-aware — used only for token resolution.
-inline Date following_weekend(Date d) {
-  while (d.weekday() >= 5) d = d.plus_days(1);
-  return d;
+// Spot/settlement date: `spot_lag` business days after the value date on `cal_id` (calendars.spot_date).
+inline Date spot_date(const Date& value_date, const std::string& cal_id, int spot_lag) {
+  return advance_bd(cal_id, value_date, spot_lag);
 }
 
 inline int imm_month(char c) {
@@ -31,27 +31,31 @@ inline int imm_month(char c) {
   return int(p) + 1;
 }
 
-// Resolve a token to a calendar date (dates.resolve). `roll` applies the weekend "following" adjustment.
-inline Date resolve(const std::string& token, const Date& value_date, bool roll = true) {
+// Resolve a token to a calendar date on a product's conventions (dates.resolve):
+//   sp / spot / t+0 / 0d  -> spot = value_date + spot_lag business days on `cal_id`
+//   on / tn               -> value_date + 1 / + 2 business days
+//   YYYY-MM-DD            -> that date, adjusted under `bdc` on `cal_id` ("Unadjusted" = as entered)
+//   IMM code (U27)        -> the contract's 3rd Wednesday (a contract date; never rolled)
+//   tenor (3M, 2Y, 1Y6M, 28D, 2W) -> spot + tenor, adjusted under `bdc`
+inline Date resolve(const std::string& token, const Date& value_date, const std::string& cal_id,
+                    const std::string& bdc, int spot_lag) {
   std::string t = token;
-  // strip surrounding whitespace
   while (!t.empty() && std::isspace((unsigned char)t.front())) t.erase(t.begin());
   while (!t.empty() && std::isspace((unsigned char)t.back())) t.pop_back();
   if (t.empty()) throw std::invalid_argument("empty date");
   if (t == "?\?\?" || t == "?") throw std::invalid_argument("meeting date not yet known");
+  if (spot_lag < 0) throw std::invalid_argument("resolve: spot_lag must be >= 0");
 
   std::string low = t;
   for (char& ch : low) ch = char(std::tolower(ch));
-  if (low == "sp" || low == "spot" || low == "0d" || low == "b" || low == "t+0")
-    return roll ? following_weekend(value_date) : value_date;
-  if (low == "on") return following_weekend(value_date.plus_days(1));
-  if (low == "tn") return following_weekend(following_weekend(value_date.plus_days(1)).plus_days(1));
+  const Date spot = spot_date(value_date, cal_id, spot_lag);
+  if (low == "sp" || low == "spot" || low == "0d" || low == "b" || low == "t+0") return spot;
+  if (low == "on") return advance_bd(cal_id, value_date, 1);
+  if (low == "tn") return advance_bd(cal_id, value_date, 2);
 
   // ISO YYYY-MM-DD
-  if (t.size() == 10 && t[4] == '-' && t[7] == '-' && std::isdigit((unsigned char)t[0])) {
-    const Date d = Date::from_iso(t);
-    return roll ? following_weekend(d) : d;
-  }
+  if (t.size() == 10 && t[4] == '-' && t[7] == '-' && std::isdigit((unsigned char)t[0]))
+    return adjust(cal_id, Date::from_iso(t), bdc);
   // IMM code: letter + 2 digits (e.g. U27)
   if (t.size() == 3 && std::isalpha((unsigned char)t[0]) && std::isdigit((unsigned char)t[1]) &&
       std::isdigit((unsigned char)t[2])) {
@@ -59,29 +63,13 @@ inline Date resolve(const std::string& token, const Date& value_date, bool roll 
     const int year = 2000 + std::stoi(t.substr(1, 2));
     return third_wednesday(year, unsigned(month));  // already a Wednesday
   }
-  // Tenor: number + unit d/w/m/y
-  {
-    const char unit = char(std::tolower(t.back()));
-    if (unit == 'd' || unit == 'w' || unit == 'm' || unit == 'y') {
-      const double n = std::stod(t.substr(0, t.size() - 1));
-      Date d = value_date;
-      if (unit == 'd') d = value_date.plus_days(int(std::lround(n)));
-      else if (unit == 'w') d = value_date.plus_days(int(std::lround(n * 7)));
-      else if (unit == 'm') d = value_date.plus_months(int(std::lround(n)));
-      else d = value_date.plus_months(int(std::lround(n * 12)));
-      return roll ? following_weekend(d) : d;
-    }
-  }
-  throw std::invalid_argument("unrecognized date/tenor: " + token);
+  // Tenor (strict; compound allowed): anchored at SPOT, adjusted under bdc.
+  const Step st = parse_step(t);
+  return adjust(cal_id, plus_step(spot, st), bdc);
 }
 
 // Curve time (ACT/365F from the value date) — the engine's ModularCurve axis (calendars.curve_time).
 inline double curve_time(const Date& value_date, const Date& d) { return (d - value_date) / 365.0; }
-
-// Spot/settlement date: `spot_lag` business days after the value date on `cal_id` (calendars.spot_date).
-inline Date spot_date(const Date& value_date, const std::string& cal_id, int spot_lag) {
-  return advance_bd(cal_id, value_date, spot_lag);
-}
 
 using Period = std::pair<Date, Date>;
 
@@ -134,14 +122,17 @@ inline std::vector<Period> swap_periods_to(const Date& value_date, const std::st
 inline std::vector<Period> swap_periods_between(const Date& spot, const std::string& cal_id,
                                                 const Date& maturity_date, const std::string& freq_tok,
                                                 const std::string& bdc, const ScheduleRule& rule) {
-  if (maturity_date <= spot) return {{spot, maturity_date}};
-  const int step_m = tok_months(freq_tok);
+  if (maturity_date <= spot)
+    throw std::invalid_argument("schedule: maturity " + iso(maturity_date) + " is on/before the start " + iso(spot) +
+                                " (a swap needs a positive accrual span)");
+  const Step step = tok_step(freq_tok);  // months (3M/1Y) or days (28D/1W) — never both
 
-  // Legacy fast path — taken verbatim so the default output can never drift by even one ulp of date.
+  // Regular grid, forward from `spot` (the legacy path, taken verbatim for monthly steps so the default
+  // output can never drift by even one ulp of date; day-based steps, e.g. MXN 28D, step by days).
   if (rule.is_default()) {
     std::vector<Date> bounds{spot};
-    for (int m = step_m;; m += step_m) {
-      const Date d = adjust(cal_id, add_period(spot, std::to_string(m) + "M"), bdc);
+    for (int k = 1;; ++k) {
+      const Date d = adjust(cal_id, plus_step(spot, step, k), bdc);
       if (d >= maturity_date) break;
       bounds.push_back(d);
     }
@@ -154,34 +145,38 @@ inline std::vector<Period> swap_periods_between(const Date& spot, const std::str
 
   // Extended ISDA path. The roll anchor and direction depend on the stub side. `dom`/`eom` describe the
   // day-of-month the regular (interior) boundaries land on before business-day adjustment.
+  if (step.days) throw std::invalid_argument("schedule: ISDA EOM/stub/roll-day rules need a monthly frequency, got " + freq_tok);
+  const int step_m = step.months;
   const Date anchor = (rule.side == StubSide::Back) ? spot : maturity_date;
   const bool eom = rule.eom || (rule.eom_auto && is_month_end(anchor));
   const int dom = rule.roll_dom > 0 ? rule.roll_dom : int(anchor.day());
 
   // Build the UNADJUSTED interior regular boundaries, strictly between spot and maturity, ascending.
+  // `on_grid` records whether the far end sits EXACTLY on a regular boundary (then there is no stub).
   std::vector<Date> interior;
+  bool on_grid = false;
   if (rule.side == StubSide::Back) {
     for (int k = 1;; ++k) {
       const Date base = anchor.plus_months(k * step_m);
       const Date d = roll_in_month(base.year(), base.month(), dom, eom);
-      if (d >= maturity_date) break;
+      if (d >= maturity_date) { on_grid = (d == maturity_date); break; }
       if (d > spot) interior.push_back(d);
     }
   } else {  // Front: step BACKWARD from maturity, collect descending then reverse.
     for (int k = 1;; ++k) {
       const Date base = anchor.plus_months(-k * step_m);
       const Date d = roll_in_month(base.year(), base.month(), dom, eom);
-      if (d <= spot) break;
+      if (d <= spot) { on_grid = (d == spot); break; }
       if (d < maturity_date) interior.push_back(d);
     }
     for (std::size_t i = 0, j = interior.size(); i + 1 < j; ++i, --j)
       std::swap(interior[i], interior[j - 1]);
   }
 
-  // LONG stub: drop the interior boundary ADJACENT to the stub end, merging the odd period into its
-  // neighbour (Back -> drop the last interior boundary; Front -> drop the first). A no-op when there is
-  // no stub to merge (no interior boundary, or maturity already coincides with the last regular date).
-  if (rule.length == StubLen::Long && !interior.empty()) {
+  // LONG stub: merge the odd period into its neighbour by dropping the interior boundary adjacent to the
+  // stub end — ONLY when a stub exists (the far end is off the regular grid). Until 2026-09-09 this also
+  // merged two REGULAR periods when the maturity sat exactly on the grid (audit E28).
+  if (rule.length == StubLen::Long && !interior.empty() && !on_grid) {
     if (rule.side == StubSide::Back)
       interior.pop_back();
     else

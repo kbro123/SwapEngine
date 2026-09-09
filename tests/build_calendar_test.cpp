@@ -4,6 +4,8 @@
 // day counts, and token resolution. QuantLib-free (in the swaps_tests binary).
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 #include <set>
 #include <sstream>
 #include <string>
@@ -44,9 +46,65 @@ TEST(BuildCalendar, HolidaysMatchPython) {
   check_holidays("EUR", 2027, "2027-01-01,2027-03-26,2027-03-29,2027-05-01,2027-12-25,2027-12-26");
 }
 
+// Calendar-aware, SPOT-anchored resolution (since 2026-09-09) on the real SIFMA calendar. Hand-derived:
+// vd Wed 2026-07-08; spot T+2 = Fri 2026-07-10; 3M from spot = Sat 2026-10-10 -> Following -> Mon 10-12 =
+// Columbus Day (SIFMA closed) -> Tue 10-13 (ModifiedFollowing stays in October); 2Y = Mon 2028-07-10;
+// 18M = Mon 2028-01-10; 28D = Fri 2026-08-07.
+TEST(BuildCalendar, ResolveIsCalendarAwareAndSpotAnchored) {
+  const b::Date vd = b::Date::from_iso("2026-07-08");
+  auto R = [&](const std::string& t) { return b::iso(b::resolve(t, vd, "USD-SOFR", "ModifiedFollowing", 2)); };
+  EXPECT_EQ(R("sp"), "2026-07-10");
+  EXPECT_EQ(R("on"), "2026-07-09");
+  EXPECT_EQ(R("tn"), "2026-07-10");
+  EXPECT_EQ(R("3m"), "2026-10-13");
+  EXPECT_EQ(R("2y"), "2028-07-10");
+  EXPECT_EQ(R("18m"), "2028-01-10");
+  EXPECT_EQ(R("1Y6M"), "2028-01-10");     // compound tenor == 18M (it used to parse as 1M)
+  EXPECT_EQ(R("28D"), "2026-08-07");
+  EXPECT_EQ(R("U27"), "2027-09-15");      // IMM: a contract date, never rolled
+  EXPECT_EQ(R("2027-09-16"), "2027-09-16");
+  EXPECT_EQ(b::iso(b::resolve("2026-10-12", vd, "USD-SOFR", "Unadjusted", 2)), "2026-10-12");  // as entered
+  EXPECT_EQ(b::iso(b::resolve("2026-10-12", vd, "USD-SOFR", "Preceding", 2)), "2026-10-09");
+  // Strict parsing: what a 2026-09 audit found silently accepted.
+  EXPECT_THROW(b::resolve("1e1M", vd, "USD-SOFR", "ModifiedFollowing", 2), std::invalid_argument);
+  EXPECT_THROW(b::resolve("-6M", vd, "USD-SOFR", "ModifiedFollowing", 2), std::invalid_argument);
+  EXPECT_THROW(b::resolve("2024-02-30", vd, "USD-SOFR", "ModifiedFollowing", 2), std::invalid_argument);
+  EXPECT_THROW(b::resolve("2024-13-01", vd, "USD-SOFR", "ModifiedFollowing", 2), std::invalid_argument);
+  EXPECT_THROW(b::resolve("2024-1a-01", vd, "USD-SOFR", "ModifiedFollowing", 2), std::invalid_argument);
+  EXPECT_THROW(b::resolve("6", vd, "USD-SOFR", "ModifiedFollowing", 2), std::invalid_argument);
+  EXPECT_THROW(b::tok_months("28D"), std::invalid_argument);   // a day-based frequency is not "whole months"
+  EXPECT_EQ(b::tok_step("28D").days, 28);
+  EXPECT_EQ(b::tok_step("1Y").months, 12);
+  EXPECT_THROW(b::tok_step("0M"), std::invalid_argument);
+  EXPECT_THROW(b::tok_step("1M2D"), std::invalid_argument);    // a frequency is months OR days
+}
+
+// Schedules: a non-positive span throws (it used to return a negative-accrual period); 28D (MXN TIIE) steps
+// by DAYS; StubLen::Long merges only when a stub exists.
+TEST(BuildCalendar, ScheduleStepsDaysAndRefusesNonPositiveSpans) {
+  const b::Date vd = b::Date::from_iso("2026-07-08");
+  EXPECT_THROW(b::swap_periods_to(vd, "USD-SOFR", vd.plus_days(1), "1Y", "ModifiedFollowing", 2), std::invalid_argument);
+  const b::Date spot = b::spot_date(vd, "MXN", 1);
+  const b::Date mat = b::resolve("1Y", vd, "MXN", "ModifiedFollowing", 1);
+  const auto per = b::swap_periods_to(vd, "MXN", mat, "28D", "ModifiedFollowing", 1);
+  ASSERT_GE(per.size(), 13u);
+  EXPECT_EQ(per.front().first.serial(), spot.serial());
+  EXPECT_EQ(per.back().second.serial(), mat.serial());
+  // every regular boundary is 28 calendar days after the previous UNADJUSTED boundary (adjusted on MXN)
+  for (std::size_t i = 1; i + 1 < per.size(); ++i)
+    EXPECT_EQ(b::adjust("MXN", spot.plus_days(28 * int(i)), "ModifiedFollowing").serial(), per[i].first.serial()) << i;
+  // Long stub: an on-grid maturity (2y, 6M) has NO stub -> 4 regular periods, not 3 merged ones (audit E28).
+  b::ScheduleRule lng; lng.length = b::StubLen::Long;
+  const b::Date m2 = b::spot_date(vd, "EUR", 2).plus_months(24);
+  EXPECT_EQ(b::swap_periods_to(vd, "EUR", m2, "6M", "ModifiedFollowing", 2, lng).size(), 4u);
+  const b::Date m2s = b::spot_date(vd, "EUR", 2).plus_months(25);  // 25M: a genuine 1M stub -> merged
+  EXPECT_EQ(b::swap_periods_to(vd, "EUR", m2s, "6M", "ModifiedFollowing", 2, lng).size(), 4u);
+  EXPECT_EQ(b::swap_periods_to(vd, "EUR", m2s, "6M", "ModifiedFollowing", 2).size(), 5u);
+}
+
 TEST(BuildCalendar, ResolveMatchesPython) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  auto R = [&](const std::string& t) { return b::iso(b::resolve(t, vd)); };
+  auto R = [&](const std::string& t) { return b::iso(b::resolve(t, vd, "NONE", "Following", 0)); };
   EXPECT_EQ(R("U27"), "2027-09-15");     // IMM 3rd-Wed Sep-2027
   EXPECT_EQ(R("M28"), "2028-06-21");
   EXPECT_EQ(R("3m"), "2026-10-08");
@@ -60,7 +118,7 @@ TEST(BuildCalendar, ResolveMatchesPython) {
 
 TEST(BuildCalendar, ScheduleAndDayCounts) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const b::Date mat = b::resolve("2y", vd);
+  const b::Date mat = b::resolve("2y", vd, "NONE", "Following", 0);
   const auto per = b::swap_periods_to(vd, "USD-SOFR", mat, "1Y", "ModifiedFollowing", 2);
   ASSERT_EQ(per.size(), 2u);
   EXPECT_EQ(b::iso(per[0].first), "2026-07-10");

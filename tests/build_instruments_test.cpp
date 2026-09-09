@@ -22,7 +22,7 @@ TEST(BuildInstruments, ObservationWindowsMatchPython) {
   EXPECT_NEAR(avg.sub_end.back(), 0.1506849315, 1e-10);
 
   // 3M compounded future — IMM U27..Z27, single telescoped bracket.
-  const auto cmp = b::observation(vd, b::resolve("U27", vd), b::resolve("Z27", vd), "compounded", 0.0,
+  const auto cmp = b::observation(vd, b::resolve("U27", vd, "NONE", "Following", 0), b::resolve("Z27", vd, "NONE", "Following", 0), "compounded", 0.0,
                                   "ACT/360", "USD-SOFR");
   ASSERT_EQ(cmp.sub_start.size(), 1u);
   EXPECT_TRUE(cmp.weight.empty());
@@ -34,7 +34,7 @@ TEST(BuildInstruments, ObservationWindowsMatchPython) {
 TEST(BuildInstruments, OisSwapScheduleMatchesPython) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
   const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
-  const b::Date mat = b::resolve("5y", vd);
+  const b::Date mat = b::resolve("5y", vd, "NONE", "Following", 0);
 
   const auto fixed = b::fixed_coupons(vd, conv, mat, 0);
   ASSERT_EQ(fixed.coupons.size(), 5u);
