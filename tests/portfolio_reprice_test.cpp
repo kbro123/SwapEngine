@@ -489,8 +489,9 @@ TEST(PortfolioRisk, CrossBundleLadderTransform) {
   const pf::MultiCurveBook book = risk_book();
   const api::PortfolioRisk rA = A.price_portfolio_risk(book);
   const api::PortfolioRisk rB = B.price_portfolio_risk(book);
-  // g = dP/dx is identical across the two bundles (same curves, same book).
-  ASSERT_LT((rA.curve_grad - rB.curve_grad).cwiseAbs().maxCoeff(), 1e-8);
+  // g = dP/dx is identical across the two bundles (same curves, same book) up to where each LM stopped:
+  // A.x and B.x are each within 1e-9 of x_true, so g differs by O(|d²P/dx²|·1e-9) — scale the bound by |g|.
+  ASSERT_LT((rA.curve_grad - rB.curve_grad).cwiseAbs().maxCoeff(), 1e-7 * (1.0 + rA.curve_grad.cwiseAbs().maxCoeff()));
 
   const Eigen::VectorXd g = rA.curve_grad;
   const Eigen::MatrixXd J_A = A.jacobian();          // n_res_A x n_knots

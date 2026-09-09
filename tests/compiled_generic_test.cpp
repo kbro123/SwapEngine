@@ -207,8 +207,10 @@ TEST(CompiledGeneric, FuturesBatchAndJacobianMatchTheKernelAndAad) {
   const double ref1 = px::future_rate<double>(o_one, conv_one, *C[0]);
   std::cout << "  [compiled-generic] futures |d| = " << std::abs(r[0] - ref0) << ", "
             << std::abs(r[1] - ref1) << "\n";
-  EXPECT_LT(std::abs(r[0] - ref0), 1e-15);
-  EXPECT_LT(std::abs(r[1] - ref1), 1e-15);
+  // The batch computes DF[s]·(1/DF[e]) with a SHARED reciprocal (compiled_book.hpp inverse_of); the templated
+  // kernel divides. a·(1/b) vs a/b differ by ≤ 1 ULP, so this is a few-ULP check, not bit identity.
+  EXPECT_LT(std::abs(r[0] - ref0), 8e-15);
+  EXPECT_LT(std::abs(r[1] - ref1), 8e-15);
 
   Eigen::MatrixXd G = Eigen::MatrixXd::Zero(2, cs.n_times());
   fu.d_rate(DF, G, /*row0=*/0);
@@ -238,10 +240,14 @@ TEST(CompiledGeneric, IdentityFastPathIsExactlyTheGeneralPath) {
   Book id = build(x, b, b);
   ASSERT_TRUE(id.fl.sub_is_identity) << "plain one-sub-period legs must take the identity fast path";
 
-  // num() honours the same shortcut; compare it against an explicit R_sub reduction of the same data.
+  // num() honours the same shortcut; compare it against an explicit R_sub reduction of the same data,
+  // written in the batch's own reciprocal form (DF[s]·INV[e] − 1, compiled_book.hpp inverse_of).
+  // (a plain loop, not an Eigen expression: clang contracts a*b-1 into an FMA in a scalar loop but not
+  // inside Eigen's packet evaluation, and this test is about the R_sub shortcut, not about contraction).
   const Eigen::VectorXd n_fast = id.fl.num(id.DF);
-  const Eigen::VectorXd sub =
-      (id.DF(id.fl.subS).array() / id.DF(id.fl.subE).array() - 1.0).matrix();
+  const Eigen::VectorXd inv = id.DF.cwiseInverse();
+  Eigen::VectorXd sub(id.fl.subS.size());
+  for (int i = 0; i < sub.size(); ++i) sub[i] = id.DF[id.fl.subS[i]] * inv[id.fl.subE[i]] - 1.0;
   const Eigen::VectorXd n_gen = id.fl.R_sub * sub;
   EXPECT_EQ(n_fast, n_gen) << "identity shortcut must be bit-identical to the sparse reduction";
 }

@@ -234,15 +234,35 @@ struct BundleFloatBatch {
   }
 
   // --- pricing --------------------------------------------------------------------------------
-  // Per-coupon numerator num = sum_k w_k (DF[s_k]/DF[e_k] - 1). Returns a const ref into per-batch
+  // SHARED RECIPROCALS (2026-09-09): every per-coupon ratio DF[s]/DF[e] is computed as DF[s]·INV[e] with
+  // INV = 1/DF precomputed ONCE per DF evaluation (n_times reciprocals, ~250 on a desk bundle) instead of
+  // one divide per sub-period (~7,000). The divide was the dominant per-coupon cost (13-15 cycle latency,
+  // 4-cycle throughput); a multiply is 0.5/cycle. a·(1/b) differs from a/b by ≤ 1 ULP, so "bit-identical to
+  // the templated kernel" becomes ~1e-16 RELATIVE parity (the T3 tests are at 1e-12). The hot callers
+  // (CompiledBundleResidual, CompiledMultiCurveBook) pass their shared INV; the DF-only overloads below
+  // compute it into per-batch scratch for everyone else (still n_times divides, never per coupon).
+  //
+  // NOTE on vectorisation: these pointer loops are NOT auto-vectorised by clang at -O3 -march=x86-64-v3
+  // ("cannot identify array bounds": data-dependent gather indices) — verified with -Rpass-analysis on
+  // 2026-09-09; the earlier "auto-vectorized gather" comments were wrong. With the reciprocal they are
+  // load/multiply bound, which is close to the scalar floor; explicit SIMD is an E4.D decision.
+  const Eigen::VectorXd& inverse_of(const Eigen::VectorXd& DF) const {
+    inv_scratch_ = DF.cwiseInverse();  // alloc-free after first sizing
+    return inv_scratch_;
+  }
+
+  // Per-coupon numerator num = sum_k w_k (DF[s_k]·INV[e_k] - 1). Returns a const ref into per-batch
   // scratch (no per-tick allocation); the reference is valid until the next call on THIS batch.
-  const Eigen::VectorXd& num(const Eigen::VectorXd& DF) const {
+  const Eigen::VectorXd& num(const Eigen::VectorXd& DF) const { return num(DF, inverse_of(DF)); }
+  const Eigen::VectorXd& num(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
     const int n = static_cast<int>(subS.size());
     sub_.resize(n);
     const double* __restrict df = DF.data();
+    const double* __restrict iv = INV.data();
     const int* __restrict ss = subS.data();
     const int* __restrict se = subE.data();
-    for (int i = 0; i < n; ++i) sub_[i] = df[ss[i]] / df[se[i]] - 1.0;  // auto-vectorized gather
+    double* __restrict out = sub_.data();
+    for (int i = 0; i < n; ++i) out[i] = df[ss[i]] * iv[se[i]] - 1.0;
     if (sub_is_identity) return sub_;  // R_sub == I: the reduction is a bitwise no-op
     num_res_.noalias() = R_sub * sub_;
     return num_res_;
@@ -250,7 +270,8 @@ struct BundleFloatBatch {
 
   // Per-instrument float-leg PV. Returns a const ref into per-batch scratch (valid until the next call
   // on THIS batch) -- gen_pos_ and gen_neg_ are distinct objects, so model_rates can hold both at once.
-  const Eigen::VectorXd& pv(const Eigen::VectorXd& DF) const {
+  const Eigen::VectorXd& pv(const Eigen::VectorXd& DF) const { return pv(DF, inverse_of(DF)); }
+  const Eigen::VectorXd& pv(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
     // PERF RULE: what reaches R_cpn must be a materialized VectorXd -- handing Eigen's sparse*dense an
     // unevaluated gather/divide re-does that work per access (~1.28x slower, measured). On the identity
     // path we fuse the sub-period gather straight into the coupon vector, so the standard shape costs
@@ -258,28 +279,31 @@ struct BundleFloatBatch {
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv() needs pay dates: this is a futures batch");
     Eigen::VectorXd& coupon = coupon_;  // reuse the per-batch scratch (no per-tick allocation)
     if (sub_is_identity && cpn_is_plain) {  // standard shape: identical work to pre-generalization
-      // Hand-written FUSED gather instead of Eigen's IndexedView: Eigen materializes DF(pay)/DF(subS)/
-      // DF(subE) element-by-element (scalar), whereas this single pointer loop is a pattern the compiler
-      // auto-vectorizes into hardware gathers at the target ISA's width (no intrinsics -- §5-clean).
+      // Hand-written FUSED gather instead of Eigen's IndexedView (which materializes DF(pay)/DF(subS)/
+      // DF(subE) into temporaries — allocations on the tick). Not auto-vectorised (see inverse_of).
       coupon.resize(n_cpn_);
       const double* __restrict df = DF.data();
+      const double* __restrict iv = INV.data();
       const int* __restrict p = pay.data();
       const int* __restrict ss = subS.data();
       const int* __restrict se = subE.data();
-      for (int i = 0; i < n_cpn_; ++i) coupon[i] = df[p[i]] * (df[ss[i]] / df[se[i]] - 1.0);
+      double* __restrict out = coupon.data();
+      for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (df[ss[i]] * iv[se[i]] - 1.0);
     }
     else if (sub_is_identity) {
       coupon.resize(n_cpn_);
       const double* __restrict df = DF.data();
+      const double* __restrict iv = INV.data();
       const int* __restrict p = pay.data();
       const int* __restrict ss = subS.data();
       const int* __restrict se = subE.data();
       const double* __restrict kk = konst.data();
       const double* __restrict kv = k.data();
+      double* __restrict out = coupon.data();
       for (int i = 0; i < n_cpn_; ++i)
-        coupon[i] = df[p[i]] * (df[ss[i]] / df[se[i]] - 1.0 + kk[i]) * kv[i];
+        out[i] = df[p[i]] * (df[ss[i]] * iv[se[i]] - 1.0 + kk[i]) * kv[i];
     } else
-      coupon = (DF(pay).array() * (num(DF).array() + konst.array()) * k.array()).matrix();
+      coupon = (DF(pay).array() * (num(DF, INV).array() + konst.array()) * k.array()).matrix();
     pv_res_.noalias() = R_cpn * coupon;
     return pv_res_;
   }
@@ -341,21 +365,23 @@ struct BundleFloatBatch {
   }
 
   // Per-instrument (per-future) rate = (num + realized)*inv_tau + convexity. Const ref into scratch.
-  const Eigen::VectorXd& rate(const Eigen::VectorXd& DF) const {
+  const Eigen::VectorXd& rate(const Eigen::VectorXd& DF) const { return rate(DF, inverse_of(DF)); }
+  const Eigen::VectorXd& rate(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
     if (sub_is_identity) {
       const int n = static_cast<int>(subS.size());
       rate_res_.resize(n);
       const double* __restrict df = DF.data();
+      const double* __restrict iv = INV.data();
       const int* __restrict ss = subS.data();
       const int* __restrict se = subE.data();
       const double* __restrict rz = realized.data();
       const double* __restrict it = inv_tau.data();
       const double* __restrict cv = convexity.data();
       double* __restrict out = rate_res_.data();
-      for (int i = 0; i < n; ++i) out[i] = (df[ss[i]] / df[se[i]] - 1.0 + rz[i]) * it[i] + cv[i];
+      for (int i = 0; i < n; ++i) out[i] = (df[ss[i]] * iv[se[i]] - 1.0 + rz[i]) * it[i] + cv[i];
       return rate_res_;
     }
-    rate_res_ = ((num(DF).array() + realized.array()) * inv_tau.array() + convexity.array()).matrix();
+    rate_res_ = ((num(DF, INV).array() + realized.array()) * inv_tau.array() + convexity.array()).matrix();
     return rate_res_;
   }
 
@@ -381,26 +407,35 @@ struct BundleFloatBatch {
   template <class Mat>  // any dense matrix (row-major preferred: the scatters are row-local)
   void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, Mat& d,
                      int row0, double sign) const {
+    d_pv_from_num(num_cpn, DF, inverse_of(DF), d, row0, sign);
+  }
+  template <class Mat>
+  void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, const Eigen::VectorXd& INV,
+                     Mat& d, int row0, double sign) const {
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "d_pv_from_num() needs pay dates");
     for (int i = 0; i < n_cpn_; ++i)
       d(row0 + inst[i], pay[i]) += sign * (num_cpn[i] + konst[i]) * k[i];
     for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
       const int i = sub_cpn[j], s = subS[j], e = subE[j];
       const double f = sign * DF[pay[i]] * k[i] * sub_w[j];
-      d(row0 + inst[i], s) += f / DF[e];
-      d(row0 + inst[i], e) += -f * DF[s] / (DF[e] * DF[e]);
+      const double ie = INV[e];
+      d(row0 + inst[i], s) += f * ie;
+      d(row0 + inst[i], e) += -f * DF[s] * ie * ie;
     }
   }
   // d(rate)/dDF for a futures batch (realized and convexity are constants -> zero derivative):
   //     d rate / d DF[s_k] = + w_k·inv_tau / DF[e_k]
   //     d rate / d DF[e_k] = − w_k·inv_tau·DF[s_k] / DF[e_k]²
   template <class Mat>
-  void d_rate(const Eigen::VectorXd& DF, Mat& d, int row0) const {
+  void d_rate(const Eigen::VectorXd& DF, Mat& d, int row0) const { d_rate(DF, inverse_of(DF), d, row0); }
+  template <class Mat>
+  void d_rate(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV, Mat& d, int row0) const {
     for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
       const int i = sub_cpn[j], s = subS[j], e = subE[j], r = row0 + inst[i];
       const double f = inv_tau[i] * sub_w[j];
-      d(r, s) += f / DF[e];
-      d(r, e) += -f * DF[s] / (DF[e] * DF[e]);
+      const double ie = INV[e];
+      d(r, s) += f * ie;
+      d(r, e) += -f * DF[s] * ie * ie;
     }
   }
 
@@ -460,7 +495,7 @@ struct BundleFloatBatch {
   // Per-batch reusable scratch (sized on first use) so pv/num/rate never allocate in the hot loop.
   // Each returns a const ref into these; because gen_pos_/gen_neg_ are distinct batch objects, two
   // results (one per batch) are simultaneously live in model_rates without aliasing.
-  mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_;
+  mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_, inv_scratch_;
   // Batched-grid scratch (pv_grid): pv_grid_ is n_inst x n_states (coupons accumulated straight into their
   // instrument row); inv_dfg_ is the per-tile reciprocal DF grid (n_times x n_states). Sized on first use.
   mutable RowMatrixXd pv_grid_, inv_dfg_;

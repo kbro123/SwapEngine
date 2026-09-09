@@ -49,7 +49,8 @@ class CompiledPortfolio {
   // reusable scratch, returns a const ref) -- so a real-time book reprice never touches the allocator.
   const Eigen::VectorXd& npv(const Eigen::VectorXd& x) const {
     cs_.df_into(x, df_);  // DF into scratch; float_/fixed_ pv/annuity return refs into their own scratch
-    const Eigen::VectorXd& pv = float_.pv(df_);
+    inv_ = df_.cwiseInverse();
+    const Eigen::VectorXd& pv = float_.pv(df_, inv_);
     const Eigen::VectorXd& ann = fixed_.annuity(df_);
     npv_ = (notional_.array() * (pv.array() - fixed_rate_.array() * ann.array())).matrix();
     return npv_;
@@ -105,7 +106,7 @@ class CompiledPortfolio {
   pricing::BundleFloatBatch float_;
   pricing::BundleFixedLegs fixed_;
   Eigen::VectorXd fixed_rate_, notional_, nf_;  // nf_ = notional⊙fixed_rate
-  mutable Eigen::VectorXd df_, npv_;      // reusable per-reprice scratch
+  mutable Eigen::VectorXd df_, inv_, npv_;      // reusable per-reprice scratch
   mutable Eigen::MatrixXd dfg_, npvg_;    // reusable col-major DF (fallback) / NPV grids for npv_grid
   mutable pricing::RowMatrixXd dfg_row_;  // reusable row-major DF grid for the batched path
 };

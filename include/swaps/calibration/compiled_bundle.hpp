@@ -148,12 +148,13 @@ class CompiledBundleResidual {
   // by quote kind internally then scattered back to each instrument's own row.
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
     const Eigen::VectorXd& DF = df_at(x);
+    const Eigen::VectorXd& INV = inv_;  // valid whenever df_at(x) is (same memo)
     out_.setZero(n_residuals());  // ACCUMULATE: a portfolio row sums its components' weighted quotes; a
                                   // plain row has one entry with weight 1 (0 + 1·q == q, bit-identical).
     if (!q_rows_.empty()) {
       const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);  // refs into DISTINCT batch objects,
-      const Eigen::VectorXd& pp = gen_pos_.pv(DF);          // so all three are simultaneously live
-      const Eigen::VectorXd& pn = gen_neg_.pv(DF);
+      const Eigen::VectorXd& pp = gen_pos_.pv(DF, INV);     // so all three are simultaneously live
+      const Eigen::VectorXd& pn = gen_neg_.pv(DF, INV);
       for (std::size_t j = 0; j < q_rows_.size(); ++j) {
         const int i = static_cast<int>(j);
         out_[q_rows_[j].row] += q_rows_[j].weight * (pp[i] - pn[i]) / ann[i];
@@ -163,7 +164,7 @@ class CompiledBundleResidual {
     // so out_[row] IS the quotient). Before the FX/turn rows (disjoint) and before any band (residuals_vs).
     for (const auto& z : zc_rows_) out_[z.row] = zero_coupon_transform_d(out_[z.row], z.tau).first;
     if (!r_rows_.empty()) {
-      const Eigen::VectorXd& v = gen_rate_.rate(DF);
+      const Eigen::VectorXd& v = gen_rate_.rate(DF, INV);
       for (std::size_t j = 0; j < r_rows_.size(); ++j)
         out_[r_rows_[j].row] += r_rows_[j].weight * v[static_cast<int>(j)];
     }
@@ -208,6 +209,7 @@ class CompiledBundleResidual {
   // residual, so a frozen-Newton streamer's M is consistent with the residual it drives.
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& DF = df_at(x);
+    const Eigen::VectorXd& INV = inv_;
     // Capture the model quotes for banded rows BEFORE the batch scratch below is overwritten.
     if (!band_.empty()) {
       const Eigen::VectorXd& mr = model_rates(x);
@@ -226,8 +228,8 @@ class CompiledBundleResidual {
       // longer runs a second time for the derivative. Const refs: each accessor returns a ref into ITS
       // OWN batch object's scratch (gen_pos_/gen_neg_/gen_fixed_ are distinct), so all stay live -- no
       // per-call vector copies. Only `num` (a genuine difference) lands in a reused member scratch.
-      const Eigen::VectorXd& num_pos = gen_pos_.num(DF);
-      const Eigen::VectorXd& num_neg = gen_neg_.num(DF);
+      const Eigen::VectorXd& num_pos = gen_pos_.num(DF, INV);
+      const Eigen::VectorXd& num_neg = gen_neg_.num(DF, INV);
       num_.noalias() = gen_pos_.pv_from_num(num_pos, DF) - gen_neg_.pv_from_num(num_neg, DF);
       const Eigen::VectorXd& num = num_;
       const Eigen::VectorXd& ann = gen_fixed_.annuity(DF);
@@ -235,8 +237,8 @@ class CompiledBundleResidual {
       dann_.setZero();
       pricing::RowMatrixXd& dnum = dnum_;
       pricing::RowMatrixXd& dann = dann_;
-      gen_pos_.d_pv_from_num(num_pos, DF, dnum, 0, 1.0);
-      gen_neg_.d_pv_from_num(num_neg, DF, dnum, 0, -1.0);
+      gen_pos_.d_pv_from_num(num_pos, DF, INV, dnum, 0, 1.0);
+      gen_neg_.d_pv_from_num(num_neg, DF, INV, dnum, 0, -1.0);
       gen_fixed_.d_annuity(dann, 0);
       for (int j = 0; j < nq; ++j)  // d(num/ann) = dnum/ann - num·dann/ann²; accumulate (portfolio rows)
         G.row(q_rows_[j].row) +=
@@ -251,7 +253,7 @@ class CompiledBundleResidual {
       const int nr = static_cast<int>(r_rows_.size());
       dr_.setZero();
       pricing::RowMatrixXd& dr = dr_;
-      gen_rate_.d_rate(DF, dr, 0);
+      gen_rate_.d_rate(DF, INV, dr, 0);
       for (int j = 0; j < nr; ++j) G.row(r_rows_[j].row) += r_rows_[j].weight * dr.row(j);
     }
     // FX rows: r = (ln F − ln q)/T with F = fx_spot·DF_num/DF_den. Only TWO dr/dDF entries per row:
@@ -316,6 +318,7 @@ class CompiledBundleResidual {
   const Eigen::VectorXd& df_at(const Eigen::VectorXd& x) const {
     if (x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {
       cs_.df_into(x, df_);  // allocation-free recompute into the df_ scratch
+      inv_ = df_.cwiseInverse();  // the shared reciprocals: n_times divides ONCE, none per coupon
       df_x_ = x;
     }
     return df_;
@@ -443,7 +446,7 @@ class CompiledBundleResidual {
   Eigen::VectorXd market_;
   // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.
-  mutable Eigen::VectorXd df_, df_x_;
+  mutable Eigen::VectorXd df_, df_x_, inv_;
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
   mutable Eigen::VectorXd qb_, num_;   // jacobian_vs scratch: banded model quotes, quotient numerator
   // ROW-MAJOR: every fill site (the d_* scatters, the per-row G assembly, the band row

@@ -107,7 +107,8 @@ class CompiledMultiCurveBook {
     double total = 0.0;
     if (n_compiled() > 0) {
       cs_.df_into(x, df_);  // DF into scratch; pv/annuity return refs into the batches' own scratch
-      const Eigen::VectorXd& pv = float_.pv(df_);
+      inv_ = df_.cwiseInverse();  // shared reciprocals (compiled_book.hpp inverse_of)
+      const Eigen::VectorXd& pv = float_.pv(df_, inv_);
       const Eigen::VectorXd& ann = fixed_.annuity(df_);
       npv_ = (notional_.array() * pv.array() - nf_.array() * ann.array()).matrix();
       total = npv_.sum();
@@ -139,9 +140,11 @@ class CompiledMultiCurveBook {
     double g = 0.0;  // Σⱼ ∂NPV/∂xⱼ = the directional derivative along the all-ones knot direction
     if (n_compiled() > 0) {
       cs_.df_into(x, df_);
+      inv_ = df_.cwiseInverse();
       t_ = (-rowsum_.array() * df_.array()).matrix();  // parallel-shift DF tangent (reused scratch)
-      const Eigen::VectorXd& num = float_.num(df_);              // per-coupon Σ w·(DF[s]/DF[e]−1)
+      const Eigen::VectorXd& num = float_.num(df_, inv_);        // per-coupon Σ w·(DF[s]·INV[e]−1)
       const double* __restrict DF = df_.data();
+      const double* __restrict IV = inv_.data();
       const double* __restrict tt = t_.data();
       // Float coupons: the pay-column partial (num+konst)·k, weighted by the owning position's notional.
       for (int c = 0; c < float_.n_coupons(); ++c) {
@@ -153,7 +156,7 @@ class CompiledMultiCurveBook {
         const int c = float_.sub_cpn[j], i = float_.inst[c];
         const int s = float_.subS[j], e = float_.subE[j];
         const double f = notional_[i] * DF[float_.pay[c]] * float_.k[c] * float_.sub_w[j];
-        g += f * (tt[s] / DF[e] - tt[e] * DF[s] / (DF[e] * DF[e]));
+        g += f * (tt[s] * IV[e] - tt[e] * DF[s] * IV[e] * IV[e]);
       }
       // Fixed annuities enter NPV as −(notional·fixed_rate)·Σ τ·DF[pay]: ∂/∂DF[pay] = −nf·τ.
       for (int i = 0; i < static_cast<int>(fixed_.pay.size()); ++i)
@@ -211,7 +214,7 @@ class CompiledMultiCurveBook {
   mutable calibration::BundleCurveSet<double> fb_curves_;
 
   Eigen::VectorXd rowsum_;             // per-registered-time Σ_j W[k,j] (constant): parallel-shift DF tangent scale
-  mutable Eigen::VectorXd df_, npv_, t_;  // reusable per-reprice scratch (df_/npv_ npv(); t_ pv01()'s DF tangent)
+  mutable Eigen::VectorXd df_, inv_, npv_, t_;  // reusable per-reprice scratch (df_/npv_ npv(); t_ pv01()'s DF tangent)
 };
 
 }  // namespace swaps::portfolio
