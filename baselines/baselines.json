@@ -228,373 +228,374 @@
         "arch_flag": "-march=x86-64-v3",
         "quantlib_toolchain": "1.35|Apple clang version 21.0.0 (clang-2100.1.1.101)|-O3 -DNDEBUG -fno-math-errno -march=x86-64-v3"
       },
-      "captured_utc": "2026-09-08T20:33:48Z",
-      "load_avg_at_capture": 3.59,
+      "captured_utc": "2026-09-09T21:56:13Z",
+      "load_avg_at_capture": 3.4,
       "reps": 5,
       "min_time_s": 0.5,
-      "notes": "Captured by tools/check_perf.py --update (min-of-reps, quiesced). Shape-ladder metrics (shape_*) captured 2026-09-09 quiesced (cpu busy 5.3%%) with --only; the rest of the block is the 2026-09-08 capture.",
+      "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate).",
       "metrics": {
-        "sofr_23k_square_cold_calibrate": {
-          "ours_ns": 504267,
-          "reference_ns": 15408873,
-          "reference_bm": "BM_CurveBuild_QuantLib",
-          "speedup": 30.56
-        },
-        "sofr_23k_risk_ladder_23q_book9": {
-          "ours_ns": 109048,
-          "reference_ns": 16175727,
-          "reference_bm": "BM_Risk_QuantLib_Bump",
-          "speedup": 148.34
-        },
-        "sofr_23k_book1000_ois_reprice": {
-          "ours_ns": 80506,
-          "reference_ns": 21268661,
-          "reference_bm": "BM_Portfolio_QuantLib",
-          "speedup": 264.19
-        },
-        "sofr_23k_warm_recal_0p3bp": {
-          "ours_ns": 17630,
-          "reference_ns": 883549,
-          "reference_bm": "BM_WarmRecal_QuantLib",
-          "speedup": 50.12
-        },
-        "sofr_23k_warm_recal_10bp": {
-          "ours_ns": 46100,
-          "reference_ns": 1017430,
-          "reference_bm": "BM_WarmRecal_QuantLib_10bp",
-          "speedup": 22.07
-        },
-        "ust_5000_clean_to_yield_sweep": {
-          "ours_ns": 3461221,
-          "reference_ns": 2573313838,
-          "reference_bm": "BM_BondSweep_QuantLib",
-          "speedup": 743.47
-        },
-        "ust_5000_curve_book_dirty_price": {
-          "ours_ns": 405586,
-          "reference_ns": 27578377,
-          "reference_bm": "BM_BondBook_QuantLib",
-          "speedup": 68.0
-        },
-        "sofr_swaption_cube17_sabr_reprice_warm": {
-          "ours_ns": 10167,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "sofr_swaption_cube17_cold_calibrate_price": {
-          "ours_ns": 1190119,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_session_cold_build_calibrate": {
-          "ours_ns": 24563764,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_session_rebind": {
-          "ours_ns": 13580007,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_session_rebind_tension_reg": {
-          "ours_ns": 21351214,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_session_stream_tick": {
-          "ours_ns": 176890,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_book200_price_portfolio_oneshot": {
-          "ours_ns": 14339421,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_kernel_cold_joint_lm": {
-          "ours_ns": 22128444,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_kernel_one_residual": {
-          "ours_ns": 31706,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_kernel_one_jacobian": {
-          "ours_ns": 433487,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "chain8x26_book200_compiled_reprice": {
-          "ours_ns": 22988,
-          "reference_ns": 701565,
-          "reference_bm": "BM_MultiCurveBook_Templated",
-          "speedup": 30.52
-        },
-        "usd_eur_xccy_3c8k_hybrid_jacobian": {
-          "ours_ns": 32547,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "usd_eur_xccy_3c8k_aad_block_jacobian": {
-          "ours_ns": 29360,
-          "reference_ns": 160816,
-          "reference_bm": "BM_FxStream_AadBlockJacobianHeap",
-          "speedup": 5.48
-        },
-        "usd_eur_xccy_3c8k_stream_tick": {
-          "ours_ns": 87395,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
         "shape_ois_nolag_stream_tick": {
-          "ours_ns": 3194,
+          "ours_ns": 1635,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_nolag_refresh_25bp": {
-          "ours_ns": 16562,
+          "ours_ns": 12507,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_nolag_jacobian": {
-          "ours_ns": 3643,
+          "ours_ns": 2637,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_lag_stream_tick": {
-          "ours_ns": 3510,
+          "ours_ns": 1956,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_lag_refresh_25bp": {
-          "ours_ns": 18787,
+          "ours_ns": 14814,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_lag_jacobian": {
-          "ours_ns": 5186,
+          "ours_ns": 4186,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_stream_tick": {
-          "ours_ns": 9033,
+          "ours_ns": 4961,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_refresh_25bp": {
-          "ours_ns": 54755,
+          "ours_ns": 45248,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_jacobian": {
-          "ours_ns": 16686,
+          "ours_ns": 15279,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_stream_tick": {
-          "ours_ns": 7899,
+          "ours_ns": 3951,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_refresh_25bp": {
-          "ours_ns": 49652,
+          "ours_ns": 39447,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_jacobian": {
-          "ours_ns": 13551,
+          "ours_ns": 11506,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_stream_tick": {
-          "ours_ns": 12103,
+          "ours_ns": 7609,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_refresh_25bp": {
-          "ours_ns": 78412,
+          "ours_ns": 66500,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_jacobian": {
-          "ours_ns": 21967,
+          "ours_ns": 20197,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_stream_tick": {
-          "ours_ns": 533790,
+          "ours_ns": 369854,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_refresh_25bp": {
-          "ours_ns": 2072240,
+          "ours_ns": 1683207,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_jacobian": {
-          "ours_ns": 913884,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_banded_stream_tick": {
-          "ours_ns": 4423,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_banded_refresh_25bp": {
-          "ours_ns": 151850,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_banded_jacobian": {
-          "ours_ns": 6131,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_turns_stream_tick": {
-          "ours_ns": 3870,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_turns_refresh_25bp": {
-          "ours_ns": 126855,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_turns_jacobian": {
-          "ours_ns": 6783,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_portfolio_stream_tick": {
-          "ours_ns": 4591,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_portfolio_refresh_25bp": {
-          "ours_ns": 54520,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_portfolio_jacobian": {
-          "ours_ns": 6824,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_zero_coupon_stream_tick": {
-          "ours_ns": 735,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_zero_coupon_refresh_25bp": {
-          "ours_ns": 1174,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_zero_coupon_jacobian": {
-          "ours_ns": 1160,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_fx_xccy_stream_tick": {
-          "ours_ns": 124818,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_fx_xccy_refresh_25bp": {
-          "ours_ns": 38394,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_fx_xccy_jacobian": {
-          "ours_ns": 359083,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_desk_stream_tick": {
-          "ours_ns": 177772,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_desk_refresh_25bp": {
-          "ours_ns": 10872708,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_desk_jacobian": {
-          "ours_ns": 631124,
+          "ours_ns": 862908,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_stream_tick": {
-          "ours_ns": 56575,
+          "ours_ns": 54488,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_refresh_25bp": {
-          "ours_ns": 148614,
+          "ours_ns": 144504,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_jacobian": {
-          "ours_ns": 14256,
+          "ours_ns": 13771,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_banded_stream_tick": {
+          "ours_ns": 2847,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_banded_refresh_25bp": {
+          "ours_ns": 135566,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_banded_jacobian": {
+          "ours_ns": 4684,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_turns_stream_tick": {
+          "ours_ns": 2312,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_turns_refresh_25bp": {
+          "ours_ns": 107668,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_turns_jacobian": {
+          "ours_ns": 5659,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_portfolio_stream_tick": {
+          "ours_ns": 2365,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_portfolio_refresh_25bp": {
+          "ours_ns": 45683,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_portfolio_jacobian": {
+          "ours_ns": 5734,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_zero_coupon_stream_tick": {
+          "ours_ns": 733,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_zero_coupon_refresh_25bp": {
+          "ours_ns": 1165,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_zero_coupon_jacobian": {
+          "ours_ns": 675,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_fx_xccy_stream_tick": {
+          "ours_ns": 120954,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_fx_xccy_refresh_25bp": {
+          "ours_ns": 37119,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_fx_xccy_jacobian": {
+          "ours_ns": 354194,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_stream_tick": {
+          "ours_ns": 160503,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_refresh_25bp": {
+          "ours_ns": 8954855,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_jacobian": {
+          "ours_ns": 605284,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "sofr_23k_square_cold_calibrate": {
+          "ours_ns": 478714,
+          "reference_ns": 15329514,
+          "reference_bm": "BM_CurveBuild_QuantLib",
+          "speedup": 32.02
+        },
+        "sofr_23k_risk_ladder_23q_book9": {
+          "ours_ns": 113651,
+          "reference_ns": 16323285,
+          "reference_bm": "BM_Risk_QuantLib_Bump",
+          "speedup": 143.63
+        },
+        "sofr_23k_book1000_ois_reprice": {
+          "ours_ns": 26064,
+          "reference_ns": 23600167,
+          "reference_bm": "BM_Portfolio_QuantLib",
+          "speedup": 905.48
+        },
+        "sofr_23k_warm_recal_0p3bp": {
+          "ours_ns": 16253,
+          "reference_ns": 900909,
+          "reference_bm": "BM_WarmRecal_QuantLib",
+          "speedup": 55.43
+        },
+        "sofr_23k_warm_recal_10bp": {
+          "ours_ns": 43189,
+          "reference_ns": 1042239,
+          "reference_bm": "BM_WarmRecal_QuantLib_10bp",
+          "speedup": 24.13
+        },
+        "ust_5000_clean_to_yield_sweep": {
+          "ours_ns": 3603879,
+          "reference_ns": 2670400040,
+          "reference_bm": "BM_BondSweep_QuantLib",
+          "speedup": 740.98
+        },
+        "ust_5000_curve_book_dirty_price": {
+          "ours_ns": 412469,
+          "reference_ns": 29840870,
+          "reference_bm": "BM_BondBook_QuantLib",
+          "speedup": 72.35
+        },
+        "sofr_swaption_cube17_sabr_reprice_warm": {
+          "ours_ns": 10092,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "sofr_swaption_cube17_cold_calibrate_price": {
+          "ours_ns": 859683,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_session_cold_build_calibrate": {
+          "ours_ns": 20893256,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_session_rebind": {
+          "ours_ns": 14088502,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_session_rebind_tension_reg": {
+          "ours_ns": 22645234,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_session_stream_tick": {
+          "ours_ns": 74766,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_book200_price_portfolio_oneshot": {
+          "ours_ns": 14757965,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_kernel_cold_joint_lm": {
+          "ours_ns": 18437733,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_kernel_one_residual": {
+          "ours_ns": 10503,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_kernel_one_jacobian": {
+          "ours_ns": 413814,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "chain8x26_book200_compiled_reprice": {
+          "ours_ns": 11894,
+          "reference_ns": 702371,
+          "reference_bm": "BM_MultiCurveBook_Templated",
+          "speedup": 59.05
+        },
+        "usd_eur_xccy_3c8k_hybrid_jacobian": {
+          "ours_ns": 32377,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "usd_eur_xccy_3c8k_aad_block_jacobian": {
+          "ours_ns": 30220,
+          "reference_ns": 166825,
+          "reference_bm": "BM_FxStream_AadBlockJacobianHeap",
+          "speedup": 5.52
+        },
+        "usd_eur_xccy_3c8k_stream_tick": {
+          "ours_ns": 88755,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         }
-      }
+      },
+      "cpu_busy_pct_at_capture": 5.1
     }
   }
 }
