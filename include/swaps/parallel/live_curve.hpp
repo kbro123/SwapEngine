@@ -11,6 +11,8 @@
 //   * snapshot(out): the reader acquire-loads `published_`, copies that slot's payload, then re-checks
 //     the slot generation AND that `published_` still points there. If a publish lapped it mid-copy
 //     (rare -- a publish is per-tick, a copy is ~µs), it retries. No locks, no allocation after the ctor.
+//     The version is stored in the slot under the same seqlock, so the (payload, version) pair a reader
+//     returns is always the pair one publish wrote.
 //
 // The only shared mutable state is the atomics; the payload is written by ONE thread and copied out by
 // readers, so there is no data race. Memory ordering: release on publish / acquire on read gives readers
@@ -42,28 +44,25 @@ class LiveCurveFeed {
   void publish(const Eigen::VectorXd& x) {
     write_idx_ = (write_idx_ + 1) % static_cast<int>(slots_.size());
     Slot& s = slots_[write_idx_];
+    const std::uint64_t ver = version_.load(std::memory_order_relaxed) + 1;  // writer-only counter
     s.gen.fetch_add(1, std::memory_order_release);   // -> odd: slot is being written
     s.x = x;                                         // payload (fixed size -> no realloc)
+    s.ver = ver;                                     // the version of THIS payload, inside the seqlock
     s.gen.fetch_add(1, std::memory_order_release);   // -> even: slot is stable
     published_.store(write_idx_, std::memory_order_release);
-    version_.fetch_add(1, std::memory_order_release);
+    version_.store(ver, std::memory_order_release);
   }
 
   // READER(S) (pricer thread[s]). Copies the current published curve into `out` (sized to n_knots by the
   // caller ONCE, reused every call). Lock-free; spins only if a publish lands during the copy. Returns
   // the version copied. `out` is guaranteed to be a wholly-published curve, never torn.
+  // The version is read from INSIDE the seqlocked slot, so it is the version of exactly the payload copied:
+  // until 2026-09-09 it was loaded from the global counter AFTER the slot check, so a publish landing in
+  // that window paired curve N with version N+1 (caught by the async-pricer consistency test under load).
   std::uint64_t snapshot(Eigen::VectorXd& out) const {
     for (;;) {
-      const int i = published_.load(std::memory_order_acquire);
-      const Slot& s = slots_[i];
-      const std::uint64_t g1 = s.gen.load(std::memory_order_acquire);
-      if (g1 & 1u) continue;                         // writer mid-write on this slot -> retry
-      out = s.x;                                      // copy the payload
-      std::atomic_thread_fence(std::memory_order_acquire);
-      const std::uint64_t g2 = s.gen.load(std::memory_order_acquire);
-      // Clean iff the slot was not touched during the copy AND it is still the published slot.
-      if (g1 == g2 && published_.load(std::memory_order_acquire) == i)
-        return version_.load(std::memory_order_acquire);
+      std::uint64_t ver;
+      if (try_snapshot(out, ver)) return ver;
     }
   }
 
@@ -75,10 +74,12 @@ class LiveCurveFeed {
     const std::uint64_t g1 = s.gen.load(std::memory_order_acquire);
     if (g1 & 1u) return false;
     out = s.x;
+    const std::uint64_t v = s.ver;
     std::atomic_thread_fence(std::memory_order_acquire);
     const std::uint64_t g2 = s.gen.load(std::memory_order_acquire);
+    // Clean iff the slot was not touched during the copy AND it is still the published slot.
     if (g1 == g2 && published_.load(std::memory_order_acquire) == i) {
-      ver = version_.load(std::memory_order_acquire);
+      ver = v;
       return true;
     }
     return false;
@@ -87,6 +88,7 @@ class LiveCurveFeed {
  private:
   struct Slot {
     Eigen::VectorXd x;
+    std::uint64_t ver = 0;              // version of the payload in x (written under the seqlock with it)
     std::atomic<std::uint64_t> gen{0};  // even = stable, odd = being written (per-slot seqlock)
   };
   std::vector<Slot> slots_;
