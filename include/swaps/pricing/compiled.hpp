@@ -50,6 +50,28 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<curve::CurveModu
   return W;
 }
 
+// FORWARD weight rows: psi(i,:) such that forward(times[i]) = psi(i,:)·x, for the same linear region layouts as
+// integral_weight_matrix (the forward is linear in x whenever the integral is). One Dual pass, setup only. Used by
+// the compiled MOMENT path (BundleFloatBatch): ∫f² over a window becomes the quadratic form xᵀ(Σ_k w_k psi_k psi_kᵀ)x
+// with the Gauss nodes' rows precomputed at compile.
+inline Eigen::MatrixXd forward_weight_matrix(const std::vector<curve::CurveModule>& regions,
+                                             const std::vector<double>& times) {
+  auto c = curve::make_modular_curve<ad::Dual>(regions);
+  if (!c.is_linear_map())
+    throw std::invalid_argument("forward_weight_matrix: requires linear interpolation regions (MonotoneCubic is value-dependent)");
+  const int m = c.n_knots();
+  Eigen::MatrixXd P(static_cast<int>(times.size()), m);
+  c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const ad::Dual f = c.forward(times[i]);
+    if (f.derivatives().size() == m)
+      P.row(static_cast<int>(i)) = f.derivatives().transpose();
+    else
+      P.row(static_cast<int>(i)).setZero();
+  }
+  return P;
+}
+
 // B-spline RISK TRANSFORM (docs/bezier-and-moments.md Part A). The B-spline free variables are CONTROL
 // POINTS, which do not lie on the curve, so a raw risk ladder is control-point sensitivity. B maps the
 // free vars x to the forward-at-knot values (front forwards are identity; back = de Boor of the control

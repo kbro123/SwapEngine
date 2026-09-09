@@ -88,6 +88,37 @@ inline px::RateObservation observation(const Date& vd, const Date& start, const 
 // ---- RFR observation-timing conventions (Priority-2: fixing lag / lookback / lockout) --------------------
 // Advance `n` observation business days (n may be negative) using the SAME weekend-only-when-empty rule as
 
+// MOMENT-path observation of a daily ARITHMETIC-AVERAGE window [start, end) (docs/bezier-and-moments.md Part B):
+// one bracket in curve time plus the calendar-derived day-count moments fixing_step = Σ_d dt_d²/(b−a) and
+// fixing_step3 = Σ_d dt_d³/(b−a) over the index calendar's business days (weekends give 3-day accruals). The engine
+// then prices the average from curve moments instead of ~250 daily sub-periods (a documented ~5e-9 relative
+// approximation of the daily sum; `observation(..., "averaged", ...)` remains the exact daily path). Spot-start only.
+inline px::RateObservation moment_observation(const Date& vd, const Date& start, const Date& end,
+                                              const std::string& dc, const std::string& cal) {
+  if (start < vd) throw std::invalid_argument("moment_observation: a partially-fixed window needs the daily path (fixings)");
+  px::RateObservation o;
+  const double a = curve_time(vd, start), b = curve_time(vd, end);
+  // Each day's term is (index accrual τ_d / curve-time step dt_d)·(e^{δ_d} − 1). For an ACT-based index day
+  // count the ratio is the SAME every day (365/360 for ACT/360 on the ACT/365F curve clock), so it factors out
+  // of the whole sum and rides as the bracket's single weight; a day count for which it varies (30/360) has no
+  // moment form and is refused rather than approximated twice.
+  double s2 = 0.0, s3 = 0.0, w = 0.0, wmin = 1e300, wmax = -1e300;
+  for (const auto& [s, e] : daily_periods(start, end, cal)) {
+    const double dt = curve_time(vd, e) - curve_time(vd, s);
+    const double r = year_frac(dc, s, e, cal) / dt;
+    s2 += dt * dt; s3 += dt * dt * dt;
+    w = r; wmin = std::min(wmin, r); wmax = std::max(wmax, r);
+  }
+  if (wmax - wmin > 1e-10 * std::max(1.0, wmax))
+    throw std::invalid_argument("moment_observation: the index day count '" + dc + "' is not a constant multiple of curve time; use the daily path");
+  o.sub_start = {a}; o.sub_end = {b};
+  if (std::abs(w - 1.0) > 1e-15) o.weight = {w};
+  o.tau_index = year_frac(dc, start, end, cal);
+  o.fixing_step = s2 / (b - a);
+  o.fixing_step3 = s3 / (b - a);
+  return o;
+}
+
 inline Date advance_obs_bd(const std::string& cal, Date d, int n) {
   if (cal.empty()) throw std::invalid_argument("advance_obs_bd: calendar id required (\'NONE\' = weekends only)");
   const int step = n >= 0 ? 1 : -1;

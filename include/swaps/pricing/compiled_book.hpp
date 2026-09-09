@@ -21,6 +21,8 @@
 // any day-count basis are all the same batch with different DATA.
 
 #include <Eigen/Core>
+#include <cmath>
+#include <stdexcept>
 #include <Eigen/SparseCore>
 
 #include <cassert>
@@ -113,6 +115,21 @@ class CompiledCurveSet {
     out = (-out.array()).exp();
   }
   const Eigen::MatrixXd& W() const { return W_; }
+  // FORWARD weight rows of curve c at `times` (forward_c(t) = row·x): own regions + base ancestry + a 0/1
+  // indicator column per turn (a turn adds δ to the forward inside its window). Setup only (the moment path's
+  // quadratic forms are built from these at registration); callable once init() has run.
+  Eigen::MatrixXd forward_rows(int c, const std::vector<double>& times) const {
+    const int ni = specs_[c].n_interp_knots();
+    Eigen::MatrixXd P = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
+    P.middleCols(knot_offset_[c], ni) = forward_weight_matrix(specs_[c].modules(), times);
+    for (int j = 0; j < static_cast<int>(specs_[c].turns.size()); ++j) {
+      const int col = knot_offset_[c] + ni + j;
+      const auto& w = specs_[c].turns[j];
+      for (int i = 0; i < static_cast<int>(times.size()); ++i) P(i, col) = (times[i] >= w.start && times[i] < w.end) ? 1.0 : 0.0;
+    }
+    if (specs_[c].base >= 0) P += forward_rows(specs_[c].base, times);
+    return P;
+  }
   int n_times() const { return static_cast<int>(pts_.size()); }
   int n_knots() const { return n_knots_; }
 
@@ -185,6 +202,58 @@ struct BundleFloatBatch {
   // pure overhead over the whole coupon vector (~1.28x on a 1000-swap book, measured), so pv() fuses
   // to the minimal pre-generalization expression. Genericity must cost the hot path nothing (design §4).
   bool cpn_is_plain = false;
+
+  // ---- MOMENT coupons (RateObservation::fixing_step > 0; docs/bezier-and-moments.md Part B) -------------------
+  // An arithmetic-average window [a,b] priced from curve MOMENTS instead of ~250 daily sub-periods:
+  //     num = ln(DF[a]·INV[b]) + ½·step·∫f² (+ ⅙·step3·∫f³),   ∫f² = xᵀ Q x with Q = Σ_k w_k psi_k psi_kᵀ
+  // Q (over the coupon's knot SUPPORT) and, when step3 > 0, the Gauss nodes' forward rows are precomputed at
+  // registration, so a tick costs one log + |S|² multiply-adds per coupon (|S| ≈ 6-16) instead of a daily gather
+  // loop — the reason a Fed funds curve can be as cheap as a SOFR curve (shape ladder: 534 → ~5 µs tick).
+  // The linear term is exact; the moment correction is the documented ~5e-9 approximation of the daily sum
+  // (the exact daily path stays available with fixing_step == 0). Same Gauss rule as the templated
+  // curve_forward_sq_integral (32 panels × 2 nodes) so both paths agree to rounding.
+  struct MomentCoupon {
+    int cpn = -1, sub = -1;              // coupon index; its single sub-period (the [a,b] bracket)
+    double step = 0.0, step3 = 0.0;      // ½·step and ⅙·step3 are applied in set_state
+    std::vector<int> support;            // global knot indices with nonzero forward weight over [a,b]
+    Eigen::MatrixXd Q;                   // |S|×|S|: Σ_k w_k psi_k psi_kᵀ (restricted to the support)
+    Eigen::MatrixXd Psi;                 // (step3 > 0 only) nodes × |S| forward rows
+    Eigen::VectorXd wq;                  // (step3 > 0 only) Gauss weights per node
+    // per-state scratch (set_state): the correction value and its gradient over the support
+    double mom = 0.0;
+    Eigen::VectorXd xs, dmom, fnode;
+  };
+  bool has_moment() const { return !moments_.empty(); }
+  const std::vector<MomentCoupon>& moments() const { return moments_; }
+  // Evaluate every moment coupon's correction (and its x-gradient) at the stacked knot state x. MUST precede
+  // num/pv/rate/d_* on a batch with moment coupons (they throw otherwise). Allocation-free after first use.
+  void set_state(const Eigen::VectorXd& x) const {
+    if (state_set_ && state_x_.size() == x.size() && (state_x_.array() == x.array()).all()) return;  // memo on x
+    state_x_ = x;
+    for (auto& mc : moments_) {
+      const int n = static_cast<int>(mc.support.size());
+      mc.xs.resize(n);
+      for (int j = 0; j < n; ++j) mc.xs[j] = x[mc.support[j]];
+      mc.dmom.resize(n);
+      mc.dmom.noalias() = mc.Q * mc.xs;                       // ∇(½ xᵀQx) = Qx (Q symmetric)
+      double m = 0.5 * mc.step * mc.xs.dot(mc.dmom);           // ½·step·xᵀQx
+      mc.dmom *= mc.step;
+      if (mc.step3 > 0.0) {
+        mc.fnode.resize(mc.Psi.rows());
+        mc.fnode.noalias() = mc.Psi * mc.xs;                   // f at the Gauss nodes
+        double cube = 0.0;
+        for (int k = 0; k < mc.fnode.size(); ++k) {
+          const double f2 = mc.fnode[k] * mc.fnode[k];
+          cube += mc.wq[k] * f2 * mc.fnode[k];
+          mc.fnode[k] = 0.5 * mc.step3 * mc.wq[k] * f2;       // reuse as the gradient weights g_k
+        }
+        m += (1.0 / 6.0) * mc.step3 * cube;
+        mc.dmom.noalias() += mc.Psi.transpose() * mc.fnode;   // d/dx ⅙·step3·Σ w f³ = Σ_k g_k psi_k (one GEMV)
+      }
+      mc.mom = m;
+    }
+    state_set_ = true;
+  }
 
   int n_coupons() const { return n_cpn_; }
   int size() const { return n_inst; }
@@ -263,6 +332,10 @@ struct BundleFloatBatch {
     const int* __restrict se = subE.data();
     double* __restrict out = sub_.data();
     for (int i = 0; i < n; ++i) out[i] = df[ss[i]] * iv[se[i]] - 1.0;
+    if (!moments_.empty()) {  // moment brackets: ln(DF[a]·INV[b]) + ½·step·∫f² (+ ⅙·step3·∫f³), from set_state
+      if (!state_set_) throw std::logic_error("BundleFloatBatch: set_state(x) must precede num/pv/rate on a batch with moment coupons");
+      for (const auto& mc : moments_) out[mc.sub] = std::log(df[ss[mc.sub]] * iv[se[mc.sub]]) + mc.mom;
+    }
     if (sub_is_identity) return sub_;  // R_sub == I: the reduction is a bitwise no-op
     num_res_.noalias() = R_sub * sub_;
     return num_res_;
@@ -278,7 +351,18 @@ struct BundleFloatBatch {
     // exactly one materialized pass, as it did before this generalization.
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv() needs pay dates: this is a futures batch");
     Eigen::VectorXd& coupon = coupon_;  // reuse the per-batch scratch (no per-tick allocation)
-    if (sub_is_identity && cpn_is_plain) {  // standard shape: identical work to pre-generalization
+    if (!moments_.empty() || !sub_is_identity) {  // moment coupons or a weighted/multi-sub-period batch: go through num()
+      const Eigen::VectorXd& nm = num(DF, INV);  // materialised per-coupon numerator (sub_ or num_res_)
+      coupon.resize(n_cpn_);
+      const double* __restrict df = DF.data();
+      const int* __restrict p = pay.data();
+      const double* __restrict nn = nm.data();
+      const double* __restrict kk = konst.data();
+      const double* __restrict kv = k.data();
+      double* __restrict out = coupon.data();
+      for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (nn[i] + kk[i]) * kv[i];  // hand gather: no IndexedView temporaries
+    }
+    else if (sub_is_identity && cpn_is_plain) {  // standard shape: identical work to pre-generalization
       // Hand-written FUSED gather instead of Eigen's IndexedView (which materializes DF(pay)/DF(subS)/
       // DF(subE) into temporaries — allocations on the tick). Not auto-vectorised (see inverse_of).
       coupon.resize(n_cpn_);
@@ -302,8 +386,7 @@ struct BundleFloatBatch {
       double* __restrict out = coupon.data();
       for (int i = 0; i < n_cpn_; ++i)
         out[i] = df[p[i]] * (df[ss[i]] * iv[se[i]] - 1.0 + kk[i]) * kv[i];
-    } else
-      coupon = (DF(pay).array() * (num(DF, INV).array() + konst.array()) * k.array()).matrix();
+    }
     pv_res_.noalias() = R_cpn * coupon;
     return pv_res_;
   }
@@ -319,10 +402,20 @@ struct BundleFloatBatch {
       return pv_res_;
     }
     Eigen::VectorXd& coupon = coupon_;
-    if (cpn_is_plain)
-      coupon = (DF(pay).array() * num_cpn.array()).matrix();
-    else
-      coupon = (DF(pay).array() * (num_cpn.array() + konst.array()) * k.array()).matrix();
+    coupon.resize(n_cpn_);
+    {
+      const double* __restrict df = DF.data();
+      const int* __restrict p = pay.data();
+      const double* __restrict nn = num_cpn.data();
+      const double* __restrict kk = konst.data();
+      const double* __restrict kv = k.data();
+      double* __restrict out = coupon.data();
+      if (cpn_is_plain)
+        for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * nn[i];
+      else
+        for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (nn[i] + kk[i]) * kv[i];
+    }
+    // (IndexedView form retired 2026-09-09: it materialised index temporaries on every Jacobian — E3-A2/A3.)
     pv_res_.noalias() = R_cpn * coupon;
     return pv_res_;
   }
@@ -367,7 +460,7 @@ struct BundleFloatBatch {
   // Per-instrument (per-future) rate = (num + realized)*inv_tau + convexity. Const ref into scratch.
   const Eigen::VectorXd& rate(const Eigen::VectorXd& DF) const { return rate(DF, inverse_of(DF)); }
   const Eigen::VectorXd& rate(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
-    if (sub_is_identity) {
+    if (sub_is_identity && moments_.empty()) {
       const int n = static_cast<int>(subS.size());
       rate_res_.resize(n);
       const double* __restrict df = DF.data();
@@ -422,6 +515,36 @@ struct BundleFloatBatch {
       d(row0 + inst[i], s) += f * ie;
       d(row0 + inst[i], e) += -f * DF[s] * ie * ie;
     }
+    // moment brackets: d ln(DF[a]/DF[b]) / dDF = +INV[a] on a, −INV[b] on b (replacing the ratio partials above)
+    for (const auto& mc : moments_) {
+      const int i = mc.cpn, s = subS[mc.sub], e = subE[mc.sub];
+      const double f = sign * DF[pay[i]] * k[i] * sub_w[mc.sub];
+      const double ie = INV[e];
+      d(row0 + inst[i], s) -= f * ie;                 // undo the ratio partials
+      d(row0 + inst[i], e) -= -f * DF[s] * ie * ie;
+      d(row0 + inst[i], s) += f * INV[s];             // log-bracket partials
+      d(row0 + inst[i], e) += -f * ie;
+    }
+  }
+  // DIRECT x-space derivative of the moment corrections (the part that is NOT a function of DF): for each moment
+  // coupon c, ∂pv_inst/∂x_j += DF[pay_c]·k_c·w·∂mom_c/∂x_j on its support. Delivered through `add(inst, j, value)` so
+  // the caller can scatter into its own Jacobian with the row's quotient / band factors. Precondition: set_state(x).
+  template <class Add>
+  void moment_direct_pv(const Eigen::VectorXd& DF, double sign, Add&& add) const {
+    for (const auto& mc : moments_) {
+      const int i = mc.cpn;
+      const double f = sign * DF[pay[i]] * k[i] * sub_w[mc.sub];
+      for (int j = 0; j < static_cast<int>(mc.support.size()); ++j) add(inst[i], mc.support[j], f * mc.dmom[j]);
+    }
+  }
+  // Same for a futures batch: ∂rate_inst/∂x_j += inv_tau·w·∂mom_c/∂x_j.
+  template <class Add>
+  void moment_direct_rate(Add&& add) const {
+    for (const auto& mc : moments_) {
+      const int i = mc.cpn;
+      const double f = inv_tau[i] * sub_w[mc.sub];
+      for (int j = 0; j < static_cast<int>(mc.support.size()); ++j) add(inst[i], mc.support[j], f * mc.dmom[j]);
+    }
   }
   // d(rate)/dDF for a futures batch (realized and convexity are constants -> zero derivative):
   //     d rate / d DF[s_k] = + w_k·inv_tau / DF[e_k]
@@ -436,6 +559,13 @@ struct BundleFloatBatch {
       const double ie = INV[e];
       d(r, s) += f * ie;
       d(r, e) += -f * DF[s] * ie * ie;
+    }
+    for (const auto& mc : moments_) {  // log-bracket partials for moment windows (see d_pv_from_num)
+      const int i = mc.cpn, s = subS[mc.sub], e = subE[mc.sub], r = row0 + inst[i];
+      const double f = inv_tau[i] * sub_w[mc.sub];
+      const double ie = INV[e];
+      d(r, s) += -f * ie + f * INV[s];
+      d(r, e) += f * DF[s] * ie * ie - f * ie;
     }
   }
 
@@ -455,17 +585,52 @@ struct BundleFloatBatch {
       throw std::invalid_argument(
           "CompiledBook: compounded (RFR lookback/lockout) observation cannot use the arithmetic "
           "W-cache batch; price it through the templated kernel");
-    // Same for the MOMENT path (fixing_step > 0): its ½·step·∫f² averaging correction has no W-cache row.
-    // Silently summing only the linear term dropped 4 bp of notional on an averaged 1y coupon.
-    if (o.fixing_step > 0.0)
-      throw std::invalid_argument(
-          "CompiledBook: a fixing_step (moment-path averaged) observation cannot use the W-cache batch; "
-          "price it through the templated kernel");
     if (!o.fixing_schedule.empty() && !o.resolved)
       throw std::runtime_error(
           "CompiledBook: a fixings-resolvable observation was compiled before resolution against a fixing "
           "table (its realized part would silently be zero) -- attach fixings / set the evaluation date first");
     const bool weighted = !o.weight.empty();
+    if (o.fixing_step > 0.0) {  // MOMENT path: one bracket + a precomputed quadratic form over the window
+      if (o.sub_start.size() != 1 || (weighted && o.weight.size() != 1))
+        throw std::invalid_argument("CompiledBook: a moment-path observation has exactly one window (one optional weight)");
+      MomentCoupon mc;
+      mc.cpn = n_cpn_;
+      mc.sub = static_cast<int>(ss_.size());
+      mc.step = o.fixing_step; mc.step3 = o.fixing_step3;
+      push_sub(cs, fc, o.sub_start[0], o.sub_end[0], weighted ? o.weight[0] : 1.0);  // the day-count ratio rides R_sub
+      // The SAME composite 2-point Gauss rule as pricing::curve_forward_sq_integral (subdiv = 32).
+      const double a = o.sub_start[0], b = o.sub_end[0];
+      constexpr int subdiv = 32;
+      const double gx = 0.5773502691896257, H = (b - a) / subdiv;
+      std::vector<double> nodes; std::vector<double> wts;
+      for (int s = 0; s < subdiv; ++s) {
+        const double mid = a + (s + 0.5) * H, h = 0.5 * H;
+        for (int sg = -1; sg <= 1; sg += 2) { nodes.push_back(mid + sg * gx * h); wts.push_back(h); }
+      }
+      const Eigen::MatrixXd P = cs.forward_rows(fc, nodes);  // nodes × n_knots
+      for (int j = 0; j < P.cols(); ++j)
+        if ((P.col(j).array() != 0.0).any()) mc.support.push_back(j);
+      const int S = static_cast<int>(mc.support.size());
+      Eigen::MatrixXd Ps(static_cast<int>(nodes.size()), S);
+      for (int j = 0; j < S; ++j) Ps.col(j) = P.col(mc.support[j]);
+      mc.Q = Eigen::MatrixXd::Zero(S, S);
+      for (int kq = 0; kq < Ps.rows(); ++kq) mc.Q.noalias() += wts[kq] * (Ps.row(kq).transpose() * Ps.row(kq));
+      if (mc.step3 > 0.0) {  // cubic term: 8 panels x 2 nodes (curve_forward_cube_integral's rule), same support
+        constexpr int subdiv3 = 8;
+        const double H3 = (b - a) / subdiv3;
+        std::vector<double> n3, w3;
+        for (int s = 0; s < subdiv3; ++s) {
+          const double mid = a + (s + 0.5) * H3, h = 0.5 * H3;
+          for (int sg = -1; sg <= 1; sg += 2) { n3.push_back(mid + sg * gx * h); w3.push_back(h); }
+        }
+        const Eigen::MatrixXd P3 = cs.forward_rows(fc, n3);
+        mc.Psi.resize(static_cast<int>(n3.size()), S);
+        for (int j = 0; j < S; ++j) mc.Psi.col(j) = P3.col(mc.support[j]);
+        mc.wq = Eigen::Map<const Eigen::VectorXd>(w3.data(), static_cast<int>(w3.size()));
+      }
+      moments_.push_back(std::move(mc));
+      return;
+    }
     for (std::size_t j = 0; j < o.sub_start.size(); ++j)
       push_sub(cs, fc, o.sub_start[j], o.sub_end[j], weighted ? o.weight[j] : 1.0);
   }
@@ -496,6 +661,9 @@ struct BundleFloatBatch {
   // Each returns a const ref into these; because gen_pos_/gen_neg_ are distinct batch objects, two
   // results (one per batch) are simultaneously live in model_rates without aliasing.
   mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_, inv_scratch_;
+  mutable std::vector<MomentCoupon> moments_;  // per-coupon precomputed quadratic forms (set_state fills mom/dmom)
+  mutable bool state_set_ = false;
+  mutable Eigen::VectorXd state_x_;  // set_state memo key
   // Batched-grid scratch (pv_grid): pv_grid_ is n_inst x n_states (coupons accumulated straight into their
   // instrument row); inv_dfg_ is the per-tile reciprocal DF grid (n_times x n_states). Sized on first use.
   mutable RowMatrixXd pv_grid_, inv_dfg_;

@@ -340,8 +340,10 @@ TEST(BugHunt, XccyZeroBasisFundingFlatIsPar) {
   EXPECT_NEAR(swaps::portfolio::MultiCurveBook::position_value<double>(p, C), 0.0, 1e-12);
 }
 
-// 17. The compiled (W-cache) book refuses a moment-path coupon instead of dropping its averaging term.
-TEST(BugHunt, CompiledBookRefusesMomentPathCoupons) {
+// 17. The compiled (W-cache) book prices a moment-path coupon WITH its averaging term (until 2026-09-09 it refused
+// the coupon; before that it silently dropped the ½·step·∫f² term — 4 bp on an averaged 1y coupon). Parity with
+// the templated kernel proves the term is there.
+TEST(BugHunt, CompiledBookPricesMomentPathCouponsWithTheAveragingTerm) {
   swaps::portfolio::Portfolio pf;
   swaps::portfolio::Portfolio::Position pos;
   px::FloatCoupon fc;
@@ -355,7 +357,14 @@ TEST(BugHunt, CompiledBookRefusesMomentPathCoupons) {
   pos.fixed_rate = 0.03;
   pos.notional = 1.0;
   pf.positions.push_back(pos);
-  EXPECT_THROW(swaps::portfolio::CompiledPortfolio(cv::flat_hermite({0.5}, {1, 2, 5, 10}), pf), std::invalid_argument);
+  const swaps::portfolio::CompiledPortfolio cp(cv::flat_hermite({0.5}, {1, 2, 5, 10}), pf);
+  Eigen::VectorXd x(5); x << 0.03, 0.035, 0.04, 0.042, 0.045;
+  auto c = cv::make_modular_curve<double>(cv::flat_hermite({0.5}, {1, 2, 5, 10}));
+  c.set_forwards(x);
+  const double ref = px::float_coupon_pv<double>(fc, c, c);  // templated moment path (obs_numerator)
+  EXPECT_NEAR(cp.total_npv(x), ref, 1e-14);
+  fc.obs.fixing_step = 0.0;  // and the term is NOT zero: without it the price is visibly different
+  EXPECT_GT(std::abs(px::float_coupon_pv<double>(fc, c, c) - ref), 1e-7);
 }
 
 // 12. Empty legs are worth nothing and must not touch leg[0].

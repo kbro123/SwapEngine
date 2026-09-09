@@ -50,6 +50,7 @@ class CompiledPortfolio {
   const Eigen::VectorXd& npv(const Eigen::VectorXd& x) const {
     cs_.df_into(x, df_);  // DF into scratch; float_/fixed_ pv/annuity return refs into their own scratch
     inv_ = df_.cwiseInverse();
+    if (float_.has_moment()) float_.set_state(x);
     const Eigen::VectorXd& pv = float_.pv(df_, inv_);
     const Eigen::VectorXd& ann = fixed_.annuity(df_);
     npv_ = (notional_.array() * (pv.array() - fixed_rate_.array() * ann.array())).matrix();

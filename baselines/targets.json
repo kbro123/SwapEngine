@@ -233,6 +233,18 @@
     "shape_desk_jacobian": {
       "target_ns": 820500,
       "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_averaged_leg_moment_stream_tick": {
+      "target_ns": 73600,
+      "note": "initial = 2026-09-09 moment-rung baseline x1.3 (first measurement of the compiled moment path); ratchets DOWN only"
+    },
+    "shape_averaged_leg_moment_refresh_25bp": {
+      "target_ns": 193200,
+      "note": "initial = 2026-09-09 moment-rung baseline x1.3 (first measurement of the compiled moment path); ratchets DOWN only"
+    },
+    "shape_averaged_leg_moment_jacobian": {
+      "target_ns": 18600,
+      "note": "initial = 2026-09-09 moment-rung baseline x1.3 (first measurement of the compiled moment path); ratchets DOWN only"
     }
   }
 }

@@ -575,6 +575,24 @@
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
+        },
+        "shape_averaged_leg_moment_stream_tick": {
+          "ours_ns": 56575,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_leg_moment_refresh_25bp": {
+          "ours_ns": 148614,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_leg_moment_jacobian": {
+          "ours_ns": 14256,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
         }
       }
     }

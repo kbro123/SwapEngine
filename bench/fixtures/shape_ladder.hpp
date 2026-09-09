@@ -102,6 +102,21 @@ inline std::vector<double> add_averaged_leg_swaps(cal::BundleProblem& p, const b
   }
   return knots;
 }
+inline std::vector<double> add_moment_leg_swaps(cal::BundleProblem& p, const b::SwapConv& conv, const std::string& index,
+                                                int fc, int disc, const std::vector<std::string>& tenors) {
+  std::vector<double> knots;
+  const std::string cl = b::index_calendar(index);
+  for (const auto& t : tenors) {
+    const b::Date mat = b::resolve(t, vd(), conv.calendar, conv.bdc, conv.spot_lag);
+    cal::Instrument in = b::par_swap(vd(), conv, mat, fc, disc, 0.03);
+    const auto per = b::swap_periods_to(vd(), conv.calendar, mat, conv.float_freq_tok, conv.bdc, conv.spot_lag);
+    for (std::size_t i = 0; i < in.fwd.coupons.size() && i < per.size(); ++i)
+      in.fwd.coupons[i].obs = b::moment_observation(vd(), per[i].first, per[i].second, conv.float_dc, cl);
+    p.instruments.push_back(std::move(in));
+    knots.push_back(p.instruments.back().fixed.coupons.back().pay);
+  }
+  return knots;
+}
 inline void fill_x(Shape& s) {
   const auto& p = s.prob;
   s.x_true.resize(p.n_knots()); s.x0.resize(p.n_knots());
@@ -208,6 +223,13 @@ inline Shape averaged_leg() {  // SOFR + FF OIS whose float legs are daily arith
   p.curves = {detail::spec(k0), detail::spec(k1, 0)};
   return detail::make("averaged_leg", "USD SOFR OIS + FF OIS with daily-averaged float coupons (ParRate rows, weighted sub-periods)", std::move(p));
 }
+inline Shape averaged_leg_moment() {  // the same FF OIS legs on the MOMENT path (one bracket + xᵀQx per coupon)
+  cal::BundleProblem p;
+  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  const auto k1 = detail::add_moment_leg_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), "USD-FEDFUNDS", 1, 0, detail::pillars());
+  p.curves = {detail::spec(k0), detail::spec(k1, 0)};
+  return detail::make("averaged_leg_moment", "USD SOFR OIS + FF OIS with daily-averaged float coupons on the MOMENT path", std::move(p));
+}
 inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row; q_cross crosses the upper edge on odd rows
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
   p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
@@ -295,7 +317,7 @@ inline Shape desk() {  // everything at once: 5 curves, every quote kind, bands,
 }
 
 inline std::vector<Shape> ladder() {
-  return {ois_nolag(), ois_lag(), ibor_multicurve(), basis_spread(), averaged(), averaged_leg(), banded(), turns(), portfolio(), zero_coupon(), fx_xccy(), desk()};
+  return {ois_nolag(), ois_lag(), ibor_multicurve(), basis_spread(), averaged(), averaged_leg(), averaged_leg_moment(), banded(), turns(), portfolio(), zero_coupon(), fx_xccy(), desk()};
 }
 
 }  // namespace swaps::shapes

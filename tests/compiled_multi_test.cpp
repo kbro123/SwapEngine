@@ -167,13 +167,14 @@ pf::MultiCurveBook mixed_book(int* n_fallback = nullptr) {
     }
     book.positions.push_back(p);
   }
-  // MOMENT-path (fixing_step > 0) averaged coupon: the batch has no ∫f² correction -> fallback.
+  // MOMENT-path (fixing_step > 0) averaged coupon: COMPILES since 2026-09-09 (BundleFloatBatch::set_state builds
+  // the ½·step·xᵀQx correction from precomputed forward rows) -- it is parity-checked below, not a fallback.
   {
     auto p = swap_position(1.0, 2, 2, 2, 0.020, 1e6);
     p.float_coupons[0].obs.fixing_step = 1.0 / 252.0;
     book.positions.push_back(p);
   }
-  if (n_fallback) *n_fallback = 3;
+  if (n_fallback) *n_fallback = 2;
   return book;
 }
 

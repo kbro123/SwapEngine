@@ -129,8 +129,10 @@ struct FixedCoupon {
 // Composite ∫f² over the curve for the moment path (defined at the end of this header).
 template <class Scalar, class Curve>
 Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv = 32);
+// The cube feeds a ~1e-9 correction: 8 panels x 2-pt Gauss (exact to degree 3 per panel) bound its quadrature
+// error far below 1e-15 of the rate. The compiled batch (compiled_book.hpp) uses the SAME rule so both agree.
 template <class Scalar, class Curve>
-Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdiv = 32);
+Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdiv = 8);
 
 // Σ_k w_k · (DF(s_k)/DF(e_k) − 1) — the curve-dependent numerator ONLY.
 // Precondition: at least one sub-period (so the accumulator can be seeded from a curve-dependent
@@ -184,6 +186,9 @@ Scalar obs_numerator(const RateObservation& o, const FCurve& fc) {
                0.5 * o.fixing_step * curve_forward_sq_integral<Scalar>(fc, a, b);
     if (o.fixing_step3 > 0.0)
       n += (1.0 / 6.0) * o.fixing_step3 * curve_forward_cube_integral<Scalar>(fc, a, b);
+    // weight[0] (if any) is the constant index-accrual / curve-time ratio of the window's days (365/360 for an
+    // ACT/360 index on the ACT/365F curve clock) — build::moment_observation; the daily path carries it per day.
+    if (!o.weight.empty()) n *= o.weight[0];
     return n;
   }
   return obs_forward_sum<Scalar>(o, fc);

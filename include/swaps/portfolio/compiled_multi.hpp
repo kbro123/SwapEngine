@@ -20,7 +20,7 @@
 //     MultiCurveBook::position_value over reusable bundle curve handles.
 //   * a Swap whose float leg carries a COMPOUNDED (RFR lookback/lockout) observation -- the batch's
 //     arithmetic Σ cannot represent the product (compiled_book push_obs throws on it);
-//   * a Swap on the MOMENT path (fixing_step > 0) -- the batch has no ∫f² correction and would silently
+//   * (moment-path coupons COMPILE since 2026-09-09 — BundleFloatBatch::set_state; retired exclusion:) -- the batch has no ∫f² correction and would silently
 //     drop it;
 //   * every position, when a curve uses a value-dependent scheme (curves_are_noncacheable): then NO
 //     curve has a constant W at all.
@@ -108,6 +108,7 @@ class CompiledMultiCurveBook {
     if (n_compiled() > 0) {
       cs_.df_into(x, df_);  // DF into scratch; pv/annuity return refs into the batches' own scratch
       inv_ = df_.cwiseInverse();  // shared reciprocals (compiled_book.hpp inverse_of)
+      if (float_.has_moment()) float_.set_state(x);
       const Eigen::VectorXd& pv = float_.pv(df_, inv_);
       const Eigen::VectorXd& ann = fixed_.annuity(df_);
       npv_ = (notional_.array() * pv.array() - nf_.array() * ann.array()).matrix();
@@ -141,6 +142,7 @@ class CompiledMultiCurveBook {
     if (n_compiled() > 0) {
       cs_.df_into(x, df_);
       inv_ = df_.cwiseInverse();
+      if (float_.has_moment()) float_.set_state(x);
       t_ = (-rowsum_.array() * df_.array()).matrix();  // parallel-shift DF tangent (reused scratch)
       const Eigen::VectorXd& num = float_.num(df_, inv_);        // per-coupon Σ w·(DF[s]·INV[e]−1)
       const double* __restrict DF = df_.data();
@@ -157,6 +159,18 @@ class CompiledMultiCurveBook {
         const int s = float_.subS[j], e = float_.subE[j];
         const double f = notional_[i] * DF[float_.pay[c]] * float_.k[c] * float_.sub_w[j];
         g += f * (tt[s] * IV[e] - tt[e] * DF[s] * IV[e] * IV[e]);
+      }
+      if (float_.has_moment()) {
+        // moment brackets: the DF partials are those of ln(DF[s]/DF[e]) (replace the ratio terms added above) and
+        // the ½·step·xᵀQx correction contributes its x-gradient summed along the all-ones direction.
+        for (const auto& mc : float_.moments()) {
+          const int c = mc.cpn, i = float_.inst[c];
+          const int s = float_.subS[mc.sub], e = float_.subE[mc.sub];
+          const double f = notional_[i] * DF[float_.pay[c]] * float_.k[c] * float_.sub_w[mc.sub];
+          g -= f * (tt[s] * IV[e] - tt[e] * DF[s] * IV[e] * IV[e]);
+          g += f * (tt[s] * IV[s] - tt[e] * IV[e]);
+          g += f * mc.dmom.sum();
+        }
       }
       // Fixed annuities enter NPV as −(notional·fixed_rate)·Σ τ·DF[pay]: ∂/∂DF[pay] = −nf·τ.
       for (int i = 0; i < static_cast<int>(fixed_.pay.size()); ++i)
@@ -176,7 +190,7 @@ class CompiledMultiCurveBook {
   static bool swap_is_compilable(const MultiCurveBook::Position& p) {
     if (!p.fixed_rates.empty() || !p.principal_flows.empty()) return false;
     for (const auto& c : p.float_coupons)
-      if (c.obs.compounded || c.obs.fixing_step > 0.0) return false;
+      if (c.obs.compounded) return false;  // (moment-path coupons compile since 2026-09-09: BundleFloatBatch::set_state)
     return true;
   }
 

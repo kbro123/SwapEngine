@@ -50,6 +50,7 @@ class CompiledBundleResidual {
     gen_pos_.finalize();
     gen_neg_.finalize();
     gen_fixed_.finalize();
+    has_moment_ = gen_pos_.has_moment() || gen_neg_.has_moment() || gen_rate_.has_moment();
     gen_rate_.finalize();
 
     // Jacobian scratch buffers, sized ONCE here and reused (setZero) every call -- no per-iteration
@@ -149,6 +150,7 @@ class CompiledBundleResidual {
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;  // valid whenever df_at(x) is (same memo)
+    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); }
     out_.setZero(n_residuals());  // ACCUMULATE: a portfolio row sums its components' weighted quotes; a
                                   // plain row has one entry with weight 1 (0 + 1·q == q, bit-identical).
     if (!q_rows_.empty()) {
@@ -210,6 +212,7 @@ class CompiledBundleResidual {
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;
+    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); }
     // Capture the model quotes for banded rows BEFORE the batch scratch below is overwritten.
     if (!band_.empty()) {
       const Eigen::VectorXd& mr = model_rates(x);
@@ -245,8 +248,12 @@ class CompiledBundleResidual {
             q_rows_[j].weight * (dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]));
       // Zero-coupon chain rule: dr/dDF = (dr/dq)·dq/dDF with q = num/ann the row's own quotient (a zc row
       // is standalone, weight 1). Applied BEFORE the band scale below, exactly as residuals_vs orders them.
-      for (const auto& z : zc_rows_)
-        G.row(z.row) *= zero_coupon_transform_d(num[z.batch] / ann[z.batch], z.tau).second;
+      for (const auto& z : zc_rows_) {
+        const double sc = zero_coupon_transform_d(num[z.batch] / ann[z.batch], z.tau).second;
+        G.row(z.row) *= sc;
+        if (has_moment_) row_scale_[z.row] *= sc;
+      }
+      if (has_moment_) { ann_keep_ = ann; num_keep_ = num; }  // the quotient factors for the direct terms below
     }
     // `Rate` rows ARE the futures batch's rate rows (convexity is a constant -> zero row).
     if (!r_rows_.empty()) {
@@ -268,10 +275,13 @@ class CompiledBundleResidual {
     // residual, problem.hpp). Scale each banded row's dr/dDF (G) by that slope before the W matmul (the
     // matmul is linear, so scaling commutes). Turn rows have a zero G row (no DF dependence), so scaling
     // them here is a no-op -- their band factor is applied to the DIRECT ∂δ/∂x entry below instead.
+    if (has_moment_) row_scale_.setOnes(n_residuals());
     for (std::size_t k = 0; k < band_.size(); ++k) {
       const Band& b = band_[k];
       const int i = static_cast<int>(k);
-      G.row(b.row) *= band_residual_d(qb_[i], q[b.row], b.lower, b.upper, b.decay).second;
+      const double sc = band_residual_d(qb_[i], q[b.row], b.lower, b.upper, b.decay).second;
+      G.row(b.row) *= sc;
+      if (has_moment_) row_scale_[b.row] *= sc;
     }
     // SUPPORT-BLOCKED product replacing the dense -(G·diag(DF))·W GEMM: J.row(r) = -Σ_{t ∈ sup(r)}
     // G(r,t)·DF[t]·W.row(t). G's nonzeros per row are exactly the row's registered times (recorded once
@@ -295,6 +305,17 @@ class CompiledBundleResidual {
       }
     }
     Eigen::MatrixXd J = Jt_.transpose();
+    // MOMENT coupons: the ½·step·xᵀQx correction is a function of x, not of DF, so its derivative enters J
+    // DIRECTLY (after the W product), through the same quotient / band / zc factors as the row's DF terms:
+    //   quotient rows: ∂r/∂x_j += weight·scale·(∂num/∂x_j)/ann,  rate rows: ∂r/∂x_j += weight·scale·∂rate/∂x_j.
+    if (has_moment_) {
+      gen_pos_.moment_direct_pv(DF, 1.0, [&](int bi, int j, double v) {
+        const auto& s = q_rows_[bi]; J(s.row, j) += s.weight * row_scale_[s.row] * v / ann_keep_[bi]; });
+      gen_neg_.moment_direct_pv(DF, -1.0, [&](int bi, int j, double v) {
+        const auto& s = q_rows_[bi]; J(s.row, j) += s.weight * row_scale_[s.row] * v / ann_keep_[bi]; });
+      gen_rate_.moment_direct_rate([&](int bi, int j, double v) {
+        const auto& s = r_rows_[bi]; J(s.row, j) += s.weight * row_scale_[s.row] * v; });
+    }
     // TURN rows: r = (banded) (δ − market) with δ = weight·x[state index] -- LINEAR in x, and independent
     // of every DF, so its Jacobian is a single DIRECT entry ∂r/∂x[state index], not part of the W matmul.
     // The band slope dr/dq (decay inside, 1 outside) multiplies that entry (matches residuals_vs).
@@ -447,6 +468,8 @@ class CompiledBundleResidual {
   // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.
   mutable Eigen::VectorXd df_, df_x_, inv_;
+  bool has_moment_ = false;                    // any batch carries moment-path coupons (set_state + direct terms)
+  mutable Eigen::VectorXd row_scale_, ann_keep_, num_keep_;  // jacobian_vs scratch for the moment direct terms
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
   mutable Eigen::VectorXd qb_, num_;   // jacobian_vs scratch: banded model quotes, quotient numerator
   // ROW-MAJOR: every fill site (the d_* scatters, the per-row G assembly, the band row

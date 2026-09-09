@@ -11,6 +11,7 @@
 #include "malloc_count.hpp"
 #include "shape_ladder.hpp"
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
 
@@ -82,4 +83,19 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     else EXPECT_LE(small, pin.small) << s.name << ": tick allocations grew past the pinned count";
     EXPECT_LE(cross, pin.cross) << s.name << ": band-crossing / hybrid tick allocations grew past the pinned count";
   }
+}
+
+// The moment path vs the exact daily path on the SAME FF OIS legs: the documented ~5e-9 relative approximation
+// (docs/bezier-and-moments.md Part B) must hold on real 1Y windows — the model par rates of the two rungs at the
+// shared x_true agree to 2e-8 (0.0002 bp) while the moment rung ticks ~100x faster (shape_ladder_bench).
+TEST(ShapeLadder, MomentPathAgreesWithTheExactDailyAverageOnFedFundsOis) {
+  const Shape daily = swaps::shapes::averaged_leg(), moment = swaps::shapes::averaged_leg_moment();
+  ASSERT_EQ(daily.prob.n_residuals(), moment.prob.n_residuals());
+  double worst = 0.0;
+  for (int i = 0; i < daily.prob.n_residuals(); ++i)
+    worst = std::max(worst, std::abs(daily.q0[i] - moment.q0[i]));
+  std::cout << "  [ladder] moment vs exact daily FF OIS par rates: max |dq| = " << worst << " (" << worst * 1e4 << " bp)\n";
+  EXPECT_LT(worst, 2e-8);
+  // And the moment rung is a pure W-cache bundle: the hybrid engine must not have routed any row to AAD.
+  EXPECT_NO_THROW(cal::CompiledBundleResidual{moment.prob});
 }
