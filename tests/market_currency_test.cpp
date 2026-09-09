@@ -3,6 +3,8 @@
 // from the DB's overnight indices, so these assertions also pin that the derivation stays wired to the DB.
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -53,9 +55,10 @@ TEST(MarketCurrency, UnknownCodeStaysValidButEmpty) {
   const mkt::Currency zzz = mkt::Currency::of("ZZZ");
   EXPECT_TRUE(zzz.valid());          // a usable value object...
   EXPECT_FALSE(zzz.known());         // ...but not recognised in the DB-derived registry
-  EXPECT_TRUE(zzz.settlement_calendar().empty());
-  EXPECT_FALSE(zzz.discount_index().known());
-  EXPECT_EQ(zzz.minor_units(), 2);   // ISO default for anything unlisted
+  // No fallbacks (PRINCIPLES.md P2): every convention accessor throws for a code the DB does not carry.
+  EXPECT_THROW(zzz.settlement_calendar(), std::invalid_argument);
+  EXPECT_THROW(zzz.discount_index(), std::invalid_argument);
+  EXPECT_THROW(zzz.minor_units(), std::invalid_argument);
 
   const mkt::Currency none;
   EXPECT_FALSE(none.valid());        // default-constructed / empty code
@@ -69,5 +72,5 @@ TEST(MarketCurrency, KnownCodesListComesFromTheDb) {
   EXPECT_TRUE(has("USD"));
   EXPECT_TRUE(has("EUR"));
   EXPECT_TRUE(has("JPY"));   // now carries JPY-TONA in the DB -> a known currency
-  EXPECT_FALSE(has("SGD"));  // no DB index yet -> not a known currency
+  EXPECT_FALSE(has("SGD"));  // not in currencies[] -> not a known currency (add a DB row, or the conventions verb)
 }

@@ -54,7 +54,7 @@ std::string swaption_json(const std::string& request) {
   const std::string currency = js(o, "currency", "USD");
   const std::string index = js(o, "index", "USD-SOFR");
   const int curve = static_cast<int>(jd(o, "curve", 0.0));
-  const b::SwapConv conv = b::swap_conv(currency, 1.0, index);
+  const b::SwapConv conv = b::swap_conv(currency, index);
 
   // Calibrate the bundle to its markets -> the curve we price off.
   cal::BundleProblem prob = bundle_from_json(o.at("bundle"));
@@ -226,7 +226,7 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json) {
 // no recalibration. This is what benchmarks and native clients call; the JSON verb is a thin wrapper below.
 VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
   const b::Date vd = b::Date::from_iso(spec.value_date);
-  const b::SwapConv conv = b::swap_conv(spec.currency, 1.0, spec.index);
+  const b::SwapConv conv = b::swap_conv(spec.currency, spec.index);
   const std::vector<VolCubeCell>& cells = spec.cells;
 
   const auto clock0 = std::chrono::steady_clock::now();
@@ -373,7 +373,7 @@ VolCube BundleSession::price_vol_cube_json(const std::string& spec_json) const {
 // ---- VolSurface: resolve schedules once, pre-index into one sample grid, pre-size the SoA output ----------
 VolSurface::VolSurface(const VolCubeSpec& spec) : curve_(spec.curve), defs_(spec.cells) {
   const b::Date vd = b::Date::from_iso(spec.value_date);
-  const b::SwapConv conv = b::swap_conv(spec.currency, 1.0, spec.index);
+  const b::SwapConv conv = b::swap_conv(spec.currency, spec.index);
 
   // (1) resolve each cell's schedule (the calendar walk — ONCE) and collect the union of all schedule times.
   std::vector<double> times;

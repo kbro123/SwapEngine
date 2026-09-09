@@ -1082,6 +1082,7 @@
     30.024658,
     30.027397
   ],
+  "has_bands": false,
   "n_knots": 5,
   "n_residuals": 6,
   "order_ids": [

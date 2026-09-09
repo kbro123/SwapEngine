@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Validate conventions/conventions.json against conventions/conventions.schema.json (PRINCIPLES.md P2).
+Run by tools/verify.sh. Also asserts referential integrity the schema cannot express: every calendar /
+index / product / currency id referenced by another row exists. Exit 1 on any error."""
+import json, os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+db = json.load(open(os.path.join(ROOT, "conventions", "conventions.json")))
+schema = json.load(open(os.path.join(ROOT, "conventions", "conventions.schema.json")))
+errors = []
+try:
+    import jsonschema
+    for e in sorted(jsonschema.Draft7Validator(schema).iter_errors(db), key=lambda e: list(e.path)):
+        errors.append("schema: " + "/".join(str(x) for x in e.path) + ": " + e.message[:200])
+except ImportError:
+    print("check_schema: WARNING jsonschema not installed — structural validation skipped (pip install jsonschema)")
+cal, idx, prod, cur = db["calendars"], db["indices"], db["products"], db["currencies"]
+def ref(kind, table, id_, where):
+    if id_ and id_ not in table: errors.append(f"{where}: unknown {kind} '{id_}'")
+for cid, c in cal.items():
+    for j in c.get("join", []): ref("calendar", cal, j, f"calendars/{cid}/join")
+for iid, i in idx.items():
+    ref("calendar", cal, i.get("calendar"), f"indices/{iid}"); ref("product", prod, i.get("par_product"), f"indices/{iid}")
+    ref("currency", cur, i.get("currency"), f"indices/{iid}")
+for pid, p in prod.items():
+    ref("calendar", cal, p.get("calendar"), f"products/{pid}"); ref("currency", cur, p.get("currency"), f"products/{pid}")
+    ref("index", idx, p.get("discount_index"), f"products/{pid}")
+    for lg in ("fixed_leg", "float_leg", "spread_leg", "flat_leg", "usd_leg", "eur_leg"):
+        if lg in p: ref("index", idx, p[lg].get("index"), f"products/{pid}/{lg}")
+for cc, c in cur.items():
+    ref("calendar", cal, c.get("settlement_calendar"), f"currencies/{cc}"); ref("index", idx, c.get("discount_index"), f"currencies/{cc}")
+    ref("product", prod, c.get("default_swap_product"), f"currencies/{cc}")
+    if idx.get(c.get("discount_index"), {}).get("currency") != cc: errors.append(f"currencies/{cc}: discount_index is not a {cc} index")
+for bid, b in db.get("bonds", {}).items():
+    ref("calendar", cal, b.get("calendar"), f"bonds/{bid}"); ref("currency", cur, b.get("currency"), f"bonds/{bid}")
+if errors:
+    print("check_schema: FAIL"); [print("  " + e) for e in errors]; sys.exit(1)
+print(f"check_schema: OK — {len(cur)} currencies, {len(cal)} calendars, {len(idx)} indices, {len(prod)} products, {len(db.get('bonds',{}))} bonds; schema + references valid")

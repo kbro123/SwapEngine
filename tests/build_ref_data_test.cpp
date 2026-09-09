@@ -3,6 +3,8 @@
 // Calendar / DayCount / Index / Convention instead of raw string ids.
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 #include "swaps/build/ref_data.hpp"
 
 namespace b = swaps::build;
@@ -32,14 +34,14 @@ TEST(RefData, IndexExposesItsConventions) {
 
   const b::Index unknown("NOT-AN-INDEX");
   EXPECT_FALSE(unknown.known());
-  EXPECT_EQ(unknown.day_count().id, "ACT/360");  // sensible fallback, same as the free function
-  EXPECT_TRUE(unknown.fixing_calendar().empty());
+  EXPECT_THROW(unknown.day_count(), std::invalid_argument);        // no fallback (PRINCIPLES.md P2)
+  EXPECT_THROW(unknown.fixing_calendar(), std::invalid_argument);
 }
 
 TEST(RefData, ConventionResolvesToSwapConv) {
   const b::Convention c{"USD", "USD-SOFR", 0.0};
   const b::SwapConv sc = c.resolve();
-  const b::SwapConv ref = b::swap_conv("USD", 0.0, "USD-SOFR");
+  const b::SwapConv ref = b::swap_conv("USD", "USD-SOFR");
   EXPECT_EQ(sc.calendar, ref.calendar);
   EXPECT_EQ(sc.fixed_dc, ref.fixed_dc);
   EXPECT_EQ(sc.float_dc, ref.float_dc);
@@ -49,7 +51,7 @@ TEST(RefData, ConventionResolvesToSwapConv) {
 TEST(RefData, IndexProducesItsConventionObjectToObject) {
   const b::Index sofr("USD-SOFR");
   const b::Convention conv = sofr.par_convention();  // Index -> Convention, no raw swap_conv() call
-  const b::SwapConv ref = b::swap_conv("USD", 0.0, "USD-SOFR");
+  const b::SwapConv ref = b::swap_conv("USD", "USD-SOFR");
   // The Convention resolves to the same SwapConv as the procedural path...
   EXPECT_EQ(conv.resolve().calendar, ref.calendar);
   EXPECT_EQ(conv.index, "USD-SOFR");
@@ -67,7 +69,7 @@ TEST(RefData, TypedConventionFamily) {
   const b::OisConvention ois = sofr.ois_convention();
   EXPECT_TRUE(ois.compounded());
   EXPECT_EQ(ois.float_day_count().id, sofr.par_convention().float_day_count().id);
-  EXPECT_EQ(ois.calendar().id, b::swap_conv("USD", 0.0, "USD-SOFR").calendar);
+  EXPECT_EQ(ois.calendar().id, b::swap_conv("USD", "USD-SOFR").calendar);
 
   // Term IBOR swap: a fixed tenor, no compounding.
   const b::Index e3m("EUR-EURIBOR-3M");
@@ -82,6 +84,6 @@ TEST(RefData, TypedConventionFamily) {
 
   // Cross-currency: a sibling shape resolving to XccyConv.
   const b::XccyConvention xccy{"EURUSD"};
-  EXPECT_EQ(xccy.calendar().id, b::xccy_conv().calendar);
-  EXPECT_EQ(xccy.day_count().id, b::xccy_conv().dc);
+  EXPECT_EQ(xccy.calendar().id, b::xccy_conv("EURUSD").calendar);
+  EXPECT_EQ(xccy.day_count().id, b::xccy_conv("EURUSD").dc);
 }

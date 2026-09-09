@@ -25,7 +25,7 @@ namespace cv = swaps::curve;
 namespace {
 
 const b::Date kVd = b::Date::from_iso("2026-07-08");
-b::SwapConv sofr() { return b::swap_conv("USD", 1.0, "USD-SOFR"); }  // annual/annual, ACT/360, SOFR OIS
+b::SwapConv sofr() { return b::swap_conv("USD", "USD-SOFR"); }  // annual/annual, ACT/360, SOFR OIS
 
 // A curve over `knots` (curve-time years) with the given knot forwards (flat_hermite back region only).
 cv::ModularCurve<double> curve_from(const std::vector<double>& knots, const std::vector<double>& fwd) {

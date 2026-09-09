@@ -103,7 +103,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "0d",
-          "start_quote": 4.340113,
+          "start_quote": 4.343605,
           "type": "rate",
           "unit": "pct"
         },
@@ -119,7 +119,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2026-10-01",
-          "start_quote": 4.285891,
+          "start_quote": 4.289139,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -135,7 +135,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2026-11-01",
-          "start_quote": 4.105718,
+          "start_quote": 4.108686,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -151,7 +151,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2026-12-01",
-          "start_quote": 4.211539,
+          "start_quote": 4.214444,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -167,7 +167,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-01-01",
-          "start_quote": 3.785555,
+          "start_quote": 3.788093,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -183,7 +183,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-02-01",
-          "start_quote": 4.154456,
+          "start_quote": 4.157094,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -199,7 +199,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-03-01",
-          "start_quote": 4.137175,
+          "start_quote": 4.139732,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -215,7 +215,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-04-01",
-          "start_quote": 4.118613,
+          "start_quote": 4.121082,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -231,7 +231,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-05-01",
-          "start_quote": 3.838839,
+          "start_quote": 3.841082,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -247,7 +247,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-06-01",
-          "start_quote": 4.08121,
+          "start_quote": 4.0835,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -263,7 +263,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-07-01",
-          "start_quote": 4.058941,
+          "start_quote": 4.061124,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -279,7 +279,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-08-01",
-          "start_quote": 3.906565,
+          "start_quote": 3.908574,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -295,7 +295,7 @@
           "quote_kind": "Rate",
           "region": "sofr-front",
           "start": "2027-09-01",
-          "start_quote": 4.016637,
+          "start_quote": 4.018614,
           "type": "fut1m",
           "unit": "pct"
         },
@@ -311,7 +311,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "Z27",
-          "start_quote": 3.900909,
+          "start_quote": 3.90248,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -327,7 +327,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "H28",
-          "start_quote": 3.856437,
+          "start_quote": 3.857772,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -343,7 +343,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "M28",
-          "start_quote": 3.816409,
+          "start_quote": 3.817536,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -359,7 +359,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "U28",
-          "start_quote": 3.785027,
+          "start_quote": 3.785979,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -375,7 +375,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "Z28",
-          "start_quote": 3.758634,
+          "start_quote": 3.759431,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -391,7 +391,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "H29",
-          "start_quote": 3.736644,
+          "start_quote": 3.737305,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -407,7 +407,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "M29",
-          "start_quote": 3.718542,
+          "start_quote": 3.719082,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -423,7 +423,7 @@
           "quote_kind": "Rate",
           "region": "sofr-back",
           "start": "U29",
-          "start_quote": 3.70388,
+          "start_quote": 3.704313,
           "type": "fut3m",
           "unit": "pct"
         },
@@ -438,7 +438,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.92605,
+          "start_quote": 3.926433,
           "type": "swap",
           "unit": "pct"
         },
@@ -453,7 +453,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.888004,
+          "start_quote": 3.88844,
           "type": "swap",
           "unit": "pct"
         },
@@ -468,7 +468,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.848919,
+          "start_quote": 3.849196,
           "type": "swap",
           "unit": "pct"
         },
@@ -483,7 +483,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.840347,
+          "start_quote": 3.840497,
           "type": "swap",
           "unit": "pct"
         },
@@ -498,7 +498,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.851385,
+          "start_quote": 3.851552,
           "type": "swap",
           "unit": "pct"
         },
@@ -513,7 +513,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.879906,
+          "start_quote": 3.880044,
           "type": "swap",
           "unit": "pct"
         },
@@ -528,7 +528,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.940646,
+          "start_quote": 3.940787,
           "type": "swap",
           "unit": "pct"
         },
@@ -543,7 +543,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.00511,
+          "start_quote": 4.005265,
           "type": "swap",
           "unit": "pct"
         },
@@ -558,7 +558,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.067226,
+          "start_quote": 4.067354,
           "type": "swap",
           "unit": "pct"
         }
@@ -580,5 +580,5 @@
     }
   ],
   "smoothness": "off",
-  "value_date": "2026-09-06"
+  "value_date": "2026-09-09"
 }

@@ -2,51 +2,203 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Market conventions database",
   "type": "object",
-  "required": ["meta", "calendars", "day_counts", "indices", "products"],
+  "required": [
+    "meta",
+    "currencies",
+    "calendars",
+    "day_counts",
+    "indices",
+    "products"
+  ],
   "additionalProperties": false,
   "properties": {
-    "$schema": { "type": "string" },
+    "$schema": {
+      "type": "string"
+    },
     "meta": {
       "type": "object",
-      "required": ["title", "description"],
+      "required": [
+        "title",
+        "description"
+      ],
       "properties": {
-        "title": { "type": "string" },
-        "description": { "type": "string" },
-        "sources": { "type": "array", "items": { "type": "string" } },
-        "notes": { "type": "array", "items": { "type": "string" } }
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "calendars": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["name"],
+        "required": [
+          "name",
+          "weekend"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "quantlib": { "type": "string" },
-          "join": { "type": "array", "items": { "type": "string" } }
-        }
+          "name": {
+            "type": "string"
+          },
+          "quantlib": {
+            "type": "string"
+          },
+          "join": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "weekend": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "observance": {
+            "enum": [
+              "none",
+              "sat_to_fri_sun_to_mon",
+              "sun_to_mon",
+              ""
+            ]
+          },
+          "holidays": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "rule"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "rule": {
+                  "enum": [
+                    "fixed",
+                    "nth_weekday",
+                    "last_weekday",
+                    "easter_offset"
+                  ]
+                },
+                "month": {
+                  "type": "integer"
+                },
+                "day": {
+                  "type": "integer"
+                },
+                "weekday": {
+                  "type": "integer"
+                },
+                "n": {
+                  "type": "integer"
+                },
+                "days": {
+                  "type": "integer"
+                },
+                "from_year": {
+                  "type": "integer"
+                },
+                "to_year": {
+                  "type": "integer"
+                },
+                "observance": {
+                  "enum": [
+                    "none",
+                    "sat_to_fri_sun_to_mon",
+                    "sun_to_mon"
+                  ]
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "holidays"
+              ]
+            },
+            "then": {
+              "required": [
+                "observance"
+              ]
+            }
+          }
+        ]
       }
     },
     "day_counts": {
       "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "indices": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["currency", "type", "day_count", "calendar"],
+        "required": [
+          "currency",
+          "type",
+          "day_count",
+          "calendar"
+        ],
         "properties": {
-          "label": { "type": "string" },
-          "currency": { "type": "string" },
-          "type": { "enum": ["overnight", "ibor"] },
-          "tenor": { "type": "string", "pattern": "^[0-9]+[DWMY]$" },
-          "day_count": { "type": "string" },
-          "calendar": { "type": "string" },
-          "publication_lag": { "type": "integer", "minimum": 0 },
-          "fixing_lag": { "type": "integer", "minimum": 0 },
-          "par_product": { "type": "string" }
+          "label": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "overnight",
+              "ibor"
+            ]
+          },
+          "tenor": {
+            "type": "string",
+            "pattern": "^[0-9]+[DWMY]$"
+          },
+          "day_count": {
+            "type": "string"
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "publication_lag": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fixing_lag": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "par_product": {
+            "type": "string"
+          }
         }
       }
     },
@@ -54,34 +206,501 @@
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["description"],
+        "required": [
+          "description",
+          "type",
+          "calendar"
+        ],
         "properties": {
-          "description": { "type": "string" },
-          "currency": { "type": "string" },
-          "pair": { "type": "string" },
-          "base": { "type": "string" },
-          "quote": { "type": "string" },
-          "base_currency": { "type": "string" },
-          "type": { "type": "string" },
-          "movable": { "type": "boolean" },
-          "index": { "type": "string" },
-          "base_index": { "type": "string" },
-          "discount_index": { "type": "string" },
-          "accrual": { "enum": ["compounded", "averaged"] },
-          "schedule": { "type": "string" },
-          "settlement": { "type": "string" },
-          "outright": { "type": "string" },
-          "calendar": { "type": "string" },
-          "bdc": { "enum": ["Following", "ModifiedFollowing", "Preceding", "ModifiedPreceding"] },
-          "spot_lag": { "type": "integer", "minimum": 0 },
-          "payment_lag": { "type": "integer", "minimum": 0 },
-          "frequency": { "type": "string", "pattern": "^[0-9]+[DWMY]$" },
-          "fixed_leg": { "$ref": "#/$defs/leg" },
-          "float_leg": { "$ref": "#/$defs/leg" },
-          "spread_leg": { "$ref": "#/$defs/leg" },
-          "flat_leg": { "$ref": "#/$defs/leg" },
-          "usd_leg": { "$ref": "#/$defs/leg" },
-          "eur_leg": { "$ref": "#/$defs/leg" }
+          "description": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "base_currency": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "ois",
+              "irs",
+              "basis",
+              "xccy_mtm",
+              "fx_forward",
+              "future",
+              "administered-basis"
+            ]
+          },
+          "movable": {
+            "type": "boolean"
+          },
+          "index": {
+            "type": "string"
+          },
+          "base_index": {
+            "type": "string"
+          },
+          "discount_index": {
+            "type": "string"
+          },
+          "accrual": {
+            "enum": [
+              "compounded",
+              "averaged"
+            ]
+          },
+          "schedule": {
+            "type": "string"
+          },
+          "settlement": {
+            "type": "string"
+          },
+          "outright": {
+            "type": "string"
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "bdc": {
+            "enum": [
+              "Following",
+              "ModifiedFollowing",
+              "Preceding",
+              "ModifiedPreceding"
+            ]
+          },
+          "spot_lag": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payment_lag": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "frequency": {
+            "type": "string",
+            "pattern": "^[0-9]+[DWMY]$"
+          },
+          "fixed_leg": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "string"
+              },
+              "day_count": {
+                "type": "string"
+              },
+              "frequency": {
+                "type": "string",
+                "pattern": "^[0-9]+[DWMY]$"
+              },
+              "compounding": {
+                "enum": [
+                  "compounded",
+                  "averaged",
+                  "simple"
+                ]
+              },
+              "fixing_lag": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "carries_spread": {
+                "type": "boolean"
+              },
+              "notional_resets": {
+                "type": "boolean"
+              },
+              "flat": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          },
+          "float_leg": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "string"
+              },
+              "day_count": {
+                "type": "string"
+              },
+              "frequency": {
+                "type": "string",
+                "pattern": "^[0-9]+[DWMY]$"
+              },
+              "compounding": {
+                "enum": [
+                  "compounded",
+                  "averaged",
+                  "simple"
+                ]
+              },
+              "fixing_lag": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "carries_spread": {
+                "type": "boolean"
+              },
+              "notional_resets": {
+                "type": "boolean"
+              },
+              "flat": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          },
+          "spread_leg": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "string"
+              },
+              "day_count": {
+                "type": "string"
+              },
+              "frequency": {
+                "type": "string",
+                "pattern": "^[0-9]+[DWMY]$"
+              },
+              "compounding": {
+                "enum": [
+                  "compounded",
+                  "averaged",
+                  "simple"
+                ]
+              },
+              "fixing_lag": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "carries_spread": {
+                "type": "boolean"
+              },
+              "notional_resets": {
+                "type": "boolean"
+              },
+              "flat": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          },
+          "flat_leg": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "string"
+              },
+              "day_count": {
+                "type": "string"
+              },
+              "frequency": {
+                "type": "string",
+                "pattern": "^[0-9]+[DWMY]$"
+              },
+              "compounding": {
+                "enum": [
+                  "compounded",
+                  "averaged",
+                  "simple"
+                ]
+              },
+              "fixing_lag": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "carries_spread": {
+                "type": "boolean"
+              },
+              "notional_resets": {
+                "type": "boolean"
+              },
+              "flat": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          },
+          "usd_leg": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "string"
+              },
+              "day_count": {
+                "type": "string"
+              },
+              "frequency": {
+                "type": "string",
+                "pattern": "^[0-9]+[DWMY]$"
+              },
+              "compounding": {
+                "enum": [
+                  "compounded",
+                  "averaged",
+                  "simple"
+                ]
+              },
+              "fixing_lag": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "carries_spread": {
+                "type": "boolean"
+              },
+              "notional_resets": {
+                "type": "boolean"
+              },
+              "flat": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          },
+          "eur_leg": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "string"
+              },
+              "day_count": {
+                "type": "string"
+              },
+              "frequency": {
+                "type": "string",
+                "pattern": "^[0-9]+[DWMY]$"
+              },
+              "compounding": {
+                "enum": [
+                  "compounded",
+                  "averaged",
+                  "simple"
+                ]
+              },
+              "fixing_lag": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "carries_spread": {
+                "type": "boolean"
+              },
+              "notional_resets": {
+                "type": "boolean"
+              },
+              "flat": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "ois",
+                    "irs"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "currency",
+                "bdc",
+                "spot_lag",
+                "payment_lag",
+                "fixed_leg",
+                "float_leg"
+              ],
+              "properties": {
+                "fixed_leg": {
+                  "type": "object",
+                  "required": [
+                    "day_count",
+                    "frequency"
+                  ]
+                },
+                "float_leg": {
+                  "type": "object",
+                  "required": [
+                    "index",
+                    "day_count",
+                    "frequency"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "basis"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "currency",
+                "bdc",
+                "spot_lag",
+                "payment_lag",
+                "spread_leg",
+                "flat_leg",
+                "discount_index"
+              ],
+              "properties": {
+                "spread_leg": {
+                  "type": "object",
+                  "required": [
+                    "index",
+                    "day_count",
+                    "frequency"
+                  ]
+                },
+                "flat_leg": {
+                  "type": "object",
+                  "required": [
+                    "index",
+                    "day_count",
+                    "frequency"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "xccy_mtm"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "pair",
+                "base_currency",
+                "bdc",
+                "spot_lag",
+                "payment_lag",
+                "frequency",
+                "usd_leg",
+                "eur_leg"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "currencies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "name",
+          "minor_units",
+          "settlement_calendar",
+          "discount_index",
+          "default_swap_product"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "minor_units": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4
+          },
+          "settlement_calendar": {
+            "type": "string"
+          },
+          "discount_index": {
+            "type": "string"
+          },
+          "default_swap_product": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "bonds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "currency",
+          "calendar",
+          "day_count",
+          "frequency",
+          "settle_lag",
+          "stub_discount"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "day_count": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string"
+          },
+          "settle_lag": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stub_discount": {
+            "enum": [
+              "compound",
+              "simple"
+            ]
+          },
+          "final_period_simple": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     }
@@ -90,14 +709,36 @@
     "leg": {
       "type": "object",
       "properties": {
-        "index": { "type": "string" },
-        "day_count": { "type": "string" },
-        "frequency": { "type": "string", "pattern": "^[0-9]+[DWMY]$" },
-        "compounding": { "enum": ["compounded", "averaged", "none"] },
-        "fixing_lag": { "type": "integer", "minimum": 0 },
-        "carries_spread": { "type": "boolean" },
-        "flat": { "type": "boolean" },
-        "notional_resets": { "type": "boolean" }
+        "index": {
+          "type": "string"
+        },
+        "day_count": {
+          "type": "string"
+        },
+        "frequency": {
+          "type": "string",
+          "pattern": "^[0-9]+[DWMY]$"
+        },
+        "compounding": {
+          "enum": [
+            "compounded",
+            "averaged",
+            "none"
+          ]
+        },
+        "fixing_lag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "carries_spread": {
+          "type": "boolean"
+        },
+        "flat": {
+          "type": "boolean"
+        },
+        "notional_resets": {
+          "type": "boolean"
+        }
       }
     }
   }

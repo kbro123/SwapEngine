@@ -199,7 +199,7 @@ TEST(Conventions, G20IndicesResolveToParProductAndCalendar) {
     // the index's settlement calendar resolves in the DB ...
     const auto cal = db::calendar(ix->calendar);
     ASSERT_TRUE(cal.has_value()) << "index " << r.index << " -> unknown calendar " << ix->calendar;
-    EXPECT_EQ(cal->id, std::string_view(r.calendar)) << r.index;
+    EXPECT_EQ(cal->row.id, std::string_view(r.calendar)) << r.index;
     // ... and its par product exists, in the same currency, with the float leg pointing back at it.
     const auto p = db::product(r.par_product);
     ASSERT_TRUE(p.has_value()) << "missing product " << r.par_product;
@@ -213,13 +213,13 @@ TEST(Conventions, G20IndicesResolveToParProductAndCalendar) {
 TEST(Conventions, SaudiWeekendIsFridaySaturday) {
   const auto sar = db::calendar("SAR");
   ASSERT_TRUE(sar.has_value());
-  EXPECT_NE(sar->weekend_mask & (1 << 4), 0);  // Friday is a weekend day
-  EXPECT_NE(sar->weekend_mask & (1 << 5), 0);  // Saturday is a weekend day
-  EXPECT_EQ(sar->weekend_mask & (1 << 6), 0);  // Sunday is a BUSINESS day
+  EXPECT_NE(sar->row.weekend_mask & (1 << 4), 0);  // Friday is a weekend day
+  EXPECT_NE(sar->row.weekend_mask & (1 << 5), 0);  // Saturday is a weekend day
+  EXPECT_EQ(sar->row.weekend_mask & (1 << 6), 0);  // Sunday is a BUSINESS day
   // A Sat/Sun currency for contrast.
   const auto gbp = db::calendar("GBP");
   ASSERT_TRUE(gbp.has_value());
-  EXPECT_NE(gbp->weekend_mask & (1 << 5), 0);  // Saturday
-  EXPECT_NE(gbp->weekend_mask & (1 << 6), 0);  // Sunday
-  EXPECT_EQ(gbp->weekend_mask & (1 << 4), 0);  // Friday is a business day
+  EXPECT_NE(gbp->row.weekend_mask & (1 << 5), 0);  // Saturday
+  EXPECT_NE(gbp->row.weekend_mask & (1 << 6), 0);  // Sunday
+  EXPECT_EQ(gbp->row.weekend_mask & (1 << 4), 0);  // Friday is a business day
 }

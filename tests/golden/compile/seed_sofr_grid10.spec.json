@@ -17,7 +17,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.238395017099,
+          "start_quote": 4.239524485608,
           "type": "swap",
           "unit": "pct"
         },
@@ -32,7 +32,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.212804840493,
+          "start_quote": 4.213886500753,
           "type": "swap",
           "unit": "pct"
         },
@@ -47,7 +47,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.184160091782,
+          "start_quote": 4.184933000225,
           "type": "swap",
           "unit": "pct"
         },
@@ -62,7 +62,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.066029496991,
+          "start_quote": 4.066273332577,
           "type": "swap",
           "unit": "pct"
         },
@@ -77,7 +77,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.982855554728,
+          "start_quote": 3.983180902205,
           "type": "swap",
           "unit": "pct"
         },
@@ -92,7 +92,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.888004,
+          "start_quote": 3.88844,
           "type": "swap",
           "unit": "pct"
         },
@@ -107,7 +107,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.840347,
+          "start_quote": 3.840497,
           "type": "swap",
           "unit": "pct"
         },
@@ -122,7 +122,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.879906,
+          "start_quote": 3.880044,
           "type": "swap",
           "unit": "pct"
         },
@@ -137,7 +137,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 3.940646,
+          "start_quote": 3.940787,
           "type": "swap",
           "unit": "pct"
         },
@@ -152,7 +152,7 @@
           "quote_kind": "ParRate",
           "region": "sofr-back",
           "start": null,
-          "start_quote": 4.067225999999,
+          "start_quote": 4.067353999999,
           "type": "swap",
           "unit": "pct"
         }
@@ -169,5 +169,5 @@
     }
   ],
   "smoothness": "off",
-  "value_date": "2026-09-06"
+  "value_date": "2026-09-09"
 }

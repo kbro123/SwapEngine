@@ -21,7 +21,7 @@ tr::Trade usd_swap(const std::string& id, double notional, tr::Pay pay, double r
 
 TEST(TradeBook, TreeFlattensAndMaterializesToTheFastBook) {
   const b::Date vd = b::Date::from_iso("2026-09-01");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
 
   tr::Book desk("USD-Rates");
   desk.add(usd_swap("t1", 100e6, tr::Pay::Fixed, 0.0375, "10y"))   // payer of fixed

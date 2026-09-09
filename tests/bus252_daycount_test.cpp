@@ -53,7 +53,7 @@ TEST(Bus252, YearFracFullYearIsOne) {
 // resolve BUS/252 without throwing and every accrual must be an exact integer number of business days / 252.
 TEST(Bus252, BrlCdiParSwapAccrual) {
   const b::Date vd = b::Date::from_iso("2025-01-02");
-  const b::SwapConv conv = b::swap_conv("BRL", 1.0, "BRL-CDI");
+  const b::SwapConv conv = b::swap_conv("BRL", "BRL-CDI");
   ASSERT_EQ(conv.calendar, "BRL");
   ASSERT_EQ(conv.fixed_dc, "BUS/252");
   ASSERT_EQ(conv.float_dc, "BUS/252");

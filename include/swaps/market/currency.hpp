@@ -27,72 +27,27 @@ namespace swaps::market {
 namespace cvd = swaps::conventions;
 namespace bld = swaps::build;
 
-// ISO minor units (decimal places) — the one piece of currency metadata the conventions DB index rows do not
-// carry. Explicit table, exactly as the calendar holiday rules are explicit; a new currency is one data row.
-// Most world currencies use 2; JPY is the common 0-decimal case.
-struct MinorUnits {
-  std::string_view code;
-  int units;
-};
-inline constexpr std::array<MinorUnits, 6> kMinorUnits = {{
-    {"USD", 2},
-    {"EUR", 2},
-    {"GBP", 2},
-    {"JPY", 0},
-    {"KRW", 0},  // Korean won: quoted to whole units
-    {"IDR", 0},  // Indonesian rupiah: quoted to whole units
-}};
-inline int minor_units_for(std::string_view code) {
-  for (const auto& m : kMinorUnits)
-    if (m.code == code) return m.units;
-  return 2;  // ISO default: the vast majority of currencies quote to 2 decimal places
-}
-
-// The default OIS / discount benchmark per currency. A currency may carry several overnight indices in the DB
-// (USD lists both SOFR and FedFunds); this pins the modern discount benchmark. Currencies NOT listed here fall
-// back to the first overnight index the DB lists for them, so the registry still populates for any new one.
-struct DiscountPref {
-  std::string_view code, index;
-};
-inline constexpr std::array<DiscountPref, 2> kDiscountPref = {{
-    {"USD", "USD-SOFR"},
-    {"EUR", "EUR-ESTR"},
-}};
-
-// One derived registry row. `settlement_calendar` is the currency-level holiday calendar id, which the DB names
-// with the ISO code itself ("USD", "EUR") — distinct from an index's own fixing calendar (e.g. "USD-SOFR").
+// The currency registry IS the conventions DB (currencies[] in conventions.json, codegen'd as kCurrencies,
+// plus any runtime overlay). Until 2026-09-08 minor units and the discount preference were C++ tables here
+// (6 and 2 rows) and every other currency silently got "2 decimals" and "first overnight index in JSON order".
 struct CurrencyInfo {
   std::string code;
-  std::string discount_index;       // default OIS index id (from the DB overnight indices)
-  std::string settlement_calendar;  // currency-level calendar id (== the ISO code)
+  std::string discount_index;       // default RFR / discount index id (currencies[].discount_index)
+  std::string settlement_calendar;  // currency-level calendar id (currencies[].settlement_calendar)
+  int minor_units = -1;
 };
-
-// The known-currency set, DERIVED once from the DB's overnight indices. Kept DB-driven in spirit: a currency
-// appears here iff the conventions DB carries an overnight index for it, and its discount index/calendar are
-// read straight off that DB row.
-inline const std::vector<CurrencyInfo>& currency_registry() {
-  static const std::vector<CurrencyInfo> reg = [] {
-    std::vector<CurrencyInfo> r;
-    const auto find = [&r](std::string_view c) -> CurrencyInfo* {
-      for (auto& e : r)
-        if (e.code == c) return &e;
-      return nullptr;
-    };
-    for (const auto& ix : cvd::kIndices) {
-      if (ix.type != std::string_view("overnight")) continue;
-      CurrencyInfo* e = find(ix.currency);
-      if (!e) {
-        // First overnight index seen for this currency seeds it (calendar = the currency-level id == code).
-        r.push_back({std::string(ix.currency), std::string(ix.id), std::string(ix.currency)});
-        e = &r.back();
-      }
-      // Pin the preferred discount benchmark when the DB offers more than one overnight index for the currency.
-      for (const auto& p : kDiscountPref)
-        if (p.code == ix.currency && p.index == ix.id) e->discount_index = std::string(ix.id);
-    }
-    return r;
-  }();
-  return reg;
+inline std::optional<CurrencyInfo> currency_info(std::string_view code) {
+  const auto c = cvd::currency(code);
+  if (!c) return std::nullopt;
+  return CurrencyInfo{std::string(c->code), std::string(c->discount_index), std::string(c->settlement_calendar),
+                      c->minor_units};
+}
+inline std::vector<CurrencyInfo> currency_registry() {
+  std::vector<CurrencyInfo> r;
+  const auto L = cvd::Registry::instance().list_currencies();
+  for (const auto& code : L.baked) if (auto i = currency_info(code)) r.push_back(*i);
+  for (const auto& code : L.overlay) if (auto i = currency_info(code)) r.push_back(*i);
+  return r;
 }
 
 // A CURRENCY — a typed reference object addressed by its ISO code. PURE reference data: minor units, the
@@ -104,11 +59,10 @@ struct Currency {
   Currency() = default;
   explicit Currency(std::string code_) : code(std::move(code_)) {}
 
-  // Registry lookup. An unrecognised code returns a valid Currency that carries the code but no DB data
-  // (known()==false), exactly as build::Index{"NOT-AN-INDEX"} stays valid with empty conventions.
+  // An unrecognised code is a valid HANDLE (known()==false); every convention accessor throws for it.
   static Currency of(std::string code) { return Currency(std::move(code)); }
 
-  // The known currencies, in DB order — a currency is known iff the conventions DB carries an overnight index.
+  // The known currencies (currencies[] in the DB + runtime overlay).
   static std::vector<std::string> known_codes() {
     std::vector<std::string> v;
     for (const auto& e : currency_registry()) v.push_back(e.code);
@@ -116,31 +70,22 @@ struct Currency {
   }
 
   bool valid() const { return !code.empty(); }        // a usable value object (non-empty code)
-  bool known() const { return info() != nullptr; }    // recognised in the DB-derived registry
+  bool known() const { return cvd::currency(code).has_value(); }  // in the DB (baked or overlay)
 
-  // ISO minor units. Available even for a currency without a DB index (table lookup), like build::Index's
-  // day-count fallback; defaults to 2 for anything unlisted.
-  int minor_units() const { return minor_units_for(code); }
+  // ISO minor units — a DB field (currencies[].minor_units); throws for an unknown code (no "2" default).
+  int minor_units() const { return cvd::require_currency(code).minor_units; }
 
-  // The currency's default settlement (holiday) calendar. Empty calendar (weekends-only) for an unknown code.
+  // The currency's default settlement (holiday) calendar (currencies[].settlement_calendar); throws if unknown.
   bld::Calendar settlement_calendar() const {
-    const auto* e = info();
-    return bld::Calendar{e ? e->settlement_calendar : std::string()};
+    return bld::Calendar{std::string(cvd::require_currency(code).settlement_calendar)};
   }
 
-  // The currency's default OIS / discount index (SOFR for USD, ESTR for EUR). Empty (unknown) Index for an
-  // unknown code; the returned Index carries its own conventions and currency straight off the DB.
-  bld::Index discount_index() const {
-    const auto* e = info();
-    return bld::Index{e ? e->discount_index : std::string()};
-  }
+  // The currency's default RFR / discount index (currencies[].discount_index); throws if unknown. The returned
+  // Index carries its own conventions and currency straight off the DB.
+  bld::Index discount_index() const { return bld::Index{std::string(cvd::require_currency(code).discount_index)}; }
 
  private:
-  const CurrencyInfo* info() const {
-    for (const auto& e : currency_registry())
-      if (e.code == code) return &e;
-    return nullptr;
-  }
+  // (no cached pointer: the registry can grow at runtime; every accessor asks the DB)
 };
 
 }  // namespace swaps::market

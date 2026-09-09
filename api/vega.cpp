@@ -93,7 +93,7 @@ std::string vega_json(const std::string& request) {
   const std::string currency = js(o, "currency", "USD");
   const std::string index = js(o, "index", "USD-SOFR");
   const int curve = static_cast<int>(jd(o, "curve", 0.0));
-  const b::SwapConv conv = b::swap_conv(currency, 1.0, index);
+  const b::SwapConv conv = b::swap_conv(currency, index);
 
   // Calibrate the bundle -> the curve we price/vega off (same recipe as swaption_json).
   cal::BundleProblem prob = bundle_from_json(o.at("bundle"));

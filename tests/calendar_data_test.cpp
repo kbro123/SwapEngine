@@ -115,6 +115,7 @@ TEST(CalendarData, ExhaustiveYearlyHolidayCounts) {
   // (SAR's ~55 reflects its Fri/Sat weekend: every Friday is a non-business weekday under Mon-Fri counting.)
   const std::map<std::string, std::vector<int>> golden = {
       // 2024 2025 2026 2027 2028 2029 2030 2031 2032 2033 2034 2035 2036
+      {"NONE",     { 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0}},  // explicit weekends-only calendar
       {"USD",      {12, 12, 12, 12, 11, 12, 12, 12, 12, 11, 12, 12, 12}},
       {"USD-SOFR", {12, 12, 12, 12, 11, 12, 12, 12, 12, 11, 12, 12, 12}},
       {"USD-FED",  {11, 11, 10,  9,  9, 11, 11, 11,  9, 10, 10, 11, 11}},

@@ -3246,6 +3246,7 @@
     10.005479,
     10.008219
   ],
+  "has_bands": false,
   "n_knots": 7,
   "n_residuals": 7,
   "order_ids": [

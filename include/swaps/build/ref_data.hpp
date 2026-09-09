@@ -25,7 +25,7 @@ namespace swaps::build {
 
 namespace cvd = swaps::conventions;
 
-// A holiday calendar addressed by its DB id (EUR / USD / USD-SOFR / USD-FED / EURUSD, or "" = weekends-only).
+// A holiday calendar addressed by its DB id (EUR / USD / USD-SOFR / USD-FED / EURUSD / ... / "NONE" = weekends-only).
 struct Calendar {
   std::string id;
 
@@ -61,7 +61,7 @@ struct Convention {
   std::string index;        // the projection index id (drives the floating-leg conventions)
   double float_freq = 0.0;  // 0 => the index/product default
 
-  SwapConv resolve() const { return swap_conv(currency, float_freq, index); }
+  SwapConv resolve() const { return swap_conv(currency, index); }  // float_freq is informational: the DB product decides
 
   Calendar calendar() const { return Calendar{resolve().calendar}; }
   DayCount fixed_day_count() const { return DayCount{resolve().fixed_dc}; }
@@ -104,7 +104,7 @@ struct BasisConvention : Convention {
 struct XccyConvention {
   std::string pair;  // e.g. "EURUSD"
 
-  XccyConv resolve() const { return xccy_conv(); }
+  XccyConv resolve() const { return xccy_conv(pair); }
   Calendar calendar() const { return Calendar{resolve().calendar}; }
   DayCount day_count() const { return DayCount{resolve().dc}; }
   std::string bdc() const { return resolve().bdc; }
@@ -115,7 +115,8 @@ struct XccyConvention {
 
 // A rate INDEX — the pivot reference object the model projects off (USD-SOFR, EUR-EURIBOR-3M, ...). PURE
 // reference data: its own observation conventions (fixing calendar, day count, tenor, lags) and NO curve; a
-// bundle later realises it as a Curve. Unknown ids stay valid (empty conventions, sensible fallbacks).
+// bundle later realises it as a Curve. Unknown ids are valid as HANDLES (conv() is nullopt) but every
+// convention accessor throws for them — there are no fallbacks (PRINCIPLES.md P2).
 struct Index {
   std::string id;
 
@@ -126,8 +127,8 @@ struct Index {
   bool known() const { return conv().has_value(); }
   std::string currency() const { auto c = conv(); return c ? sv_str(c->currency) : std::string(); }
   bool is_overnight() const { auto c = conv(); return c && c->type == std::string_view("overnight"); }
-  DayCount day_count() const { return DayCount{index_day_count(id)}; }        // DB day count, else ACT/360
-  Calendar fixing_calendar() const { return Calendar{index_calendar(id)}; }   // DB calendar, else weekends-only
+  DayCount day_count() const { return DayCount{index_day_count(id)}; }        // DB day count (throws if unknown)
+  Calendar fixing_calendar() const { return Calendar{index_calendar(id)}; }   // DB calendar (throws if unknown)
   std::string par_product() const { auto c = conv(); return c ? sv_str(c->par_product) : std::string(); }
   std::string tenor() const { auto c = conv(); return c ? sv_str(c->tenor) : std::string(); }
   int fixing_lag() const { auto c = conv(); return c ? c->fixing_lag : 0; }

@@ -12,7 +12,7 @@ namespace pf = swaps::portfolio;
 
 TEST(Trade, VanillaPayerSwapToPosition) {
   const b::Date value_date = b::Date::from_iso("2026-01-15");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
 
   // ~spot effective, 10y maturity (the builders roll their own schedule from spot(value_date); effective
   // is the booked record and, for a spot-start swap, equals that spot).
@@ -45,7 +45,7 @@ TEST(Trade, VanillaPayerSwapToPosition) {
 
 TEST(Trade, ReceiverFlipsTheNotionalSign) {
   const b::Date value_date = b::Date::from_iso("2026-01-15");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
   const b::Date maturity = b::resolve("10Y", value_date);
 
   // Same deal, but we RECEIVE fixed: NPV = fixed - float = -(float - fixed), so the payer-of-fixed kernel

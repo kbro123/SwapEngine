@@ -34,6 +34,7 @@ for arg in "$@"; do
 done
 
 pass_oracle="SKIP"
+pass_schema="SKIP"
 pass_lit="SKIP"
 pass_correctness="SKIP"
 pass_perf="SKIP"
@@ -77,6 +78,10 @@ else
   pass_conv="FAIL"; rc=1
 fi
 rm -f "${_conv_tmp}"
+
+# ---- Conventions-DB schema + referential-integrity guard (PRINCIPLES.md P2) ----
+echo ">> conventions schema guard"
+if python3 "${ROOT}/tools/check_schema.py"; then pass_schema="PASS"; else pass_schema="FAIL"; rc=1; fi
 
 # ---- No-literal-conventions guard (PRINCIPLES.md P2) ------------------------
 # No market-convention literal (currency/index/calendar id, day count, frequency, lag, recovery, contract
@@ -137,6 +142,7 @@ echo ""
 echo "========== VERIFY SUMMARY =========="
 printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
 printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
+printf "  %-20s %s\n" "conventions schema:" "${pass_schema}"
 printf "  %-20s %s\n" "no-literal guard:" "${pass_lit}"
 printf "  %-20s %s\n" "api-dispatch sync:" "${pass_disp}"
 printf "  %-20s %s\n" "correctness gate:" "${pass_correctness}"

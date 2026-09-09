@@ -38,6 +38,7 @@ def main():
     db = json.load(open(JSON))
     products, indices, bonds = db["products"], db["indices"], db.get("bonds", {})
     calendars = db.get("calendars", {})
+    currencies = db.get("currencies", {})
 
     lines = [
         "#pragma once",
@@ -56,10 +57,19 @@ def main():
         "  std::string_view index, day_count, frequency, compounding;",
         "  int fixing_lag; bool carries_spread, notional_resets, flat;",
         "};",
+        "// type: ois | irs | basis | xccy_mtm | fx_forward | future | administered-basis. `floating` is the quoted",
+        "// float / spread / usd leg; `other` is the flat / eur leg of a basis or xccy product (empty otherwise).",
+        "// `frequency` is the product-level payment frequency (xccy), `discount_index` the DB discount index (basis).",
         "struct ProductConv {",
-        "  std::string_view id, currency, calendar, bdc;",
+        "  std::string_view id, type, currency, calendar, bdc, frequency, discount_index, pair, base_currency;",
         "  int spot_lag, payment_lag;",
-        "  LegConv fixed, floating;",
+        "  LegConv fixed, floating, other;",
+        "};",
+        "// A CURRENCY row (currencies[] in the JSON): ISO minor units, currency-level settlement calendar, the",
+        "// default discount (RFR) index and the default swap product used when a curve names no index.",
+        "struct CurrencyConv {",
+        "  std::string_view code, name, settlement_calendar, discount_index, default_swap_product;",
+        "  int minor_units;",
         "};",
         "struct IndexConv {",
         "  std::string_view id, currency, type, day_count, calendar, par_product, tenor;",
@@ -97,10 +107,12 @@ def main():
     for pid in sorted(products):
         p = products[pid]
         lines.append("  {" + ", ".join([
-            sv(pid), sv(p.get("currency")), sv(p.get("calendar")), sv(p.get("bdc")),
+            sv(pid), sv(p.get("type")), sv(p.get("currency")), sv(p.get("calendar")), sv(p.get("bdc")),
+            sv(p.get("frequency")), sv(p.get("discount_index")), sv(p.get("pair")), sv(p.get("base_currency")),
             str(p.get("spot_lag", -1)), str(p.get("payment_lag", -1)),
             leg(p.get("fixed_leg")),
             leg(p.get("float_leg") or p.get("spread_leg") or p.get("usd_leg")),
+            leg(p.get("flat_leg") or p.get("eur_leg")),
         ]) + "},")
     lines += ["}};", ""]
 
@@ -111,6 +123,15 @@ def main():
             sv(iid), sv(i.get("currency")), sv(i.get("type")), sv(i.get("day_count")), sv(i.get("calendar")),
             sv(i.get("par_product")), sv(i.get("tenor")),
             str(i.get("fixing_lag", -1)), str(i.get("publication_lag", -1)),
+        ]) + "},")
+    lines += ["}};", ""]
+
+    lines.append(f"inline constexpr std::array<CurrencyConv, {len(currencies)}> kCurrencies = {{{{")
+    for cc in sorted(currencies):
+        c = currencies[cc]
+        lines.append("  {" + ", ".join([
+            sv(cc), sv(c.get("name")), sv(c.get("settlement_calendar")), sv(c.get("discount_index")),
+            sv(c.get("default_swap_product")), str(c.get("minor_units", 2)),
         ]) + "},")
     lines += ["}};", ""]
 
@@ -154,23 +175,6 @@ def main():
     lines += cal_rows + ["}};", ""]
 
     lines += [
-        "inline std::optional<CalendarConv> calendar(std::string_view id) {",
-        "  for (const auto& c : kCalendars) if (c.id == id) return c;",
-        "  return std::nullopt;",
-        "}",
-        "inline std::optional<BondConv> bond(std::string_view id) {",
-        "  for (const auto& b : kBonds) if (b.id == id) return b;",
-        "  return std::nullopt;",
-        "}",
-        "inline std::optional<ProductConv> product(std::string_view id) {",
-        "  for (const auto& p : kProducts) if (p.id == id) return p;",
-        "  return std::nullopt;",
-        "}",
-        "inline std::optional<IndexConv> index(std::string_view id) {",
-        "  for (const auto& i : kIndices) if (i.id == id) return i;",
-        "  return std::nullopt;",
-        "}",
-        "",
         "// Approximate year-fraction of a frequency/tenor token ('3M'->0.25, '6M'->0.5, '1Y'->1.0), for the",
         "// coupon-period length a curve build needs when it only has year fractions (conventions_db.period_years).",
         "inline double period_years(std::string_view tok) {",
@@ -185,6 +189,11 @@ def main():
         "}",
         "",
         "}  // namespace swaps::conventions",
+        "",
+        "// The LOOKUPS live in the hand-written registry (baked defaults + runtime overlay; unknown id throws on",
+        "// the require_* forms). It is included here, after the arrays, so every consumer of this header sees them.",
+        "#define SWAPS_CONVENTIONS_DATA_INCLUDED 1",
+        "#include \"swaps/conventions_db.hpp\"",
         "",
     ]
     text = "\n".join(lines)

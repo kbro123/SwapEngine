@@ -337,16 +337,16 @@ TurnWindow turn_window(const json::object& ins, const b::Date& vd, const std::st
   } catch (const std::exception& e) {
     throw CompileError(ctx + ": " + e.what());
   }
-  std::string cal, dc = "ACT/360";
-  if (!index.empty()) {
-    if (auto ix = cvd::index(index)) {
-      if (ix->type == "overnight") {
-        cal = std::string(ix->calendar);
-        if (!ix->day_count.empty()) dc = std::string(ix->day_count);
-      }
-    }
+  // The turn accrues on the curve's overnight index calendar/day count; a curve with no index uses the
+  // currency's DB discount index (currencies[ccy].discount_index). No literal fallback (P2).
+  std::string cal, dc;
+  {
+    const std::string ix_id = !index.empty() ? index
+                              : std::string(cvd::require_currency(upper(currency)).discount_index);
+    const cvd::IndexConv ix = cvd::require_index(ix_id);
+    cal = std::string(cvd::require_field(ix.calendar, "calendar", ix.id));
+    dc = std::string(cvd::require_field(ix.day_count, "day_count", ix.id));
   }
-  if (cal.empty()) cal = (upper(currency.empty() ? "USD" : currency) == "EUR") ? "EUR" : "USD";
   const b::Date start_date = b::adjust(cal, raw, "Preceding");  // last business day on/before
   const b::Date end_date = b::advance_bd(cal, start_date, 1);    // accrues to next business day
   const double start = b::curve_time(vd, start_date);
@@ -429,7 +429,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   // Currency -> engine-blind integer tag, by first use.
   std::vector<std::string> ccy_order;
   auto ccy_index = [&](const std::string& name) -> int {
-    const std::string n = upper(name.empty() ? "USD" : name);
+    if (name.empty()) throw CompileError("a curve has no 'currency' (required; no default)");
+    const std::string n = upper(name);
     auto it = std::find(ccy_order.begin(), ccy_order.end(), n);
     if (it != ccy_order.end()) return int(it - ccy_order.begin());
     ccy_order.push_back(n);
@@ -541,7 +542,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
 
     PerCurveInfo pc;
     pc.name = cname;
-    pc.currency = upper(get_s(c, "currency", "USD"));
+    if (get_s(c, "currency").empty()) throw CompileError("curve '" + cname + "' has no 'currency' (required; no default)");
+    pc.currency = upper(get_s(c, "currency"));
     pc.type = ctype;
     pc.fwd_tenor = fwd_tenor;
     pc.policies = layout.policies;
@@ -597,7 +599,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
       const std::string iid = ins_key(ins, j);
 
       if (get_s(ins, "type") == "portfolio") {
-        const b::SwapConv pconv = b::swap_conv(get_s(c, "currency"), 1.0, get_s(c, "index"));
+        const b::SwapConv pconv = b::swap_conv(get_s(c, "currency"), get_s(c, "index"));
         cal::Instrument obj;
         obj.quote = cal::QuoteKind::Portfolio;
         if (ins.contains("components") && ins.at("components").is_array())
@@ -640,7 +642,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
                                           b::index_calendar(get_s(c, "index")), get_s(c, "index")),
                                  mkt);
       } else if (kind == "ParSpread") {
-        obj = b::basis_swap(value_date, b::swap_conv(get_s(c, "currency"), 1.0, get_s(c, "index")), mat_date,
+        obj = b::basis_swap(value_date, b::swap_conv(get_s(c, "currency"), get_s(c, "index")), mat_date,
                             ci, bench_of(ins), disc, mkt);
       } else if (kind == "FxForward") {
         const std::string den = get_s(ins, "fx_den");
@@ -655,7 +657,10 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
           throw CompileError("Xccy basis on '" + cname + "' needs a valid 'fx_den' curve.");
         if (idx.at(fund) == ci)
           throw CompileError("Xccy basis on '" + cname + "' cannot use its own curve as the fund leg.");
-        obj = b::xccy_mtm_basis(value_date, b::xccy_conv(), mat_date, ci, bench_of(ins), idx.at(fund),
+        const std::string pair = get_s(c, "pair");
+        if (pair.empty())
+          throw CompileError("Xccy basis on '" + cname + "' needs the curve's 'pair' (e.g. EURUSD) — the DB product XCCY-MTM-<PAIR> supplies the conventions.");
+        obj = b::xccy_mtm_basis(value_date, b::xccy_conv(pair), mat_date, ci, bench_of(ins), idx.at(fund),
                                get_d(ins, "fx_spot", 1.0), mkt);
       } else if (kind == "TurnJump") {
         auto it = turn_index_of.find({cid, iid});
@@ -664,7 +669,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         obj = b::turn_jump(ci, it->second, mkt);
       } else {  // ParRate
         obj = b::par_swap(value_date,
-                          b::swap_conv(get_s(c, "currency"), get_d(ins, "float_freq", 1.0), get_s(c, "index")),
+                          b::swap_conv(get_s(c, "currency"), get_s(c, "index")),  // float_freq: the DB product decides
                           mat_date, ci, disc, mkt);
       }
       apply_band(obj, ins, unit);

@@ -9,6 +9,7 @@
 #define SWAPS_BUILD_OBSERVATIONS_HPP
 
 #include <cmath>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,11 +26,13 @@ namespace px = swaps::pricing;
 // Proleptic Gregorian ordinal (Python date.toordinal(): 0001-01-01 == 1). 1970-01-01 == 719163.
 inline int ordinal(const Date& d) { return int(d.serial()) + 719163; }
 
-// Fixing dates in [start, end) on the index calendar ("" -> weekends only) (conventions.business_days).
+// Fixing dates in [start, end) on the index calendar (conventions.business_days). The id is REQUIRED; the DB
+// calendar "NONE" is the explicit weekends-only calendar (an empty id used to mean that silently).
 inline std::vector<Date> business_days(const Date& start, const Date& end, const std::string& cal) {
+  if (cal.empty()) throw std::invalid_argument("business_days: calendar id required (\'NONE\' = weekends only)");
   std::vector<Date> days;
   for (Date d = start; d < end; d = d.plus_days(1)) {
-    const bool bd = cal.empty() ? (d.weekday() < 5) : is_business_day(cal, d);
+    const bool bd = is_business_day(cal, d);
     if (bd) days.push_back(d);
   }
   return days;
@@ -48,7 +51,7 @@ inline std::vector<std::pair<Date, Date>> daily_periods(const Date& start, const
 // The obs for a futures-style Rate quote (conventions.observation). `realized_pct` in PERCENT.
 inline px::RateObservation observation(const Date& vd, const Date& start, const Date& end,
                                        const std::string& accrual, double realized_pct,
-                                       const std::string& dc = "ACT/360", const std::string& cal = "") {
+                                       const std::string& dc, const std::string& cal) {  // both REQUIRED (P2)
   const double tau = year_frac(dc, start, end, cal);  // `cal` is ignored unless dc==BUS/252
   const Date fwd_from = (start > vd) ? start : vd;
   const double tau_past = (start < vd) ? year_frac(dc, start, vd, cal) : 0.0;
@@ -83,12 +86,13 @@ inline px::RateObservation observation(const Date& vd, const Date& start, const 
 
 // ---- RFR observation-timing conventions (Priority-2: fixing lag / lookback / lockout) --------------------
 // Advance `n` observation business days (n may be negative) using the SAME weekend-only-when-empty rule as
-// business_days(): an empty calendar means weekends only (NOT the USD-SIFMA fallback advance_bd would take).
+
 inline Date advance_obs_bd(const std::string& cal, Date d, int n) {
+  if (cal.empty()) throw std::invalid_argument("advance_obs_bd: calendar id required (\'NONE\' = weekends only)");
   const int step = n >= 0 ? 1 : -1;
   for (int left = std::abs(n); left; ) {
     d = d.plus_days(step);
-    const bool bd = cal.empty() ? (d.weekday() < 5) : is_business_day(cal, d);
+    const bool bd = is_business_day(cal, d);
     if (bd) --left;
   }
   return d;

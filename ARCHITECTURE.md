@@ -234,6 +234,7 @@ calibrate jointly via `SpreadHandle`), and the `reference_*.hpp` QuantLib market
 |---|---|---|
 | build | cmake/ninja | QuantLib absent (fatal unless `-DSWAPS_ALLOW_NO_ORACLE=ON`, which marks the build non-gated) |
 | oracle/consistency registry | `tools/check_oracle_tests.sh --build` | a registered file missing / wrong banner / oracle without QuantLib / fewer `TEST`s or `EXPECT`s than `tests/oracle_assertions.lock` / a QuantLib-linked binary missing or listing fewer tests than locked. `tools/selftest_guards.sh` proves it trips. |
+| conventions schema | `tools/check_schema.py` | `conventions.json` fails `conventions.schema.json` (swap products must carry calendar/bdc/lags/leg day counts+frequencies; currencies/calendars/bonds declared) or references an id that does not exist |
 | conventions sync | `tools/gen_conventions_hpp.py --stdout` diff | `conventions.json` edited without regenerating `conventions_data.hpp` |
 | no-literal conventions | `tools/check_no_literals.py` | any NEW currency/index/calendar/day-count/frequency/lag/recovery literal or silent fallback in `include/` or `api/` (existing ones are a ratchet in `tools/check_no_literals.allow`, burned down in E2) |
 | api-dispatch sync | `tools/gen_dispatch.py --stdout` diff | descriptor edited without regenerating the dispatch |
@@ -241,5 +242,22 @@ calibrate jointly via `SpreadHandle`), and the `reference_*.hpp` QuantLib market
 | performance | `tools/check_perf.py` | `ours_ns > 1.25 × baseline` for this fingerprint (`baselines/baselines.json`, key = CPU + ISA + engine arch flag + compiler + **QuantLib toolchain**) or `ours_ns > target` (`baselines/targets.json`, ratchets down only); refuses to run when the CPU is >15% busy (2 s sample). QuantLib numbers are printed as an informational reference, never gated. |
 
 Enforcement: `.githooks/pre-push` (`tools/install_hooks.sh`) runs the guards + `verify.sh --test-only`; `.github/workflows/ci.yml` builds and runs the QuantLib-free binaries on every push; `tools/nightly.sh` (launchd, `tools/install_nightly.sh`) runs the full gate quiesced and writes `baselines/NIGHTLY.md`. Flags have one source of truth, `cmake/DetectISA.cmake`, probed by `tools/archprobe` for `bootstrap_deps.sh` (QuantLib is built with the engine's exact flags) and `fingerprint.sh`.
+
+## The conventions registry (PRINCIPLES.md P2 — "specifics as data", runtime-extensible)
+
+`conventions/conventions.json` (currencies · calendars · day_counts · indices · products · bonds) is codegen'd to
+`include/swaps/conventions_data.hpp` (constexpr `kCurrencies/kCalendars/kHolidayRules/kIndices/kProducts/kBonds`)
+which then includes the hand-written **`include/swaps/conventions_db.hpp`**: `swaps::conventions::Registry`, a
+process-wide overlay on top of the baked arrays. Lookups `product/index/bond/currency/calendar(id)` return
+`std::optional` (overlay first, then baked); `require_*(id)` THROW on a miss — there are no silent fallbacks
+anywhere in `build/` or `api/` any more (unknown calendar → USD SIFMA, unknown currency → USD, empty day count →
+ACT/360, float-frequency → EURIBOR product guesses all died on 2026-09-09). A curve that names no index resolves
+through `currencies[ccy].default_swap_product`; xccy conventions come from `XCCY-MTM-<PAIR>`; weekend-only
+synthetic problems name the DB calendar `"NONE"` explicitly. Any API adds or overrides entries at runtime with
+the stateless **`conventions`** verb (`{"conventions": {"currencies": {...}, "calendars": {...}, "indices": {...},
+"products": {...}, "bonds": {...}}}`, rows in exactly the JSON file's shapes; `clear_overlay` resets) and reads
+what the engine knows with **`list_conventions`** (`api/conventions.cpp`; `tests/conventions_registry_test.cpp`).
+`tools/check_no_literals.py` (verify.sh) fails on any new convention literal in `include/`+`api/`; the remaining
+68 (of the original 130) are ratcheted in `tools/check_no_literals.allow` for the rest of E2.
 
 > **Performance:** see [`OPTIMIZATION.md`](OPTIMIZATION.md) for how the calibration/streaming path was made fast (the W-cache, hybrid AAD, frozen-Newton streaming, alloc-free/SIMD hot path) and the repeatable optimization playbook.

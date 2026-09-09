@@ -250,7 +250,7 @@ TEST(BugHunt, InvertedCdsStripHazardNonNegativeSurvivalMonotone) {
 TEST(BugHunt, FixedLegFrequencyComesFromTheProduct) {
   const auto p = swaps::conventions::product("SAR-SAIBOR-3M-IRS");
   ASSERT_TRUE(p.has_value());
-  const bld::SwapConv conv = bld::conv_from_product(*p, "SAR", "3M");
+  const bld::SwapConv conv = bld::conv_from_product(*p);
   EXPECT_EQ(conv.fixed_freq_tok, "6M");
   const bld::Date vd = bld::Date::ymd(2026, 9, 9);
   const cal::Instrument sw = bld::par_swap(vd, conv, bld::resolve("5Y", vd), 0, 0, 0.04);
@@ -263,7 +263,7 @@ TEST(BugHunt, FixedLegFrequencyComesFromTheProduct) {
 // 14. A seasoned trade rolls from its EFFECTIVE date. With a zero payment lag, a 7y trade struck two years
 // ago has exactly the coupons of a 5y trade struck today (the elapsed periods are settled and dropped).
 TEST(BugHunt, SeasonedTradeRollsFromEffective) {
-  bld::SwapConv conv = bld::swap_conv("USD", 1.0, "USD-SOFR");
+  bld::SwapConv conv = bld::swap_conv("USD", "USD-SOFR");
   conv.pay_lag = 0;
   const bld::Date vd = bld::Date::ymd(2026, 9, 9), mat = bld::Date::ymd(2031, 9, 9);
   const auto seasoned = swaps::trade::Trade::vanilla_swap("S", 1e6, swaps::trade::Pay::Fixed, 0.03, "USD", "USD-SOFR",
@@ -288,7 +288,7 @@ TEST(BugHunt, SeasonedTradeRollsFromEffective) {
 // unresolved is refused (it would price the elapsed part at zero), and resolving it against a fixing table
 // puts the realized compounding into realized_factor and starts the forecast at today.
 TEST(BugHunt, SeasonedTradeCurrentPeriodResolvesFromFixings) {
-  const bld::SwapConv conv = bld::swap_conv("USD", 1.0, "USD-SOFR");
+  const bld::SwapConv conv = bld::swap_conv("USD", "USD-SOFR");
   const bld::Date vd = bld::Date::ymd(2026, 9, 9);
   const auto t = swaps::trade::Trade::vanilla_swap("S", 1e6, swaps::trade::Pay::Fixed, 0.03, "USD", "USD-SOFR",
                                                   bld::Date::ymd(2026, 3, 9), bld::Date::ymd(2031, 3, 9), 0, 0);

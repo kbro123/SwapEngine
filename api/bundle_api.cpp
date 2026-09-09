@@ -27,6 +27,7 @@
 #include "swaps/api/inflation.hpp"                   // inflation_json (the 'inflation' ZCIS/YoY verb)
 #include "swaps/api/fx_option.hpp"                    // fx_option_json (the 'fx_option'/'fx_vol' verb)
 #include "swaps/api/bond_future.hpp"                  // bond_future_json (the 'bond_future' CTD verb)
+#include "swaps/api/conventions.hpp"
 #include "swaps/api/ndf.hpp"                          // ndf_json (the 'ndf' non-deliverable FX verb)
 #include "swaps/api/calib_report.hpp"                 // calib_report_json (calibration diagnostics verb)
 #include "swaps/api/credit.hpp"                       // credit_json (the 'credit' hazard-curve/CDS verb)
@@ -1097,6 +1098,10 @@ std::string run_json(const std::string& request) {
 
     // Stateless FX_OPTION / FX_VOL verb: Garman-Kohlhagen vanilla FX options + delta-quoted smile.
     if (o.contains("fx_option") || o.contains("fx_vol")) return fx_option_json(request);
+
+    // Conventions registry (P2): add/override market conventions at runtime; list what the engine knows.
+    if (o.contains("conventions")) return conventions_json(request);
+    if (o.contains("list_conventions")) return list_conventions_json(request);
 
     // Stateless NDF verb: non-deliverable FX forwards / NDS (covered-interest-parity, linear, no vol).
     if (o.contains("ndf")) return ndf_json(request);

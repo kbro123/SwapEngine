@@ -109,7 +109,8 @@
         }
       ],
       "kind": "spread",
-      "name": "EUR/USD xccy"
+      "name": "EUR/USD xccy",
+      "pair": "EURUSD"
     }
   ],
   "smoothness": "light",

@@ -53,12 +53,15 @@ inline px::FloatCoupon ois_coupon(const Date& vd, const SwapConv& conv, const Da
 
 // Fixed annuity leg to `mat`. `fixed_freq` overrides the coupon frequency (default "1Y" reproduces the old
 // hard-coded annual leg); `notionals` gives an amortizing/step-up schedule (default empty => unit notional).
+// `fixed_freq` "" = the product's fixed-leg frequency (conv.fixed_freq_tok); never a literal default.
 inline cal::FixedLeg fixed_coupons(const Date& vd, const SwapConv& conv, const Date& mat, int disc,
-                                   const std::string& fixed_freq = "1Y",
+                                   const std::string& fixed_freq = "",
                                    const std::vector<double>& notionals = {}) {
   cal::FixedLeg leg;
   leg.discount = disc;
-  const auto periods = swap_periods_to(vd, conv.calendar, mat, fixed_freq, conv.bdc, conv.spot_lag);
+  const std::string& freq = fixed_freq.empty() ? conv.fixed_freq_tok : fixed_freq;
+  if (freq.empty()) throw std::invalid_argument("fixed_coupons: no fixed-leg frequency (product '" + conv.product_id + "')");
+  const auto periods = swap_periods_to(vd, conv.calendar, mat, freq, conv.bdc, conv.spot_lag);
   for (std::size_t i = 0; i < periods.size(); ++i) {
     const auto& [s, e] = periods[i];
     const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
@@ -196,7 +199,11 @@ inline cal::Instrument basis_swap(const Date& vd, const SwapConv& conv, const Da
                       notionals);
   ins.bench = float_leg(vd, conv, mat, bench, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, 0.0,
                         notionals);
-  ins.fixed = fixed_coupons(vd, conv, mat, disc, "1Y", notionals);
+  // The spread annuity is on the QUOTED leg's schedule and day count (it used to be a hard-wired annual
+  // fixed leg — wrong for every non-annual basis; audit item E29 / build M6).
+  SwapConv qc = conv;
+  qc.fixed_dc = conv.float_dc;
+  ins.fixed = fixed_coupons(vd, qc, mat, disc, conv.float_freq_tok, notionals);
   ins.market = market;
   return ins;
 }
@@ -205,7 +212,10 @@ inline cal::Instrument basis_swap(const Date& vd, const SwapConv& conv, const Da
 inline cal::Instrument xccy_mtm_basis(const Date& vd, const XccyConv& x, const Date& mat, int ci, int foreign,
                                       int fund, double fx_spot, double market) {
   // The XccyConv shares the SwapConv shape for the leg builders (calendar/bdc/spot_lag/freq/dc).
-  const SwapConv sc{x.calendar, x.bdc, x.dc, x.dc, x.freq_tok, x.spot_lag, x.pay_lag};
+  SwapConv sc;
+  sc.calendar = x.calendar; sc.bdc = x.bdc; sc.fixed_dc = x.dc; sc.float_dc = x.dc;
+  sc.float_freq_tok = x.freq_tok; sc.fixed_freq_tok = x.freq_tok; sc.spot_lag = x.spot_lag; sc.pay_lag = x.pay_lag;
+  sc.product_id = x.product_id;
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::XccyMtmBasis;
   ins.fwd = float_leg(vd, sc, mat, ci, ci, x.freq_tok, x.dc);
@@ -273,7 +283,7 @@ inline cal::Instrument turn_jump(int ci, int turn_index, double market) {
 inline cal::Instrument par_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int disc,
                                 double market, double float_spread = 0.0,
                                 const std::vector<double>& notionals = {},
-                                const std::string& fixed_freq = "1Y") {
+                                const std::string& fixed_freq = "") {  // "" = the product's
   return par_swap(vd, conv.resolve(), mat, fc, disc, market, float_spread, notionals, fixed_freq);
 }
 inline cal::Instrument basis_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int bench,
@@ -282,7 +292,7 @@ inline cal::Instrument basis_swap(const Date& vd, const Convention& conv, const 
   return basis_swap(vd, conv.resolve(), mat, fc, bench, disc, market, fwd_spread, notionals);
 }
 inline cal::FixedLeg fixed_coupons(const Date& vd, const Convention& conv, const Date& mat, int disc,
-                                   const std::string& fixed_freq = "1Y",
+                                   const std::string& fixed_freq = "",  // "" = the product's
                                    const std::vector<double>& notionals = {}) {
   return fixed_coupons(vd, conv.resolve(), mat, disc, fixed_freq, notionals);
 }

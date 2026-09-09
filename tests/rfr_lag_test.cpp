@@ -11,7 +11,7 @@ namespace b = swaps::build;
 // Default (inactive) lag == the plain single telescoped bracket, byte-for-byte.
 TEST(RfrLag, InactiveIsByteIdenticalToPlainBracket) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
   const b::Date s = b::Date::from_iso("2026-08-03"), e = b::Date::from_iso("2026-11-03");
 
   const b::px::FloatCoupon def = b::ois_coupon(vd, conv, s, e, conv.float_dc);          // no lag arg
@@ -39,7 +39,7 @@ TEST(RfrLag, InactiveIsByteIdenticalToPlainBracket) {
 // `days` business days, so both endpoints move earlier by exactly that shift.
 TEST(RfrLag, ShiftMovesWholeWindowAndStaysTelescoped) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
   const b::Date s = b::Date::from_iso("2026-08-03"), e = b::Date::from_iso("2026-11-03");
 
   b::RfrLag lag{b::RfrStyle::Shift, 5, "USD-SOFR"};
@@ -59,7 +59,7 @@ TEST(RfrLag, ShiftMovesWholeWindowAndStaysTelescoped) {
 // window looked back `days` BDs while the accrual weight keys off the ACTUAL day.
 TEST(RfrLag, LookbackIsDailyCompounded) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
   const b::Date s = b::Date::from_iso("2026-08-03"), e = b::Date::from_iso("2026-09-01");
 
   b::RfrLag lag{b::RfrStyle::Lookback, 5, "USD-SOFR"};
@@ -81,7 +81,7 @@ TEST(RfrLag, LookbackIsDailyCompounded) {
 // window (identical sub-period), while each still carries its own actual-accrual weight.
 TEST(RfrLag, LockoutFreezesTailWindow) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
   const b::Date s = b::Date::from_iso("2026-08-03"), e = b::Date::from_iso("2026-09-01");
 
   const int lock = 3;

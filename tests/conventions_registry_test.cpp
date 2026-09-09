@@ -1,0 +1,138 @@
+// @regression-test — the runtime conventions registry (PRINCIPLES.md P2): the baked JSON is the DEFAULT set,
+// any API can ADD entries through the `conventions` verb, a lookup miss THROWS (no silent USD/ACT/360/SIFMA
+// fallbacks), and an added product is used by the very next build. Class T6 (proven to fail without the
+// registry: before 2026-09-08 `swap_conv("XXX", "")` returned a USD-SOFR-OIS convention and
+// `is_business_day("NOPE", d)` used the SIFMA calendar).
+#include <gtest/gtest.h>
+
+#include <stdexcept>
+#include <string>
+
+#include <boost/json.hpp>
+
+#include "swaps/api/conventions.hpp"
+#include "swaps/build/calendar.hpp"
+#include "swaps/build/conventions.hpp"
+#include "swaps/build/instruments.hpp"
+#include "swaps/conventions_data.hpp"
+
+namespace api = swaps::api;
+namespace b = swaps::build;
+namespace cvd = swaps::conventions;
+namespace json = boost::json;
+
+namespace {
+struct RegistryFixture : ::testing::Test {
+  void SetUp() override { cvd::Registry::instance().clear_overlay(); }
+  void TearDown() override { cvd::Registry::instance().clear_overlay(); }
+};
+}  // namespace
+
+TEST_F(RegistryFixture, UnknownIdsThrowInsteadOfDefaulting) {
+  EXPECT_THROW(b::swap_conv("XXX", ""), std::invalid_argument);            // no currency row -> no product guess
+  EXPECT_THROW(b::swap_conv("USD", "NOT-AN-INDEX"), std::invalid_argument);
+  EXPECT_THROW(b::xccy_conv("GBPJPY"), std::invalid_argument);            // only XCCY-MTM-EURUSD is baked
+  EXPECT_THROW(b::index_day_count(""), std::invalid_argument);
+  EXPECT_THROW(b::index_calendar("NOT-AN-INDEX"), std::invalid_argument);
+  EXPECT_THROW(b::is_business_day("NOPE", b::Date::from_iso("2026-01-01")), std::invalid_argument);
+  EXPECT_THROW(b::is_business_day("", b::Date::from_iso("2026-01-01")), std::invalid_argument);
+  EXPECT_THROW(cvd::require_currency("ZZZ"), std::invalid_argument);
+  EXPECT_FALSE(cvd::product("NOT-A-PRODUCT").has_value());
+}
+
+TEST_F(RegistryFixture, NoIndexResolvesThroughTheCurrencyRowNotAHeuristic) {
+  // currencies[USD].default_swap_product == USD-SOFR-OIS is DATA; the old code guessed EUR-EURIBOR-*-IRS
+  // from a float frequency and fell back to USD-SOFR-OIS for every currency.
+  const b::SwapConv usd = b::swap_conv("USD", "");
+  EXPECT_EQ(usd.product_id, std::string(cvd::require_currency("USD").default_swap_product));
+  const b::SwapConv aud = b::swap_conv("aud", "");  // case-insensitive code
+  EXPECT_EQ(aud.product_id, "AUD-AONIA-OIS");
+  EXPECT_EQ(aud.calendar, "AUD");
+  EXPECT_EQ(aud.spot_lag, 1);
+}
+
+TEST_F(RegistryFixture, BasisAnnuityFollowsTheQuotedLegNotAnAnnualLiteral) {
+  const b::SwapConv sar = b::swap_conv("SAR", "SAR-SAIBOR-3M");
+  EXPECT_EQ(sar.fixed_freq_tok, "6M");
+  const b::Date vd = b::Date::from_iso("2026-07-08");
+  const b::Date mat = b::resolve("2Y", vd, false);
+  const auto par = b::par_swap(vd, sar, mat, 0, 0, 0.04);
+  const auto bas = b::basis_swap(vd, sar, mat, 0, 1, 0, 0.0010);
+  EXPECT_EQ(par.fixed.coupons.size(), 4u);                       // 6M fixed leg over 2y
+  EXPECT_EQ(bas.fixed.coupons.size(), bas.fwd.coupons.size());   // annuity on the quoted (3M) leg: 8, not 2
+  EXPECT_EQ(bas.fixed.coupons.size(), 8u);
+}
+
+TEST_F(RegistryFixture, ConventionsVerbAddsACurrencyCalendarIndexAndProductUsedByTheNextBuild) {
+  // A brand-new market (fictional "XYZ") added through the JSON seam only — no rebuild, no code.
+  const std::string req = R"({"conventions": {
+    "currencies": {"XYZ": {"name": "Test dollar", "minor_units": 3, "settlement_calendar": "XYZ",
+                           "discount_index": "XYZ-ONIA", "default_swap_product": "XYZ-ONIA-OIS"}},
+    "calendars": {"XYZ": {"name": "Test", "weekend": [4, 5], "observance": "none",
+                          "holidays": [{"rule": "fixed", "month": 7, "day": 9}]}},
+    "indices": {"XYZ-ONIA": {"currency": "XYZ", "type": "overnight", "day_count": "ACT/365F",
+                             "calendar": "XYZ", "publication_lag": 1, "par_product": "XYZ-ONIA-OIS"}},
+    "products": {"XYZ-ONIA-OIS": {"description": "test", "type": "ois", "currency": "XYZ", "calendar": "XYZ",
+                                  "bdc": "Following", "spot_lag": 0, "payment_lag": 1,
+                                  "fixed_leg": {"day_count": "ACT/365F", "frequency": "3M"},
+                                  "float_leg": {"index": "XYZ-ONIA", "compounding": "compounded",
+                                                "day_count": "ACT/365F", "frequency": "3M"}}}}})";
+  const json::object resp = json::parse(api::conventions_json(req)).as_object();
+  EXPECT_EQ(resp.at("conventions").as_object().at("overlay_size").to_number<int>(), 4);
+
+  // Consumed by every layer: currency row, calendar interpreter, index accessors, the swap builder.
+  EXPECT_EQ(cvd::require_currency("XYZ").minor_units, 3);
+  EXPECT_FALSE(b::is_business_day("XYZ", b::Date::from_iso("2026-07-09")));   // the added fixed holiday
+  EXPECT_FALSE(b::is_business_day("XYZ", b::Date::from_iso("2026-07-10")));   // Friday = weekend [4,5]
+  EXPECT_TRUE(b::is_business_day("XYZ", b::Date::from_iso("2026-07-12")));    // Sunday is a business day here
+  EXPECT_EQ(b::index_day_count("XYZ-ONIA"), "ACT/365F");
+  const b::SwapConv c = b::swap_conv("XYZ", "");
+  EXPECT_EQ(c.product_id, "XYZ-ONIA-OIS");
+  EXPECT_EQ(c.bdc, "Following");
+  EXPECT_EQ(c.spot_lag, 0);
+  EXPECT_EQ(c.pay_lag, 1);
+  EXPECT_EQ(c.fixed_freq_tok, "3M");
+  const b::Date vd = b::Date::from_iso("2026-07-08");
+  const auto ins = b::par_swap(vd, c, b::resolve("1Y", vd, false), 0, 0, 0.03);
+  EXPECT_EQ(ins.fixed.coupons.size(), 4u);  // quarterly, from the added product
+
+  // Listed, and distinguishable from the baked defaults.
+  const json::object L = json::parse(api::list_conventions_json("{\"list_conventions\": true}")).as_object();
+  const auto& prods = L.at("conventions").as_object().at("products").as_object();
+  bool in_overlay = false, in_baked = false;
+  for (const auto& v : prods.at("overlay").as_array()) in_overlay |= (v.as_string() == "XYZ-ONIA-OIS");
+  for (const auto& v : prods.at("baked").as_array()) in_baked |= (v.as_string() == "USD-SOFR-OIS");
+  EXPECT_TRUE(in_overlay);
+  EXPECT_TRUE(in_baked);
+
+  // Overlay wins over baked for the SAME id (an override), and clear_overlay restores the default.
+  const std::string over = R"({"conventions": {"products": {"USD-SOFR-OIS": {"description": "override", "type": "ois",
+    "currency": "USD", "calendar": "USD-SOFR", "bdc": "ModifiedFollowing", "spot_lag": 2, "payment_lag": 2,
+    "fixed_leg": {"day_count": "ACT/360", "frequency": "6M"},
+    "float_leg": {"index": "USD-SOFR", "compounding": "compounded", "day_count": "ACT/360", "frequency": "6M"}}}}})";
+  api::conventions_json(over);
+  EXPECT_EQ(b::swap_conv("USD", "USD-SOFR").fixed_freq_tok, "6M");
+  api::conventions_json(R"({"conventions": {"clear_overlay": true}})");
+  EXPECT_EQ(b::swap_conv("USD", "USD-SOFR").fixed_freq_tok, "1Y");
+  EXPECT_THROW(cvd::require_currency("XYZ"), std::invalid_argument);
+}
+
+TEST_F(RegistryFixture, MalformedEntriesAreRejectedLoudly) {
+  EXPECT_THROW(api::conventions_json(R"({"conventions": {"products": {"P": {"description": "no type"}}}})"),
+               std::invalid_argument);
+  EXPECT_THROW(api::conventions_json(R"({"conventions": {"calendars": {"C": {"name": "no weekend"}}}})"),
+               std::invalid_argument);
+  EXPECT_THROW(api::conventions_json(R"({"conventions": {"indices": {"I": {"currency": "USD"}}}})"),
+               std::invalid_argument);
+  // A product row that lacks a field the builders need is rejected at USE, with the row id in the message.
+  api::conventions_json(R"({"conventions": {"products": {"BAD-OIS": {"description": "x", "type": "ois",
+    "currency": "USD", "calendar": "USD-SOFR", "bdc": "ModifiedFollowing", "spot_lag": 2, "payment_lag": 2,
+    "fixed_leg": {"day_count": "ACT/360"}, "float_leg": {"index": "USD-SOFR", "day_count": "ACT/360", "frequency": "1Y"}}}}})");
+  try {
+    b::conv_from_product(cvd::require_product("BAD-OIS"));
+    FAIL() << "missing fixed_leg frequency must throw";
+  } catch (const std::invalid_argument& e) {
+    EXPECT_NE(std::string(e.what()).find("BAD-OIS"), std::string::npos);
+    EXPECT_NE(std::string(e.what()).find("frequency"), std::string::npos);
+  }
+}

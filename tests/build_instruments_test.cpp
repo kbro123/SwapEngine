@@ -33,7 +33,7 @@ TEST(BuildInstruments, ObservationWindowsMatchPython) {
 
 TEST(BuildInstruments, OisSwapScheduleMatchesPython) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
-  const b::SwapConv conv = b::swap_conv("USD", 1.0, "USD-SOFR");
+  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
   const b::Date mat = b::resolve("5y", vd);
 
   const auto fixed = b::fixed_coupons(vd, conv, mat, 0);
