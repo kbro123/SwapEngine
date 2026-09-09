@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <sstream>
@@ -22,6 +23,46 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/bundle_api.hpp"
+
+// ---- SanitizerCoverage counters (exact, compiler-emitted; active only when the binary is built with
+// -fsanitize-coverage=trace-pc-guard,indirect-calls,trace-cmp,trace-loads,trace-stores — the build-cov
+// configuration). They give what hardware counters would: basic blocks executed (a branch proxy), indirect =
+// VIRTUAL calls, comparisons, and bytes loaded / stored (bytes actually touched). Timing under
+// instrumentation is meaningless and is not reported from that build.
+namespace {
+struct CovCounters { unsigned long bb = 0, indir = 0, cmp = 0, loads = 0, stores = 0; };
+CovCounters g_cov;
+bool g_cov_armed = false, g_cov_present = false;
+}  // namespace
+extern "C" {
+void __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
+  static uint32_t n = 0;
+  g_cov_present = true;
+  if (start == stop || *start) return;
+  for (uint32_t* x = start; x < stop; ++x) *x = ++n;
+}
+void __sanitizer_cov_trace_pc_guard(uint32_t*) { if (g_cov_armed) ++g_cov.bb; }
+void __sanitizer_cov_trace_pc_indir(uintptr_t) { if (g_cov_armed) ++g_cov.indir; }
+void __sanitizer_cov_trace_cmp1(uint8_t, uint8_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_cmp2(uint16_t, uint16_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_cmp4(uint32_t, uint32_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_cmp8(uint64_t, uint64_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_const_cmp1(uint8_t, uint8_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_const_cmp2(uint16_t, uint16_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_const_cmp4(uint32_t, uint32_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_const_cmp8(uint64_t, uint64_t) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_trace_switch(uint64_t, uint64_t*) { if (g_cov_armed) ++g_cov.cmp; }
+void __sanitizer_cov_load1(uint8_t*) { if (g_cov_armed) g_cov.loads += 1; }
+void __sanitizer_cov_load2(uint16_t*) { if (g_cov_armed) g_cov.loads += 2; }
+void __sanitizer_cov_load4(uint32_t*) { if (g_cov_armed) g_cov.loads += 4; }
+void __sanitizer_cov_load8(uint64_t*) { if (g_cov_armed) g_cov.loads += 8; }
+void __sanitizer_cov_load16(__int128*) { if (g_cov_armed) g_cov.loads += 16; }
+void __sanitizer_cov_store1(uint8_t*) { if (g_cov_armed) g_cov.stores += 1; }
+void __sanitizer_cov_store2(uint16_t*) { if (g_cov_armed) g_cov.stores += 2; }
+void __sanitizer_cov_store4(uint32_t*) { if (g_cov_armed) g_cov.stores += 4; }
+void __sanitizer_cov_store8(uint64_t*) { if (g_cov_armed) g_cov.stores += 8; }
+void __sanitizer_cov_store16(__int128*) { if (g_cov_armed) g_cov.stores += 16; }
+}
 
 extern "C" {
 typedef void(malloc_logger_t)(uint32_t type, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t result,
@@ -45,32 +86,48 @@ void logger(uint32_t type, uintptr_t, uintptr_t a2, uintptr_t a3, uintptr_t, uin
 struct Row {
   std::string path;
   double allocs = 0, bytes = 0, frees = 0, us_min = 0, us_mean = 0;
+  double bb = 0, indir = 0, cmp = 0, loads = 0, stores = 0;  // SanitizerCoverage build only
   int calls = 0;
   std::string note;
 };
 
 // Warm up `warm` times, then measure `n` calls: allocation counters bracket each call (the logger is armed
 // only inside the call so the harness's own vectors are not counted); time is wall-clock per call.
+// HOTPATH_CENSUS_REPS=k caps warm-up and measured calls at k (the instrumented build is ~100x slower; its
+// counts are deterministic, so one call per path is enough there).
+inline int reps_cap() { const char* e = std::getenv("HOTPATH_CENSUS_REPS"); return e ? std::max(1, std::atoi(e)) : 0; }
 template <class F>
 Row census(const std::string& name, F&& f, int warm = 3, int n = 20, std::string note = "") {
+  if (const int cap = reps_cap()) { warm = std::min(warm, cap); n = std::min(n, cap); }
   for (int i = 0; i < warm; ++i) f();
   Row r; r.path = name; r.calls = n; r.note = std::move(note);
   double sum = 0, mn = 1e300;
   Counters tot;
+  CovCounters ctot;
   for (int i = 0; i < n; ++i) {
     g_c = Counters{};
+    g_cov = CovCounters{};
     const auto t0 = std::chrono::steady_clock::now();
     malloc_logger = logger;
+    g_cov_armed = true;
     f();
+    g_cov_armed = false;
     malloc_logger = nullptr;
     const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
     tot.allocs += g_c.allocs; tot.bytes += g_c.bytes; tot.frees += g_c.frees;
+    ctot.bb += g_cov.bb; ctot.indir += g_cov.indir; ctot.cmp += g_cov.cmp; ctot.loads += g_cov.loads; ctot.stores += g_cov.stores;
     sum += us; mn = std::min(mn, us);
   }
   r.allocs = double(tot.allocs) / n; r.bytes = double(tot.bytes) / n; r.frees = double(tot.frees) / n;
   r.us_min = mn; r.us_mean = sum / n;
-  std::printf("  %-44s allocs/call %9.1f  bytes/call %11.0f  frees/call %9.1f  us min %10.1f  mean %10.1f  %s\n",
-              r.path.c_str(), r.allocs, r.bytes, r.frees, r.us_min, r.us_mean, r.note.c_str());
+  r.bb = double(ctot.bb) / n; r.indir = double(ctot.indir) / n; r.cmp = double(ctot.cmp) / n;
+  r.loads = double(ctot.loads) / n; r.stores = double(ctot.stores) / n;
+  if (g_cov_present)
+    std::printf("  %-44s allocs/call %9.1f  bytes/call %11.0f  blocks %12.0f  vcalls %9.0f  cmps %12.0f  KB loaded %10.1f  KB stored %10.1f  %s\n",
+                r.path.c_str(), r.allocs, r.bytes, r.bb, r.indir, r.cmp, r.loads / 1024.0, r.stores / 1024.0, r.note.c_str());
+  else
+    std::printf("  %-44s allocs/call %9.1f  bytes/call %11.0f  frees/call %9.1f  us min %10.1f  mean %10.1f  %s\n",
+                r.path.c_str(), r.allocs, r.bytes, r.frees, r.us_min, r.us_mean, r.note.c_str());
   return r;
 }
 
@@ -150,8 +207,9 @@ int main(int argc, char** argv) {
   const std::string out_path = argc > 1 ? argv[1] : "build/perf/hotpath_census.json";
   const Fixture f;
   std::vector<Row> rows;
-  std::printf("hotpath_census — chain8x26 (%d instruments, %d knots), book200, sofr swaption cube17\n",
-              int(f.prob.instruments.size()), f.prob.n_knots());
+  std::printf("hotpath_census — chain8x26 (%d instruments, %d knots), book200, sofr swaption cube17%s\n",
+              int(f.prob.instruments.size()), f.prob.n_knots(),
+              g_cov_present ? "  [SanitizerCoverage build: exact counts, timings NOT reported]" : "");
 
   // Cold: construct + calibrate (allocation is expected here; the number is the reference for 'warm' claims).
   rows.push_back(census("chain8x26_cold_build_calibrate", [&] { api::BundleSession s(f.prob); s.calibrate(f.x0); }, 1, 5));
@@ -203,7 +261,10 @@ int main(int argc, char** argv) {
   boost::json::object o;
   for (const auto& r : rows)
     o[r.path] = boost::json::object{{"allocs_per_call", r.allocs}, {"bytes_per_call", r.bytes}, {"frees_per_call", r.frees},
-                                    {"us_min", r.us_min}, {"us_mean", r.us_mean}, {"calls", r.calls}, {"note", r.note}};
+                                    {"us_min", g_cov_present ? 0.0 : r.us_min}, {"us_mean", g_cov_present ? 0.0 : r.us_mean},
+                                    {"calls", r.calls}, {"note", r.note}, {"instrumented", g_cov_present},
+                                    {"basic_blocks", r.bb}, {"indirect_calls", r.indir}, {"comparisons", r.cmp},
+                                    {"bytes_loaded", r.loads}, {"bytes_stored", r.stores}};
   std::ofstream(out_path) << boost::json::serialize(o) << "\n";
   std::printf("wrote %s\n", out_path.c_str());
   return 0;
