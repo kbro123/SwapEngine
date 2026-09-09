@@ -20,6 +20,13 @@
 #include "swaps/pricing/bond.hpp"
 #include "swaps/pricing/bond_future.hpp"
 
+#include "swaps/build/day_count.hpp"
+#include "swaps/conventions_data.hpp"
+
+// The CME Treasury contract parameters come from the conventions DB (bond_futures[]), not literals.
+static const double kNotionalCoupon = swaps::conventions::require_bond_future("CME-TY").notional_coupon;
+static const double kRepoBasis = swaps::build::day_count_basis(std::string(swaps::conventions::require_bond_future("CME-TY").repo_day_count));
+
 namespace px = swaps::pricing;
 namespace bld = swaps::build;
 
@@ -45,7 +52,7 @@ TEST(BondFuture, ConversionFactorEqualsSixPercentCleanPrice) {
   struct Case { int n; int z; int half_years; double coupon; };
   for (const Case& c : {Case{10, 0, 20, 0.05}, Case{10, 6, 21, 0.05}, Case{7, 0, 14, 0.0375},
                         Case{5, 6, 11, 0.08}}) {
-    const double cf = px::cme_conversion_factor<double>(c.coupon, c.n, c.z);
+    const double cf = px::cme_conversion_factor<double>(c.coupon, c.n, c.z, kNotionalCoupon);
     const bld::BuiltBond bb = on_grid_bond(c.half_years, c.coupon);
     const double clean_6pct = px::bond_clean_from_yield(bb.yield, 0.06);
     EXPECT_NEAR(cf, clean_6pct, 1e-10) << "n=" << c.n << " z=" << c.z;
@@ -54,9 +61,9 @@ TEST(BondFuture, ConversionFactorEqualsSixPercentCleanPrice) {
 
 // (2) A 6% bond an exact number of half-years out has CF = 1; Hull's 10% 20y worked example is 1.4623.
 TEST(BondFuture, ConversionFactorKnownValues) {
-  EXPECT_NEAR(px::cme_conversion_factor<double>(0.06, 15, 0), 1.0, 1e-12);
-  EXPECT_NEAR(px::cme_conversion_factor<double>(0.06, 8, 0), 1.0, 1e-12);
-  EXPECT_NEAR(px::cme_conversion_factor<double>(0.10, 20, 0), 1.4623, 5e-5);  // Hull, OFOD
+  EXPECT_NEAR(px::cme_conversion_factor<double>(0.06, 15, 0, kNotionalCoupon), 1.0, 1e-12);
+  EXPECT_NEAR(px::cme_conversion_factor<double>(0.06, 8, 0, kNotionalCoupon), 1.0, 1e-12);
+  EXPECT_NEAR(px::cme_conversion_factor<double>(0.10, 20, 0, kNotionalCoupon), 1.4623, 5e-5);  // Hull, OFOD
 }
 
 // (3) Definitional identities: invoice price and gross basis.
@@ -77,12 +84,12 @@ TEST(BondFuture, NetBasisZeroAtImpliedRepo) {
   in.accrued_delivery = 0.0021;
   in.interim_coupons = {{0.0225, 45.0}};  // a 4.5% semi coupon paid 45 days before delivery
   const double futures = 1.0685, days = 120.0;
-  const double irr = px::bond_future_implied_repo<double>(in, futures, days);
-  EXPECT_NEAR(px::bond_future_net_basis<double>(in, futures, irr, days), 0.0, 1e-12);
+  const double irr = px::bond_future_implied_repo<double>(in, futures, days, kRepoBasis);
+  EXPECT_NEAR(px::bond_future_net_basis<double>(in, futures, irr, days, kRepoBasis), 0.0, 1e-12);
   // And net basis is monotone increasing in the funding repo (higher financing cost => less net carry
   // => costlier to hold the CTD to delivery). It is symmetric about zero at the implied repo.
-  EXPECT_LT(px::bond_future_net_basis<double>(in, futures, irr - 0.01, days),
-            px::bond_future_net_basis<double>(in, futures, irr + 0.01, days));
+  EXPECT_LT(px::bond_future_net_basis<double>(in, futures, irr - 0.01, days, kRepoBasis),
+            px::bond_future_net_basis<double>(in, futures, irr + 0.01, days, kRepoBasis));
 }
 
 // (4b) CTD selection: the max-implied-repo bond, and it is also (here) the min net basis at a common repo.
@@ -94,7 +101,7 @@ TEST(BondFuture, CtdIsMaxImpliedRepo) {
   basket[1] = {0.9600, 0.9950, 0.0155, 0.0110, {}};  // CTD: priced cheap vs its CF
   basket[2] = {0.9990, 1.0060, 0.0100, 0.0060, {}};
   std::vector<px::DeliverableResult<double>> results;
-  for (const auto& in : basket) results.push_back(px::analyze_deliverable<double>(in, futures, repo, days));
+  for (const auto& in : basket) results.push_back(px::analyze_deliverable<double>(in, futures, repo, days, kRepoBasis));
 
   const std::size_t ctd = px::select_ctd(results);
   EXPECT_EQ(ctd, 1u);

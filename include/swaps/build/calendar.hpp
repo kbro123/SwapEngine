@@ -104,7 +104,7 @@ inline Date roll(const std::string& cal_id, Date d, int step) {
 }
 
 // Business-day-adjust under `bdc` (Following / ModifiedFollowing / Preceding / ModifiedPreceding).
-inline Date adjust(const std::string& cal_id, const Date& d, const std::string& bdc = "ModifiedFollowing") {
+inline Date adjust(const std::string& cal_id, const Date& d, const std::string& bdc) {  // bdc REQUIRED (no default)
   if (is_business_day(cal_id, d)) return d;
   if (bdc == "Following") return roll(cal_id, d, 1);
   if (bdc == "Preceding") return roll(cal_id, d, -1);

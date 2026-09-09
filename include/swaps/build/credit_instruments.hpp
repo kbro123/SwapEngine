@@ -37,6 +37,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "swaps/build/day_count.hpp"
 #include "swaps/curve/hazard.hpp"
 
 namespace swaps::build {
@@ -44,7 +45,7 @@ namespace swaps::build {
 // One par-CDS calibration instrument. `model_quote<Scalar>` prices its PAR SPREAD against a SurvivalCurve;
 // the residual is (model_quote − market), rate units, like every other calibration instrument.
 struct CdsInstrument {
-  double recovery = 0.40;  // R: recovery rate; loss given default = (1 − R)
+  double recovery = -1.0;  // R: recovery rate (REQUIRED; credit.cds_products[].recovery_default is the DB default)
   double maturity = 0.0;   // T (curve years)
   double market = 0.0;     // quoted par spread (decimal; 150 bp = 0.0150)
 
@@ -91,10 +92,16 @@ struct CdsInstrument {
 // double(double) returning the nominal discount factor DF(t); `premium_freq` coupons per year (default 4 =
 // quarterly); `prot_steps` protection-grid subintervals PER premium period (default 4). The discount
 // factors are sampled ONCE here and stored as constants — the free object is the hazard curve.
+// `accrual_ratio` converts the ACT/365F curve-time period length to the premium leg's day-count accrual
+// (365/360 for ACT/360 — the ISDA standard — 1.0 for ACT/365F): credit_accrual_ratio(day_count). All of
+// premium_freq / prot_steps / accrual_ratio are product DATA (credit.cds_products[]), never defaulted here.
+inline double credit_accrual_ratio(const std::string& day_count) { return 365.0 / day_count_basis(day_count); }
 template <class DiscFn>
 inline CdsInstrument make_cds(double maturity, double spread, double recovery, DiscFn&& df,
-                             int premium_freq = 4, int prot_steps = 4) {
+                             int premium_freq, int prot_steps, double accrual_ratio) {
   if (!(maturity > 0.0)) throw std::invalid_argument("make_cds: maturity must be > 0");
+  if (!(recovery >= 0.0 && recovery < 1.0)) throw std::invalid_argument("make_cds: recovery must be in [0, 1)");
+  if (!(accrual_ratio > 0.0)) throw std::invalid_argument("make_cds: accrual_ratio must be > 0");
   if (premium_freq < 1) throw std::invalid_argument("make_cds: premium_freq must be >= 1");
   if (prot_steps < 1) throw std::invalid_argument("make_cds: prot_steps must be >= 1");
 
@@ -112,7 +119,7 @@ inline CdsInstrument make_cds(double maturity, double spread, double recovery, D
   double prev = 0.0;
   for (double e : ends) {
     ins.pay.push_back(e);
-    ins.tau.push_back((e - prev) * (365.0 / 360.0));
+    ins.tau.push_back((e - prev) * accrual_ratio);
     ins.df_prem.push_back(df(e));
     prev = e;
   }

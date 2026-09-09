@@ -30,8 +30,26 @@ for cc, c in cur.items():
     ref("calendar", cal, c.get("settlement_calendar"), f"currencies/{cc}"); ref("index", idx, c.get("discount_index"), f"currencies/{cc}")
     ref("product", prod, c.get("default_swap_product"), f"currencies/{cc}")
     if idx.get(c.get("discount_index"), {}).get("currency") != cc: errors.append(f"currencies/{cc}: discount_index is not a {cc} index")
+for cid, c in db.get("credit", {}).get("cds_products", {}).items():
+    ref("calendar", cal, c.get("calendar"), f"credit/{cid}"); ref("currency", cur, c.get("currency"), f"credit/{cid}")
+    if c.get("day_count") not in db["day_counts"]: errors.append(f"credit/{cid}: unknown day_count {c.get('day_count')}")
+for fid, f in db.get("bond_futures", {}).items():
+    ref("calendar", cal, f.get("exchange_calendar"), f"bond_futures/{fid}"); ref("currency", cur, f.get("currency"), f"bond_futures/{fid}")
+    if f.get("deliverable_convention") not in db.get("bonds", {}): errors.append(f"bond_futures/{fid}: unknown deliverable_convention")
+    if f.get("repo_day_count") not in db["day_counts"]: errors.append(f"bond_futures/{fid}: unknown repo_day_count")
+for pid_, f in db.get("fx_pairs", {}).items():
+    for k in ("base", "quote", "premium_currency"): ref("currency", cur, f.get(k), f"fx_pairs/{pid_}/{k}")
+    ref("calendar", cal, f.get("calendar"), f"fx_pairs/{pid_}"); ref("product", prod, f.get("xccy_product"), f"fx_pairs/{pid_}"); ref("product", prod, f.get("forward_product"), f"fx_pairs/{pid_}")
+    if pid_ != f.get("base", "") + f.get("quote", ""): errors.append(f"fx_pairs/{pid_}: id must be base+quote")
+for cc, c in db.get("cb_schedules", {}).items():
+    ref("currency", cur, cc, f"cb_schedules/{cc}")
+    if c.get("meetings") != sorted(c.get("meetings", [])): errors.append(f"cb_schedules/{cc}: meetings not sorted")
+for cc, c in cur.items():
+    if c.get("repo_day_count") not in db["day_counts"]: errors.append(f"currencies/{cc}: unknown repo_day_count")
 for bid, b in db.get("bonds", {}).items():
     ref("calendar", cal, b.get("calendar"), f"bonds/{bid}"); ref("currency", cur, b.get("currency"), f"bonds/{bid}")
 if errors:
     print("check_schema: FAIL"); [print("  " + e) for e in errors]; sys.exit(1)
-print(f"check_schema: OK — {len(cur)} currencies, {len(cal)} calendars, {len(idx)} indices, {len(prod)} products, {len(db.get('bonds',{}))} bonds; schema + references valid")
+print(f"check_schema: OK — {len(cur)} currencies, {len(cal)} calendars, {len(idx)} indices, {len(prod)} products, {len(db.get('bonds',{}))} bonds, "
+      f"{len(db.get('bond_futures',{}))} bond futures, {len(db.get('credit',{}).get('cds_products',{}))} cds products, {len(db.get('fx_pairs',{}))} fx pairs, "
+      f"{len(db.get('cb_schedules',{}))} cb schedules; schema + references valid")

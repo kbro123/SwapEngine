@@ -139,8 +139,8 @@ struct VolCubeCell {
 };
 struct VolCubeSpec {
   std::string value_date;
-  std::string currency = "USD";
-  std::string index = "USD-SOFR";
+  std::string currency;  // optional; must agree with the index's DB currency when given
+  std::string index;     // REQUIRED: the swap's DB index (carries the product conventions)
   int curve = 0;
   std::vector<VolCubeCell> cells;
 };

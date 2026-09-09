@@ -120,13 +120,11 @@ struct ScheduleRule {
 // EOM / stub-location / roll-day-anchor generation (see ScheduleRule above).
 inline std::vector<Period> swap_periods_between(const Date& spot, const std::string& cal_id,
                                                 const Date& maturity_date, const std::string& freq_tok,
-                                                const std::string& bdc = "ModifiedFollowing",
-                                                const ScheduleRule& rule = {});
+                                                const std::string& bdc, const ScheduleRule& rule = {});
 
 inline std::vector<Period> swap_periods_to(const Date& value_date, const std::string& cal_id,
                                            const Date& maturity_date, const std::string& freq_tok,
-                                           const std::string& bdc = "ModifiedFollowing", int spot_lag = 2,
-                                           const ScheduleRule& rule = {}) {
+                                           const std::string& bdc, int spot_lag, const ScheduleRule& rule = {}) {
   return swap_periods_between(spot_date(value_date, cal_id, spot_lag), cal_id, maturity_date, freq_tok, bdc, rule);
 }
 

@@ -6,74 +6,11 @@ include/swaps/build/calendar.hpp    CONV  ^(Following|Preceding|ModifiedFollowin
 include/swaps/build/observations.hpp CONV  ^(averaged|compounded)$   # accrual-mode vocabulary (not in DB ids anyway)
 include/swaps/build/date.hpp:85     NUM   schedule-step-literal   # add_period 'Y' = 12 months: unit conversion, not a schedule
 include/swaps/build/conventions.hpp NUM   lag-default   # `int spot_lag = -1` = UNRESOLVED sentinel; conv_from_product throws unless the DB sets it
+include/swaps/derive/asset_swap.hpp NUM   lag-default   # `settle_lag = -1` = UNRESOLVED sentinel (bonds[].settle_lag fills it)
 include/swaps/build/conventions.hpp DBID  ^XCCY-MTM-$   # the product-id SCHEME for pairs (XCCY-MTM-<PAIR>), not a pair choice
+api/credit.cpp                      JSONDEF  ^(recovery=cp\.recovery_default|premium_freq=1\.0 / py|recovery=recovery)$   # defaults ARE the DB row (credit.cds_products[]) / the verb-level value
+api/bond_future.cpp                 JSONDEF  ^(notional_coupon|round_months)=fut\.   # defaults ARE the DB contract row (bond_futures[])
+api/compile.cpp                     CONV     ^Preceding$   # a TURN window starts on the last business day on/before the turn date — the turn's definition, not a market choice
 
-# ---- RATCHET (adopted 2026-09-08 with 130 entries; re-baselined 2026-09-09 after E2 step 1). Every line below is an EXISTING class-A/B hit to be REMOVED in E2, not a permission. ----
-api/bond.cpp:76  FALLBACK  US\-TREASURY
-api/bond.cpp:84  JSONDEF  freq=2\.0
-api/bond.cpp:199  JSONDEF  freq=2\.0
-api/bond.cpp:204  NUM  schedule\-step\-literal
-api/bond.cpp:209  CONV  ACT/360
-api/bond_future.cpp:76  JSONDEF  notional_coupon=0\.06
-api/bond_future.cpp:77  JSONDEF  round_months=3\.0
-api/bond_future.cpp:97  FALLBACK  US\-TREASURY
-api/bond_future.cpp:99  JSONDEF  freq=2\.0
-api/bundle_api.cpp:478  JSONDEF  discount_index=index\.c_str\(
-api/compile.cpp:350  CONV  Preceding
-api/credit.cpp:83  JSONDEF  recovery=0\.40
-api/credit.cpp:84  JSONDEF  premium_freq=4\.0
-api/credit.cpp:112  JSONDEF  recovery=recovery
-api/inflation.cpp:57  JSONDEF  base=100\.0
-api/options.cpp:54  CCY  USD
-api/options.cpp:54  JSONDEF  currency="USD"
-api/options.cpp:55  DBID  USD\-SOFR
-api/options.cpp:55  JSONDEF  index="USD\-SOFR"
-api/options.cpp:90  NUM  schedule\-step\-literal
-api/options.cpp:189  CCY  USD
-api/options.cpp:189  JSONDEF  currency="USD"
-api/options.cpp:190  DBID  USD\-SOFR
-api/options.cpp:190  JSONDEF  index="USD\-SOFR"
-api/options.cpp:259  NUM  schedule\-step\-literal
-api/options.cpp:398  NUM  schedule\-step\-literal
-api/rv.cpp:107  DBID  US\-TREASURY
-api/rv.cpp:107  JSONDEF  convention="US\-TREASURY"
-api/rv.cpp:110  CCY  USD
-api/rv.cpp:154  DBID  US\-TREASURY
-api/rv.cpp:154  JSONDEF  convention="US\-TREASURY"
-api/rv.cpp:158  CCY  USD
-api/rv.cpp:158  JSONDEF  settle_calendar="USD"
-api/rv.cpp:159  JSONDEF  settle_lag=1\.0
-api/rv.cpp:235  CCY  USD
-api/rv.cpp:235  JSONDEF  settle_calendar="USD"
-api/rv.cpp:236  JSONDEF  settle_lag=1\.0
-api/rv.cpp:244  DBID  US\-TREASURY
-api/rv.cpp:244  JSONDEF  convention="US\-TREASURY"
-api/rv.cpp:257  CONV  5Y
-api/rv.cpp:257  JSONDEF  tenor="5Y"
-api/vega.cpp:75  NUM  schedule\-step\-literal
-api/vega.cpp:93  CCY  USD
-api/vega.cpp:93  JSONDEF  currency="USD"
-api/vega.cpp:94  DBID  USD\-SOFR
-api/vega.cpp:94  JSONDEF  index="USD\-SOFR"
-include/swaps/api/bundle_api.hpp:142  FALLBACK  USD
-include/swaps/api/bundle_api.hpp:143  FALLBACK  USD\-SOFR
-include/swaps/build/bond.hpp:46  NUM  freq\-semiannual
-include/swaps/build/calendar.hpp:107  FALLBACK  ModifiedFollowing
-include/swaps/build/conventions.hpp:26  NUM  lag\-default
-include/swaps/build/conventions.hpp:75  NUM  lag\-default
-include/swaps/build/credit_instruments.hpp:115  NUM  365/360\-ratio
-include/swaps/build/credit_instruments.hpp:115  NUM  accrual\-360
-include/swaps/build/ref_data.hpp:33  FALLBACK  ModifiedFollowing
+# ---- RATCHET (adopted 2026-09-08 with 130 entries; 68 after E2 step 1; re-baselined after step 2). Every line below is an EXISTING class-A/B hit to be REMOVED in E2 step 3, not a permission. ----
 include/swaps/build/schedule.hpp:23  NUM  weekend\-hardwired
-include/swaps/build/schedule.hpp:123  FALLBACK  ModifiedFollowing
-include/swaps/build/schedule.hpp:128  FALLBACK  ModifiedFollowing
-include/swaps/build/schedule.hpp:128  NUM  lag\-default
-include/swaps/derive/asset_swap.hpp:68  FALLBACK  USD
-include/swaps/derive/asset_swap.hpp:69  NUM  lag\-default
-include/swaps/derive/asset_swap.hpp:137  NUM  accrual\-360
-include/swaps/derive/asset_swap.hpp:141  NUM  accrual\-360
-include/swaps/market/fx.hpp:115  FALLBACK  USD
-include/swaps/pricing/bond_future.hpp:45  NUM  cf\-yield\-6pct
-include/swaps/pricing/bond_future.hpp:103  NUM  accrual\-360
-include/swaps/pricing/bond_future.hpp:115  NUM  accrual\-360
-include/swaps/pricing/bond_future.hpp:117  NUM  accrual\-360

@@ -34,7 +34,7 @@ TEST(Scenario, ShiftsKeyedCurveAndLeavesOthersUnchanged) {
 }
 
 TEST(Scenario, BumpsFxPairRelativelyOnACopy) {
-  mkt::FxMatrix fx;
+  mkt::FxMatrix fx("USD");
   fx.add("EUR", "USD", 1.09);
 
   // +1% on EURUSD.

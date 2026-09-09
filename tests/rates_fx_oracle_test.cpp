@@ -20,6 +20,13 @@
 #include "swaps/vol/sabr.hpp"
 #include "swaps/vol/sabr_calibration.hpp"
 
+#include "swaps/build/day_count.hpp"
+#include "swaps/conventions_data.hpp"
+
+// The CME Treasury contract parameters come from the conventions DB (bond_futures[]), not literals.
+static const double kNotionalCoupon = swaps::conventions::require_bond_future("CME-TY").notional_coupon;
+static const double kRepoBasis = swaps::build::day_count_basis(std::string(swaps::conventions::require_bond_future("CME-TY").repo_day_count));
+
 namespace p = swaps::pricing;
 namespace bld = swaps::build;
 namespace v = swaps::vol;
@@ -149,19 +156,19 @@ TEST(RatesFxOracle, ConversionFactorEqualsSixPercentClean) {
       {7, 0, 14, 0.05}, {7, 6, 15, 0.05}, {10, 0, 20, 0.06},  {10, 6, 21, 0.06},
       {15, 0, 30, 0.08}, {20, 0, 40, 0.10}};
   for (const Case& c : cases) {
-    const double cf = p::cme_conversion_factor<double>(c.coupon, c.n, c.z);
+    const double cf = p::cme_conversion_factor<double>(c.coupon, c.n, c.z, kNotionalCoupon);
     const bld::BuiltBond bb = on_grid_bond(c.half_years, c.coupon);
     EXPECT_NEAR(cf, p::bond_clean_from_yield(bb.yield, 0.06), 1e-10) << "n=" << c.n << " z=" << c.z;
     if (c.z == 0)  // independent first-principles oracle only valid on the whole-half-year grid
       EXPECT_NEAR(cf, clean_6pct_zzero(c.coupon, 2 * c.n), 1e-12) << "n=" << c.n;
   }
   // A 6% coupon whole-half-years out has CF exactly 1; Hull's 10%/20y benchmark is 1.4623.
-  for (int n : {2, 5, 8, 15}) EXPECT_NEAR(p::cme_conversion_factor<double>(0.06, n, 0), 1.0, 1e-12);
-  EXPECT_NEAR(p::cme_conversion_factor<double>(0.10, 20, 0), 1.4623, 5e-5);
+  for (int n : {2, 5, 8, 15}) EXPECT_NEAR(p::cme_conversion_factor<double>(0.06, n, 0, kNotionalCoupon), 1.0, 1e-12);
+  EXPECT_NEAR(p::cme_conversion_factor<double>(0.10, 20, 0, kNotionalCoupon), 1.4623, 5e-5);
   // CF is affine in coupon: CF(c) = CF0 + slope·c. Verify at three coupons for a fixed (n,z).
-  const double a = p::cme_conversion_factor<double>(0.00, 10, 6);
-  const double b = p::cme_conversion_factor<double>(0.04, 10, 6);
-  const double d = p::cme_conversion_factor<double>(0.08, 10, 6);
+  const double a = p::cme_conversion_factor<double>(0.00, 10, 6, kNotionalCoupon);
+  const double b = p::cme_conversion_factor<double>(0.04, 10, 6, kNotionalCoupon);
+  const double d = p::cme_conversion_factor<double>(0.08, 10, 6, kNotionalCoupon);
   EXPECT_NEAR(d - b, b - a, 1e-12);  // equal coupon steps -> equal CF steps (affine)
 }
 
@@ -181,12 +188,12 @@ TEST(RatesFxOracle, NetBasisZeroAtImpliedRepoAndMonotone) {
     const double days = uDays(rng);
     if (hasCoupon(rng)) in.interim_coupons = {{0.02, days * 0.4}};
     const double fut = uFut(rng);
-    const double irr = p::bond_future_implied_repo<double>(in, fut, days);
-    EXPECT_NEAR(p::bond_future_net_basis<double>(in, fut, irr, days), 0.0, 1e-11) << "i=" << i;
+    const double irr = p::bond_future_implied_repo<double>(in, fut, days, kRepoBasis);
+    EXPECT_NEAR(p::bond_future_net_basis<double>(in, fut, irr, days, kRepoBasis), 0.0, 1e-11) << "i=" << i;
     // Monotone increasing in repo: sample three repos around the implied rate.
-    const double lo = p::bond_future_net_basis<double>(in, fut, irr - 0.02, days);
-    const double mid = p::bond_future_net_basis<double>(in, fut, irr, days);
-    const double hi = p::bond_future_net_basis<double>(in, fut, irr + 0.02, days);
+    const double lo = p::bond_future_net_basis<double>(in, fut, irr - 0.02, days, kRepoBasis);
+    const double mid = p::bond_future_net_basis<double>(in, fut, irr, days, kRepoBasis);
+    const double hi = p::bond_future_net_basis<double>(in, fut, irr + 0.02, days, kRepoBasis);
     EXPECT_LT(lo, mid);
     EXPECT_LT(mid, hi);
   }
@@ -209,7 +216,7 @@ TEST(RatesFxOracle, CtdIsArgmaxImpliedRepoRandomBasket) {
     }
     const double fut = uFut(rng), repo = uRepo(rng), days = uDays(rng);
     std::vector<p::DeliverableResult<double>> res;
-    for (const auto& in : basket) res.push_back(p::analyze_deliverable<double>(in, fut, repo, days));
+    for (const auto& in : basket) res.push_back(p::analyze_deliverable<double>(in, fut, repo, days, kRepoBasis));
 
     // Brute-force argmax of implied repo (ties -> first, matching select_ctd).
     std::size_t want = 0;
@@ -220,7 +227,7 @@ TEST(RatesFxOracle, CtdIsArgmaxImpliedRepoRandomBasket) {
     for (std::size_t i = 0; i < res.size(); ++i)
       EXPECT_GE(res[ctd].implied_repo, res[i].implied_repo);
     // implied_repo is intrinsic (independent of the funding repo passed to analyze_deliverable).
-    auto res2 = p::analyze_deliverable<double>(basket[ctd], fut, repo + 0.03, days);
+    auto res2 = p::analyze_deliverable<double>(basket[ctd], fut, repo + 0.03, days, kRepoBasis);
     EXPECT_NEAR(res2.implied_repo, res[ctd].implied_repo, 1e-13);
   }
 }

@@ -13,6 +13,7 @@
 
 #include "swaps/api/credit.hpp"
 #include "swaps/build/credit_instruments.hpp"
+#include "swaps/conventions_data.hpp"
 #include "swaps/calibration/credit_problem.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/curve/curve_module.hpp"
@@ -22,6 +23,7 @@ namespace swaps::api {
 
 namespace json = boost::json;
 namespace b = swaps::build;
+namespace cvd = swaps::conventions;
 namespace cal = swaps::calibration;
 
 namespace {
@@ -80,9 +82,17 @@ std::string credit_json(const std::string& request) {
   if (!o.contains("instruments") || !o.at("instruments").is_array())
     throw std::invalid_argument("credit: missing 'instruments' array");
 
-  const double recovery = jd(o, "recovery", 0.40);
-  const int premium_freq = static_cast<int>(jd(o, "premium_freq", 4.0) + 0.5);
-  const int prot_steps = static_cast<int>(jd(o, "prot_steps", 4.0) + 0.5);
+  // The CDS PRODUCT row (credit.cds_products[]) supplies the default recovery, the premium frequency, the
+  // accrual day count and the protection-integration steps; explicit request fields override.
+  const std::string product_id = js(o, "product");
+  if (product_id.empty()) throw std::invalid_argument("credit: missing 'product' (a credit.cds_products[] row id, e.g. CDS-USD-SNAC)");
+  const cvd::CreditConv cp = cvd::require_credit_product(product_id);
+  const double recovery = jd(o, "recovery", cp.recovery_default);
+  const double py = cvd::period_years(cp.frequency);
+  if (!(py > 0.0)) throw std::invalid_argument("credit: product '" + product_id + "' has an unusable frequency");
+  const int premium_freq = static_cast<int>(jd(o, "premium_freq", 1.0 / py) + 0.5);
+  const int prot_steps = static_cast<int>(jd(o, "prot_steps", cp.protection_steps) + 0.5);
+  const double accrual_ratio = b::credit_accrual_ratio(std::string(cp.day_count));
 
   // Nominal discount curve: explicit {discount_times, dfs} node set, else a flat continuous zero.
   DiscountFn df;
@@ -110,7 +120,7 @@ std::string credit_json(const std::string& request) {
     const double mat = jd(io, "maturity", 0.0);
     const double spread = jd(io, "spread", 0.0);
     const double rec = jd(io, "recovery", recovery);
-    prob.instruments.push_back(b::make_cds(mat, spread, rec, df, premium_freq, prot_steps));
+    prob.instruments.push_back(b::make_cds(mat, spread, rec, df, premium_freq, prot_steps, accrual_ratio));
     maturities.push_back(mat);
   }
   if (prob.instruments.empty()) throw std::invalid_argument("credit: no instruments");

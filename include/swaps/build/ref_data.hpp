@@ -30,7 +30,7 @@ struct Calendar {
   std::string id;
 
   bool is_business_day(const Date& d) const { return swaps::build::is_business_day(id, d); }
-  Date adjust(const Date& d, const std::string& bdc = "ModifiedFollowing") const {
+  Date adjust(const Date& d, const std::string& bdc) const {  // bdc REQUIRED (no default)
     return swaps::build::adjust(id, d, bdc);
   }
   Date advance_bd(const Date& d, int n) const { return swaps::build::advance_bd(id, d, n); }

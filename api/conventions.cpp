@@ -72,7 +72,7 @@ void add_currency(cvd::Registry& R, std::string_view code, const json::object& c
   cvd::CurrencyConv x{};
   x.code = code; x.name = js(c, "name"); x.settlement_calendar = js(c, "settlement_calendar");
   x.discount_index = js(c, "discount_index"); x.default_swap_product = js(c, "default_swap_product");
-  x.minor_units = ji(c, "minor_units", -1);
+  x.repo_day_count = js(c, "repo_day_count"); x.minor_units = ji(c, "minor_units", -1);
   if (x.settlement_calendar.empty() || x.minor_units < 0)
     throw std::invalid_argument("conventions: currency '" + std::string(code) + "' needs settlement_calendar + minor_units");
   R.add_currency(x);
@@ -105,6 +105,64 @@ void add_calendar(cvd::Registry& R, std::string_view id, const json::object& c) 
   R.add_calendar(row, rules, joins);
 }
 
+void add_credit(cvd::Registry& R, std::string_view id, const json::object& c) {
+  cvd::CreditConv x{};
+  x.id = id; x.currency = js(c, "currency"); x.calendar = js(c, "calendar"); x.day_count = js(c, "day_count");
+  x.frequency = js(c, "frequency"); x.roll = js(c, "roll");
+  x.recovery_default = c.contains("recovery_default") ? c.at("recovery_default").to_number<double>() : -1.0;
+  x.settlement_lag = ji(c, "settlement_lag", -1); x.protection_steps = ji(c, "protection_steps", -1);
+  if (x.currency.empty() || x.day_count.empty() || x.frequency.empty() || x.recovery_default < 0 || x.protection_steps < 1)
+    throw std::invalid_argument("conventions: cds product '" + std::string(id) + "' needs currency/day_count/frequency/recovery_default/protection_steps");
+  R.add_credit_product(x);
+}
+void add_bond_future(cvd::Registry& R, std::string_view id, const json::object& f) {
+  cvd::BondFutureConv x{};
+  x.id = id; x.currency = js(f, "currency"); x.exchange_calendar = js(f, "exchange_calendar");
+  x.deliverable_convention = js(f, "deliverable_convention"); x.repo_day_count = js(f, "repo_day_count"); x.delivery = js(f, "delivery");
+  x.notional_coupon = f.contains("notional_coupon") ? f.at("notional_coupon").to_number<double>() : -1.0;
+  x.basket_min_years = f.contains("basket_min_years") ? f.at("basket_min_years").to_number<double>() : 0.0;
+  x.basket_max_years = f.contains("basket_max_years") ? f.at("basket_max_years").to_number<double>() : 0.0;
+  x.maturity_rounding_months = ji(f, "maturity_rounding_months", -1);
+  if (x.deliverable_convention.empty() || x.notional_coupon < 0 || x.maturity_rounding_months < 1 || x.repo_day_count.empty())
+    throw std::invalid_argument("conventions: bond future '" + std::string(id) + "' needs deliverable_convention/notional_coupon/maturity_rounding_months/repo_day_count");
+  R.add_bond_future(x);
+}
+void add_fx_pair(cvd::Registry& R, std::string_view id, const json::object& f) {
+  cvd::FxPairConv x{};
+  x.id = id; x.base = js(f, "base"); x.quote = js(f, "quote"); x.calendar = js(f, "calendar");
+  x.premium_currency = js(f, "premium_currency"); x.delta_convention = js(f, "delta_convention"); x.atm_convention = js(f, "atm_convention");
+  x.xccy_product = js(f, "xccy_product"); x.forward_product = js(f, "forward_product"); x.spot_lag = ji(f, "spot_lag", -1);
+  if (f.contains("smile_pillars") && f.at("smile_pillars").is_array() && !f.at("smile_pillars").as_array().empty()) {
+    const auto& a = f.at("smile_pillars").as_array();
+    x.smile_pillar_lo = a.front().to_number<double>(); x.smile_pillar_hi = a.back().to_number<double>();
+  }
+  if (x.base.empty() || x.quote.empty() || x.calendar.empty() || x.spot_lag < 0 || x.delta_convention.empty() || x.atm_convention.empty())
+    throw std::invalid_argument("conventions: fx pair '" + std::string(id) + "' needs base/quote/calendar/spot_lag/delta_convention/atm_convention");
+  if (std::string(x.base) + std::string(x.quote) != std::string(id))
+    throw std::invalid_argument("conventions: fx pair id '" + std::string(id) + "' must equal base+quote");
+  R.add_fx_pair(x);
+}
+long serial_of_iso(std::string_view iso) {  // YYYY-MM-DD -> Unix-day serial (days since 1970-01-01)
+  if (iso.size() != 10) throw std::invalid_argument("conventions: bad ISO date '" + std::string(iso) + "'");
+  const int y = std::stoi(std::string(iso.substr(0, 4))), m = std::stoi(std::string(iso.substr(5, 2))), d = std::stoi(std::string(iso.substr(8, 2)));
+  // days-from-civil (Howard Hinnant)
+  const int yy = y - (m <= 2); const int era = (yy >= 0 ? yy : yy - 399) / 400; const unsigned yoe = static_cast<unsigned>(yy - era * 400);
+  const unsigned doy = (153u * static_cast<unsigned>(m + (m > 2 ? -3 : 9)) + 2u) / 5u + static_cast<unsigned>(d) - 1u;
+  const unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+  return static_cast<long>(era) * 146097L + static_cast<long>(doe) - 719468L;
+}
+void add_cb_schedule(cvd::Registry& R, std::string_view ccy, const json::object& c) {
+  cvd::CbScheduleConv x{};
+  x.currency = ccy; x.bank = js(c, "bank"); x.source = js(c, "source"); x.as_of = js(c, "as_of");
+  std::vector<long> m;
+  if (!c.contains("meetings") || !c.at("meetings").is_array())
+    throw std::invalid_argument("conventions: cb schedule '" + std::string(ccy) + "' needs a 'meetings' array of ISO dates");
+  for (const auto& v : c.at("meetings").as_array()) m.push_back(serial_of_iso(std::string_view(v.as_string().data(), v.as_string().size())));
+  for (std::size_t i = 1; i < m.size(); ++i)
+    if (m[i] <= m[i - 1]) throw std::invalid_argument("conventions: cb schedule '" + std::string(ccy) + "' meetings must be strictly ascending");
+  R.add_cb_schedule(x, std::move(m));
+}
+
 json::array names_of(const std::vector<std::string>& v) {
   json::array a;
   for (const auto& s : v) a.emplace_back(s);
@@ -126,7 +184,19 @@ std::string conventions_json(const std::string& request) {
   struct Fam { const char* key; void (*add)(cvd::Registry&, std::string_view, const json::object&); };
   // Order matters only for the caller's readability; lookups are by id at build time, not at add time.
   const Fam fams[] = {{"currencies", add_currency}, {"calendars", add_calendar}, {"indices", add_index},
-                      {"products", add_product}, {"bonds", add_bond}};
+                      {"products", add_product}, {"bonds", add_bond}, {"bond_futures", add_bond_future},
+                      {"fx_pairs", add_fx_pair}, {"cb_schedules", add_cb_schedule}};
+  // credit.cds_products nests one level deeper than the other families (mirrors the JSON file).
+  if (const json::object* cr = jobj(o, "credit"))
+    if (const json::object* cp = jobj(*cr, "cds_products")) {
+      json::array ids;
+      for (const auto& kv : *cp) {
+        if (!kv.value().is_object()) throw std::invalid_argument("conventions: credit.cds_products entries must be objects");
+        add_credit(R, std::string_view(kv.key().data(), kv.key().size()), kv.value().as_object());
+        ids.emplace_back(kv.key());
+      }
+      added["cds_products"] = ids;
+    }
   for (const auto& f : fams) {
     const json::object* fo = jobj(o, f.key);
     if (!fo) continue;
@@ -149,7 +219,9 @@ std::string list_conventions_json(const std::string& /*request*/) {
   out["conventions"] = json::object{
       {"currencies", listing(R.list_currencies())}, {"calendars", listing(R.list_calendars())},
       {"indices", listing(R.list_indices())},       {"products", listing(R.list_products())},
-      {"bonds", listing(R.list_bonds())},           {"overlay_size", R.overlay_size()}};
+      {"bonds", listing(R.list_bonds())},           {"cds_products", listing(R.list_credit_products())},
+      {"bond_futures", listing(R.list_bond_futures())}, {"fx_pairs", listing(R.list_fx_pairs())},
+      {"cb_schedules", listing(R.list_cb_schedules())}, {"overlay_size", R.overlay_size()}};
   return json::serialize(out);
 }
 

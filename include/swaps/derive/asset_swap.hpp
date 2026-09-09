@@ -65,8 +65,8 @@ struct AssetSwapConvention {
   SwapSpreadType type = SwapSpreadType::HeadlineYield;
   std::string govvie_curve;                              // the govvie curve this spread references, by name
   std::string swap_index;                                // the matched swap's index, e.g. "USD-SOFR"
-  std::string settle_calendar = "USD";                   // conventions-DB calendar key for settlement
-  int settle_lag = 1;                                    // business days to settlement (T+1 for USTs)
+  std::string settle_calendar;                           // conventions-DB calendar key for settlement (REQUIRED)
+  int settle_lag = -1;                                   // business days to settlement (REQUIRED; bonds[].settle_lag)
 };
 
 // The benchmark's STREET yield, precomputed from the Market: build the bond on its convention, read its
@@ -133,12 +133,14 @@ inline double ctd_forward_yield(const AssetSwapConvention& conv, const build::Bo
   const int freq = int(bb_now.yield.conv.freq + 0.5);
   const double cpn_per_period = ctd.coupon / double(freq);
 
-  // Carry the dirty price to delivery at repo, reinvesting any interim coupon paid in (settle, delivery].
-  double fwd_dirty = dirty_now * (1.0 + repo * days / 360.0);
+  // Carry the dirty price to delivery at repo (the CURRENCY's repo day-count basis, currencies[].repo_day_count),
+  // reinvesting any interim coupon paid in (settle, delivery].
+  const double repo_basis = build::day_count_basis(std::string(conventions::require_currency(conv.currency).repo_day_count));
+  double fwd_dirty = dirty_now * (1.0 + repo * days / repo_basis);
   build::Date ref_start;
   for (const build::Date& cd : build::coupon_dates_backward(ctd.issue, ctd.maturity, freq, ref_start))
     if (cd > settle && cd <= delivery)
-      fwd_dirty -= cpn_per_period * (1.0 + repo * double(delivery - cd) / 360.0);
+      fwd_dirty -= cpn_per_period * (1.0 + repo * double(delivery - cd) / repo_basis);
 
   // Invert the forward CLEAN price through the CTD rebuilt as of delivery (accrued + flows at delivery).
   const build::BuiltBond bb_del = build::build_bond(ctd, delivery, delivery);

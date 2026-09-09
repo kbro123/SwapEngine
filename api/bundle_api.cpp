@@ -475,9 +475,10 @@ pf::MultiCurveBook book_from_json(const json::value& v) {
         disc_id = swaps::trade::CSA::cash(get_s(to.at("csa").as_object(), "collateral_currency", ""))
                       .discount_index_id();
       else
-        disc_id = get_s(to, "discount_index", index.c_str());
+        disc_id = get_s(to, "discount_index", "");
       if (disc_id.empty())
-        throw std::invalid_argument("book: trade CSA has an unknown collateral currency");
+        throw std::invalid_argument("book: every typed trade needs a 'csa' (collateral_currency) or an explicit "
+                                    "'discount_index' — discounting on the trade's own index is not assumed");
       swaps::trade::Trade t = swaps::trade::Trade::vanilla_swap(
           get_s(to, "id", ""), get_d(to, "notional", 1.0),
           get_s(to, "pay", "fixed") == "float" ? swaps::trade::Pay::Float : swaps::trade::Pay::Fixed,

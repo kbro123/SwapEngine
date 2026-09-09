@@ -58,6 +58,15 @@ inline long business_days_between(const std::string& cal_id, const Date& d1, con
 // Accrual factor between two dates under `dc` (calendars.year_frac). Reference-period-free, CALENDAR-FREE
 // day counts only; ACT/ACT(ICMA) needs the coupon period (`act_act_icma` below) and BUS/252 needs a
 // calendar (the 4-arg overload below) — the 3-arg form throws for BUS/252 rather than silently guessing one.
+// The denominator of a "days / basis" day count (repo / money-market accrual): ACT/360 -> 360, ACT/365F -> 365,
+// BUS/252 -> 252. Anything else has no fixed basis and throws (never defaulted).
+inline double day_count_basis(const std::string& dc) {
+  if (dc == "ACT/360") return 360.0;
+  if (dc == "ACT/365F") return 365.0;
+  if (dc == "BUS/252") return 252.0;
+  throw std::invalid_argument("day_count_basis: '" + dc + "' has no fixed denominator");
+}
+
 inline double year_frac(const std::string& dc, const Date& d1, const Date& d2) {
   if (dc == "ACT/360") return (d2 - d1) / 360.0;
   if (dc == "ACT/365F") return (d2 - d1) / 365.0;

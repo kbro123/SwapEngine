@@ -12,6 +12,8 @@
 
 #include "swaps/api/conventions.hpp"
 #include "swaps/build/calendar.hpp"
+#include "swaps/build/credit_instruments.hpp"
+#include "swaps/build/day_count.hpp"
 #include "swaps/build/conventions.hpp"
 #include "swaps/build/instruments.hpp"
 #include "swaps/conventions_data.hpp"
@@ -135,4 +137,44 @@ TEST_F(RegistryFixture, MalformedEntriesAreRejectedLoudly) {
     EXPECT_NE(std::string(e.what()).find("BAD-OIS"), std::string::npos);
     EXPECT_NE(std::string(e.what()).find("frequency"), std::string::npos);
   }
+}
+
+TEST_F(RegistryFixture, NewFamiliesAreDataAndRuntimeExtensible) {
+  // credit / bond futures / fx pairs / central-bank schedules: baked rows replace what were C++ literals
+  // (recovery 0.40, CF 6% + 3-month rounding + repo /360, USD pivot, a web-side meeting table).
+  const cvd::CreditConv cds = cvd::require_credit_product("CDS-USD-SNAC");
+  EXPECT_DOUBLE_EQ(cds.recovery_default, 0.40);
+  EXPECT_EQ(cds.day_count, "ACT/360");
+  EXPECT_DOUBLE_EQ(b::credit_accrual_ratio(std::string(cds.day_count)), 365.0 / 360.0);
+  const cvd::BondFutureConv ty = cvd::require_bond_future("CME-TY");
+  EXPECT_DOUBLE_EQ(ty.notional_coupon, 0.06);
+  EXPECT_EQ(ty.maturity_rounding_months, 3);
+  EXPECT_EQ(cvd::require_bond_future("CME-FV").maturity_rounding_months, 1);
+  EXPECT_EQ(ty.deliverable_convention, "US-TREASURY");
+  EXPECT_DOUBLE_EQ(b::day_count_basis(std::string(ty.repo_day_count)), 360.0);
+  EXPECT_DOUBLE_EQ(b::day_count_basis(std::string(cvd::require_currency("GBP").repo_day_count)), 365.0);
+  const cvd::FxPairConv eu = cvd::require_fx_pair("EURUSD");
+  EXPECT_EQ(eu.base, "EUR"); EXPECT_EQ(eu.quote, "USD"); EXPECT_EQ(eu.spot_lag, 2);
+  const std::vector<long> fomc = cvd::require_cb_meetings("USD");
+  EXPECT_EQ(fomc.size(), 16u);
+  EXPECT_EQ(b::iso(b::Date::from_iso("1970-01-01").plus_days(int(fomc.front()))), "2026-01-28");
+  EXPECT_THROW(cvd::require_cb_meetings("NZD"), std::invalid_argument);   // not a DB currency
+  EXPECT_THROW(cvd::require_bond_future("EUREX-FGBL"), std::invalid_argument);
+
+  // Runtime overlay through the verb: a new contract, and a REPLACEMENT meeting schedule for GBP.
+  api::conventions_json(R"({"conventions": {
+    "bond_futures": {"TEST-XX": {"currency": "USD", "exchange_calendar": "USD", "deliverable_convention": "US-TREASURY",
+                                 "notional_coupon": 0.04, "maturity_rounding_months": 1, "repo_day_count": "ACT/365F"}},
+    "cb_schedules": {"GBP": {"bank": "BoE", "source": "test", "as_of": "2026-09-09",
+                             "meetings": ["2027-02-04", "2027-03-18"]}}}})");
+  EXPECT_DOUBLE_EQ(cvd::require_bond_future("TEST-XX").notional_coupon, 0.04);
+  EXPECT_DOUBLE_EQ(b::day_count_basis(std::string(cvd::require_bond_future("TEST-XX").repo_day_count)), 365.0);
+  const std::vector<long> boe = cvd::require_cb_meetings("GBP");
+  ASSERT_EQ(boe.size(), 2u);
+  EXPECT_EQ(b::iso(b::Date::from_iso("1970-01-01").plus_days(int(boe[1]))), "2027-03-18");
+  EXPECT_THROW(api::conventions_json(R"({"conventions": {"cb_schedules": {"GBP": {"meetings": ["2027-03-18", "2027-02-04"]}}}})"),
+               std::invalid_argument);  // must be ascending
+  EXPECT_THROW(api::conventions_json(R"({"conventions": {"fx_pairs": {"USDEUR": {"base": "EUR", "quote": "USD", "spot_lag": 2,
+    "calendar": "EURUSD", "premium_currency": "USD", "delta_convention": "spot", "atm_convention": "delta_neutral"}}}})"),
+               std::invalid_argument);  // id must equal base+quote
 }

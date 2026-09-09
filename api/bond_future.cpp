@@ -22,6 +22,7 @@ namespace swaps::api {
 
 namespace json = boost::json;
 namespace b = swaps::build;
+namespace cvd = swaps::conventions;
 namespace px = swaps::pricing;
 
 namespace {
@@ -73,8 +74,14 @@ std::string bond_future_json(const std::string& request) {
   const b::Date delivery = del_iso.empty() ? first_delivery : b::Date::from_iso(del_iso);
   const double futures = jd(o, "futures_price", 0.0);
   const double repo = jd(o, "repo", 0.0);
-  const double notional_coupon = jd(o, "notional_coupon", 0.06);
-  const int round_months = static_cast<int>(jd(o, "round_months", 3.0));
+  // The CONTRACT row (bond_futures[]) supplies the conversion-factor notional coupon, the maturity rounding,
+  // the deliverable bond convention and the repo day-count basis; explicit request fields override.
+  const std::string contract_id = js(o, "contract");
+  if (contract_id.empty()) throw std::invalid_argument("bond_future: missing 'contract' (a bond_futures[] row id, e.g. CME-TY)");
+  const cvd::BondFutureConv fut = cvd::require_bond_future(contract_id);
+  const double notional_coupon = jd(o, "notional_coupon", fut.notional_coupon);
+  const int round_months = static_cast<int>(jd(o, "round_months", fut.maturity_rounding_months));
+  const double repo_basis = b::day_count_basis(std::string(fut.repo_day_count));
   if (round_months <= 0 || 12 % round_months != 0)
     throw std::invalid_argument("bond_future: 'round_months' must divide 12");
 
@@ -94,9 +101,9 @@ std::string bond_future_json(const std::string& request) {
     const double coupon = jd(bo, "coupon", 0.0);
     const double clean = jd(bo, "clean", 0.0);
 
-    const std::string conv_id = js(bo, "convention").empty() ? std::string("US-TREASURY") : js(bo, "convention");
+    const std::string conv_id = js(bo, "convention").empty() ? std::string(fut.deliverable_convention) : js(bo, "convention");
     const px::YieldConvention yc = b::yield_convention(conv_id);
-    const int freq = bo.contains("freq") ? static_cast<int>(jd(bo, "freq", 2.0))
+    const int freq = bo.contains("freq") ? static_cast<int>(jd(bo, "freq", 0.0))
                                          : static_cast<int>(yc.freq + 0.5);
     const std::string settle_iso = js(bo, "settle");
     const b::Date settle = settle_iso.empty() ? value : b::Date::from_iso(settle_iso);
@@ -148,7 +155,7 @@ std::string bond_future_json(const std::string& request) {
         in.interim_coupons.emplace_back(cpn_per_period, double(delivery - cd));
 
     const double days = double(delivery - settle);
-    const px::DeliverableResult<double> r = px::analyze_deliverable<double>(in, futures, repo, days);
+    const px::DeliverableResult<double> r = px::analyze_deliverable<double>(in, futures, repo, days, repo_basis);
     results.push_back(r);
     cf_v.push_back(r.conversion_factor);
     gross_v.push_back(r.gross_basis);

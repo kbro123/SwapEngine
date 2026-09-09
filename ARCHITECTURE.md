@@ -257,7 +257,15 @@ synthetic problems name the DB calendar `"NONE"` explicitly. Any API adds or ove
 the stateless **`conventions`** verb (`{"conventions": {"currencies": {...}, "calendars": {...}, "indices": {...},
 "products": {...}, "bonds": {...}}}`, rows in exactly the JSON file's shapes; `clear_overlay` resets) and reads
 what the engine knows with **`list_conventions`** (`api/conventions.cpp`; `tests/conventions_registry_test.cpp`).
-`tools/check_no_literals.py` (verify.sh) fails on any new convention literal in `include/`+`api/`; the remaining
-68 (of the original 130) are ratcheted in `tools/check_no_literals.allow` for the rest of E2.
+The DB also carries `credit.cds_products` (recovery / premium schedule / accrual day count / protection steps),
+`bond_futures` (deliverable convention, CF notional coupon, maturity rounding, repo day count), `fx_pairs` (spot lag,
+calendar, premium currency, delta/ATM conventions) and `cb_schedules` (central-bank meeting dates per currency,
+sourced + dated) — each with its own registry lookup, `require_*`, overlay `add_*` and listing. The verbs consume
+them: `credit` needs a `product`, `bond_future` a `contract`, `bonds`/`bond_universe`/`govvie_fit`/`swap_spread`
+a bond `convention`, `swaption`/`vol_cube`/`vega` an `index` (currency derived from it), `inflation` a `base`;
+a typed trade needs a `csa` or `discount_index`; `FxMatrix` takes its pivot explicitly. `tools/check_no_literals.py`
+(verify.sh) fails on any new convention literal in `include/`+`api/`; of the original 130 ratcheted hits ONE remains
+(`schedule.hpp` `resolve()` rolling tenor tokens on weekends only — E2 step 3), the rest are vocabulary-dispatch or
+DB-row defaults documented in `tools/check_no_literals.allow`.
 
 > **Performance:** see [`OPTIMIZATION.md`](OPTIMIZATION.md) for how the calibration/streaming path was made fast (the W-cache, hybrid AAD, frozen-Newton streaming, alloc-free/SIMD hot path) and the repeatable optimization playbook.

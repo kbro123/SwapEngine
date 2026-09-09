@@ -181,7 +181,7 @@ cal::CalibrationResult calibrate_cds(const std::vector<double>& mats, const std:
   prob.back_times = mats;
   double mean = 0.0;
   for (std::size_t i = 0; i < mats.size(); ++i) {
-    prob.instruments.push_back(b::make_cds(mats[i], spreads[i], R, FlatDf{r}, /*freq=*/4, /*prot=*/8));
+    prob.instruments.push_back(b::make_cds(mats[i], spreads[i], R, FlatDf{r}, /*freq=*/4, /*prot=*/8, 365.0 / 360.0));
     mean += spreads[i];
   }
   mean /= static_cast<double>(spreads.size());
@@ -218,7 +218,7 @@ TEST(CurveProperty, CreditCalibratedStripRepricesAndSurvivalWellFormed) {
     cal::CreditProblem probe;
     probe.back_times = mats;
     for (std::size_t i = 0; i < mats.size(); ++i)
-      probe.instruments.push_back(b::make_cds(mats[i], spreads[i], R, FlatDf{r}, 4, 8));
+      probe.instruments.push_back(b::make_cds(mats[i], spreads[i], R, FlatDf{r}, 4, 8, 365.0 / 360.0));
     for (std::size_t i = 0; i < mats.size(); ++i)
       EXPECT_NEAR(probe.instruments[i].model_quote<double>(surv), spreads[i], 1e-6)
           << "trial " << trial << " mat " << mats[i];
@@ -255,13 +255,13 @@ TEST(CurveProperty, CreditTriangleBoundAndRecoveryScalingOnFlatStrip) {
     const auto hz = flat_curve(h);
     const curve::SurvivalCurve<double> surv{&hz};
 
-    const double s = b::make_cds(T, 0.0, R, FlatDf{r}, /*freq=*/4, /*prot=*/8).model_quote<double>(surv);
+    const double s = b::make_cds(T, 0.0, R, FlatDf{r}, /*freq=*/4, /*prot=*/8, 365.0 / 360.0).model_quote<double>(surv);
     EXPECT_GT(s, 0.0) << "trial " << trial;
     EXPECT_NEAR(s, (1.0 - R) * h, 1.5e-3) << "trial " << trial << " h " << h << " R " << R;
 
     // s ∝ (1−R): re-price with a second recovery and check the exact ratio (annuity is R-independent).
     const double R2 = (R < 0.4) ? R + 0.2 : R - 0.2;
-    const double s2 = b::make_cds(T, 0.0, R2, FlatDf{r}, 4, 8).model_quote<double>(surv);
+    const double s2 = b::make_cds(T, 0.0, R2, FlatDf{r}, 4, 8, 365.0 / 360.0).model_quote<double>(surv);
     EXPECT_NEAR(s / s2, (1.0 - R) / (1.0 - R2), 1e-9) << "trial " << trial;
   }
 }

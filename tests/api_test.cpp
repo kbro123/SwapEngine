@@ -544,10 +544,11 @@ TEST(BundleApi, BondsVerbSelectsConventionAndHandlesWhenIssued) {
   EXPECT_NEAR(street * 100.0, 93.607147151563, 1e-9);
   EXPECT_NEAR(tsy * 100.0, 93.604631472068, 1e-9);
   EXPECT_GT(std::abs(street - tsy), 1e-6);
-  // Omitting `convention` defaults to US-TREASURY (street).
+  // Omitting `convention` is an ERROR (PRINCIPLES.md P2: no silent US-TREASURY default — until 2026-09-09
+  // this test asserted the opposite).
   const auto def = run(R"({"bonds":{"bonds":[{"issue":"2019-08-15","settle":"2024-01-16",
       "maturity":"2029-08-15","coupon":0.025,"yield":0.04}]}})");
-  EXPECT_EQ(def.at("dirty").as_array()[0].as_double(), street);
+  EXPECT_TRUE(def.contains("error")) << "a bond without 'convention' must be rejected";
 
   // WHEN-ISSUED: `dated` + `first_coupon` instead of `issue`. A new issue settles on the dated date, so
   // accrued is exactly zero and clean == dirty.

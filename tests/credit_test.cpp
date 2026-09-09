@@ -62,13 +62,13 @@ TEST(Credit, FlatHazardRepricesParSpreadExactly) {
 
   // Sanity: Q(t) = exp(−h·t) and the par spread sits near the credit-triangle value (1−R)·h.
   EXPECT_NEAR(surv.survival(T), std::exp(-h * T), 1e-12);
-  const auto probe = b::make_cds(T, /*spread=*/0.0, R, FlatDf{r});
+  const auto probe = b::make_cds(T, /*spread=*/0.0, R, FlatDf{r}, 4, 4, 365.0 / 360.0);
   const double s_model = probe.model_quote<double>(surv);
   EXPECT_NEAR(s_model, (1.0 - R) * h, 5e-4);  // discretised leg ≈ closed-form credit triangle
   EXPECT_GT(s_model, 0.0);
 
   // Build the instrument AT its own par spread => residual is exactly zero.
-  const auto cds = b::make_cds(T, s_model, R, FlatDf{r});
+  const auto cds = b::make_cds(T, s_model, R, FlatDf{r}, 4, 4, 365.0 / 360.0);
   EXPECT_NEAR(cds.model_quote<double>(surv), s_model, 1e-14);
   EXPECT_NEAR(cds.residual<double>(surv), 0.0, 1e-14);
 }
@@ -98,7 +98,7 @@ TEST(Credit, CalibrateCdsStripRecoversSpreads) {
   cal::CreditProblem prob;
   prob.back_times = mats;
   for (std::size_t i = 0; i < mats.size(); ++i)
-    prob.instruments.push_back(b::make_cds(mats[i], tgt[i], R, FlatDf{r}));
+    prob.instruments.push_back(b::make_cds(mats[i], tgt[i], R, FlatDf{r}, 4, 4, 365.0 / 360.0));
 
   const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(prob.n_knots(), tgt.front() / (1.0 - R));
   const cal::CalibrationResult res = cal::calibrate(prob, x0);
@@ -118,9 +118,9 @@ TEST(Credit, HigherRecoveryLowersParSpread) {
   const auto hz = flat_hazard(h, kKnots);
   const curve::SurvivalCurve<double> surv{&hz};
 
-  const double s_lowR = b::make_cds(T, 0.0, /*R=*/0.20, FlatDf{r}).model_quote<double>(surv);
-  const double s_midR = b::make_cds(T, 0.0, /*R=*/0.40, FlatDf{r}).model_quote<double>(surv);
-  const double s_hiR = b::make_cds(T, 0.0, /*R=*/0.60, FlatDf{r}).model_quote<double>(surv);
+  const double s_lowR = b::make_cds(T, 0.0, /*R=*/0.20, FlatDf{r}, 4, 4, 365.0 / 360.0).model_quote<double>(surv);
+  const double s_midR = b::make_cds(T, 0.0, /*R=*/0.40, FlatDf{r}, 4, 4, 365.0 / 360.0).model_quote<double>(surv);
+  const double s_hiR = b::make_cds(T, 0.0, /*R=*/0.60, FlatDf{r}, 4, 4, 365.0 / 360.0).model_quote<double>(surv);
 
   EXPECT_GT(s_lowR, s_midR);
   EXPECT_GT(s_midR, s_hiR);

@@ -66,18 +66,32 @@ CellSchedule cell_schedule(const std::string& expiry, const std::string& tenor, 
   const double tenor_years = conventions::period_years(tenor);
   if (!(tenor_years > 0.0))
     throw std::invalid_argument("vega: unrecognized or non-positive tenor '" + tenor + "' (use e.g. 2Y, 5Y, 10Y)");
-  const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
+  const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
   CellSchedule s;
   s.t_start = b::curve_time(vd, swap_start);
   s.t_expiry = b::curve_time(vd, expiry_date);
-  b::Date prev = swap_start;
-  for (int i = 1; i <= n; ++i) {
-    const b::Date pay = b::adjust(conv.calendar, swap_start.plus_months(12 * i), conv.bdc);
-    s.tau.push_back(b::year_frac(conv.fixed_dc, prev, pay));
-    s.pay_time.push_back(b::curve_time(vd, pay));
-    prev = pay;
+  // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
+  // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
+  const b::Date und_mat = swap_start.plus_months(months);
+  for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
+    s.tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
+    s.pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
   }
   return s;
+}
+
+// The swap's DB index is REQUIRED (it carries the product conventions); `currency` is optional and, if given,
+// must agree with the index row (PRINCIPLES.md P2: no "USD"/"USD-SOFR" defaults).
+std::string require_index_arg(const json::object& o, const char* verb) {
+  const std::string index = js(o, "index");
+  if (index.empty()) throw std::invalid_argument(std::string(verb) + ": missing 'index' (the swap's DB index id, e.g. USD-SOFR)");
+  return index;
+}
+std::string currency_for_index(const std::string& index, const std::string& given, const char* verb) {
+  const std::string ccy = std::string(swaps::conventions::require_index(index).currency);
+  if (!given.empty() && b::upper(given) != ccy)
+    throw std::invalid_argument(std::string(verb) + ": 'currency' " + given + " does not match index " + index + " (" + ccy + ")");
+  return ccy;
 }
 }  // namespace
 
@@ -90,8 +104,8 @@ std::string vega_json(const std::string& request) {
   if (vd_iso.empty()) throw std::invalid_argument("vega: missing 'value_date'");
   if (!o.contains("bundle")) throw std::invalid_argument("vega: missing 'bundle'");
   const b::Date vd = b::Date::from_iso(vd_iso);
-  const std::string currency = js(o, "currency", "USD");
-  const std::string index = js(o, "index", "USD-SOFR");
+  const std::string index = require_index_arg(o, "vega");
+  const std::string currency = currency_for_index(index, js(o, "currency"), "vega");
   const int curve = static_cast<int>(jd(o, "curve", 0.0));
   const b::SwapConv conv = b::swap_conv(currency, index);
 

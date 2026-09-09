@@ -24,7 +24,7 @@ TEST(Market, ComposesNamedCurvesFxQuotesCurrenciesAndToday) {
   auto direct = cv::make_modular_curve<double>(modules);
   direct.set_forwards(x);
 
-  mkt::FxMatrix fx;
+  mkt::FxMatrix fx("USD");
   fx.add("EUR", "USD", 1.09);
   fx.add("USD", "JPY", 150.0);
 
@@ -69,7 +69,7 @@ TEST(Market, ScenarioForksAShockedSnapshotLeavingTheParentUnchanged) {
   const auto modules = cv::flat_hermite(front, back);
   Eigen::VectorXd x(4);
   x << 0.043, 0.041, 0.038, 0.045;
-  mkt::FxMatrix fx;
+  mkt::FxMatrix fx("USD");
   fx.add("EUR", "USD", 1.09);
 
   mkt::Market base;

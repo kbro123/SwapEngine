@@ -43,7 +43,7 @@ struct FixedBondTerms {
   Date issue;
   Date maturity;
   double coupon = 0.0;  // annual coupon rate (0.04 = 4%)
-  int freq = 2;         // coupons per year (also the yield compounding frequency f)
+  int freq = -1;        // coupons per year (also the yield compounding frequency f) — REQUIRED, no default
   // Yield CONVENTION — how the fractional first period is discounted (pricing/bond.hpp YieldConvention).
   // The default is the plain compound stub (UK gilt / French OAT). A US Treasury quoted STREET wants
   // final_period_simple = true; the 31 CFR App B / Bloomberg "Treasury method" wants stub = Simple. Use

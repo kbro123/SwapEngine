@@ -54,7 +54,8 @@ std::string inflation_json(const std::string& request) {
   if (!o.contains("instruments") || !o.at("instruments").is_array())
     throw std::invalid_argument("inflation: missing 'instruments' array");
 
-  const double base = jd(o, "base", 100.0);
+  if (!o.contains("base")) throw std::invalid_argument("inflation: missing 'base' (the index base level; instrument data, not a default)");
+  const double base = jd(o, "base", 0.0);
   const double nominal_zero = jd(o, "nominal_zero", 0.0);
 
   cal::InflationProblem prob;

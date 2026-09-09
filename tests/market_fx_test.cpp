@@ -9,7 +9,7 @@
 namespace mkt = swaps::market;
 
 TEST(FxMatrix, DirectInverseTriangulateAndConvert) {
-  mkt::FxMatrix fx;             // default pivot is USD
+  mkt::FxMatrix fx("USD");      // the pivot is explicit (no default currency)
   fx.add("EUR", "USD", 1.09);   // EURUSD = 1.09  (1 EUR = 1.09 USD)
   fx.add("USD", "JPY", 150.0);  // USDJPY = 150   (1 USD = 150 JPY)
 
@@ -38,7 +38,7 @@ TEST(FxMatrix, DirectInverseTriangulateAndConvert) {
 }
 
 TEST(FxMatrix, MissingPathThrowsAndHasIsFalse) {
-  mkt::FxMatrix fx;
+  mkt::FxMatrix fx("USD");
   fx.add("EUR", "USD", 1.09);
   fx.add("USD", "JPY", 150.0);
 
@@ -50,7 +50,7 @@ TEST(FxMatrix, MissingPathThrowsAndHasIsFalse) {
 }
 
 TEST(FxMatrix, AddFxRateStructAndInverseImplied) {
-  mkt::FxMatrix fx;
+  mkt::FxMatrix fx("USD");
   fx.add(mkt::FxRate{"EUR", "USD", 1.09});
   // Only EURUSD was stored, yet USDEUR resolves as its inverse.
   EXPECT_NEAR(fx.rate("USD", "EUR"), 1.0 / 1.09, 1e-9);

@@ -16,6 +16,7 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/build/par_asset_swap.hpp"
 #include "swaps/build/bond.hpp"
+#include "swaps/build/conventions.hpp"
 #include "swaps/build/date.hpp"
 #include "swaps/build/day_count.hpp"
 #include "swaps/build/schedule.hpp"
@@ -25,6 +26,7 @@ namespace swaps::api {
 
 namespace json = boost::json;
 namespace b = swaps::build;
+namespace cvd = swaps::conventions;
 namespace px = swaps::pricing;
 namespace cal = swaps::calibration;
 
@@ -73,15 +75,15 @@ std::string bonds_json(const std::string& request) {
     // layer reads), so a caller says "US-TREASURY" (street) or "US-TREASURY-TSY" (31 CFR App B / the
     // Bloomberg Treasury method) rather than encoding the discounting rule. Explicit `freq` still
     // overrides for a bond that is not one of the catalogued types.
-    const std::string conv_id = js(bo, "convention").empty() ? std::string("US-TREASURY")
-                                                             : js(bo, "convention");
+    const std::string conv_id = js(bo, "convention");
+    if (conv_id.empty()) throw std::invalid_argument("bonds: each bond needs 'convention' (a bonds[] row id, e.g. US-TREASURY)");
     const px::YieldConvention yc = b::yield_convention(conv_id);
 
     const b::Date value = b::Date::from_iso(vd_top.empty() ? settle_iso : vd_top);
     const b::Date settle_d = b::Date::from_iso(settle_iso);
     const b::Date maturity_d = b::Date::from_iso(maturity_iso);
     const double cpn = jd(bo, "coupon", 0.0);
-    const int freq = bo.contains("freq") ? static_cast<int>(jd(bo, "freq", 2.0))
+    const int freq = bo.contains("freq") ? static_cast<int>(jd(bo, "freq", 0.0))
                                          : static_cast<int>(yc.freq + 0.5);
 
     // WHEN-ISSUED / odd-first-period bond: signalled by `dated` + `first_coupon`. A new issue settles ON
@@ -196,17 +198,24 @@ std::string asset_swap_json(const std::string& request) {
     t.issue = b::Date::from_iso(issue_iso);
     t.maturity = b::Date::from_iso(maturity_iso);
     t.coupon = jd(bo, "coupon", 0.0);
-    t.freq = static_cast<int>(jd(bo, "freq", 2.0));
+    const std::string aconv = js(bo, "convention");
+    if (aconv.empty()) throw std::invalid_argument("asset_swap: each bond needs 'convention' (a bonds[] row id, e.g. US-TREASURY)");
+    const cvd::BondConv abc = cvd::require_bond(aconv);
+    t.freq = bo.contains("freq") ? static_cast<int>(jd(bo, "freq", 0.0))
+                                 : static_cast<int>(b::yield_convention(aconv).freq + 0.5);
     const b::BuiltBond bond = b::fixed_rate_bond(t);
 
-    // Standard ASW float leg: quarterly ACT/360, backward from maturity to settlement (short front stub).
+    // ASW float leg on the bond currency's default swap product (frequency / day count / calendar / bdc from
+    // the DB), backward from maturity to settlement (short front stub). Used to be hard-wired quarterly ACT/360.
+    const b::SwapConv swc = b::swap_conv(std::string(abc.currency), js(bo, "index"));
+    const int step_m = b::tok_months(swc.float_freq_tok);
     std::vector<b::Date> fd;
-    for (b::Date d = t.maturity; d > t.settle; d = d.plus_months(-3)) fd.push_back(d);
+    for (b::Date d = t.maturity; d > t.settle; d = d.plus_months(-step_m)) fd.push_back(b::adjust(swc.calendar, d, swc.bdc));
     std::reverse(fd.begin(), fd.end());
     std::vector<double> fpay, ftau;
     b::Date prev = t.settle;
     for (const b::Date& pay : fd) {
-      ftau.push_back(b::year_frac("ACT/360", prev, pay));
+      ftau.push_back(b::year_frac(swc.float_dc, prev, pay));
       fpay.push_back(b::curve_time(vd, pay));
       prev = pay;
     }

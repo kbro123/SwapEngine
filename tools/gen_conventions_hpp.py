@@ -68,8 +68,28 @@ def main():
         "// A CURRENCY row (currencies[] in the JSON): ISO minor units, currency-level settlement calendar, the",
         "// default discount (RFR) index and the default swap product used when a curve names no index.",
         "struct CurrencyConv {",
-        "  std::string_view code, name, settlement_calendar, discount_index, default_swap_product;",
+        "  std::string_view code, name, settlement_calendar, discount_index, default_swap_product, repo_day_count;",
         "  int minor_units;",
+        "};",
+        "// A CDS product (credit.cds_products[]): premium schedule + default recovery + protection integration.",
+        "struct CreditConv {",
+        "  std::string_view id, currency, calendar, day_count, frequency, roll;",
+        "  double recovery_default; int settlement_lag, protection_steps;",
+        "};",
+        "// A bond-futures CONTRACT (bond_futures[]): deliverable convention, CF notional coupon, rounding, repo basis.",
+        "struct BondFutureConv {",
+        "  std::string_view id, currency, exchange_calendar, deliverable_convention, repo_day_count, delivery;",
+        "  double notional_coupon, basket_min_years, basket_max_years; int maturity_rounding_months;",
+        "};",
+        "// An FX pair (fx_pairs[]): quoting/settlement/option conventions. id == base+quote.",
+        "struct FxPairConv {",
+        "  std::string_view id, base, quote, calendar, premium_currency, delta_convention, atm_convention, xccy_product, forward_product;",
+        "  int spot_lag; double smile_pillar_lo, smile_pillar_hi;",
+        "};",
+        "// A central-bank meeting schedule (cb_schedules[]): a slice of kCbMeetings (Unix-day serials, ascending).",
+        "struct CbScheduleConv {",
+        "  std::string_view currency, bank, source, as_of;",
+        "  std::size_t begin, count;",
         "};",
         "struct IndexConv {",
         "  std::string_view id, currency, type, day_count, calendar, par_product, tenor;",
@@ -131,9 +151,57 @@ def main():
         c = currencies[cc]
         lines.append("  {" + ", ".join([
             sv(cc), sv(c.get("name")), sv(c.get("settlement_calendar")), sv(c.get("discount_index")),
-            sv(c.get("default_swap_product")), str(c.get("minor_units", 2)),
+            sv(c.get("default_swap_product")), sv(c.get("repo_day_count")), str(c.get("minor_units", 2)),
         ]) + "},")
     lines += ["}};", ""]
+
+    credit = db.get("credit", {}).get("cds_products", {})
+    lines.append(f"inline constexpr std::array<CreditConv, {len(credit)}> kCredit = {{{{")
+    for cid in sorted(credit):
+        c = credit[cid]
+        lines.append("  {" + ", ".join([
+            sv(cid), sv(c.get("currency")), sv(c.get("calendar")), sv(c.get("day_count")), sv(c.get("frequency")),
+            sv(c.get("roll")), repr(float(c.get("recovery_default", -1))), str(c.get("settlement_lag", -1)),
+            str(c.get("protection_steps", -1)),
+        ]) + "},")
+    lines += ["}};", ""]
+    futs = db.get("bond_futures", {})
+    lines.append(f"inline constexpr std::array<BondFutureConv, {len(futs)}> kBondFutures = {{{{")
+    for fid in sorted(futs):
+        f = futs[fid]
+        lines.append("  {" + ", ".join([
+            sv(fid), sv(f.get("currency")), sv(f.get("exchange_calendar")), sv(f.get("deliverable_convention")),
+            sv(f.get("repo_day_count")), sv(f.get("delivery")), repr(float(f.get("notional_coupon", -1))),
+            repr(float(f.get("basket_min_years", 0))), repr(float(f.get("basket_max_years", 0))),
+            str(f.get("maturity_rounding_months", -1)),
+        ]) + "},")
+    lines += ["}};", ""]
+    pairs = db.get("fx_pairs", {})
+    lines.append(f"inline constexpr std::array<FxPairConv, {len(pairs)}> kFxPairs = {{{{")
+    for pid2 in sorted(pairs):
+        f = pairs[pid2]
+        sp = f.get("smile_pillars", [])
+        lines.append("  {" + ", ".join([
+            sv(pid2), sv(f.get("base")), sv(f.get("quote")), sv(f.get("calendar")), sv(f.get("premium_currency")),
+            sv(f.get("delta_convention")), sv(f.get("atm_convention")), sv(f.get("xccy_product")), sv(f.get("forward_product")),
+            str(f.get("spot_lag", -1)), repr(float(sp[0]) if sp else 0.0), repr(float(sp[-1]) if sp else 0.0),
+        ]) + "},")
+    lines += ["}};", ""]
+    cbs = db.get("cb_schedules", {})
+    import datetime as _dt
+    meetings, cb_rows = [], []
+    for cc in sorted(cbs):
+        c = cbs[cc]
+        b = len(meetings)
+        for iso in c.get("meetings", []):
+            d = _dt.date.fromisoformat(iso)
+            meetings.append("  " + str((d - _dt.date(1970, 1, 1)).days) + ",")
+        cb_rows.append("  {" + ", ".join([sv(cc), sv(c.get("bank")), sv(c.get("source")), sv(c.get("as_of")),
+                                         str(b), str(len(meetings) - b)]) + "},")
+    lines.append(f"inline constexpr std::array<long, {len(meetings)}> kCbMeetings = {{{{")
+    lines += meetings + ["}};", ""]
+    lines.append(f"inline constexpr std::array<CbScheduleConv, {len(cbs)}> kCbSchedules = {{{{")
+    lines += cb_rows + ["}};", ""]
 
     lines.append(f"inline constexpr std::array<BondConv, {len(bonds)}> kBonds = {{{{")
     for bid in sorted(bonds):
@@ -203,7 +271,8 @@ def main():
     with open(OUT, "w") as f:
         f.write(text)
     print(f"wrote {OUT} ({len(products)} products, {len(indices)} indices, {len(bonds)} bonds, "
-          f"{len(calendars)} calendars / {len(rules)} holiday rules)")
+          f"{len(calendars)} calendars / {len(rules)} holiday rules, {len(currencies)} currencies, "
+          f"{len(credit)} cds products, {len(futs)} bond futures, {len(pairs)} fx pairs, {len(cbs)} cb schedules)")
 
 
 if __name__ == "__main__":

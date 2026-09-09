@@ -40,6 +40,20 @@ std::string js(const json::object& o, const char* k, const char* d = "") {
 bool jb(const json::object& o, const char* k, bool d) {
   return o.contains(k) && o.at(k).is_bool() ? o.at(k).as_bool() : d;
 }
+
+// The swap's DB index is REQUIRED (it carries the product conventions); `currency` is optional and, if given,
+// must agree with the index row (PRINCIPLES.md P2: no "USD"/"USD-SOFR" defaults).
+std::string require_index_arg(const json::object& o, const char* verb) {
+  const std::string index = js(o, "index");
+  if (index.empty()) throw std::invalid_argument(std::string(verb) + ": missing 'index' (the swap's DB index id, e.g. USD-SOFR)");
+  return index;
+}
+std::string currency_for_index(const std::string& index, const std::string& given, const char* verb) {
+  const std::string ccy = std::string(swaps::conventions::require_index(index).currency);
+  if (!given.empty() && b::upper(given) != ccy)
+    throw std::invalid_argument(std::string(verb) + ": 'currency' " + given + " does not match index " + index + " (" + ccy + ")");
+  return ccy;
+}
 }  // namespace
 
 std::string swaption_json(const std::string& request) {
@@ -51,8 +65,8 @@ std::string swaption_json(const std::string& request) {
   if (vd_iso.empty()) throw std::invalid_argument("swaption: missing 'value_date'");
   if (!o.contains("bundle")) throw std::invalid_argument("swaption: missing 'bundle'");
   const b::Date vd = b::Date::from_iso(vd_iso);
-  const std::string currency = js(o, "currency", "USD");
-  const std::string index = js(o, "index", "USD-SOFR");
+  const std::string index = require_index_arg(o, "swaption");
+  const std::string currency = currency_for_index(index, js(o, "currency"), "swaption");
   const int curve = static_cast<int>(jd(o, "curve", 0.0));
   const b::SwapConv conv = b::swap_conv(currency, index);
 
@@ -83,14 +97,14 @@ std::string swaption_json(const std::string& request) {
       if (!(tenor_years > 0.0))
         throw std::invalid_argument("swaption: unrecognized or non-positive tenor '" + tenor +
                                     "' (use e.g. 2Y, 5Y, 10Y)");
-      const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
+      const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
       std::vector<double> pay_time, tau;
-      b::Date prev = swap_start;
-      for (int i = 1; i <= n; ++i) {
-        const b::Date pay = b::adjust(conv.calendar, swap_start.plus_months(12 * i), conv.bdc);
-        tau.push_back(b::year_frac(conv.fixed_dc, prev, pay));
-        pay_time.push_back(b::curve_time(vd, pay));
-        prev = pay;
+      // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
+      // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
+      const b::Date und_mat = swap_start.plus_months(months);
+      for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
+        tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
+        pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
       }
       const double t_start = b::curve_time(vd, swap_start);
       const double t_expiry = b::curve_time(vd, expiry_date);
@@ -186,8 +200,8 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json) {
   VolCubeSpec spec;
   spec.value_date = js(o, "value_date");
   if (spec.value_date.empty()) throw std::invalid_argument("vol_cube: missing 'value_date'");
-  spec.currency = js(o, "currency", "USD");
-  spec.index = js(o, "index", "USD-SOFR");
+  spec.index = require_index_arg(o, "vol_cube");
+  spec.currency = currency_for_index(spec.index, js(o, "currency"), "vol_cube");
   spec.curve = static_cast<int>(jd(o, "curve", 0.0));
   if (!o.contains("cells") || !o.at("cells").is_array())
     throw std::invalid_argument("vol_cube: missing 'cells' array");
@@ -225,6 +239,7 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json) {
 // just the Bachelier/SABR pass. Reuses the calibrated/streaming session, so a live vol surface reprices with
 // no recalibration. This is what benchmarks and native clients call; the JSON verb is a thin wrapper below.
 VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
+  if (spec.index.empty()) throw std::invalid_argument("vol_cube: VolCubeSpec.index is required (the swap's DB index)");
   const b::Date vd = b::Date::from_iso(spec.value_date);
   const b::SwapConv conv = b::swap_conv(spec.currency, spec.index);
   const std::vector<VolCubeCell>& cells = spec.cells;
@@ -250,16 +265,16 @@ VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
       if (!(tenor_years > 0.0))
         throw std::invalid_argument("vol_cube: unrecognized or non-positive tenor '" + c.tenor +
                                     "' (use e.g. 2Y, 5Y, 10Y)");
-      const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
+      const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
       SwaptionSchedule ss;
       ss.t_start = b::curve_time(vd, swap_start);
       ss.t_expiry = b::curve_time(vd, expiry_date);
-      b::Date prev = swap_start;
-      for (int i = 1; i <= n; ++i) {
-        const b::Date pay = b::adjust(conv.calendar, swap_start.plus_months(12 * i), conv.bdc);
-        ss.tau.push_back(b::year_frac(conv.fixed_dc, prev, pay));
-        ss.pay_time.push_back(b::curve_time(vd, pay));
-        prev = pay;
+      // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
+      // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
+      const b::Date und_mat = swap_start.plus_months(months);
+      for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
+        ss.tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
+        ss.pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
       }
       it = vol_sched_cache_.emplace(key, std::move(ss)).first;
     }
@@ -372,6 +387,7 @@ VolCube BundleSession::price_vol_cube_json(const std::string& spec_json) const {
 
 // ---- VolSurface: resolve schedules once, pre-index into one sample grid, pre-size the SoA output ----------
 VolSurface::VolSurface(const VolCubeSpec& spec) : curve_(spec.curve), defs_(spec.cells) {
+  if (spec.index.empty()) throw std::invalid_argument("VolSurface: VolCubeSpec.index is required (the swap's DB index)");
   const b::Date vd = b::Date::from_iso(spec.value_date);
   const b::SwapConv conv = b::swap_conv(spec.currency, spec.index);
 
@@ -388,17 +404,17 @@ VolSurface::VolSurface(const VolCubeSpec& spec) : curve_(spec.curve), defs_(spec
     const double tenor_years = conventions::period_years(c.tenor);
     if (!(tenor_years > 0.0))
       throw std::invalid_argument("vol_surface: unrecognized or non-positive tenor '" + c.tenor + "'");
-    const int n = std::max(1, static_cast<int>(std::lround(tenor_years)));
+    const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
     Cell cell;
     cell.t_expiry = b::curve_time(vd, expiry_date);
     const double t_start = b::curve_time(vd, swap_start);
     std::vector<double> pay_time;
-    b::Date prev = swap_start;
-    for (int i = 1; i <= n; ++i) {
-      const b::Date pay = b::adjust(conv.calendar, swap_start.plus_months(12 * i), conv.bdc);
-      cell.tau.push_back(b::year_frac(conv.fixed_dc, prev, pay));
-      pay_time.push_back(b::curve_time(vd, pay));
-      prev = pay;
+    // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
+    // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
+    const b::Date und_mat = swap_start.plus_months(months);
+    for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
+      cell.tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
+      pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
     }
     times.push_back(t_start);
     times.insert(times.end(), pay_time.begin(), pay_time.end());

@@ -42,7 +42,7 @@ namespace swaps::pricing {
 // Self-checks: a 6% bond an exact number of half-years out (z=0) has CF = 1; a 10% 20y note (z=0) has
 // CF = 1.4623 (Hull). Affine in `coupon`, so AAD-clean; n,z are integer convention data.
 template <class Scalar>
-Scalar cme_conversion_factor(Scalar coupon, int n, int z, double notional_coupon = 0.06) {
+Scalar cme_conversion_factor(Scalar coupon, int n, int z, double notional_coupon) {  // notional coupon = contract DATA (bond_futures[].notional_coupon)
   const double semi = 1.0 + notional_coupon / 2.0;  // 1.03 for a 6% notional
   const int v = (z < 7) ? z : z - 6;
   const double A = 1.0 / std::pow(semi, double(v) / 6.0);
@@ -91,7 +91,7 @@ Scalar bond_future_gross_basis(Scalar clean, Scalar futures, Scalar conversion_f
 //     IRR = 360 · (P_inv + Σ c_k − P_buy) / (P_buy·d − Σ c_k·d_k)
 // (d = days settle→delivery). The bond with the HIGHEST IRR is the CTD.
 template <class Scalar>
-Scalar bond_future_implied_repo(const DeliverableInput& in, Scalar futures, double days_to_delivery) {
+Scalar bond_future_implied_repo(const DeliverableInput& in, Scalar futures, double days_to_delivery, double repo_basis) {  // repo_basis = 360/365 per bond_futures[].repo_day_count
   const Scalar p_buy = Scalar(in.clean + in.accrued_now);
   const Scalar p_inv = futures * Scalar(in.conversion_factor) + Scalar(in.accrued_delivery);
   Scalar coupon_sum = Scalar(0), coupon_time = Scalar(0);  // Σ c_k , Σ c_k·d_k
@@ -100,7 +100,7 @@ Scalar bond_future_implied_repo(const DeliverableInput& in, Scalar futures, doub
     coupon_time += Scalar(ck.first) * Scalar(ck.second);
   }
   const Scalar denom = p_buy * Scalar(days_to_delivery) - coupon_time;
-  return Scalar(360.0) * (p_inv + coupon_sum - p_buy) / denom;
+  return Scalar(repo_basis) * (p_inv + coupon_sum - p_buy) / denom;
 }
 
 // Net basis (price points): gross basis net of carry — the forward clean price at delivery (bond bought
@@ -110,11 +110,11 @@ Scalar bond_future_implied_repo(const DeliverableInput& in, Scalar futures, doub
 // Zero exactly when repo == the implied repo rate. The CTD is (to first order) the MIN net basis.
 template <class Scalar>
 Scalar bond_future_net_basis(const DeliverableInput& in, Scalar futures, Scalar repo,
-                             double days_to_delivery) {
+                             double days_to_delivery, double repo_basis) {
   const Scalar p_buy = Scalar(in.clean + in.accrued_now);
-  Scalar fwd_dirty = p_buy * (Scalar(1) + repo * Scalar(days_to_delivery / 360.0));
+  Scalar fwd_dirty = p_buy * (Scalar(1) + repo * Scalar(days_to_delivery / repo_basis));
   for (const auto& ck : in.interim_coupons)
-    fwd_dirty -= Scalar(ck.first) * (Scalar(1) + repo * Scalar(ck.second / 360.0));
+    fwd_dirty -= Scalar(ck.first) * (Scalar(1) + repo * Scalar(ck.second / repo_basis));
   const Scalar fwd_clean = fwd_dirty - Scalar(in.accrued_delivery);
   return fwd_clean - futures * Scalar(in.conversion_factor);
 }
@@ -133,12 +133,12 @@ struct DeliverableResult {
 // basis meaningful; implied repo is intrinsic and independent of it).
 template <class Scalar>
 DeliverableResult<Scalar> analyze_deliverable(const DeliverableInput& in, Scalar futures, Scalar repo,
-                                              double days_to_delivery) {
+                                              double days_to_delivery, double repo_basis) {
   DeliverableResult<Scalar> r;
   r.conversion_factor = Scalar(in.conversion_factor);
   r.gross_basis = bond_future_gross_basis(Scalar(in.clean), futures, Scalar(in.conversion_factor));
-  r.net_basis = bond_future_net_basis(in, futures, repo, days_to_delivery);
-  r.implied_repo = bond_future_implied_repo(in, futures, days_to_delivery);
+  r.net_basis = bond_future_net_basis(in, futures, repo, days_to_delivery, repo_basis);
+  r.implied_repo = bond_future_implied_repo(in, futures, days_to_delivery, repo_basis);
   r.invoice_price = bond_future_invoice_price(futures, Scalar(in.conversion_factor),
                                               Scalar(in.accrued_delivery));
   return r;

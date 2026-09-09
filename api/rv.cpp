@@ -44,6 +44,7 @@ namespace json = boost::json;
 namespace b = swaps::build;
 namespace cal = swaps::calibration;
 namespace cv = swaps::curve;
+namespace cvd = swaps::conventions;
 namespace der = swaps::derive;
 namespace mkt = swaps::market;
 namespace pf = swaps::portfolio;
@@ -104,10 +105,13 @@ std::vector<b::BondId> universe_from(const json::object& o, const std::string& c
 std::string bond_universe_json(const std::string& request) {
   const json::value req = json::parse(request);
   const json::object& o = sub(req.as_object(), "bond_universe");
-  const std::string convention = js(o, "convention", "US-TREASURY");
+  const std::string convention = js(o, "convention");
+  if (convention.empty()) throw std::invalid_argument("bond_universe: missing 'convention' (a bonds[] row id, e.g. US-TREASURY)");
+  const cvd::BondConv bc = cvd::require_bond(convention);
   const b::Date vd = b::Date::from_iso(js(o, "value_date"));
   const std::string settle_iso = js(o, "settle");
-  const b::Date settle = settle_iso.empty() ? b::advance_bd("USD", vd, 1) : b::Date::from_iso(settle_iso);
+  const b::Date settle = settle_iso.empty() ? b::advance_bd(std::string(bc.calendar), vd, bc.settle_lag)
+                                            : b::Date::from_iso(settle_iso);
 
   const std::vector<b::BondId> ids = universe_from(o, convention);
   std::vector<px::YieldBond> yb;
@@ -151,12 +155,15 @@ std::string bond_universe_json(const std::string& request) {
 std::string govvie_fit_json(const std::string& request) {
   const json::value req = json::parse(request);
   const json::object& o = sub(req.as_object(), "govvie_fit");
-  const std::string convention = js(o, "convention", "US-TREASURY");
+  const std::string convention = js(o, "convention");
+  if (convention.empty()) throw std::invalid_argument("govvie_fit: missing 'convention' (a bonds[] row id)");
+  const cvd::BondConv bc = cvd::require_bond(convention);
   const b::Date vd = b::Date::from_iso(js(o, "value_date"));
 
-  der::AssetSwapConvention conv;  // settlement rule for the universe build (the convention object, reused)
-  conv.settle_calendar = js(o, "settle_calendar", "USD");
-  conv.settle_lag = static_cast<int>(jd(o, "settle_lag", 1.0));
+  der::AssetSwapConvention conv;  // settlement rule for the universe build: the bond convention's (DB), overridable
+  conv.currency = std::string(bc.currency);
+  conv.settle_calendar = js(o, "settle_calendar").empty() ? std::string(bc.calendar) : js(o, "settle_calendar");
+  conv.settle_lag = o.contains("settle_lag") ? static_cast<int>(jd(o, "settle_lag", 0.0)) : bc.settle_lag;
 
   const std::vector<b::BondId> ids = universe_from(o, convention);
   const std::vector<double> clean = darr(o, "clean");
@@ -231,9 +238,13 @@ std::string swap_spread_json(const std::string& request) {
   const json::object& o = sub(req.as_object(), "swap_spread");
   const b::Date vd = b::Date::from_iso(js(o, "value_date"));
 
+  const std::string convention = js(o, "convention");
+  if (convention.empty()) throw std::invalid_argument("swap_spread: missing 'convention' (the benchmark's bonds[] row id)");
+  const cvd::BondConv bc = cvd::require_bond(convention);
   der::AssetSwapConvention conv;
-  conv.settle_calendar = js(o, "settle_calendar", "USD");
-  conv.settle_lag = static_cast<int>(jd(o, "settle_lag", 1.0));
+  conv.currency = std::string(bc.currency);
+  conv.settle_calendar = js(o, "settle_calendar").empty() ? std::string(bc.calendar) : js(o, "settle_calendar");
+  conv.settle_lag = o.contains("settle_lag") ? static_cast<int>(jd(o, "settle_lag", 0.0)) : bc.settle_lag;
   conv.type = js(o, "spread_type", "headline") == "matched_maturity"
                   ? der::SwapSpreadType::MatchedMaturity
                   : der::SwapSpreadType::HeadlineYield;
@@ -241,7 +252,7 @@ std::string swap_spread_json(const std::string& request) {
   if (!o.contains("bond") || !o.at("bond").is_object())
     throw std::invalid_argument("swap_spread: missing 'bond' object");
   const b::BondId bond =
-      bond_id_from(o.at("bond").as_object(), js(o, "convention", "US-TREASURY"));
+      bond_id_from(o.at("bond").as_object(), convention);
   const double clean = jd(o, "clean", 0.0);
   if (clean <= 0.0) throw std::invalid_argument("swap_spread: missing benchmark 'clean' price");
   const double spread = jd(o, "spread", 0.0);
@@ -254,7 +265,9 @@ std::string swap_spread_json(const std::string& request) {
   if (index_id.empty()) throw std::invalid_argument("swap_spread: missing swap 'index'");
   const int swap_curve = static_cast<int>(jd(o, "swap_curve", 0.0));
   const int factor_curve = static_cast<int>(jd(o, "factor_curve", 1.0));
-  const b::Date mat = b::resolve(js(o, "tenor", "5Y"), vd);
+  const std::string tenor = js(o, "tenor");
+  if (tenor.empty()) throw std::invalid_argument("swap_spread: missing swap 'tenor' (e.g. 5Y)");
+  const b::Date mat = b::resolve(tenor, vd);
   const cal::Instrument spot_swap =
       b::par_swap(vd, b::Index(index_id).par_convention(), mat, swap_curve, swap_curve, 0.0);
   const double anchor = jd(o, "anchor", b::curve_time(vd, mat));

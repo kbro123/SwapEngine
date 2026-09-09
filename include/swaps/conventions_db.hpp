@@ -70,6 +70,33 @@ class Registry {
     for (const auto& c : kCurrencies) if (c.code == code) return c;
     return std::nullopt;
   }
+  std::optional<CreditConv> credit_product(std::string_view id) const {
+    if (auto o = find_overlay(credit_, id)) return o;
+    for (const auto& c : kCredit) if (c.id == id) return c;
+    return std::nullopt;
+  }
+  std::optional<BondFutureConv> bond_future(std::string_view id) const {
+    if (auto o = find_overlay(bond_futures_, id)) return o;
+    for (const auto& f : kBondFutures) if (f.id == id) return f;
+    return std::nullopt;
+  }
+  std::optional<FxPairConv> fx_pair(std::string_view id) const {
+    if (auto o = find_overlay(fx_pairs_, id)) return o;
+    for (const auto& f : kFxPairs) if (f.id == id) return f;
+    return std::nullopt;
+  }
+  // Central-bank meeting dates for a currency (Unix-day serials, ascending); overlay REPLACES the baked list.
+  std::optional<std::vector<long>> cb_meetings(std::string_view currency) const {
+    if (overlay_n_.load(std::memory_order_acquire)) {
+      std::shared_lock lk(mu_);
+      for (std::size_t k = cb_schedules_.size(); k-- > 0;)
+        if (cb_schedules_[k].currency == currency) return cb_meetings_[k];
+    }
+    for (const auto& c : kCbSchedules)
+      if (c.currency == currency)
+        return std::vector<long>(kCbMeetings.begin() + c.begin, kCbMeetings.begin() + c.begin + c.count);
+    return std::nullopt;
+  }
   std::optional<CalendarView> calendar(std::string_view id) const {
     if (overlay_n_.load(std::memory_order_acquire)) {
       std::shared_lock lk(mu_);
@@ -114,7 +141,41 @@ class Registry {
     CurrencyConv o = c;
     o.code = intern(c.code); o.name = intern(c.name); o.settlement_calendar = intern(c.settlement_calendar);
     o.discount_index = intern(c.discount_index); o.default_swap_product = intern(c.default_swap_product);
+    o.repo_day_count = intern(c.repo_day_count);
     currencies_.push_back(o);
+    overlay_n_.fetch_add(1, std::memory_order_release);
+  }
+  void add_credit_product(const CreditConv& c) {
+    std::unique_lock lk(mu_);
+    CreditConv o = c;
+    o.id = intern(c.id); o.currency = intern(c.currency); o.calendar = intern(c.calendar); o.day_count = intern(c.day_count);
+    o.frequency = intern(c.frequency); o.roll = intern(c.roll);
+    credit_.push_back(o);
+    overlay_n_.fetch_add(1, std::memory_order_release);
+  }
+  void add_bond_future(const BondFutureConv& f) {
+    std::unique_lock lk(mu_);
+    BondFutureConv o = f;
+    o.id = intern(f.id); o.currency = intern(f.currency); o.exchange_calendar = intern(f.exchange_calendar);
+    o.deliverable_convention = intern(f.deliverable_convention); o.repo_day_count = intern(f.repo_day_count); o.delivery = intern(f.delivery);
+    bond_futures_.push_back(o);
+    overlay_n_.fetch_add(1, std::memory_order_release);
+  }
+  void add_fx_pair(const FxPairConv& f) {
+    std::unique_lock lk(mu_);
+    FxPairConv o = f;
+    o.id = intern(f.id); o.base = intern(f.base); o.quote = intern(f.quote); o.calendar = intern(f.calendar);
+    o.premium_currency = intern(f.premium_currency); o.delta_convention = intern(f.delta_convention); o.atm_convention = intern(f.atm_convention);
+    o.xccy_product = intern(f.xccy_product); o.forward_product = intern(f.forward_product);
+    fx_pairs_.push_back(o);
+    overlay_n_.fetch_add(1, std::memory_order_release);
+  }
+  void add_cb_schedule(const CbScheduleConv& c, std::vector<long> meetings) {
+    std::unique_lock lk(mu_);
+    CbScheduleConv o = c;
+    o.currency = intern(c.currency); o.bank = intern(c.bank); o.source = intern(c.source); o.as_of = intern(c.as_of);
+    o.begin = 0; o.count = meetings.size();
+    cb_schedules_.push_back(o); cb_meetings_.push_back(std::move(meetings));
     overlay_n_.fetch_add(1, std::memory_order_release);
   }
   void add_calendar(const CalendarConv& c, const std::vector<HolidayRule>& rules,
@@ -137,6 +198,7 @@ class Registry {
     std::unique_lock lk(mu_);
     products_.clear(); indices_.clear(); bonds_.clear(); currencies_.clear();
     calendars_.clear(); cal_rules_.clear(); cal_joins_.clear();
+    credit_.clear(); bond_futures_.clear(); fx_pairs_.clear(); cb_schedules_.clear(); cb_meetings_.clear();
     overlay_n_.store(0, std::memory_order_release);
   }
 
@@ -147,6 +209,10 @@ class Registry {
   Listing list_bonds() const     { Listing L; for (const auto& b : kBonds)    L.baked.emplace_back(b.id);  { std::shared_lock lk(mu_); for (const auto& b : bonds_)     L.overlay.emplace_back(b.id); } return L; }
   Listing list_currencies() const{ Listing L; for (const auto& c : kCurrencies) L.baked.emplace_back(c.code); { std::shared_lock lk(mu_); for (const auto& c : currencies_) L.overlay.emplace_back(c.code); } return L; }
   Listing list_calendars() const { Listing L; for (const auto& c : kCalendars) L.baked.emplace_back(c.id);  { std::shared_lock lk(mu_); for (const auto& c : calendars_) L.overlay.emplace_back(c.id); } return L; }
+  Listing list_credit_products() const { Listing L; for (const auto& c : kCredit) L.baked.emplace_back(c.id); { std::shared_lock lk(mu_); for (const auto& c : credit_) L.overlay.emplace_back(c.id); } return L; }
+  Listing list_bond_futures() const { Listing L; for (const auto& f : kBondFutures) L.baked.emplace_back(f.id); { std::shared_lock lk(mu_); for (const auto& f : bond_futures_) L.overlay.emplace_back(f.id); } return L; }
+  Listing list_fx_pairs() const { Listing L; for (const auto& f : kFxPairs) L.baked.emplace_back(f.id); { std::shared_lock lk(mu_); for (const auto& f : fx_pairs_) L.overlay.emplace_back(f.id); } return L; }
+  Listing list_cb_schedules() const { Listing L; for (const auto& c : kCbSchedules) L.baked.emplace_back(c.currency); { std::shared_lock lk(mu_); for (const auto& c : cb_schedules_) L.overlay.emplace_back(c.currency); } return L; }
   int overlay_size() const { return overlay_n_.load(std::memory_order_acquire); }
 
  private:
@@ -178,6 +244,11 @@ class Registry {
   std::vector<CalendarConv> calendars_;
   std::vector<std::vector<HolidayRule>> cal_rules_;
   std::vector<std::vector<std::string_view>> cal_joins_;
+  std::vector<CreditConv> credit_;
+  std::vector<BondFutureConv> bond_futures_;
+  std::vector<FxPairConv> fx_pairs_;
+  std::vector<CbScheduleConv> cb_schedules_;
+  std::vector<std::vector<long>> cb_meetings_;
   std::atomic<int> overlay_n_{0};
 };
 
@@ -187,6 +258,10 @@ inline std::optional<IndexConv>    index(std::string_view id)     { return Regis
 inline std::optional<BondConv>     bond(std::string_view id)      { return Registry::instance().bond(id); }
 inline std::optional<CurrencyConv> currency(std::string_view id)  { return Registry::instance().currency(id); }
 inline std::optional<CalendarView> calendar(std::string_view id)  { return Registry::instance().calendar(id); }
+inline std::optional<CreditConv>     credit_product(std::string_view id) { return Registry::instance().credit_product(id); }
+inline std::optional<BondFutureConv> bond_future(std::string_view id)    { return Registry::instance().bond_future(id); }
+inline std::optional<FxPairConv>     fx_pair(std::string_view id)        { return Registry::instance().fx_pair(id); }
+inline std::optional<std::vector<long>> cb_meetings(std::string_view ccy) { return Registry::instance().cb_meetings(ccy); }
 
 [[noreturn]] inline void unknown(const char* kind, std::string_view id) {
   throw std::invalid_argument(std::string("conventions DB: unknown ") + kind + " '" + std::string(id) +
@@ -196,6 +271,10 @@ inline ProductConv  require_product(std::string_view id)  { if (id.empty()) unkn
 inline IndexConv    require_index(std::string_view id)    { if (id.empty()) unknown("index (empty id)", id);    if (auto r = index(id))    return *r; unknown("index", id); }
 inline BondConv     require_bond(std::string_view id)     { if (id.empty()) unknown("bond (empty id)", id);     if (auto r = bond(id))     return *r; unknown("bond convention", id); }
 inline CurrencyConv require_currency(std::string_view id) { if (id.empty()) unknown("currency (empty code)", id); if (auto r = currency(id)) return *r; unknown("currency", id); }
+inline CreditConv     require_credit_product(std::string_view id) { if (id.empty()) unknown("cds product (empty id)", id); if (auto r = credit_product(id)) return *r; unknown("cds product", id); }
+inline BondFutureConv require_bond_future(std::string_view id)    { if (id.empty()) unknown("bond-future contract (empty id)", id); if (auto r = bond_future(id)) return *r; unknown("bond-future contract", id); }
+inline FxPairConv     require_fx_pair(std::string_view id)        { if (id.empty()) unknown("fx pair (empty id)", id); if (auto r = fx_pair(id)) return *r; unknown("fx pair", id); }
+inline std::vector<long> require_cb_meetings(std::string_view ccy) { if (ccy.empty()) unknown("cb schedule (empty currency)", ccy); if (auto r = cb_meetings(ccy)) return *r; unknown("cb schedule for currency", ccy); }
 inline CalendarView require_calendar(std::string_view id) { if (id.empty()) unknown("calendar (empty id; use 'NONE' for weekends-only)", id); if (auto r = calendar(id)) return *r; unknown("calendar", id); }
 
 // A DB field that a builder cannot proceed without. Never defaulted (P2).

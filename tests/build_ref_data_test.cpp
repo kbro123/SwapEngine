@@ -13,7 +13,7 @@ TEST(RefData, CalendarDelegatesToFreeFunctions) {
   const b::Calendar cal{"USD"};
   const b::Date d = b::Date::from_iso("2026-07-03");
   EXPECT_EQ(cal.is_business_day(d), b::is_business_day("USD", d));
-  EXPECT_EQ(cal.adjust(d).serial(), b::adjust("USD", d).serial());
+  EXPECT_EQ(cal.adjust(d, "ModifiedFollowing").serial(), b::adjust("USD", d, "ModifiedFollowing").serial());
   EXPECT_EQ(cal.advance_bd(d, 2).serial(), b::advance_bd("USD", d, 2).serial());
   EXPECT_TRUE(b::Calendar{""}.empty());
 }

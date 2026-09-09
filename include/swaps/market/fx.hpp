@@ -32,7 +32,7 @@ struct FxRate {
 };
 
 // A shared FX-spot store. Add each quoted pair once; the inverse is implied, and any missing cross is derived
-// by triangulating through a pivot currency (USD by default). A clean value type: copyable, comparable-by-state
+// by triangulating through a pivot currency (an explicit ctor argument — no default). A clean value type: copyable, comparable-by-state
 // via its underlying map, cheap to pass around.
 class FxMatrix {
  public:
@@ -105,6 +105,7 @@ class FxMatrix {
     // Triangulate: from -> pivot -> to. Skip the leg that IS the pivot to avoid a redundant identity hop.
     if (from == pivot_ || to == pivot_) return false;  // a plain pivot leg would already be direct
     double leg1 = 0.0, leg2 = 0.0;
+    if (pivot_.empty()) return false;  // no pivot set -> no triangulation (the caller's error message names it)
     if (try_direct(from, pivot_, leg1) && try_direct(pivot_, to, leg2)) {
       out = leg1 * leg2;
       return true;
@@ -112,7 +113,7 @@ class FxMatrix {
     return false;
   }
 
-  std::string pivot_ = "USD";
+  std::string pivot_;  // set by the ctor (no default currency): triangulation without a pivot throws
   std::map<std::string, double> pairs_;  // keyed by normalized "BASEQUOTE"; inverse implied.
 };
 

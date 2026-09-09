@@ -631,7 +631,8 @@
           "minor_units",
           "settlement_calendar",
           "discount_index",
-          "default_swap_product"
+          "default_swap_product",
+          "repo_day_count"
         ],
         "properties": {
           "name": {
@@ -652,6 +653,9 @@
             "type": "string"
           },
           "note": {
+            "type": "string"
+          },
+          "repo_day_count": {
             "type": "string"
           }
         }
@@ -700,6 +704,204 @@
           },
           "note": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "credit": {
+      "type": "object",
+      "required": [
+        "cds_products"
+      ],
+      "properties": {
+        "cds_products": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "currency",
+              "calendar",
+              "day_count",
+              "frequency",
+              "recovery_default",
+              "settlement_lag",
+              "protection_steps"
+            ],
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "calendar": {
+                "type": "string"
+              },
+              "day_count": {
+                "type": "string"
+              },
+              "frequency": {
+                "type": "string",
+                "pattern": "^[0-9]+[DWMY]$"
+              },
+              "roll": {
+                "type": "string"
+              },
+              "recovery_default": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "settlement_lag": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "protection_steps": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "bond_futures": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "currency",
+          "exchange_calendar",
+          "deliverable_convention",
+          "notional_coupon",
+          "maturity_rounding_months",
+          "repo_day_count"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "exchange_calendar": {
+            "type": "string"
+          },
+          "deliverable_convention": {
+            "type": "string"
+          },
+          "notional_coupon": {
+            "type": "number"
+          },
+          "maturity_rounding_months": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "basket_min_years": {
+            "type": "number"
+          },
+          "basket_max_years": {
+            "type": "number"
+          },
+          "repo_day_count": {
+            "type": "string"
+          },
+          "delivery": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "fx_pairs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "base",
+          "quote",
+          "spot_lag",
+          "calendar",
+          "premium_currency",
+          "delta_convention",
+          "atm_convention"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "spot_lag": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "premium_currency": {
+            "type": "string"
+          },
+          "delta_convention": {
+            "enum": [
+              "spot",
+              "forward",
+              "spot_pa",
+              "forward_pa"
+            ]
+          },
+          "atm_convention": {
+            "enum": [
+              "delta_neutral",
+              "forward",
+              "spot"
+            ]
+          },
+          "smile_pillars": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "xccy_product": {
+            "type": "string"
+          },
+          "forward_product": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "cb_schedules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "bank",
+          "source",
+          "as_of",
+          "meetings"
+        ],
+        "properties": {
+          "bank": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "meetings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
           }
         }
       }

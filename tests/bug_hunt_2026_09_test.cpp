@@ -229,7 +229,7 @@ TEST(BugHunt, InvertedCdsStripHazardNonNegativeSurvivalMonotone) {
   const std::vector<double> tgt{0.0300, 0.0200, 0.0150, 0.0120};
   cal::CreditProblem prob;
   prob.back_times = mats;
-  for (std::size_t i = 0; i < mats.size(); ++i) prob.instruments.push_back(bld::make_cds(mats[i], tgt[i], R, FlatDf{r}));
+  for (std::size_t i = 0; i < mats.size(); ++i) prob.instruments.push_back(bld::make_cds(mats[i], tgt[i], R, FlatDf{r}, 4, 4, 365.0 / 360.0));
   const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(prob.n_knots(), tgt.front() / (1.0 - R));
   const cal::CalibrationResult res = cal::calibrate(prob, x0);
   EXPECT_LT(res.stationarity, 1e-8);

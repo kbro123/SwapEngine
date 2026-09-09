@@ -25,8 +25,28 @@ struct ProductConv {
 // A CURRENCY row (currencies[] in the JSON): ISO minor units, currency-level settlement calendar, the
 // default discount (RFR) index and the default swap product used when a curve names no index.
 struct CurrencyConv {
-  std::string_view code, name, settlement_calendar, discount_index, default_swap_product;
+  std::string_view code, name, settlement_calendar, discount_index, default_swap_product, repo_day_count;
   int minor_units;
+};
+// A CDS product (credit.cds_products[]): premium schedule + default recovery + protection integration.
+struct CreditConv {
+  std::string_view id, currency, calendar, day_count, frequency, roll;
+  double recovery_default; int settlement_lag, protection_steps;
+};
+// A bond-futures CONTRACT (bond_futures[]): deliverable convention, CF notional coupon, rounding, repo basis.
+struct BondFutureConv {
+  std::string_view id, currency, exchange_calendar, deliverable_convention, repo_day_count, delivery;
+  double notional_coupon, basket_min_years, basket_max_years; int maturity_rounding_months;
+};
+// An FX pair (fx_pairs[]): quoting/settlement/option conventions. id == base+quote.
+struct FxPairConv {
+  std::string_view id, base, quote, calendar, premium_currency, delta_convention, atm_convention, xccy_product, forward_product;
+  int spot_lag; double smile_pillar_lo, smile_pillar_hi;
+};
+// A central-bank meeting schedule (cb_schedules[]): a slice of kCbMeetings (Unix-day serials, ascending).
+struct CbScheduleConv {
+  std::string_view currency, bank, source, as_of;
+  std::size_t begin, count;
 };
 struct IndexConv {
   std::string_view id, currency, type, day_count, calendar, par_product, tenor;
@@ -125,24 +145,121 @@ inline constexpr std::array<IndexConv, 26> kIndices = {{
 }};
 
 inline constexpr std::array<CurrencyConv, 18> kCurrencies = {{
-  {"ARS", "Argentine peso", "ARS", "ARS-BADLAR", "ARS-BADLAR-IRS", 2},
-  {"AUD", "Australian dollar", "AUD", "AUD-AONIA", "AUD-AONIA-OIS", 2},
-  {"BRL", "Brazilian real", "BRL", "BRL-CDI", "BRL-CDI-SWAP", 2},
-  {"CAD", "Canadian dollar", "CAD", "CAD-CORRA", "CAD-CORRA-OIS", 2},
-  {"CHF", "Swiss franc", "CHF", "CHF-SARON", "CHF-SARON-OIS", 2},
-  {"CNY", "Chinese yuan (onshore)", "CNY", "CNY-FR007", "CNY-FR007-IRS", 2},
-  {"EUR", "Euro", "EUR", "EUR-ESTR", "EUR-ESTR-OIS", 2},
-  {"GBP", "Pound sterling", "GBP", "GBP-SONIA", "GBP-SONIA-OIS", 2},
-  {"IDR", "Indonesian rupiah", "IDR", "IDR-INDONIA", "IDR-INDONIA-OIS", 0},
-  {"INR", "Indian rupee", "INR", "INR-MIBOR-ON", "INR-MIBOR-OIS", 2},
-  {"JPY", "Japanese yen", "JPY", "JPY-TONA", "JPY-TONA-OIS", 0},
-  {"KRW", "South Korean won", "KRW", "KRW-KOFR", "KRW-KOFR-OIS", 0},
-  {"MXN", "Mexican peso", "MXN", "MXN-FTIIE", "MXN-FTIIE-OIS", 2},
-  {"RUB", "Russian rouble", "RUB", "RUB-RUONIA", "RUB-RUONIA-OIS", 2},
-  {"SAR", "Saudi riyal", "SAR", "SAR-SAIBOR-3M", "SAR-SAIBOR-3M-IRS", 2},
-  {"TRY", "Turkish lira", "TRY", "TRY-TLREF", "TRY-TLREF-OIS", 2},
-  {"USD", "US dollar", "USD", "USD-SOFR", "USD-SOFR-OIS", 2},
-  {"ZAR", "South African rand", "ZAR", "ZAR-ZARONIA", "ZAR-ZARONIA-OIS", 2},
+  {"ARS", "Argentine peso", "ARS", "ARS-BADLAR", "ARS-BADLAR-IRS", "ACT/365F", 2},
+  {"AUD", "Australian dollar", "AUD", "AUD-AONIA", "AUD-AONIA-OIS", "ACT/365F", 2},
+  {"BRL", "Brazilian real", "BRL", "BRL-CDI", "BRL-CDI-SWAP", "BUS/252", 2},
+  {"CAD", "Canadian dollar", "CAD", "CAD-CORRA", "CAD-CORRA-OIS", "ACT/365F", 2},
+  {"CHF", "Swiss franc", "CHF", "CHF-SARON", "CHF-SARON-OIS", "ACT/360", 2},
+  {"CNY", "Chinese yuan (onshore)", "CNY", "CNY-FR007", "CNY-FR007-IRS", "ACT/360", 2},
+  {"EUR", "Euro", "EUR", "EUR-ESTR", "EUR-ESTR-OIS", "ACT/360", 2},
+  {"GBP", "Pound sterling", "GBP", "GBP-SONIA", "GBP-SONIA-OIS", "ACT/365F", 2},
+  {"IDR", "Indonesian rupiah", "IDR", "IDR-INDONIA", "IDR-INDONIA-OIS", "ACT/360", 0},
+  {"INR", "Indian rupee", "INR", "INR-MIBOR-ON", "INR-MIBOR-OIS", "ACT/365F", 2},
+  {"JPY", "Japanese yen", "JPY", "JPY-TONA", "JPY-TONA-OIS", "ACT/365F", 0},
+  {"KRW", "South Korean won", "KRW", "KRW-KOFR", "KRW-KOFR-OIS", "ACT/365F", 0},
+  {"MXN", "Mexican peso", "MXN", "MXN-FTIIE", "MXN-FTIIE-OIS", "ACT/360", 2},
+  {"RUB", "Russian rouble", "RUB", "RUB-RUONIA", "RUB-RUONIA-OIS", "ACT/365F", 2},
+  {"SAR", "Saudi riyal", "SAR", "SAR-SAIBOR-3M", "SAR-SAIBOR-3M-IRS", "ACT/360", 2},
+  {"TRY", "Turkish lira", "TRY", "TRY-TLREF", "TRY-TLREF-OIS", "ACT/360", 2},
+  {"USD", "US dollar", "USD", "USD-SOFR", "USD-SOFR-OIS", "ACT/360", 2},
+  {"ZAR", "South African rand", "ZAR", "ZAR-ZARONIA", "ZAR-ZARONIA-OIS", "ACT/365F", 2},
+}};
+
+inline constexpr std::array<CreditConv, 2> kCredit = {{
+  {"CDS-EUR-STEC", "EUR", "EUR", "ACT/360", "3M", "IMM-20", 0.4, 1, 4},
+  {"CDS-USD-SNAC", "USD", "USD", "ACT/360", "3M", "IMM-20", 0.4, 1, 4},
+}};
+
+inline constexpr std::array<BondFutureConv, 4> kBondFutures = {{
+  {"CME-FV", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 4.1667, 5.25, 1},
+  {"CME-TU", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 1.75, 2.0, 1},
+  {"CME-TY", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 6.5, 10.0, 3},
+  {"CME-US", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 15.0, 25.0, 3},
+}};
+
+inline constexpr std::array<FxPairConv, 1> kFxPairs = {{
+  {"EURUSD", "EUR", "USD", "EURUSD", "USD", "spot", "delta_neutral", "XCCY-MTM-EURUSD", "FX-FWD-EURUSD", 2, 0.1, 0.25},
+}};
+
+inline constexpr std::array<long, 68> kCbMeetings = {{
+  20487,
+  20529,
+  20578,
+  20620,
+  20676,
+  20725,
+  20760,
+  20795,
+  20481,
+  20523,
+  20572,
+  20614,
+  20649,
+  20698,
+  20754,
+  20796,
+  20531,
+  20622,
+  20720,
+  20804,
+  20482,
+  20531,
+  20573,
+  20615,
+  20657,
+  20706,
+  20755,
+  20804,
+  20853,
+  20895,
+  20937,
+  20979,
+  21021,
+  21070,
+  21119,
+  21168,
+  20489,
+  20531,
+  20573,
+  20622,
+  20664,
+  20713,
+  20762,
+  20804,
+  20476,
+  20531,
+  20571,
+  20620,
+  20665,
+  20714,
+  20756,
+  20805,
+  20481,
+  20530,
+  20572,
+  20621,
+  20663,
+  20712,
+  20754,
+  20796,
+  20845,
+  20894,
+  20936,
+  20978,
+  21027,
+  21076,
+  21118,
+  21160,
+}};
+
+inline constexpr std::array<CbScheduleConv, 7> kCbSchedules = {{
+  {"AUD", "RBA monetary policy board", "rba.gov.au meeting dates", "2026-09-08", 0, 8},
+  {"CAD", "Bank of Canada", "bankofcanada.ca fixed announcement dates", "2026-09-08", 8, 8},
+  {"CHF", "SNB quarterly assessment", "snb.ch", "2026-09-08", 16, 4},
+  {"EUR", "ECB Governing Council", "ecb.europa.eu press calendar (decision day)", "2026-09-08", 20, 16},
+  {"GBP", "Bank of England MPC", "bankofengland.co.uk upcoming-mpc-dates", "2026-09-08", 36, 8},
+  {"JPY", "Bank of Japan MPM", "boj.or.jp scheduled dates", "2026-09-08", 44, 8},
+  {"USD", "FOMC", "federalreserve.gov/monetarypolicy/fomccalendars.htm", "2026-09-08", 52, 16},
 }};
 
 inline constexpr std::array<BondConv, 2> kBonds = {{

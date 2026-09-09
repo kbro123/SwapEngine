@@ -16,7 +16,8 @@
       "Convexity for futures is NOT a convention: it is a per-quote user input added to the quote before calibration (desk decision 2026-07).",
       "USD overnight calendars are split (desk 2026-07): SOFR fixes on the SOFR/SIFMA calendar (USD-SOFR, closes Good Friday), EFFR/Fed Funds on the Federal Reserve calendar (USD-FED). The EUR/USD FX & xccy joint calendar uses the SIFMA government-bond calendar (USD) on the USD side.",
       "bonds: only conventions the engine supports END TO END (builder + QuantLib oracle) are listed. UK gilts, French OATs and Bunds are ONE entry away -- the kernel already reproduces their yield math exactly (verified against Rateslib uk_gb/fr_gb to 12 digits) -- but gilts need ex-dividend handling and a GBP calendar, and Bunds a EUR bond calendar, so they are deliberately NOT listed yet rather than listed half-supported. BTPs additionally need a payment-date adjustment.",
-      "calendars.holidays: rule-based holiday DATA interpreted by include/swaps/build/calendar.hpp (codegen'd via gen_conventions_hpp.py). Rule kinds: fixed {month, day, from_year?}, nth_weekday {month, weekday, n}, last_weekday {month, weekday}, easter_offset {days} (Good Friday = -2, Easter Monday = +1, Gregorian computus). weekday is Python-style Mon=0..Sun=6; 'weekend' lists the weekend weekdays. 'observance' shifts a rule's date off the weekend: 'sat_to_fri_sun_to_mon' (US bond market: Sat -> preceding Fri, Sun -> following Mon), 'sun_to_mon' (Federal Reserve: Sun -> Mon only, Sat NOT observed), 'none' (TARGET; also every nth/last-weekday and easter rule -- they never need shifting). Per-calendar 'observance' is the default; a rule-level 'observance' overrides it. NOTE (transcribed legacy behavior, kept bit-for-bit): a year's holiday set is generated FROM that year's rules, so a New Year observed on Dec-31 lands in the PREVIOUS year's dates but the NEXT year's bucket -- business-day lookup buckets by the queried date's own year, so such a spilled observance is inert (e.g. 2021-12-31 is a USD business day even though Jan-1-2022 fell on a Saturday). Joint calendars ('join') carry no rules: closed if ANY leg is closed."
+      "calendars.holidays: rule-based holiday DATA interpreted by include/swaps/build/calendar.hpp (codegen'd via gen_conventions_hpp.py). Rule kinds: fixed {month, day, from_year?}, nth_weekday {month, weekday, n}, last_weekday {month, weekday}, easter_offset {days} (Good Friday = -2, Easter Monday = +1, Gregorian computus). weekday is Python-style Mon=0..Sun=6; 'weekend' lists the weekend weekdays. 'observance' shifts a rule's date off the weekend: 'sat_to_fri_sun_to_mon' (US bond market: Sat -> preceding Fri, Sun -> following Mon), 'sun_to_mon' (Federal Reserve: Sun -> Mon only, Sat NOT observed), 'none' (TARGET; also every nth/last-weekday and easter rule -- they never need shifting). Per-calendar 'observance' is the default; a rule-level 'observance' overrides it. NOTE (transcribed legacy behavior, kept bit-for-bit): a year's holiday set is generated FROM that year's rules, so a New Year observed on Dec-31 lands in the PREVIOUS year's dates but the NEXT year's bucket -- business-day lookup buckets by the queried date's own year, so such a spilled observance is inert (e.g. 2021-12-31 is a USD business day even though Jan-1-2022 fell on a Saturday). Joint calendars ('join') carry no rules: closed if ANY leg is closed.",
+      "2026-09-09: currencies (repo_day_count), credit.cds_products, bond_futures, fx_pairs and cb_schedules sections added — the values these replaced were C++ literals (recovery 0.40, quarterly, 365/360; CF 6% / 3-month rounding / repo ACT/360; USD pivot; web-side BAKED meeting table). NZD/SEK/NOK meeting dates from the web table are NOT carried until those currencies exist in the DB."
     ]
   },
   "currencies": {
@@ -26,7 +27,8 @@
       "settlement_calendar": "ARS",
       "discount_index": "ARS-BADLAR",
       "default_swap_product": "ARS-BADLAR-IRS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "AUD": {
       "name": "Australian dollar",
@@ -34,7 +36,8 @@
       "settlement_calendar": "AUD",
       "discount_index": "AUD-AONIA",
       "default_swap_product": "AUD-AONIA-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "BRL": {
       "name": "Brazilian real",
@@ -42,7 +45,8 @@
       "settlement_calendar": "BRL",
       "discount_index": "BRL-CDI",
       "default_swap_product": "BRL-CDI-SWAP",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "BUS/252"
     },
     "CAD": {
       "name": "Canadian dollar",
@@ -50,7 +54,8 @@
       "settlement_calendar": "CAD",
       "discount_index": "CAD-CORRA",
       "default_swap_product": "CAD-CORRA-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "CHF": {
       "name": "Swiss franc",
@@ -58,7 +63,8 @@
       "settlement_calendar": "CHF",
       "discount_index": "CHF-SARON",
       "default_swap_product": "CHF-SARON-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "CNY": {
       "name": "Chinese yuan (onshore)",
@@ -66,7 +72,8 @@
       "settlement_calendar": "CNY",
       "discount_index": "CNY-FR007",
       "default_swap_product": "CNY-FR007-IRS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "EUR": {
       "name": "Euro",
@@ -74,7 +81,8 @@
       "settlement_calendar": "EUR",
       "discount_index": "EUR-ESTR",
       "default_swap_product": "EUR-ESTR-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "GBP": {
       "name": "Pound sterling",
@@ -82,7 +90,8 @@
       "settlement_calendar": "GBP",
       "discount_index": "GBP-SONIA",
       "default_swap_product": "GBP-SONIA-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "IDR": {
       "name": "Indonesian rupiah",
@@ -90,7 +99,8 @@
       "settlement_calendar": "IDR",
       "discount_index": "IDR-INDONIA",
       "default_swap_product": "IDR-INDONIA-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "INR": {
       "name": "Indian rupee",
@@ -98,7 +108,8 @@
       "settlement_calendar": "INR",
       "discount_index": "INR-MIBOR-ON",
       "default_swap_product": "INR-MIBOR-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "JPY": {
       "name": "Japanese yen",
@@ -106,7 +117,8 @@
       "settlement_calendar": "JPY",
       "discount_index": "JPY-TONA",
       "default_swap_product": "JPY-TONA-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "KRW": {
       "name": "South Korean won",
@@ -114,7 +126,8 @@
       "settlement_calendar": "KRW",
       "discount_index": "KRW-KOFR",
       "default_swap_product": "KRW-KOFR-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "MXN": {
       "name": "Mexican peso",
@@ -122,7 +135,8 @@
       "settlement_calendar": "MXN",
       "discount_index": "MXN-FTIIE",
       "default_swap_product": "MXN-FTIIE-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "RUB": {
       "name": "Russian rouble",
@@ -130,7 +144,8 @@
       "settlement_calendar": "RUB",
       "discount_index": "RUB-RUONIA",
       "default_swap_product": "RUB-RUONIA-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     },
     "SAR": {
       "name": "Saudi riyal",
@@ -138,7 +153,8 @@
       "settlement_calendar": "SAR",
       "discount_index": "SAR-SAIBOR-3M",
       "default_swap_product": "SAR-SAIBOR-3M-IRS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "TRY": {
       "name": "Turkish lira",
@@ -146,7 +162,8 @@
       "settlement_calendar": "TRY",
       "discount_index": "TRY-TLREF",
       "default_swap_product": "TRY-TLREF-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "USD": {
       "name": "US dollar",
@@ -154,7 +171,8 @@
       "settlement_calendar": "USD",
       "discount_index": "USD-SOFR",
       "default_swap_product": "USD-SOFR-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/360"
     },
     "ZAR": {
       "name": "South African rand",
@@ -162,7 +180,8 @@
       "settlement_calendar": "ZAR",
       "discount_index": "ZAR-ZARONIA",
       "default_swap_product": "ZAR-ZARONIA-OIS",
-      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default"
+      "note": "discount_index = the modern RFR where one exists; ARS/CNY/SAR have no overnight index in the DB so the term index is the default",
+      "repo_day_count": "ACT/365F"
     }
   },
   "calendars": {
@@ -5824,6 +5843,219 @@
       "settle_lag": 1,
       "stub_discount": "simple",
       "final_period_simple": false
+    }
+  },
+  "bond_futures": {
+    "CME-TU": {
+      "description": "CME 2-Year T-Note future: 1y9m–2y remaining, rounding to whole months",
+      "currency": "USD",
+      "exchange_calendar": "USD",
+      "deliverable_convention": "US-TREASURY",
+      "notional_coupon": 0.06,
+      "maturity_rounding_months": 1,
+      "basket_min_years": 1.75,
+      "basket_max_years": 2.0,
+      "repo_day_count": "ACT/360",
+      "delivery": "any_business_day_in_month"
+    },
+    "CME-FV": {
+      "description": "CME 5-Year T-Note future: 4y2m–5y3m remaining, rounding to whole months",
+      "currency": "USD",
+      "exchange_calendar": "USD",
+      "deliverable_convention": "US-TREASURY",
+      "notional_coupon": 0.06,
+      "maturity_rounding_months": 1,
+      "basket_min_years": 4.1667,
+      "basket_max_years": 5.25,
+      "repo_day_count": "ACT/360",
+      "delivery": "any_business_day_in_month"
+    },
+    "CME-TY": {
+      "description": "CME 10-Year T-Note future: 6.5–10y remaining, rounding to whole quarters",
+      "currency": "USD",
+      "exchange_calendar": "USD",
+      "deliverable_convention": "US-TREASURY",
+      "notional_coupon": 0.06,
+      "maturity_rounding_months": 3,
+      "basket_min_years": 6.5,
+      "basket_max_years": 10.0,
+      "repo_day_count": "ACT/360",
+      "delivery": "any_business_day_in_month"
+    },
+    "CME-US": {
+      "description": "CME classic T-Bond future: 15–25y remaining, rounding to whole quarters",
+      "currency": "USD",
+      "exchange_calendar": "USD",
+      "deliverable_convention": "US-TREASURY",
+      "notional_coupon": 0.06,
+      "maturity_rounding_months": 3,
+      "basket_min_years": 15.0,
+      "basket_max_years": 25.0,
+      "repo_day_count": "ACT/360",
+      "delivery": "any_business_day_in_month"
+    }
+  },
+  "credit": {
+    "cds_products": {
+      "CDS-USD-SNAC": {
+        "description": "ISDA Standard North American Contract: quarterly IMM (20th) premium, ACT/360, T+1 settlement, senior recovery 40%.",
+        "currency": "USD",
+        "calendar": "USD",
+        "day_count": "ACT/360",
+        "frequency": "3M",
+        "roll": "IMM-20",
+        "recovery_default": 0.4,
+        "settlement_lag": 1,
+        "protection_steps": 4
+      },
+      "CDS-EUR-STEC": {
+        "description": "ISDA Standard European Contract: quarterly IMM premium, ACT/360, T+1, senior recovery 40%.",
+        "currency": "EUR",
+        "calendar": "EUR",
+        "day_count": "ACT/360",
+        "frequency": "3M",
+        "roll": "IMM-20",
+        "recovery_default": 0.4,
+        "settlement_lag": 1,
+        "protection_steps": 4
+      }
+    }
+  },
+  "fx_pairs": {
+    "EURUSD": {
+      "description": "EUR/USD: EUR base, USD quote; spot T+2 on the joint calendar; premium in USD; spot-delta, delta-neutral ATM (interbank major).",
+      "base": "EUR",
+      "quote": "USD",
+      "spot_lag": 2,
+      "calendar": "EURUSD",
+      "premium_currency": "USD",
+      "delta_convention": "spot",
+      "atm_convention": "delta_neutral",
+      "smile_pillars": [
+        0.1,
+        0.25
+      ],
+      "xccy_product": "XCCY-MTM-EURUSD",
+      "forward_product": "FX-FWD-EURUSD"
+    }
+  },
+  "cb_schedules": {
+    "USD": {
+      "bank": "FOMC",
+      "source": "federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "as_of": "2026-09-08",
+      "meetings": [
+        "2026-01-28",
+        "2026-03-18",
+        "2026-04-29",
+        "2026-06-17",
+        "2026-07-29",
+        "2026-09-16",
+        "2026-10-28",
+        "2026-12-09",
+        "2027-01-27",
+        "2027-03-17",
+        "2027-04-28",
+        "2027-06-09",
+        "2027-07-28",
+        "2027-09-15",
+        "2027-10-27",
+        "2027-12-08"
+      ]
+    },
+    "EUR": {
+      "bank": "ECB Governing Council",
+      "source": "ecb.europa.eu press calendar (decision day)",
+      "as_of": "2026-09-08",
+      "meetings": [
+        "2026-01-29",
+        "2026-03-19",
+        "2026-04-30",
+        "2026-06-11",
+        "2026-07-23",
+        "2026-09-10",
+        "2026-10-29",
+        "2026-12-17",
+        "2027-02-04",
+        "2027-03-18",
+        "2027-04-29",
+        "2027-06-10",
+        "2027-07-22",
+        "2027-09-09",
+        "2027-10-28",
+        "2027-12-16"
+      ]
+    },
+    "GBP": {
+      "bank": "Bank of England MPC",
+      "source": "bankofengland.co.uk upcoming-mpc-dates",
+      "as_of": "2026-09-08",
+      "meetings": [
+        "2026-02-05",
+        "2026-03-19",
+        "2026-04-30",
+        "2026-06-18",
+        "2026-07-30",
+        "2026-09-17",
+        "2026-11-05",
+        "2026-12-17"
+      ]
+    },
+    "JPY": {
+      "bank": "Bank of Japan MPM",
+      "source": "boj.or.jp scheduled dates",
+      "as_of": "2026-09-08",
+      "meetings": [
+        "2026-01-23",
+        "2026-03-19",
+        "2026-04-28",
+        "2026-06-16",
+        "2026-07-31",
+        "2026-09-18",
+        "2026-10-30",
+        "2026-12-18"
+      ]
+    },
+    "CHF": {
+      "bank": "SNB quarterly assessment",
+      "source": "snb.ch",
+      "as_of": "2026-09-08",
+      "meetings": [
+        "2026-03-19",
+        "2026-06-18",
+        "2026-09-24",
+        "2026-12-17"
+      ]
+    },
+    "CAD": {
+      "bank": "Bank of Canada",
+      "source": "bankofcanada.ca fixed announcement dates",
+      "as_of": "2026-09-08",
+      "meetings": [
+        "2026-01-28",
+        "2026-03-11",
+        "2026-04-29",
+        "2026-06-10",
+        "2026-07-15",
+        "2026-09-02",
+        "2026-10-28",
+        "2026-12-09"
+      ]
+    },
+    "AUD": {
+      "bank": "RBA monetary policy board",
+      "source": "rba.gov.au meeting dates",
+      "as_of": "2026-09-08",
+      "meetings": [
+        "2026-02-03",
+        "2026-03-17",
+        "2026-05-05",
+        "2026-06-16",
+        "2026-08-11",
+        "2026-09-29",
+        "2026-11-03",
+        "2026-12-08"
+      ]
     }
   }
 }
