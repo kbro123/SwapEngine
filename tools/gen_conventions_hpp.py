@@ -91,6 +91,16 @@ def main():
         "  std::string_view currency, bank, source, as_of;",
         "  std::size_t begin, count;",
         "};",
+        "// A fixing SOURCE (fixing_sources[]): where an index's realized fixings are fetched from. Fetching is",
+        "// API-side; the engine carries the metadata so no client keeps its own provider table. id == index id.",
+        "struct FixingSourceConv {",
+        "  std::string_view id, provider, series, start, granularity;",
+        "};",
+        "// An INFLATION index (inflation[]): the swap reference index's observation lag and interpolation rule.",
+        "struct InflationIndexConv {",
+        "  std::string_view id, label, currency, calendar, interpolation, frequency;",
+        "  int observation_lag_months;",
+        "};",
         "struct IndexConv {",
         "  std::string_view id, currency, type, day_count, calendar, par_product, tenor;",
         "  int fixing_lag, publication_lag;",
@@ -188,6 +198,21 @@ def main():
             sv(f.get("delta_convention")), sv(f.get("atm_convention")), sv(f.get("xccy_product")), sv(f.get("forward_product")),
             str(f.get("spot_lag", -1)), repr(float(sp[0]) if sp else 0.0), repr(float(sp[-1]) if sp else 0.0),
         ]) + "},")
+    lines += ["}};", ""]
+    srcs = db.get("fixing_sources", {})
+    lines.append(f"inline constexpr std::array<FixingSourceConv, {len(srcs)}> kFixingSources = {{{{")
+    for sid in sorted(srcs):
+        s = srcs[sid]
+        lines.append("  {" + ", ".join([sv(sid), sv(s.get("provider")), sv(s.get("series")), sv(s.get("start")),
+                                        sv(s.get("granularity"))]) + "},")
+    lines += ["}};", ""]
+    infl = db.get("inflation", {})
+    lines.append(f"inline constexpr std::array<InflationIndexConv, {len(infl)}> kInflationIndices = {{{{")
+    for iid2 in sorted(infl):
+        x = infl[iid2]
+        lines.append("  {" + ", ".join([sv(iid2), sv(x.get("label")), sv(x.get("currency")), sv(x.get("calendar")),
+                                        sv(x.get("interpolation")), sv(x.get("frequency")),
+                                        str(x.get("observation_lag_months", -1))]) + "},")
     lines += ["}};", ""]
     cbs = db.get("cb_schedules", {})
     import datetime as _dt

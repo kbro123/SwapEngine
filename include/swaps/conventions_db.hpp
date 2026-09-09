@@ -85,6 +85,16 @@ class Registry {
     for (const auto& f : kFxPairs) if (f.id == id) return f;
     return std::nullopt;
   }
+  std::optional<FixingSourceConv> fixing_source(std::string_view index_id) const {
+    if (auto o = find_overlay(fixing_sources_, index_id)) return o;
+    for (const auto& s : kFixingSources) if (s.id == index_id) return s;
+    return std::nullopt;
+  }
+  std::optional<InflationIndexConv> inflation_index(std::string_view id) const {
+    if (auto o = find_overlay(inflation_, id)) return o;
+    for (const auto& x : kInflationIndices) if (x.id == id) return x;
+    return std::nullopt;
+  }
   // Central-bank meeting dates for a currency (Unix-day serials, ascending); overlay REPLACES the baked list.
   std::optional<std::vector<long>> cb_meetings(std::string_view currency) const {
     if (overlay_n_.load(std::memory_order_acquire)) {
@@ -170,6 +180,21 @@ class Registry {
     fx_pairs_.push_back(o);
     overlay_n_.fetch_add(1, std::memory_order_release);
   }
+  void add_fixing_source(const FixingSourceConv& s) {
+    std::unique_lock lk(mu_);
+    FixingSourceConv o = s;
+    o.id = intern(s.id); o.provider = intern(s.provider); o.series = intern(s.series); o.start = intern(s.start); o.granularity = intern(s.granularity);
+    fixing_sources_.push_back(o);
+    overlay_n_.fetch_add(1, std::memory_order_release);
+  }
+  void add_inflation_index(const InflationIndexConv& x) {
+    std::unique_lock lk(mu_);
+    InflationIndexConv o = x;
+    o.id = intern(x.id); o.label = intern(x.label); o.currency = intern(x.currency); o.calendar = intern(x.calendar);
+    o.interpolation = intern(x.interpolation); o.frequency = intern(x.frequency);
+    inflation_.push_back(o);
+    overlay_n_.fetch_add(1, std::memory_order_release);
+  }
   void add_cb_schedule(const CbScheduleConv& c, std::vector<long> meetings) {
     std::unique_lock lk(mu_);
     CbScheduleConv o = c;
@@ -199,6 +224,7 @@ class Registry {
     products_.clear(); indices_.clear(); bonds_.clear(); currencies_.clear();
     calendars_.clear(); cal_rules_.clear(); cal_joins_.clear();
     credit_.clear(); bond_futures_.clear(); fx_pairs_.clear(); cb_schedules_.clear(); cb_meetings_.clear();
+    fixing_sources_.clear(); inflation_.clear();
     overlay_n_.store(0, std::memory_order_release);
   }
 
@@ -213,6 +239,8 @@ class Registry {
   Listing list_bond_futures() const { Listing L; for (const auto& f : kBondFutures) L.baked.emplace_back(f.id); { std::shared_lock lk(mu_); for (const auto& f : bond_futures_) L.overlay.emplace_back(f.id); } return L; }
   Listing list_fx_pairs() const { Listing L; for (const auto& f : kFxPairs) L.baked.emplace_back(f.id); { std::shared_lock lk(mu_); for (const auto& f : fx_pairs_) L.overlay.emplace_back(f.id); } return L; }
   Listing list_cb_schedules() const { Listing L; for (const auto& c : kCbSchedules) L.baked.emplace_back(c.currency); { std::shared_lock lk(mu_); for (const auto& c : cb_schedules_) L.overlay.emplace_back(c.currency); } return L; }
+  Listing list_fixing_sources() const { Listing L; for (const auto& s : kFixingSources) L.baked.emplace_back(s.id); { std::shared_lock lk(mu_); for (const auto& s : fixing_sources_) L.overlay.emplace_back(s.id); } return L; }
+  Listing list_inflation_indices() const { Listing L; for (const auto& x : kInflationIndices) L.baked.emplace_back(x.id); { std::shared_lock lk(mu_); for (const auto& x : inflation_) L.overlay.emplace_back(x.id); } return L; }
   int overlay_size() const { return overlay_n_.load(std::memory_order_acquire); }
 
  private:
@@ -249,6 +277,8 @@ class Registry {
   std::vector<FxPairConv> fx_pairs_;
   std::vector<CbScheduleConv> cb_schedules_;
   std::vector<std::vector<long>> cb_meetings_;
+  std::vector<FixingSourceConv> fixing_sources_;
+  std::vector<InflationIndexConv> inflation_;
   std::atomic<int> overlay_n_{0};
 };
 
@@ -262,6 +292,8 @@ inline std::optional<CreditConv>     credit_product(std::string_view id) { retur
 inline std::optional<BondFutureConv> bond_future(std::string_view id)    { return Registry::instance().bond_future(id); }
 inline std::optional<FxPairConv>     fx_pair(std::string_view id)        { return Registry::instance().fx_pair(id); }
 inline std::optional<std::vector<long>> cb_meetings(std::string_view ccy) { return Registry::instance().cb_meetings(ccy); }
+inline std::optional<FixingSourceConv>   fixing_source(std::string_view index_id) { return Registry::instance().fixing_source(index_id); }
+inline std::optional<InflationIndexConv> inflation_index(std::string_view id)     { return Registry::instance().inflation_index(id); }
 
 [[noreturn]] inline void unknown(const char* kind, std::string_view id) {
   throw std::invalid_argument(std::string("conventions DB: unknown ") + kind + " '" + std::string(id) +
@@ -275,6 +307,8 @@ inline CreditConv     require_credit_product(std::string_view id) { if (id.empty
 inline BondFutureConv require_bond_future(std::string_view id)    { if (id.empty()) unknown("bond-future contract (empty id)", id); if (auto r = bond_future(id)) return *r; unknown("bond-future contract", id); }
 inline FxPairConv     require_fx_pair(std::string_view id)        { if (id.empty()) unknown("fx pair (empty id)", id); if (auto r = fx_pair(id)) return *r; unknown("fx pair", id); }
 inline std::vector<long> require_cb_meetings(std::string_view ccy) { if (ccy.empty()) unknown("cb schedule (empty currency)", ccy); if (auto r = cb_meetings(ccy)) return *r; unknown("cb schedule for currency", ccy); }
+inline FixingSourceConv   require_fixing_source(std::string_view index_id) { if (index_id.empty()) unknown("fixing source (empty index id)", index_id); if (auto r = fixing_source(index_id)) return *r; unknown("fixing source for index", index_id); }
+inline InflationIndexConv require_inflation_index(std::string_view id)     { if (id.empty()) unknown("inflation index (empty id)", id); if (auto r = inflation_index(id)) return *r; unknown("inflation index", id); }
 inline CalendarView require_calendar(std::string_view id) { if (id.empty()) unknown("calendar (empty id; use 'NONE' for weekends-only)", id); if (auto r = calendar(id)) return *r; unknown("calendar", id); }
 
 // A DB field that a builder cannot proceed without. Never defaulted (P2).

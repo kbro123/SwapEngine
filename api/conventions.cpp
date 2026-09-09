@@ -142,6 +142,24 @@ void add_fx_pair(cvd::Registry& R, std::string_view id, const json::object& f) {
     throw std::invalid_argument("conventions: fx pair id '" + std::string(id) + "' must equal base+quote");
   R.add_fx_pair(x);
 }
+void add_fixing_source(cvd::Registry& R, std::string_view index_id, const json::object& s) {
+  cvd::FixingSourceConv x{};
+  x.id = index_id; x.provider = js(s, "provider"); x.series = js(s, "series"); x.start = js(s, "start"); x.granularity = js(s, "granularity");
+  if (x.provider.empty() || x.series.empty() || x.granularity.empty())
+    throw std::invalid_argument("conventions: fixing source '" + std::string(index_id) + "' needs provider/series/granularity");
+  if (!cvd::index(index_id))
+    throw std::invalid_argument("conventions: fixing source '" + std::string(index_id) + "' names an index the registry does not know (add the index first)");
+  R.add_fixing_source(x);
+}
+void add_inflation_index(cvd::Registry& R, std::string_view id, const json::object& i) {
+  cvd::InflationIndexConv x{};
+  x.id = id; x.label = js(i, "label"); x.currency = js(i, "currency"); x.calendar = js(i, "calendar");
+  x.interpolation = js(i, "interpolation"); x.frequency = js(i, "frequency"); x.observation_lag_months = ji(i, "observation_lag_months", -1);
+  if (x.currency.empty() || x.calendar.empty() || x.frequency.empty() || x.observation_lag_months < 0 ||
+      (x.interpolation != "flat" && x.interpolation != "linear"))
+    throw std::invalid_argument("conventions: inflation index '" + std::string(id) + "' needs currency/calendar/frequency/observation_lag_months and interpolation flat|linear");
+  R.add_inflation_index(x);
+}
 long serial_of_iso(std::string_view iso) {  // YYYY-MM-DD -> Unix-day serial (days since 1970-01-01)
   if (iso.size() != 10) throw std::invalid_argument("conventions: bad ISO date '" + std::string(iso) + "'");
   const int y = std::stoi(std::string(iso.substr(0, 4))), m = std::stoi(std::string(iso.substr(5, 2))), d = std::stoi(std::string(iso.substr(8, 2)));
@@ -185,7 +203,8 @@ std::string conventions_json(const std::string& request) {
   // Order matters only for the caller's readability; lookups are by id at build time, not at add time.
   const Fam fams[] = {{"currencies", add_currency}, {"calendars", add_calendar}, {"indices", add_index},
                       {"products", add_product}, {"bonds", add_bond}, {"bond_futures", add_bond_future},
-                      {"fx_pairs", add_fx_pair}, {"cb_schedules", add_cb_schedule}};
+                      {"fx_pairs", add_fx_pair}, {"cb_schedules", add_cb_schedule},
+                      {"fixing_sources", add_fixing_source}, {"inflation", add_inflation_index}};
   // credit.cds_products nests one level deeper than the other families (mirrors the JSON file).
   if (const json::object* cr = jobj(o, "credit"))
     if (const json::object* cp = jobj(*cr, "cds_products")) {
@@ -221,7 +240,8 @@ std::string list_conventions_json(const std::string& /*request*/) {
       {"indices", listing(R.list_indices())},       {"products", listing(R.list_products())},
       {"bonds", listing(R.list_bonds())},           {"cds_products", listing(R.list_credit_products())},
       {"bond_futures", listing(R.list_bond_futures())}, {"fx_pairs", listing(R.list_fx_pairs())},
-      {"cb_schedules", listing(R.list_cb_schedules())}, {"overlay_size", R.overlay_size()}};
+      {"cb_schedules", listing(R.list_cb_schedules())}, {"fixing_sources", listing(R.list_fixing_sources())},
+      {"inflation", listing(R.list_inflation_indices())}, {"overlay_size", R.overlay_size()}};
   return json::serialize(out);
 }
 

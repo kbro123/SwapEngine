@@ -925,6 +925,84 @@
           }
         }
       }
+    },
+    "fixing_sources": {
+      "description": "Where an index's realized fixings are FETCHED from (index id -> provider locator). Fetching is API-side; the engine carries the metadata so no client keeps its own provider table.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "provider",
+          "series",
+          "granularity"
+        ],
+        "properties": {
+          "provider": {
+            "enum": [
+              "nyfed",
+              "ecb"
+            ]
+          },
+          "series": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "granularity": {
+            "enum": [
+              "daily",
+              "monthly"
+            ]
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inflation": {
+      "description": "Inflation indices referenced by zero-coupon / year-on-year inflation swaps: observation lag and interpolation convention.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "currency",
+          "calendar",
+          "observation_lag_months",
+          "interpolation",
+          "frequency"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "calendar": {
+            "type": "string"
+          },
+          "observation_lag_months": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "interpolation": {
+            "enum": [
+              "flat",
+              "linear"
+            ]
+          },
+          "frequency": {
+            "type": "string",
+            "pattern": "^[0-9]+[DWMY]$"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "$defs": {

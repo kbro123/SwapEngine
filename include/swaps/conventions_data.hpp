@@ -48,6 +48,16 @@ struct CbScheduleConv {
   std::string_view currency, bank, source, as_of;
   std::size_t begin, count;
 };
+// A fixing SOURCE (fixing_sources[]): where an index's realized fixings are fetched from. Fetching is
+// API-side; the engine carries the metadata so no client keeps its own provider table. id == index id.
+struct FixingSourceConv {
+  std::string_view id, provider, series, start, granularity;
+};
+// An INFLATION index (inflation[]): the swap reference index's observation lag and interpolation rule.
+struct InflationIndexConv {
+  std::string_view id, label, currency, calendar, interpolation, frequency;
+  int observation_lag_months;
+};
 struct IndexConv {
   std::string_view id, currency, type, day_count, calendar, par_product, tenor;
   int fixing_lag, publication_lag;
@@ -181,6 +191,21 @@ inline constexpr std::array<BondFutureConv, 4> kBondFutures = {{
 
 inline constexpr std::array<FxPairConv, 1> kFxPairs = {{
   {"EURUSD", "EUR", "USD", "EURUSD", "USD", "spot", "delta_neutral", "XCCY-MTM-EURUSD", "FX-FWD-EURUSD", 2, 0.1, 0.25},
+}};
+
+inline constexpr std::array<FixingSourceConv, 5> kFixingSources = {{
+  {"EUR-ESTR", "ecb", "EST/B.EU000A2X2A25.WT", "2019-10-02", "daily"},
+  {"EUR-EURIBOR-3M", "ecb", "FM/M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA", "", "monthly"},
+  {"EUR-EURIBOR-6M", "ecb", "FM/M.U2.EUR.RT.MM.EURIBOR6MD_.HSTA", "", "monthly"},
+  {"USD-FEDFUNDS", "nyfed", "unsecured/effr", "2016-03-01", "daily"},
+  {"USD-SOFR", "nyfed", "secured/sofr", "2018-04-01", "daily"},
+}};
+
+inline constexpr std::array<InflationIndexConv, 4> kInflationIndices = {{
+  {"EU-HICPXT", "Eurozone HICP ex tobacco NSA (Eurostat)", "EUR", "EUR", "flat", "1M", 3},
+  {"FR-CPIXT", "France CPI ex tobacco NSA (INSEE)", "EUR", "EUR", "flat", "1M", 3},
+  {"UK-RPI", "UK RPI NSA (ONS)", "GBP", "GBP", "flat", "1M", 2},
+  {"US-CPI-U", "US CPI-U NSA (all urban consumers, BLS CPURNSA)", "USD", "USD", "linear", "1M", 3},
 }};
 
 inline constexpr std::array<long, 68> kCbMeetings = {{

@@ -11,6 +11,7 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/inflation.hpp"
+#include "swaps/conventions_data.hpp"
 #include "swaps/build/inflation_instruments.hpp"
 #include "swaps/calibration/inflation_problem.hpp"
 #include "swaps/calibration/lm.hpp"
@@ -20,6 +21,7 @@
 namespace swaps::api {
 
 namespace json = boost::json;
+namespace cvd = swaps::conventions;
 namespace b = swaps::build;
 namespace cal = swaps::calibration;
 
@@ -55,6 +57,13 @@ std::string inflation_json(const std::string& request) {
     throw std::invalid_argument("inflation: missing 'instruments' array");
 
   if (!o.contains("base")) throw std::invalid_argument("inflation: missing 'base' (the index base level; instrument data, not a default)");
+  // The reference index is DATA (conventions.json `inflation`): its observation lag and interpolation rule are
+  // returned with the curve so every API sees one convention; the pricing kernel consumes them in E4.8 (today
+  // the ZCIS/YoY kernels are year-fraction based and the lag/interpolation are reported, not yet applied).
+  const std::string index_id = js(o, "index", "");
+  if (index_id.empty())
+    throw std::invalid_argument("inflation: missing 'index' (the reference inflation index id, e.g. US-CPI-U / UK-RPI / EU-HICPXT — conventions DB `inflation` section)");
+  const cvd::InflationIndexConv ix = cvd::require_inflation_index(index_id);
   const double base = jd(o, "base", 0.0);
   const double nominal_zero = jd(o, "nominal_zero", 0.0);
 
@@ -143,6 +152,9 @@ std::string inflation_json(const std::string& request) {
   out["rank_deficiency"] = res.rank_deficiency;
   out["iterations"] = res.iterations;
   out["n"] = static_cast<int>(prob.instruments.size());
+  out["index_id"] = index_id;
+  out["observation_lag_months"] = ix.observation_lag_months;
+  out["interpolation"] = std::string(ix.interpolation);
   return json::serialize(json::value(std::move(out)));
 }
 

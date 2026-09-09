@@ -304,11 +304,11 @@ TEST(BugHunt, SeasonedTradeCurrentPeriodResolvesFromFixings) {
   px::FixingTable table;
   double expect_rf = 1.0;
   for (const px::FixingDay& d : cur.obs.fixing_schedule)
-    if (d.fixing_date < bld::ordinal(vd)) {
+    if (d.fixing_date < int(vd.serial())) {
       table.set("USD-SOFR", d.fixing_date, 0.03);
       expect_rf *= 1.0 + 0.03 * d.accrual;
     }
-  px::resolve_into(cur.obs, px::PricingContext{bld::ordinal(vd), &table});
+  px::resolve_into(cur.obs, px::PricingContext{int(vd.serial()), &table});
   EXPECT_TRUE(cur.obs.resolved);
   EXPECT_NEAR(cur.obs.realized_factor, expect_rf, 1e-14);
   EXPECT_GT(cur.obs.realized_factor, 1.01);

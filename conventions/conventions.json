@@ -8273,5 +8273,78 @@
         "2026-12-08"
       ]
     }
+  },
+  "fixing_sources": {
+    "USD-SOFR": {
+      "provider": "nyfed",
+      "series": "secured/sofr",
+      "start": "2018-04-01",
+      "granularity": "daily",
+      "source": "Federal Reserve Bank of New York markets API, rates/secured/sofr (SOFR first published 2018-04-03)"
+    },
+    "USD-FEDFUNDS": {
+      "provider": "nyfed",
+      "series": "unsecured/effr",
+      "start": "2016-03-01",
+      "granularity": "daily",
+      "source": "Federal Reserve Bank of New York markets API, rates/unsecured/effr (current EFFR methodology from 2016-03-01)"
+    },
+    "EUR-ESTR": {
+      "provider": "ecb",
+      "series": "EST/B.EU000A2X2A25.WT",
+      "start": "2019-10-02",
+      "granularity": "daily",
+      "source": "ECB Data Portal, EST dataflow (euro short-term rate, first published 2019-10-02)"
+    },
+    "EUR-EURIBOR-3M": {
+      "provider": "ecb",
+      "series": "FM/M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA",
+      "granularity": "monthly",
+      "source": "ECB Data Portal, FM dataflow: 3-month EURIBOR, monthly average (historical close)"
+    },
+    "EUR-EURIBOR-6M": {
+      "provider": "ecb",
+      "series": "FM/M.U2.EUR.RT.MM.EURIBOR6MD_.HSTA",
+      "granularity": "monthly",
+      "source": "ECB Data Portal, FM dataflow: 6-month EURIBOR, monthly average (historical close)"
+    }
+  },
+  "inflation": {
+    "US-CPI-U": {
+      "label": "US CPI-U NSA (all urban consumers, BLS CPURNSA)",
+      "currency": "USD",
+      "calendar": "USD",
+      "observation_lag_months": 3,
+      "interpolation": "linear",
+      "frequency": "1M",
+      "source": "USD zero-coupon inflation swap convention: CPI-U NSA with a 3-month lag and daily linear interpolation between monthly prints (the TIPS index-ratio method)"
+    },
+    "UK-RPI": {
+      "label": "UK RPI NSA (ONS)",
+      "currency": "GBP",
+      "calendar": "GBP",
+      "observation_lag_months": 2,
+      "interpolation": "flat",
+      "frequency": "1M",
+      "source": "GBP zero-coupon inflation swap convention: RPI with a 2-month lag, no interpolation (monthly step)"
+    },
+    "EU-HICPXT": {
+      "label": "Eurozone HICP ex tobacco NSA (Eurostat)",
+      "currency": "EUR",
+      "calendar": "EUR",
+      "observation_lag_months": 3,
+      "interpolation": "flat",
+      "frequency": "1M",
+      "source": "EUR zero-coupon inflation swap convention: HICPxT with a 3-month lag, no interpolation"
+    },
+    "FR-CPIXT": {
+      "label": "France CPI ex tobacco NSA (INSEE)",
+      "currency": "EUR",
+      "calendar": "EUR",
+      "observation_lag_months": 3,
+      "interpolation": "flat",
+      "frequency": "1M",
+      "source": "French inflation swap convention: CPI ex tobacco with a 3-month lag, no interpolation (OATi/OATei bonds interpolate daily instead)"
+    }
   }
 }

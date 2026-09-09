@@ -391,7 +391,7 @@ class BundleSession {
   // streamer absorbs; a past/future boundary move changes subs and refreshes W via streamer staleness).
 
   // Set the evaluation date (integer serial the caller defines); fixings strictly before it are fixed.
-  void set_evaluation_date(int serial) { eval_date_ = serial; resolve_fixings(); }
+  void set_evaluation_date(int serial) { pricing::check_date_serial(serial, "set_evaluation_date"); eval_date_ = serial; resolve_fixings(); }
   // Upsert fixings for one index and re-resolve every schedule-carrying observation in place. Returns the
   // number of observations still un-priceable (a required past fixing is missing) after the update.
   int set_fixings(const std::string& index, const std::vector<std::pair<int, double>>& rows) {

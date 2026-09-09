@@ -16,7 +16,10 @@
 // The RESOLVED result is a plain RateObservation (constant `realized`/`realized_factor` + forecast
 // sub-periods) — bit-identical to today's baked observation — so the W-cache / AAD hot paths are
 // unchanged. Resolution runs on attach and on each table update, and is cached in between. QuantLib-free
-// (the shipped core links no QuantLib): dates are integer serials the caller supplies, index is a string.
+// (the shipped core links no QuantLib): dates are Unix-day serials (days since 1970-01-01 == build::Date::serial();
+// 2026-01-01 == 20454), index is a string. This is the engine's ONE integer date convention — FixingSeries, the
+// CB meeting schedule and the builders' fixing schedules all use it; set() REJECTS a value outside the plausible
+// range so a Python date.toordinal() (739xxx) can never be stored as a date.
 
 #include <map>
 #include <optional>
@@ -28,10 +31,18 @@
 
 namespace swaps::pricing {
 
+// The plausible range of a Unix-day serial for a market date: 1900-01-01 (-25567) .. 2299-12-31 (120528).
+// A Python proleptic ordinal (1970-01-01 == 719163) or a YYYYMMDD integer falls far outside it.
+inline void check_date_serial(int serial, const char* what) {
+  if (serial < -25567 || serial > 120528)
+    throw std::invalid_argument(std::string(what) + ": date " + std::to_string(serial) +
+                                " is not a Unix-day serial (days since 1970-01-01, build::Date::serial()); a date.toordinal() value is not accepted");
+}
+
 // Thrown when a required PAST fixing is absent from the table (and cannot be forecast from the curve).
 struct MissingFixing : std::runtime_error {
   std::string index;
-  int date;  // serial
+  int date;  // Unix-day serial
   MissingFixing(std::string idx, int d)
       : std::runtime_error("missing fixing for index '" + idx + "' on date-serial " + std::to_string(d)),
         index(std::move(idx)), date(d) {}
@@ -68,11 +79,13 @@ class FixingTable : public Observable {
  public:
   // Upsert a single fixing and notify observers. Rate is a DECIMAL (0.043), not percent.
   void set(const std::string& index, int date, double rate) {
+    check_date_serial(date, "FixingTable::set");
     data_[index][date] = rate;
     notify();
   }
   // Bulk load without notifying per row; notifies ONCE at the end (use for a table refresh).
   void bulk_set(const std::string& index, const std::vector<std::pair<int, double>>& rows) {
+    for (const auto& [d, r] : rows) check_date_serial(d, "FixingTable::bulk_set");
     auto& m = data_[index];
     for (const auto& [d, r] : rows) m[d] = r;
     notify();
@@ -100,7 +113,7 @@ class FixingTable : public Observable {
 
 // ---- Pricing context: evaluation date + a (possibly null) fixing table ----------------------------
 struct PricingContext {
-  int evaluation_date = 0;              // serial; fixings strictly before this are "already fixed"
+  int evaluation_date = 0;              // Unix-day serial; fixings strictly before this are "already fixed"
   const FixingTable* fixings = nullptr;  // may be null until a table is attached
 };
 

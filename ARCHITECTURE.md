@@ -243,6 +243,11 @@ calibrate jointly via `SpreadHandle`), and the `reference_*.hpp` QuantLib market
 
 Enforcement: `.githooks/pre-push` (`tools/install_hooks.sh`) runs the guards + `verify.sh --test-only`; `.github/workflows/ci.yml` builds and runs the QuantLib-free binaries on every push; `tools/nightly.sh` (launchd, `tools/install_nightly.sh`) runs the full gate quiesced and writes `baselines/NIGHTLY.md`. Flags have one source of truth, `cmake/DetectISA.cmake`, probed by `tools/archprobe` for `bootstrap_deps.sh` (QuantLib is built with the engine's exact flags) and `fingerprint.sh`.
 
+**One integer date convention**: every integer date the engine stores or accepts is a Unix-day serial (days since 1970-01-01 ==
+`build::Date::serial()`): `FixingTable`/`PricingContext`, `FixingSeries`, CB meetings and the builders' `FixingDay` schedules.
+`FixingTable::set` and `set_evaluation_date` reject anything outside 1900..2299, so a Python `date.toordinal()` (739xxx) cannot be
+stored as a date (until 2026-09-09 the builders emitted ordinals while `FixingSeries` used serials).
+
 ## The conventions registry (PRINCIPLES.md P2 — "specifics as data", runtime-extensible)
 
 `conventions/conventions.json` (currencies · calendars · day_counts · indices · products · bonds) is codegen'd to
@@ -259,10 +264,12 @@ the stateless **`conventions`** verb (`{"conventions": {"currencies": {...}, "ca
 what the engine knows with **`list_conventions`** (`api/conventions.cpp`; `tests/conventions_registry_test.cpp`).
 The DB also carries `credit.cds_products` (recovery / premium schedule / accrual day count / protection steps),
 `bond_futures` (deliverable convention, CF notional coupon, maturity rounding, repo day count), `fx_pairs` (spot lag,
-calendar, premium currency, delta/ATM conventions) and `cb_schedules` (central-bank meeting dates per currency,
-sourced + dated) — each with its own registry lookup, `require_*`, overlay `add_*` and listing. The verbs consume
+calendar, premium currency, delta/ATM conventions), `cb_schedules` (central-bank meeting dates per currency,
+sourced + dated), `fixing_sources` (index → provider/series/start/granularity: where realized fixings are FETCHED from;
+fetching stays API-side, the metadata lives here so no client keeps its own provider table) and `inflation` (ZCIS reference
+indices: observation lag in months + flat|linear interpolation; reported by the verb today, consumed by the kernel in E4.8) — each with its own registry lookup, `require_*`, overlay `add_*` and listing. The verbs consume
 them: `credit` needs a `product`, `bond_future` a `contract`, `bonds`/`bond_universe`/`govvie_fit`/`swap_spread`
-a bond `convention`, `swaption`/`vol_cube`/`vega` an `index` (currency derived from it), `inflation` a `base`;
+a bond `convention`, `swaption`/`vol_cube`/`vega` an `index` (currency derived from it), `inflation` a `base` and an `index`;
 a typed trade needs a `csa` or `discount_index`; `FxMatrix` takes its pivot explicitly. `tools/check_no_literals.py`
 (verify.sh) fails on any new convention literal in `include/`+`api/`; of the original 130 ratcheted hits ONE remains
 (`schedule.hpp` `resolve()` rolling tenor tokens on weekends only — E2 step 3), the rest are vocabulary-dispatch or

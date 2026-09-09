@@ -131,7 +131,7 @@ struct Index {
   Calendar fixing_calendar() const { return Calendar{index_calendar(id)}; }   // DB calendar (throws if unknown)
   std::string par_product() const { auto c = conv(); return c ? sv_str(c->par_product) : std::string(); }
   std::string tenor() const { auto c = conv(); return c ? sv_str(c->tenor) : std::string(); }
-  int fixing_lag() const { auto c = conv(); return c ? c->fixing_lag : 0; }
+  int fixing_lag() const { return cvd::require_lag(cvd::require_index(id).fixing_lag, "fixing_lag", id); }  // DB lag (throws if unset)
 
   // The par-swap CONVENTION this index quotes under — the object-to-object bridge Index -> Convention ->
   // Instrument. `float_freq` overrides the leg frequency (0 = the index/product default). The typed

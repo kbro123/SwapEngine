@@ -23,8 +23,9 @@ namespace swaps::build {
 
 namespace px = swaps::pricing;
 
-// Proleptic Gregorian ordinal (Python date.toordinal(): 0001-01-01 == 1). 1970-01-01 == 719163.
-inline int ordinal(const Date& d) { return int(d.serial()) + 719163; }
+// Fixing dates are Unix-day serials (Date::serial(), days since 1970-01-01) — the engine's ONE integer date
+// convention (pricing/fixings.hpp, market/fixing_series.hpp, cb meetings). Until 2026-09-09 this file emitted
+// Python proleptic ordinals (+719163) while FixingSeries used serials, so the two fixing stores disagreed.
 
 // Fixing dates in [start, end) on the index calendar (conventions.business_days). The id is REQUIRED; the DB
 // calendar "NONE" is the explicit weekends-only calendar (an empty id used to mean that silently).
@@ -186,7 +187,7 @@ inline px::RateObservation scheduled_observation(const Date& vd, const Date& sta
     const double acc = year_frac(dc, days[i], nxt, cal);
     const double ts = curve_time(vd, days[i]), te = curve_time(vd, nxt), crv = te - ts;
     const double w = compounded ? 1.0 : (crv > 0 ? acc / crv : 1.0);
-    o.fixing_schedule.push_back(px::FixingDay{ordinal(days[i]), acc, ts, te, w});
+    o.fixing_schedule.push_back(px::FixingDay{int(days[i].serial()), acc, ts, te, w});
   }
   return o;
 }

@@ -4,7 +4,9 @@
 // knows. The baked conventions.json is the DEFAULT set; entries added here overlay it for the life of the
 // process (last write wins) and are consumed by the very next build/compile/calibrate.
 //
-//   {"conventions": {"currencies": {...}, "calendars": {...}, "indices": {...}, "products": {...}, "bonds": {...}}}
+//   {"conventions": {"currencies": {...}, "calendars": {...}, "indices": {...}, "products": {...}, "bonds": {...},
+//                    "bond_futures": {...}, "fx_pairs": {...}, "cb_schedules": {...}, "credit": {"cds_products": {...}},
+//                    "fixing_sources": {...}, "inflation": {...}}}
 //       entries use EXACTLY the conventions.json row shapes (the schema in conventions/conventions.schema.json)
 //       -> {"conventions": {"added": {"currencies": [...], "calendars": [...], ...}, "overlay_size": n}}
 //   {"conventions": {"clear_overlay": true}}   -> drops every runtime entry (tests / session reset)

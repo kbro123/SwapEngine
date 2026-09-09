@@ -148,3 +148,15 @@ TEST(Fixings, BoundObservationBuildsWithoutTableThenAttachAndUpdate) {
   EXPECT_DOUBLE_EQ(bound.observation().realized, (kR97 + kR98 + kR99 + kR100) / 360.0);
   EXPECT_EQ(bound.observation().sub_start.size(), 1u);   // only day 101 still forecast
 }
+
+// The engine's ONE integer date convention: Unix-day serials (days since 1970-01-01). Until 2026-09-09 the
+// builders emitted Python ordinals (+719163) into FixingDay while FixingSeries used serials; a table now
+// refuses anything outside the plausible market-date range so the two stores can never disagree silently.
+TEST(Fixings, TableRejectsDatesThatAreNotUnixDaySerials) {
+  FixingTable t;
+  EXPECT_NO_THROW(t.set("USD-SOFR", 20454, 0.04));                         // 2026-01-01
+  EXPECT_THROW(t.set("USD-SOFR", 739617, 0.04), std::invalid_argument);    // a Python date.toordinal()
+  EXPECT_THROW(t.set("USD-SOFR", 20260101, 0.04), std::invalid_argument);  // a YYYYMMDD integer
+  EXPECT_THROW(t.bulk_set("USD-SOFR", {{20454, 0.04}, {739617, 0.04}}), std::invalid_argument);
+  EXPECT_EQ(t.size("USD-SOFR"), 1u);
+}

@@ -133,7 +133,7 @@ inline cal::FloatLeg float_leg_from(const Date& vd, const SwapConv& conv, const 
         const double tau = year_frac(dc, s, e, conv.calendar);
         c.obs.fixing_index = index;
         c.obs.tau_index = tau;
-        c.obs.fixing_schedule.push_back(px::FixingDay{ordinal(fixing), tau, curve_time(vd, s), curve_time(vd, e), 1.0});
+        c.obs.fixing_schedule.push_back(px::FixingDay{int(fixing.serial()), tau, curve_time(vd, s), curve_time(vd, e), 1.0});
       }
       c.pay = curve_time(vd, pay);
       c.tau_pay = year_frac(dc, s, e, conv.calendar);

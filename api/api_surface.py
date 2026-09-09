@@ -116,7 +116,7 @@ METHODS = [
      "doc": "Anchor the streaming calibrator at the current x (step_tol>0 loosens the corrector tolerance)."},
     {"name": "set_evaluation_date", "cpp": None, "args": [("serial", "INT")], "ret": "INT", "verb": None,
      "body": "sess_.set_evaluation_date(serial); return sess_.n_unresolved();",
-     "doc": "Set the evaluation date (serial); re-resolve fixing schedules. Returns n still un-priceable."},
+     "doc": "Set the evaluation date (Unix-day serial: days since 1970-01-01); re-resolve fixing schedules. Returns n still un-priceable."},
     # CUSTOM irregular shapes (bespoke marshalling; still typed for pyi/excel via ret='CUSTOM')
     {"name": "calibrate", "custom": True,
      "args": [("x0", "VEC", "None"), ("reg", "REG")], "ret": "CUSTOM:dict", "verb": None,
@@ -124,7 +124,7 @@ METHODS = [
     {"name": "sample", "custom": True, "args": [("times", "VEC")], "ret": "CUSTOM:list", "verb": "sample_times",
      "doc": "Sample every curve on a time grid -> [{currency,t,discount,zero,forward}, ...]."},
     {"name": "set_fixings", "custom": True, "args": [("index", "STR"), ("rows", "CUSTOM:pairs")], "ret": "INT",
-     "verb": None, "doc": "Upsert fixings for an index (rows=[(date_serial,rate),...]). Returns n un-priceable."},
+     "verb": None, "doc": "Upsert fixings for an index (rows=[(unix_day_serial,rate_decimal),...]; serial = days since 1970-01-01). Returns n un-priceable."},
     {"name": "knot_times", "custom": True, "args": [], "ret": "CUSTOM:list", "verb": None,
      "doc": "Per-curve sorted knot times (meeting+back) as a list of lists."},
     {"name": "currencies", "custom": True, "args": [], "ret": "IVEC", "verb": None,

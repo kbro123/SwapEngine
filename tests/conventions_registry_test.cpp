@@ -178,3 +178,27 @@ TEST_F(RegistryFixture, NewFamiliesAreDataAndRuntimeExtensible) {
     "calendar": "EURUSD", "premium_currency": "USD", "delta_convention": "spot", "atm_convention": "delta_neutral"}}}})"),
                std::invalid_argument);  // id must equal base+quote
 }
+
+TEST_F(RegistryFixture, FixingSourcesAndInflationIndicesAreDataAndRuntimeExtensible) {
+  // Baked: the fixing-source metadata every API used to carry its own copy of, and the ZCIS reference indices.
+  const auto sofr = cvd::require_fixing_source("USD-SOFR");
+  EXPECT_EQ(sofr.provider, std::string_view("nyfed"));
+  EXPECT_EQ(sofr.granularity, std::string_view("daily"));
+  const auto rpi = cvd::require_inflation_index("UK-RPI");
+  EXPECT_EQ(rpi.observation_lag_months, 2);
+  EXPECT_EQ(rpi.interpolation, std::string_view("flat"));
+  EXPECT_EQ(cvd::require_inflation_index("US-CPI-U").interpolation, std::string_view("linear"));
+  EXPECT_THROW(cvd::require_fixing_source("GBP-SONIA"), std::invalid_argument);   // no source baked
+  EXPECT_THROW(cvd::require_inflation_index("CA-CPI"), std::invalid_argument);
+  // Runtime: the verb adds both families; the next lookup sees them; malformed rows are rejected.
+  api::conventions_json(R"({"conventions": {
+    "fixing_sources": {"GBP-SONIA": {"provider": "ecb", "series": "TEST/SONIA", "granularity": "daily"}},
+    "inflation": {"CA-CPI": {"currency": "CAD", "calendar": "CAD", "observation_lag_months": 3, "interpolation": "linear", "frequency": "1M"}}}})");
+  EXPECT_EQ(cvd::require_fixing_source("GBP-SONIA").series, std::string_view("TEST/SONIA"));
+  EXPECT_EQ(cvd::require_inflation_index("CA-CPI").observation_lag_months, 3);
+  EXPECT_THROW(api::conventions_json(R"({"conventions": {"fixing_sources": {"NOT-AN-INDEX": {"provider": "ecb", "series": "x", "granularity": "daily"}}}})"), std::invalid_argument);
+  EXPECT_THROW(api::conventions_json(R"({"conventions": {"inflation": {"XX": {"currency": "USD", "calendar": "USD", "observation_lag_months": 3, "interpolation": "cubic", "frequency": "1M"}}}})"), std::invalid_argument);
+  const auto listed = json::parse(api::list_conventions_json("{}")).as_object().at("conventions").as_object();
+  EXPECT_EQ(listed.at("inflation").as_object().at("overlay").as_array().size(), 1u);
+  EXPECT_GE(listed.at("fixing_sources").as_object().at("baked").as_array().size(), 5u);
+}

@@ -48,8 +48,12 @@ for cc, c in cur.items():
     if c.get("repo_day_count") not in db["day_counts"]: errors.append(f"currencies/{cc}: unknown repo_day_count")
 for bid, b in db.get("bonds", {}).items():
     ref("calendar", cal, b.get("calendar"), f"bonds/{bid}"); ref("currency", cur, b.get("currency"), f"bonds/{bid}")
+for iid, s in db.get("fixing_sources", {}).items():
+    ref("index", idx, iid, f"fixing_sources/{iid}")
+for iid, x in db.get("inflation", {}).items():
+    ref("currency", cur, x.get("currency"), f"inflation/{iid}"); ref("calendar", cal, x.get("calendar"), f"inflation/{iid}")
 if errors:
     print("check_schema: FAIL"); [print("  " + e) for e in errors]; sys.exit(1)
 print(f"check_schema: OK — {len(cur)} currencies, {len(cal)} calendars, {len(idx)} indices, {len(prod)} products, {len(db.get('bonds',{}))} bonds, "
       f"{len(db.get('bond_futures',{}))} bond futures, {len(db.get('credit',{}).get('cds_products',{}))} cds products, {len(db.get('fx_pairs',{}))} fx pairs, "
-      f"{len(db.get('cb_schedules',{}))} cb schedules; schema + references valid")
+      f"{len(db.get('cb_schedules',{}))} cb schedules, {len(db.get('fixing_sources',{}))} fixing sources, {len(db.get('inflation',{}))} inflation indices; schema + references valid")
