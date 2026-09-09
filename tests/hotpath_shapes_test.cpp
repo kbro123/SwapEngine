@@ -75,7 +75,9 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     struct Pin { const char* name; unsigned long small, cross; };
     //   averaged_leg (compiled, 18/tick = 6 per residual x 3 Newton steps): E3-A3, Eigen IndexedView copies on
     //   pv()'s general branch — the one compiled shape that is NOT allocation-free today.
-    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 1733}, {"fx_xccy", 630, 630}, {"desk", 1120, 3991}};
+    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 1800}, {"fx_xccy", 630, 630}, {"desk", 1120, 4000}};
+    //   (banded / desk crossing pins carry a few % of slack: the count of refreshes 20 crossing ticks trigger moves with
+    //    rounding when the kernel's summation order changes — 1733 sparse, 1757 segment.)
     Pin pin{s.name.c_str(), 0, 0};
     bool pinned = false;
     for (const auto& q : pins) if (s.name == q.name) { pin = q; pinned = true; }

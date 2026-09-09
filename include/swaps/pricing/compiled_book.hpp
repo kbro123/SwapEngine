@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <Eigen/SparseCore>
 
+#include <algorithm>
 #include <cassert>
 #include <map>
 #include <stdexcept>
@@ -36,6 +37,20 @@
 #include "swaps/pricing/curve_spec.hpp"  // CurveStructure (shared with the calibration layer)
 
 namespace swaps::pricing {
+
+// REDUCE LAYOUT (E4.D, measured 2026-09-09 on every rung of the shape ladder, tools/check_perf.py shape_*):
+//   1  SEGMENT (default): coupons of an instrument (and sub-periods of a coupon) are CONTIGUOUS in registration
+//      order, so each coupon's gather-product accumulates straight into its instrument's slot — no coupon
+//      vector, no sparse matrix. Stream tick 0.50-0.66x of the sparse form on every compiled shape, 0.42x on the
+//      desk-scale chain (177 -> 74 us); refresh 0.78-0.90x; Jacobian 0.84-0.96x; never slower.
+//   0  SPARSE (reference): materialise the coupon vector, then R_cpn * coupon (Eigen SpMV). Kept selectable
+//      (-DSWAPS_REDUCE_LAYOUT=0) as the A/B baseline; not used by any build.
+//   A PADDED coupon-major layout (slots x instruments with a DF==1 sentinel, instruments as SIMD lanes) was
+//   measured too and was neutral to 1.2x SLOWER on the ticks (padding waste, worse locality); deleted.
+#ifndef SWAPS_REDUCE_LAYOUT
+#define SWAPS_REDUCE_LAYOUT 1
+#endif
+static_assert(SWAPS_REDUCE_LAYOUT == 0 || SWAPS_REDUCE_LAYOUT == 1, "SWAPS_REDUCE_LAYOUT: 0 (sparse reference) or 1 (segment)");
 
 // Row-major dense matrix: storing the batched DF grid row-major makes DFg.row(t) — one registered time
 // across ALL curve-states — a CONTIGUOUS span, which is what lets the batched leg reduce gather a coupon's
@@ -257,6 +272,7 @@ struct BundleFloatBatch {
 
   int n_coupons() const { return n_cpn_; }
   int size() const { return n_inst; }
+  static constexpr int reduce_layout() { return SWAPS_REDUCE_LAYOUT; }
 
   // --- generic registration -------------------------------------------------------------------
   // One instrument = one float leg: coupons forecast `fc`, discount `dc`.
@@ -294,6 +310,14 @@ struct BundleFloatBatch {
     convexity = detail::to_vec(cv_);
     R_sub = build(sc_, sw_, n_cpn_);
     R_cpn = build(row_, std::vector<double>(row_.size(), 1.0), n_inst);
+    // Segment offsets: coupons of one instrument and sub-periods of one coupon are contiguous by construction
+    // (add() pushes a whole leg; push_obs pushes a whole observation) -- asserted, since the fused reduces rely on it.
+    cpn_begin_.assign(n_inst + 1, 0);
+    for (int c = 0; c < n_cpn_; ++c) { assert(c == 0 || row_[c] >= row_[c - 1]); ++cpn_begin_[row_[c] + 1]; }
+    for (int i = 0; i < n_inst; ++i) cpn_begin_[i + 1] += cpn_begin_[i];
+    sub_begin_.assign(n_cpn_ + 1, 0);
+    for (std::size_t j = 0; j < sc_.size(); ++j) { assert(j == 0 || sc_[j] >= sc_[j - 1]); ++sub_begin_[sc_[j] + 1]; }
+    for (int c = 0; c < n_cpn_; ++c) sub_begin_[c + 1] += sub_begin_[c];
     sub_is_identity = (static_cast<int>(sc_.size()) == n_cpn_);
     for (std::size_t j = 0; sub_is_identity && j < sc_.size(); ++j)
       sub_is_identity = (sc_[j] == static_cast<int>(j) && sw_[j] == 1.0);
@@ -337,7 +361,12 @@ struct BundleFloatBatch {
       for (const auto& mc : moments_) out[mc.sub] = std::log(df[ss[mc.sub]] * iv[se[mc.sub]]) + mc.mom;
     }
     if (sub_is_identity) return sub_;  // R_sub == I: the reduction is a bitwise no-op
-    num_res_.noalias() = R_sub * sub_;
+    if (SWAPS_REDUCE_LAYOUT == 0) { num_res_.noalias() = R_sub * sub_; return num_res_; }
+    num_res_.resize(n_cpn_);  // segment-sum of the weighted sub-periods of each coupon (sub_w = R_sub's values)
+    const double* __restrict sw = sub_w.data();
+    const int* __restrict sb = sub_begin_.data();
+    double* __restrict nr = num_res_.data();
+    for (int c = 0; c < n_cpn_; ++c) { double acc = 0.0; for (int j = sb[c]; j < sb[c + 1]; ++j) acc += sw[j] * out[j]; nr[c] = acc; }
     return num_res_;
   }
 
@@ -351,6 +380,29 @@ struct BundleFloatBatch {
     // exactly one materialized pass, as it did before this generalization.
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv() needs pay dates: this is a futures batch");
     Eigen::VectorXd& coupon = coupon_;  // reuse the per-batch scratch (no per-tick allocation)
+    if (SWAPS_REDUCE_LAYOUT >= 1) {  // SEGMENT: each coupon's gather-product accumulates into its instrument's slot
+      pv_res_.setZero(n_inst);
+      const double* __restrict df = DF.data();
+      const double* __restrict iv = INV.data();
+      const int* __restrict p = pay.data();
+      const double* __restrict kk = konst.data();
+      const double* __restrict kv = k.data();
+      const int* __restrict cb = cpn_begin_.data();
+      double* __restrict out = pv_res_.data();
+      if (!moments_.empty() || !sub_is_identity) {
+        const Eigen::VectorXd& nm = num(DF, INV);
+        const double* __restrict nn = nm.data();
+        for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (nn[c] + kk[c]) * kv[c]; out[i] = acc; }
+      } else {
+        const int* __restrict ss = subS.data();
+        const int* __restrict se = subE.data();
+        if (cpn_is_plain)
+          for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (df[ss[c]] * iv[se[c]] - 1.0); out[i] = acc; }
+        else
+          for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (df[ss[c]] * iv[se[c]] - 1.0 + kk[c]) * kv[c]; out[i] = acc; }
+      }
+      return pv_res_;
+    }
     if (!moments_.empty() || !sub_is_identity) {  // moment coupons or a weighted/multi-sub-period batch: go through num()
       const Eigen::VectorXd& nm = num(DF, INV);  // materialised per-coupon numerator (sub_ or num_res_)
       coupon.resize(n_cpn_);
@@ -416,6 +468,12 @@ struct BundleFloatBatch {
         for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (nn[i] + kk[i]) * kv[i];
     }
     // (IndexedView form retired 2026-09-09: it materialised index temporaries on every Jacobian — E3-A2/A3.)
+    if (SWAPS_REDUCE_LAYOUT >= 1) {
+      pv_res_.resize(n_inst);
+      const int* __restrict cb = cpn_begin_.data(); const double* __restrict cc = coupon.data(); double* __restrict out = pv_res_.data();
+      for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += cc[c]; out[i] = acc; }
+      return pv_res_;
+    }
     pv_res_.noalias() = R_cpn * coupon;
     return pv_res_;
   }
@@ -656,6 +714,7 @@ struct BundleFloatBatch {
 
   int n_cpn_ = 0;
   std::vector<int> ss_, se_, sc_, p_, row_;
+  std::vector<int> cpn_begin_, sub_begin_;                // segment offsets (coupons of an instrument; subs of a coupon)
   std::vector<double> sw_, konst_, k_, rz_, it_, cv_;
   // Per-batch reusable scratch (sized on first use) so pv/num/rate never allocate in the hot loop.
   // Each returns a const ref into these; because gen_pos_/gen_neg_ are distinct batch objects, two
@@ -695,6 +754,9 @@ struct BundleFixedLegs {
     for (int k = 0; k < static_cast<int>(row_.size()); ++k) trip.emplace_back(row_[k], k, 1.0);
     R.resize(n_inst, static_cast<int>(row_.size()));
     R.setFromTriplets(trip.begin(), trip.end());
+    cpn_begin_.assign(n_inst + 1, 0);
+    for (std::size_t c = 0; c < row_.size(); ++c) { assert(c == 0 || row_[c] >= row_[c - 1]); ++cpn_begin_[row_[c] + 1]; }
+    for (int i = 0; i < n_inst; ++i) cpn_begin_[i + 1] += cpn_begin_[i];
   }
   const Eigen::VectorXd& annuity(const Eigen::VectorXd& DF) const {
     const int n = static_cast<int>(pay.size());
@@ -703,6 +765,12 @@ struct BundleFixedLegs {
     const int* __restrict p = pay.data();
     const double* __restrict t = tau.data();
     double* __restrict d = disc_.data();
+    if (SWAPS_REDUCE_LAYOUT >= 1) {
+      ann_res_.setZero(n_inst);
+      const int* __restrict cb = cpn_begin_.data(); double* __restrict out = ann_res_.data();
+      for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += t[c] * df[p[c]]; out[i] = acc; }
+      return ann_res_;
+    }
     for (int i = 0; i < n; ++i) d[i] = t[i] * df[p[i]];
     ann_res_.noalias() = R * disc_;
     return ann_res_;
@@ -730,6 +798,7 @@ struct BundleFixedLegs {
  private:
   std::vector<int> p_, row_;
   std::vector<double> t_;
+  std::vector<int> cpn_begin_;              // segment offsets (coupons of an instrument)
   mutable Eigen::VectorXd disc_, ann_res_;  // per-batch reusable scratch for annuity()
   mutable RowMatrixXd ann_grid_;  // reusable scratch for annuity_grid()
 };
