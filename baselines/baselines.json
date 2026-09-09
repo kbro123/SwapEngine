@@ -51,7 +51,10 @@
     "chain8x26_kernel_one_jacobian": "One analytic support-blocked Jacobian of the 8\u00d726 chain (208\u00d7208) \u2014 the per-LM-iteration cost.",
     "usd_eur_xccy_3c8k_hybrid_jacobian": "USD + EUR + EURUSD-xccy bundle, 3 curves \u00d7 8 knots, with genuinely NON-W-cacheable rows: FX forwards nested inside Portfolio instruments and MtM xccy basis swaps with a 2-day funding-leg payment lag (fx spot 1.10). HybridBundleResidual::jacobian (AAD block dominates).",
     "usd_eur_xccy_3c8k_aad_block_jacobian": "The AadBlock forward-AAD sweep of the same bundle in isolation, pooled duals (touched width 24 \u2264 kPooledMaxW=48). Reference row: the force-heap Dual fallback (the before/after of the DualPooled retype).",
-    "usd_eur_xccy_3c8k_stream_tick": "One StreamingCalibrator tick on the same USD/EUR/xccy hybrid bundle."
+    "usd_eur_xccy_3c8k_stream_tick": "One StreamingCalibrator tick on the same USD/EUR/xccy hybrid bundle.",
+    "shape_<name>_stream_tick": "THE SHAPE LADDER (bench/fixtures/shape_ladder.hpp): one 0.1 bp streaming tick (frozen Jacobian) on the named instrument shape, real DB conventions and dates: ois_nolag (GBP SONIA), ois_lag (USD SOFR), ibor_multicurve (EUR ESTR + 6M EURIBOR spread), basis_spread (SOFR + FF ParSpread), averaged (+ monthly averaged FF futures), averaged_leg (FF OIS with daily-averaged float coupons), banded (+-1bp Huber bands), turns (year-end turn pin + bracketing future), portfolio (butterflies), zero_coupon (BRL DI x Pre), fx_xccy (SOFR + ESTR + EUR-in-USD FX forwards & MtM xccy; hybrid route), desk (all of it, 5 curves).",
+    "shape_<name>_refresh_25bp": "Same shape, a 25 bp move each tick: Jacobian refresh + factorisation on every tick.",
+    "shape_<name>_jacobian": "Same shape, one HybridBundleResidual::jacobian at x_true."
   },
   "machines": {
     "52e94be82bc4": {
@@ -229,7 +232,7 @@
       "load_avg_at_capture": 3.59,
       "reps": 5,
       "min_time_s": 0.5,
-      "notes": "Captured by tools/check_perf.py --update (min-of-reps, quiesced).",
+      "notes": "Captured by tools/check_perf.py --update (min-of-reps, quiesced). Shape-ladder metrics (shape_*) captured 2026-09-09 quiesced (cpu busy 5.3%%) with --only; the rest of the block is the 2026-09-08 capture.",
       "metrics": {
         "sofr_23k_square_cold_calibrate": {
           "ours_ns": 504267,
@@ -353,6 +356,222 @@
         },
         "usd_eur_xccy_3c8k_stream_tick": {
           "ours_ns": 87395,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ois_nolag_stream_tick": {
+          "ours_ns": 3194,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ois_nolag_refresh_25bp": {
+          "ours_ns": 16562,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ois_nolag_jacobian": {
+          "ours_ns": 3643,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ois_lag_stream_tick": {
+          "ours_ns": 3510,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ois_lag_refresh_25bp": {
+          "ours_ns": 18787,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ois_lag_jacobian": {
+          "ours_ns": 5186,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ibor_multicurve_stream_tick": {
+          "ours_ns": 9033,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ibor_multicurve_refresh_25bp": {
+          "ours_ns": 54755,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_ibor_multicurve_jacobian": {
+          "ours_ns": 16686,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_basis_spread_stream_tick": {
+          "ours_ns": 7899,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_basis_spread_refresh_25bp": {
+          "ours_ns": 49652,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_basis_spread_jacobian": {
+          "ours_ns": 13551,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_stream_tick": {
+          "ours_ns": 12103,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_refresh_25bp": {
+          "ours_ns": 78412,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_jacobian": {
+          "ours_ns": 21967,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_leg_stream_tick": {
+          "ours_ns": 533790,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_leg_refresh_25bp": {
+          "ours_ns": 2072240,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_averaged_leg_jacobian": {
+          "ours_ns": 913884,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_banded_stream_tick": {
+          "ours_ns": 4423,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_banded_refresh_25bp": {
+          "ours_ns": 151850,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_banded_jacobian": {
+          "ours_ns": 6131,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_turns_stream_tick": {
+          "ours_ns": 3870,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_turns_refresh_25bp": {
+          "ours_ns": 126855,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_turns_jacobian": {
+          "ours_ns": 6783,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_portfolio_stream_tick": {
+          "ours_ns": 4591,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_portfolio_refresh_25bp": {
+          "ours_ns": 54520,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_portfolio_jacobian": {
+          "ours_ns": 6824,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_zero_coupon_stream_tick": {
+          "ours_ns": 735,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_zero_coupon_refresh_25bp": {
+          "ours_ns": 1174,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_zero_coupon_jacobian": {
+          "ours_ns": 1160,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_fx_xccy_stream_tick": {
+          "ours_ns": 124818,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_fx_xccy_refresh_25bp": {
+          "ours_ns": 38394,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_fx_xccy_jacobian": {
+          "ours_ns": 359083,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_stream_tick": {
+          "ours_ns": 177772,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_refresh_25bp": {
+          "ours_ns": 10872708,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_jacobian": {
+          "ours_ns": 631124,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null

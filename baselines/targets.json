@@ -89,6 +89,150 @@
     "usd_eur_xccy_3c8k_stream_tick": {
       "target_ns": 114000,
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+    },
+    "shape_ois_nolag_stream_tick": {
+      "target_ns": 4200,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ois_nolag_refresh_25bp": {
+      "target_ns": 21600,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ois_nolag_jacobian": {
+      "target_ns": 4800,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ois_lag_stream_tick": {
+      "target_ns": 4600,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ois_lag_refresh_25bp": {
+      "target_ns": 24500,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ois_lag_jacobian": {
+      "target_ns": 6800,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ibor_multicurve_stream_tick": {
+      "target_ns": 11800,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ibor_multicurve_refresh_25bp": {
+      "target_ns": 71200,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_ibor_multicurve_jacobian": {
+      "target_ns": 21700,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_basis_spread_stream_tick": {
+      "target_ns": 10300,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_basis_spread_refresh_25bp": {
+      "target_ns": 64600,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_basis_spread_jacobian": {
+      "target_ns": 17700,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_averaged_stream_tick": {
+      "target_ns": 15800,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_averaged_refresh_25bp": {
+      "target_ns": 102000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_averaged_jacobian": {
+      "target_ns": 28600,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_averaged_leg_stream_tick": {
+      "target_ns": 694000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_averaged_leg_refresh_25bp": {
+      "target_ns": 2694000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_averaged_leg_jacobian": {
+      "target_ns": 1188100,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_banded_stream_tick": {
+      "target_ns": 5800,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_banded_refresh_25bp": {
+      "target_ns": 197500,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_banded_jacobian": {
+      "target_ns": 8000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_turns_stream_tick": {
+      "target_ns": 5100,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_turns_refresh_25bp": {
+      "target_ns": 165000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_turns_jacobian": {
+      "target_ns": 8900,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_portfolio_stream_tick": {
+      "target_ns": 6000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_portfolio_refresh_25bp": {
+      "target_ns": 70900,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_portfolio_jacobian": {
+      "target_ns": 8900,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_zero_coupon_stream_tick": {
+      "target_ns": 1000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_zero_coupon_refresh_25bp": {
+      "target_ns": 1600,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_zero_coupon_jacobian": {
+      "target_ns": 1600,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_fx_xccy_stream_tick": {
+      "target_ns": 162300,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_fx_xccy_refresh_25bp": {
+      "target_ns": 50000,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_fx_xccy_jacobian": {
+      "target_ns": 466900,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_desk_stream_tick": {
+      "target_ns": 231200,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_desk_refresh_25bp": {
+      "target_ns": 14134600,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
+    },
+    "shape_desk_jacobian": {
+      "target_ns": 820500,
+      "note": "initial = 2026-09-09 shape-ladder baseline x1.3 (engine 540abaf, before any kernel change); ratchets DOWN only"
     }
   }
 }

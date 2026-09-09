@@ -134,3 +134,8 @@ add_custom_target(bench
 add_executable(hotpath_census hotpath_census.cpp)
 target_link_libraries(hotpath_census PRIVATE swaps swaps_api)
 target_compile_definitions(hotpath_census PRIVATE SOFR_BUNDLE_JSON="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sofr_bundle.json")
+
+# THE SHAPE LADDER (E4.D acceptance): per-shape stream tick / refresh tick / Jacobian, gated per rung.
+add_executable(shape_ladder_bench shape_ladder_bench.cpp)
+target_link_libraries(shape_ladder_bench PRIVATE swaps swaps_api benchmark::benchmark)
+target_include_directories(shape_ladder_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
