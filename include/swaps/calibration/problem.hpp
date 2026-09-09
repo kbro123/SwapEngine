@@ -58,6 +58,11 @@ enum class QuoteKind {
   ParRate,    // float_leg_pv(fwd) / annuity(fixed)
   ParSpread,  // (float_leg_pv(bench) - float_leg_pv(fwd)) / annuity(fixed)
   Rate,       // rate(obs) + convexity
+  ZeroCouponRate, // ANNUALLY-COMPOUNDED zero-coupon par rate: r = (1 + τ·q)^(1/τ) − 1 with q the ParRate
+                  // quotient of the same legs and τ the ONE fixed accrual (BRL DI×Pre: fixed pays
+                  // (1+r)^τ − 1 at maturity vs CDI compounded to maturity, BUS/252). A NONLINEAR transform
+                  // of ParRate (zero_coupon_transform); rides the W-cache with a chain-rule row scale, and
+                  // the band residual applies to the TRANSFORMED quote.
   // Cross-currency (multi-currency). BOTH are W-cacheable in their STANDARD form (compiled_bundle.hpp):
   // a standalone FxForward's log-residual is affine in x (constant Jacobian row), and a MtM basis with a
   // PAR funding leg collapses to the ParSpread quotient (the data-driven mtm_funding_term_negligible
@@ -228,6 +233,26 @@ inline double band_slope(double q, double lower, double upper, double decay) {
   return (q > upper || q < lower) ? 1.0 : decay;
 }
 
+// ZeroCouponRate: the annually-compounded rate r with (1+r)^τ − 1 == τ·q, i.e. r = (1+τq)^(1/τ) − 1, and
+// dr/dq = (1+τq)^(1/τ − 1). Written with exp/log so the AAD scalar types carry the derivative.
+template <class Scalar>
+Scalar zero_coupon_transform(const Scalar& q, double tau) {
+  using std::exp; using std::log;
+  return exp(log(Scalar(1.0) + Scalar(tau) * q) / tau) - Scalar(1.0);
+}
+inline std::pair<double, double> zero_coupon_transform_d(double q, double tau) {  // {r, dr/dq}
+  const double base = 1.0 + tau * q;
+  const double r = std::exp(std::log(base) / tau) - 1.0;
+  return {r, std::exp((1.0 / tau - 1.0) * std::log(base))};
+}
+// The single fixed accrual τ of a ZeroCouponRate instrument (its fixed leg IS one coupon; anything else is a
+// build error, never a silent Σ).
+inline double zero_coupon_tau(const Instrument& ins) {
+  if (ins.fixed.coupons.size() != 1)
+    throw std::invalid_argument("ZeroCouponRate instrument must have exactly ONE fixed coupon (the zero-coupon accrual)");
+  return ins.fixed.coupons.front().tau;
+}
+
 // Model quote of an instrument, per the design §3 table. `C(role)` maps a curve role index to the
 // curve object (anything with `Scalar discount(double)`); a single-curve problem passes a lambda that
 // returns its one curve for every role.
@@ -279,6 +304,11 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
           C(ins.mtm.reset_num), C(ins.mtm.reset_den));
       return (pv_self - pv_fx) / ann + mtm / (ins.mtm.fx_spot * ann);
     }
+    case QuoteKind::ZeroCouponRate:
+      return zero_coupon_transform<Scalar>(
+          pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount)) /
+              pricing::annuity<Scalar>(ins.fixed.coupons, C(ins.fixed.discount)),
+          zero_coupon_tau(ins));
     case QuoteKind::ParRate:
     default:
       return pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount)) /

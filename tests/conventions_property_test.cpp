@@ -117,7 +117,13 @@ TEST(ConventionsProperty, EveryProductLegHasResolvableCalendarDayCountFrequency)
 
     for (const auto* leg : {&p.fixed, &p.floating}) {
       expect_leg_daycount_computes(leg->day_count, std::string(p.calendar), who.c_str());
-      expect_sane_frequency(leg->frequency, who.c_str());
+      if (!p.zero_coupon) expect_sane_frequency(leg->frequency, who.c_str());
+    }
+    // A zero_coupon product (BRL DI×Pre) is ONE period spot->maturity: day counts, never a frequency.
+    if (p.zero_coupon) {
+      EXPECT_TRUE(p.fixed.frequency.empty() && p.floating.frequency.empty()) << who << " zero_coupon carries a frequency";
+      EXPECT_FALSE(p.fixed.day_count.empty() || p.floating.day_count.empty()) << who << " zero_coupon leg lacks a day count";
+      continue;
     }
     // Any accruing leg carries a frequency -- EXCEPT xccy / MTM cross-currency products, which declare a
     // single shared frequency at the product level in the JSON (not represented per-leg in ProductConv),

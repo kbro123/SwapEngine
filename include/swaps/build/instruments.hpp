@@ -174,10 +174,40 @@ inline cal::FixedLeg fixed_coupons_from(const Date& vd, const SwapConv& conv, co
 // frequency override; "" = the product's). NOTE: a single `notionals` vector is fed to both legs, so it is
 // one-per-period on EACH leg -- for a swap whose float and fixed period counts differ (e.g. quarterly float
 // vs annual fixed) build the legs directly with float_leg/fixed_coupons instead.
+// Zero-coupon swap (DB products[].zero_coupon, e.g. BRL DI×Pre): ONE compounded float coupon spot->maturity vs
+// ONE fixed accrual of the same span, quoted as the annually-compounded rate r with (1+r)^τ − 1 paid at
+// maturity — QuoteKind::ZeroCouponRate, the nonlinear transform of the ParRate quotient of these two legs.
+inline cal::Instrument zero_coupon_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int disc,
+                                        double market) {
+  if (!conv.zero_coupon)
+    throw std::invalid_argument("zero_coupon_swap: product '" + conv.product_id + "' is not a zero_coupon product");
+  const Date s = spot_date(vd, conv.calendar, conv.spot_lag);
+  const Date e = adjust(conv.calendar, mat, conv.bdc);
+  if (!(e > s)) throw std::invalid_argument("zero_coupon_swap: maturity must be after spot (product '" + conv.product_id + "')");
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::ZeroCouponRate;
+  ins.fwd.forecast = fc;
+  ins.fwd.discount = disc;
+  ins.fwd.coupons.push_back(ois_coupon(vd, conv, s, e, conv.float_dc));
+  px::FixedCoupon fcpn;
+  fcpn.pay = curve_time(vd, advance_bd(conv.calendar, e, conv.pay_lag));
+  fcpn.tau = year_frac(conv.fixed_dc, s, e, conv.calendar);
+  fcpn.scale = 1.0;
+  ins.fixed.discount = disc;
+  ins.fixed.coupons.push_back(fcpn);
+  ins.market = market;
+  return ins;
+}
+
 inline cal::Instrument par_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int disc,
                                 double market, double float_spread = 0.0,
                                 const std::vector<double>& notionals = {},
                                 const std::string& fixed_freq = "") {
+  if (conv.zero_coupon) {  // the PRODUCT decides the shape: a zero_coupon row has no coupon schedule at all
+    if (float_spread != 0.0 || !notionals.empty() || !fixed_freq.empty())
+      throw std::invalid_argument("par_swap: zero_coupon product '" + conv.product_id + "' takes no spread/notionals/fixed_freq");
+    return zero_coupon_swap(vd, conv, mat, fc, disc, market);
+  }
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::ParRate;
   ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, float_spread,

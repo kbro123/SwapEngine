@@ -27,7 +27,6 @@ def leg(d):
     d = d or {}
     return ("{" + ", ".join([
         sv(d.get("index")), sv(d.get("day_count")), sv(d.get("frequency")), sv(d.get("compounding")),
-        str(d.get("fixing_lag", -1)),
         "true" if d.get("carries_spread") else "false",
         "true" if d.get("notional_resets") else "false",
         "true" if d.get("flat") else "false",
@@ -55,7 +54,7 @@ def main():
         "",
         "struct LegConv {",
         "  std::string_view index, day_count, frequency, compounding;",
-        "  int fixing_lag; bool carries_spread, notional_resets, flat;",
+        "  bool carries_spread, notional_resets, flat;  // the fixing lag lives on the INDEX row (one owner)",
         "};",
         "// type: ois | irs | basis | xccy_mtm | fx_forward | future | administered-basis. `floating` is the quoted",
         "// float / spread / usd leg; `other` is the flat / eur leg of a basis or xccy product (empty otherwise).",
@@ -63,6 +62,7 @@ def main():
         "struct ProductConv {",
         "  std::string_view id, type, currency, calendar, bdc, frequency, discount_index, pair, base_currency;",
         "  int spot_lag, payment_lag;",
+        "  bool zero_coupon;  // one period spot->maturity, quoted annually-compounded (QuoteKind::ZeroCouponRate)",
         "  LegConv fixed, floating, other;",
         "};",
         "// A CURRENCY row (currencies[] in the JSON): ISO minor units, currency-level settlement calendar, the",
@@ -142,6 +142,7 @@ def main():
             sv(pid), sv(p.get("type")), sv(p.get("currency")), sv(p.get("calendar")), sv(p.get("bdc")),
             sv(p.get("frequency")), sv(p.get("discount_index")), sv(p.get("pair")), sv(p.get("base_currency")),
             str(p.get("spot_lag", -1)), str(p.get("payment_lag", -1)),
+            "true" if p.get("zero_coupon") else "false",
             leg(p.get("fixed_leg")),
             leg(p.get("float_leg") or p.get("spread_leg") or p.get("usd_leg")),
             leg(p.get("flat_leg") or p.get("eur_leg")),

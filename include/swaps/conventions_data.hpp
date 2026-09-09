@@ -12,7 +12,7 @@ namespace swaps::conventions {
 
 struct LegConv {
   std::string_view index, day_count, frequency, compounding;
-  int fixing_lag; bool carries_spread, notional_resets, flat;
+  bool carries_spread, notional_resets, flat;  // the fixing lag lives on the INDEX row (one owner)
 };
 // type: ois | irs | basis | xccy_mtm | fx_forward | future | administered-basis. `floating` is the quoted
 // float / spread / usd leg; `other` is the flat / eur leg of a basis or xccy product (empty otherwise).
@@ -20,6 +20,7 @@ struct LegConv {
 struct ProductConv {
   std::string_view id, type, currency, calendar, bdc, frequency, discount_index, pair, base_currency;
   int spot_lag, payment_lag;
+  bool zero_coupon;  // one period spot->maturity, quoted annually-compounded (QuoteKind::ZeroCouponRate)
   LegConv fixed, floating, other;
 };
 // A CURRENCY row (currencies[] in the JSON): ISO minor units, currency-level settlement calendar, the
@@ -92,39 +93,39 @@ struct CalendarConv {
 };
 
 inline constexpr std::array<ProductConv, 33> kProducts = {{
-  {"ARS-BADLAR-IRS", "irs", "ARS", "ARS", "ModifiedFollowing", "", "", "", "", 2, 0, {"", "ACT/360", "1M", "", -1, false, false, false}, {"ARS-BADLAR", "ACT/360", "1M", "", 0, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"AUD-AONIA-OIS", "ois", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 2, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"AUD-AONIA", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"AUD-BBSW-3M-IRS", "irs", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/365F", "3M", "", -1, false, false, false}, {"AUD-BBSW-3M", "ACT/365F", "3M", "", 0, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"AUD-BBSW-6M-IRS", "irs", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/365F", "6M", "", -1, false, false, false}, {"AUD-BBSW-6M", "ACT/365F", "6M", "", 0, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"BRL-CDI-SWAP", "irs", "BRL", "BRL", "Following", "", "", "", "", 1, 0, {"", "BUS/252", "1Y", "", -1, false, false, false}, {"BRL-CDI", "BUS/252", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"CAD-CORRA-OIS", "ois", "CAD", "CAD", "ModifiedFollowing", "", "", "", "", 1, 2, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"CAD-CORRA", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"CHF-SARON-OIS", "ois", "CHF", "CHF", "ModifiedFollowing", "", "", "", "", 2, 2, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"CHF-SARON", "ACT/360", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"CNY-FR007-IRS", "irs", "CNY", "CNY", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/365F", "3M", "", -1, false, false, false}, {"CNY-FR007", "ACT/365F", "3M", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"CNY-SHIBOR-3M-IRS", "irs", "CNY", "CNY", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/365F", "3M", "", -1, false, false, false}, {"CNY-SHIBOR-3M", "ACT/360", "3M", "", 1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"EUR-3S6S-BASIS", "basis", "EUR", "EUR", "ModifiedFollowing", "", "EUR-ESTR", "", "", 2, 0, {"", "", "", "", -1, false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", -1, true, false, false}, {"EUR-EURIBOR-6M", "ACT/360", "6M", "", -1, false, false, false}},
-  {"EUR-ESTR-OIS", "ois", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", 2, 2, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"EUR-ESTR", "ACT/360", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"EUR-EURIBOR-3M-IRS", "irs", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", 2, 0, {"", "30E/360", "1Y", "", -1, false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", 2, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"EUR-EURIBOR-6M-IRS", "irs", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", 2, 0, {"", "30E/360", "1Y", "", -1, false, false, false}, {"EUR-EURIBOR-6M", "ACT/360", "6M", "", 2, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"FX-FWD-EURUSD", "fx_forward", "", "EURUSD", "", "", "", "EURUSD", "", 2, -1, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"GBP-SONIA-OIS", "ois", "GBP", "GBP", "ModifiedFollowing", "", "", "", "", 0, 0, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"GBP-SONIA", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"IDR-INDONIA-OIS", "ois", "IDR", "IDR", "ModifiedFollowing", "", "", "", "", 2, 0, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"IDR-INDONIA", "ACT/360", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"INR-MIBOR-OIS", "ois", "INR", "INR", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"INR-MIBOR-ON", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"JPY-TONA-OIS", "ois", "JPY", "JPY", "ModifiedFollowing", "", "", "", "", 2, 2, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"JPY-TONA", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"KRW-KOFR-OIS", "ois", "KRW", "KRW", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"KRW-KOFR", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"MXN-FTIIE-OIS", "ois", "MXN", "MXN", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"MXN-FTIIE", "ACT/360", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"MXN-TIIE-28-IRS", "irs", "MXN", "MXN", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/360", "28D", "", -1, false, false, false}, {"MXN-TIIE-28", "ACT/360", "28D", "", 1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"RUB-RUONIA-OIS", "ois", "RUB", "RUB", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"RUB-RUONIA", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"SAR-SAIBOR-3M-IRS", "irs", "SAR", "SAR", "ModifiedFollowing", "", "", "", "", 2, 0, {"", "ACT/360", "6M", "", -1, false, false, false}, {"SAR-SAIBOR-3M", "ACT/360", "3M", "", 2, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"TRY-TLREF-OIS", "ois", "TRY", "TRY", "ModifiedFollowing", "", "", "", "", 1, 0, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"TRY-TLREF", "ACT/360", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"USD-FEDFUNDS-1M-FUTURE", "future", "USD", "USD-FED", "", "", "", "", "", -1, -1, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"USD-FEDFUNDS-OIS", "ois", "USD", "USD-FED", "ModifiedFollowing", "", "", "", "", 2, 2, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"USD-FEDFUNDS", "ACT/360", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"USD-PRIME", "administered-basis", "USD", "USD-FED", "", "", "", "", "", -1, -1, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"USD-SOFR-1M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"USD-SOFR-3M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"USD-SOFR-OIS", "ois", "USD", "USD-SOFR", "ModifiedFollowing", "", "", "", "", 2, 2, {"", "ACT/360", "1Y", "", -1, false, false, false}, {"USD-SOFR", "ACT/360", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"XCCY-MTM-EURUSD", "xccy_mtm", "", "EURUSD", "ModifiedFollowing", "3M", "", "EURUSD", "EUR", 2, 2, {"", "", "", "", -1, false, false, false}, {"USD-SOFR", "ACT/360", "3M", "compounded", -1, false, true, true}, {"EUR-ESTR", "ACT/360", "3M", "compounded", -1, true, false, false}},
-  {"ZAR-JIBAR-3M-IRS", "irs", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", 0, 0, {"", "ACT/365F", "3M", "", -1, false, false, false}, {"ZAR-JIBAR-3M", "ACT/365F", "3M", "", 0, false, false, false}, {"", "", "", "", -1, false, false, false}},
-  {"ZAR-ZARONIA-OIS", "ois", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", 0, 0, {"", "ACT/365F", "1Y", "", -1, false, false, false}, {"ZAR-ZARONIA", "ACT/365F", "1Y", "compounded", -1, false, false, false}, {"", "", "", "", -1, false, false, false}},
+  {"ARS-BADLAR-IRS", "irs", "ARS", "ARS", "ModifiedFollowing", "", "", "", "", 2, 0, false, {"", "ACT/360", "1M", "", false, false, false}, {"ARS-BADLAR", "ACT/360", "1M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"AUD-AONIA-OIS", "ois", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 2, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"AUD-AONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"AUD-BBSW-3M-IRS", "irs", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "3M", "", false, false, false}, {"AUD-BBSW-3M", "ACT/365F", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"AUD-BBSW-6M-IRS", "irs", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "6M", "", false, false, false}, {"AUD-BBSW-6M", "ACT/365F", "6M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"BRL-CDI-SWAP", "irs", "BRL", "BRL", "Following", "", "", "", "", 1, 0, true, {"", "BUS/252", "", "", false, false, false}, {"BRL-CDI", "BUS/252", "", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"CAD-CORRA-OIS", "ois", "CAD", "CAD", "ModifiedFollowing", "", "", "", "", 1, 2, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"CAD-CORRA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"CHF-SARON-OIS", "ois", "CHF", "CHF", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/360", "1Y", "", false, false, false}, {"CHF-SARON", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"CNY-FR007-IRS", "irs", "CNY", "CNY", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "3M", "", false, false, false}, {"CNY-FR007", "ACT/365F", "3M", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"CNY-SHIBOR-3M-IRS", "irs", "CNY", "CNY", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "3M", "", false, false, false}, {"CNY-SHIBOR-3M", "ACT/360", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"EUR-3S6S-BASIS", "basis", "EUR", "EUR", "ModifiedFollowing", "", "EUR-ESTR", "", "", 2, 0, false, {"", "", "", "", false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", true, false, false}, {"EUR-EURIBOR-6M", "ACT/360", "6M", "", false, false, false}},
+  {"EUR-ESTR-OIS", "ois", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/360", "1Y", "", false, false, false}, {"EUR-ESTR", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"EUR-EURIBOR-3M-IRS", "irs", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", 2, 0, false, {"", "30E/360", "1Y", "", false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"EUR-EURIBOR-6M-IRS", "irs", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", 2, 0, false, {"", "30E/360", "1Y", "", false, false, false}, {"EUR-EURIBOR-6M", "ACT/360", "6M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"FX-FWD-EURUSD", "fx_forward", "", "EURUSD", "", "", "", "EURUSD", "", 2, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"GBP-SONIA-OIS", "ois", "GBP", "GBP", "ModifiedFollowing", "", "", "", "", 0, 0, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"GBP-SONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"IDR-INDONIA-OIS", "ois", "IDR", "IDR", "ModifiedFollowing", "", "", "", "", 2, 0, false, {"", "ACT/360", "1Y", "", false, false, false}, {"IDR-INDONIA", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"INR-MIBOR-OIS", "ois", "INR", "INR", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"INR-MIBOR-ON", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"JPY-TONA-OIS", "ois", "JPY", "JPY", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"JPY-TONA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"KRW-KOFR-OIS", "ois", "KRW", "KRW", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"KRW-KOFR", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"MXN-FTIIE-OIS", "ois", "MXN", "MXN", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/360", "1Y", "", false, false, false}, {"MXN-FTIIE", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"MXN-TIIE-28-IRS", "irs", "MXN", "MXN", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/360", "28D", "", false, false, false}, {"MXN-TIIE-28", "ACT/360", "28D", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"RUB-RUONIA-OIS", "ois", "RUB", "RUB", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"RUB-RUONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"SAR-SAIBOR-3M-IRS", "irs", "SAR", "SAR", "ModifiedFollowing", "", "", "", "", 2, 0, false, {"", "ACT/360", "6M", "", false, false, false}, {"SAR-SAIBOR-3M", "ACT/360", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"TRY-TLREF-OIS", "ois", "TRY", "TRY", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/360", "1Y", "", false, false, false}, {"TRY-TLREF", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-FEDFUNDS-1M-FUTURE", "future", "USD", "USD-FED", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-FEDFUNDS-OIS", "ois", "USD", "USD-FED", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/360", "1Y", "", false, false, false}, {"USD-FEDFUNDS", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-PRIME", "administered-basis", "USD", "USD-FED", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-SOFR-1M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-SOFR-3M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-SOFR-OIS", "ois", "USD", "USD-SOFR", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/360", "1Y", "", false, false, false}, {"USD-SOFR", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"XCCY-MTM-EURUSD", "xccy_mtm", "", "EURUSD", "ModifiedFollowing", "3M", "", "EURUSD", "EUR", 2, 2, false, {"", "", "", "", false, false, false}, {"USD-SOFR", "ACT/360", "3M", "compounded", false, true, true}, {"EUR-ESTR", "ACT/360", "3M", "compounded", true, false, false}},
+  {"ZAR-JIBAR-3M-IRS", "irs", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", 0, 0, false, {"", "ACT/365F", "3M", "", false, false, false}, {"ZAR-JIBAR-3M", "ACT/365F", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"ZAR-ZARONIA-OIS", "ois", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", 0, 0, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"ZAR-ZARONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
 }};
 
 inline constexpr std::array<IndexConv, 26> kIndices = {{

@@ -214,7 +214,8 @@
           },
           "fixing_lag": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Business days before the accrual start on which the index FIXES (T-2 EURIBOR/SAIBOR, T-1 TIIE/SHIBOR, T+0 BBSW/JIBAR). The index row is the ONE owner of this lag (product legs carry none)."
           },
           "par_product": {
             "type": "string"
@@ -331,10 +332,6 @@
                   "simple"
                 ]
               },
-              "fixing_lag": {
-                "type": "integer",
-                "minimum": 0
-              },
               "carries_spread": {
                 "type": "boolean"
               },
@@ -368,10 +365,6 @@
                   "averaged",
                   "simple"
                 ]
-              },
-              "fixing_lag": {
-                "type": "integer",
-                "minimum": 0
               },
               "carries_spread": {
                 "type": "boolean"
@@ -407,10 +400,6 @@
                   "simple"
                 ]
               },
-              "fixing_lag": {
-                "type": "integer",
-                "minimum": 0
-              },
               "carries_spread": {
                 "type": "boolean"
               },
@@ -444,10 +433,6 @@
                   "averaged",
                   "simple"
                 ]
-              },
-              "fixing_lag": {
-                "type": "integer",
-                "minimum": 0
               },
               "carries_spread": {
                 "type": "boolean"
@@ -483,10 +468,6 @@
                   "simple"
                 ]
               },
-              "fixing_lag": {
-                "type": "integer",
-                "minimum": 0
-              },
               "carries_spread": {
                 "type": "boolean"
               },
@@ -521,10 +502,6 @@
                   "simple"
                 ]
               },
-              "fixing_lag": {
-                "type": "integer",
-                "minimum": 0
-              },
               "carries_spread": {
                 "type": "boolean"
               },
@@ -538,6 +515,10 @@
                 "type": "string"
               }
             }
+          },
+          "zero_coupon": {
+            "type": "boolean",
+            "description": "ONE period spot->maturity on both legs, quoted as an annually-compounded rate (engine QuoteKind ZeroCouponRate, e.g. BRL DI x Pre). Legs carry no frequency."
           }
         },
         "allOf": [
@@ -550,6 +531,16 @@
                     "irs"
                   ]
                 }
+              },
+              "not": {
+                "properties": {
+                  "zero_coupon": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "zero_coupon"
+                ]
               }
             },
             "then": {
@@ -576,6 +567,59 @@
                     "day_count",
                     "frequency"
                   ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "zero_coupon": {
+                  "const": true
+                }
+              },
+              "required": [
+                "zero_coupon"
+              ]
+            },
+            "then": {
+              "required": [
+                "currency",
+                "bdc",
+                "spot_lag",
+                "payment_lag",
+                "fixed_leg",
+                "float_leg"
+              ],
+              "properties": {
+                "type": {
+                  "enum": [
+                    "ois",
+                    "irs"
+                  ]
+                },
+                "fixed_leg": {
+                  "type": "object",
+                  "required": [
+                    "day_count"
+                  ],
+                  "not": {
+                    "required": [
+                      "frequency"
+                    ]
+                  }
+                },
+                "float_leg": {
+                  "type": "object",
+                  "required": [
+                    "index",
+                    "day_count"
+                  ],
+                  "not": {
+                    "required": [
+                      "frequency"
+                    ]
+                  }
                 }
               }
             }
@@ -1025,10 +1069,6 @@
             "averaged",
             "none"
           ]
-        },
-        "fixing_lag": {
-          "type": "integer",
-          "minimum": 0
         },
         "carries_spread": {
           "type": "boolean"

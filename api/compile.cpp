@@ -680,7 +680,12 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         if (it == turn_index_of.end())
           throw CompileError("Turn on '" + cname + "' has no resolved window (internal).");
         obj = b::turn_jump(ci, it->second, mkt);
-      } else {  // ParRate
+      } else if (kind == "ZeroCouponRate") {
+        const b::SwapConv zc = b::swap_conv(get_s(c, "currency"), get_s(c, "index"));
+        if (!zc.zero_coupon)
+          throw CompileError("ZeroCouponRate on '" + cname + "': product '" + zc.product_id + "' is not a zero_coupon product (DB products[].zero_coupon).");
+        obj = b::zero_coupon_swap(value_date, zc, mat_date, ci, disc, mkt);
+      } else {  // ParRate (a zero_coupon product dispatches to the zero-coupon swap: the DB row decides the shape)
         obj = b::par_swap(value_date,
                           b::swap_conv(get_s(c, "currency"), get_s(c, "index")),  // float_freq: the DB product decides
                           mat_date, ci, disc, mkt);

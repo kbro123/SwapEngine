@@ -159,6 +159,9 @@ class CompiledBundleResidual {
         out_[q_rows_[j].row] += q_rows_[j].weight * (pp[i] - pn[i]) / ann[i];
       }
     }
+    // Zero-coupon rows: the ParRate quotient just accumulated is transformed in place (standalone rows only,
+    // so out_[row] IS the quotient). Before the FX/turn rows (disjoint) and before any band (residuals_vs).
+    for (const auto& z : zc_rows_) out_[z.row] = zero_coupon_transform_d(out_[z.row], z.tau).first;
     if (!r_rows_.empty()) {
       const Eigen::VectorXd& v = gen_rate_.rate(DF);
       for (std::size_t j = 0; j < r_rows_.size(); ++j)
@@ -238,6 +241,10 @@ class CompiledBundleResidual {
       for (int j = 0; j < nq; ++j)  // d(num/ann) = dnum/ann - num·dann/ann²; accumulate (portfolio rows)
         G.row(q_rows_[j].row) +=
             q_rows_[j].weight * (dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]));
+      // Zero-coupon chain rule: dr/dDF = (dr/dq)·dq/dDF with q = num/ann the row's own quotient (a zc row
+      // is standalone, weight 1). Applied BEFORE the band scale below, exactly as residuals_vs orders them.
+      for (const auto& z : zc_rows_)
+        G.row(z.row) *= zero_coupon_transform_d(num[z.batch] / ann[z.batch], z.tau).second;
     }
     // `Rate` rows ARE the futures batch's rate rows (convexity is a constant -> zero row).
     if (!r_rows_.empty()) {
@@ -389,6 +396,13 @@ class CompiledBundleResidual {
       turn_rows_.push_back({row, state_index, weight});
       return;
     }
+    if (ins.quote == QuoteKind::ZeroCouponRate) {
+      // The ParRate quotient of the same legs with a per-row nonlinear post-transform (problem.hpp
+      // zero_coupon_transform). Only STANDALONE (weight 1): a Σ of transformed quotes is not one quotient.
+      if (weight != 1.0)
+        throw std::invalid_argument("CompiledBundleResidual: ZeroCouponRate inside a Portfolio is not W-cacheable; use the AAD engine");
+      zc_rows_.push_back({row, static_cast<int>(q_rows_.size()), zero_coupon_tau(ins)});
+    }
     const bool spread = (ins.quote == QuoteKind::ParSpread);
     const FloatLeg& pos = spread ? ins.bench : ins.fwd;  // ParSpread: +bench; ParRate: +fwd
     gen_pos_.add(cs_, pos.forecast, pos.discount, pos.coupons);
@@ -411,6 +425,9 @@ class CompiledBundleResidual {
   // portfolio row -- which is exactly why a portfolio of W-cacheable components stays W-cacheable.
   struct Scatter { int row; double weight; };
   std::vector<Scatter> q_rows_, r_rows_;
+  // Zero-coupon rows: residual row, its quotient batch index (into q_rows_/num/ann) and the single accrual τ.
+  struct ZcRow { int row, batch; double tau; };
+  std::vector<ZcRow> zc_rows_;
   // FX-forward rows: F = fx_spot·DF[idx_num]/DF[idx_den] at time fx_time; residual (ln F − ln q)/fx_time.
   // Affine in x (ln DF = −Wx), so it rides the W-cache with a constant Jacobian row -- no AAD needed.
   struct Fx { int row, idx_num, idx_den; double fx_spot, fx_time; };

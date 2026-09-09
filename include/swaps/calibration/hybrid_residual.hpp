@@ -66,6 +66,7 @@ inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<
   if (ins.quote == QuoteKind::Portfolio)
     for (const auto& c : ins.combination)
       if (c.instrument.quote == QuoteKind::FxForward || c.instrument.quote == QuoteKind::XccyMtmBasis ||
+          c.instrument.quote == QuoteKind::ZeroCouponRate ||
           instrument_is_noncacheable(c.instrument, curves))
         return true;
   return false;

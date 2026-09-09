@@ -24,6 +24,8 @@ namespace cvd = swaps::conventions;
 struct SwapConv {
   std::string calendar, bdc, fixed_dc, float_dc, float_freq_tok, fixed_freq_tok;
   int spot_lag = -1, pay_lag = -1;
+  bool zero_coupon = false;  // DB products[].zero_coupon: ONE period spot->maturity on both legs, quoted as an
+                             // annually-compounded rate (QuoteKind::ZeroCouponRate; BRL DI×Pre). No frequencies.
   std::string product_id;  // the DB row this came from (diagnostics)
 };
 
@@ -45,6 +47,15 @@ inline SwapConv conv_from_product(const cvd::ProductConv& p) {
   c.spot_lag = cvd::require_lag(p.spot_lag, "spot_lag", p.id);
   c.pay_lag = cvd::require_lag(p.payment_lag, "payment_lag", p.id);
   c.float_dc = sv_str(cvd::require_field(p.floating.day_count, "float/spread leg day_count", p.id));
+  c.zero_coupon = p.zero_coupon;
+  if (p.zero_coupon) {
+    // ONE period spot->maturity on both legs (zero_coupon_swap): the row carries day counts, never frequencies.
+    if (p.type == "basis") throw std::invalid_argument("conventions DB: '" + sv_str(p.id) + "' is a zero_coupon basis product — unsupported");
+    if (!p.floating.frequency.empty() || !p.fixed.frequency.empty())
+      throw std::invalid_argument("conventions DB: zero_coupon product '" + sv_str(p.id) + "' must not carry leg frequencies");
+    c.fixed_dc = sv_str(cvd::require_field(p.fixed.day_count, "fixed_leg day_count", p.id));
+    return c;
+  }
   c.float_freq_tok = sv_str(cvd::require_field(p.floating.frequency, "float/spread leg frequency", p.id));
   if (p.type == "basis") {
     // A basis swap has no fixed leg; the annuity used to convert the spread is built on the QUOTED leg's

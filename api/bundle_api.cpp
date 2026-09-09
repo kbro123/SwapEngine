@@ -100,6 +100,7 @@ const char* quote_to_str(cal::QuoteKind q) {
     case cal::QuoteKind::XccyMtmBasis: return "XccyMtmBasis";
     case cal::QuoteKind::Portfolio: return "Portfolio";
     case cal::QuoteKind::TurnJump: return "TurnJump";
+    case cal::QuoteKind::ZeroCouponRate: return "ZeroCouponRate";
   }
   return "ParRate";
 }
@@ -110,6 +111,7 @@ cal::QuoteKind quote_from_str(const std::string& s) {
   if (s == "XccyMtmBasis") return cal::QuoteKind::XccyMtmBasis;
   if (s == "Portfolio") return cal::QuoteKind::Portfolio;
   if (s == "TurnJump") return cal::QuoteKind::TurnJump;
+  if (s == "ZeroCouponRate") return cal::QuoteKind::ZeroCouponRate;
   if (s == "ParRate") return cal::QuoteKind::ParRate;
   throw std::invalid_argument("unknown quote kind: " + s);
 }
@@ -529,7 +531,7 @@ Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
     double sum = 0.0;
     int n = 0;
     for (const auto& ins : prob.instruments)
-      if (ins.quote == cal::QuoteKind::ParRate || ins.quote == cal::QuoteKind::Rate) {
+      if (ins.quote == cal::QuoteKind::ParRate || ins.quote == cal::QuoteKind::Rate || ins.quote == cal::QuoteKind::ZeroCouponRate) {
         sum += ins.market;
         ++n;
       }

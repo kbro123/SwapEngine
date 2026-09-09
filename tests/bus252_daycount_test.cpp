@@ -49,33 +49,25 @@ TEST(Bus252, YearFracFullYearIsOne) {
   EXPECT_DOUBLE_EQ(b::year_frac("ACT/360", y0, y1, cal), b::year_frac("ACT/360", y0, y1));
 }
 
-// (c) BRL-CDI par swap (fixed BUS/252 vs compounded CDI, both on the BRL calendar): the leg builders must
-// resolve BUS/252 without throwing and every accrual must be an exact integer number of business days / 252.
-TEST(Bus252, BrlCdiParSwapAccrual) {
+// (c) BRL-CDI DI×Pre swap: a ZERO-COUPON product (DB products[].zero_coupon) — one BUS/252 accrual spot->maturity on
+// each leg, on the BRL calendar; every accrual is an exact integer number of business days / 252. (Its quote kind,
+// closed form and compiled/AAD parity are proven in zero_coupon_swap_test.cpp.)
+TEST(Bus252, BrlCdiZeroCouponSwapAccrual) {
   const b::Date vd = b::Date::from_iso("2025-01-02");
   const b::SwapConv conv = b::swap_conv("BRL", "BRL-CDI");
   ASSERT_EQ(conv.calendar, "BRL");
   ASSERT_EQ(conv.fixed_dc, "BUS/252");
   ASSERT_EQ(conv.float_dc, "BUS/252");
-  const b::Date mat = b::resolve("2y", vd, "NONE", "Following", 0);
-
-  // Fixed leg: annual BUS/252 coupons, each ~1 year of business days.
-  const auto fixed = b::fixed_coupons(vd, conv, mat, 0);
-  ASSERT_EQ(fixed.coupons.size(), 2u);
-  for (const auto& c : fixed.coupons) {
-    const double bd = c.tau * 252.0;                       // business-day count implied by the accrual
-    EXPECT_NEAR(std::round(bd), bd, 1e-9);                 // BUS/252 => integer/252
-    EXPECT_GT(c.tau, 0.95);                                // a ~1Y BRL period is ~248-252 business days
-    EXPECT_LT(c.tau, 1.02);
-  }
-
-  // Float (compounded CDI) leg builds; its telescoped observation tau_index is likewise business-days/252.
-  const auto flt = b::float_leg(vd, conv, mat, 0, 0, conv.float_freq_tok, conv.float_dc);
-  ASSERT_EQ(flt.coupons.size(), 2u);
-  for (const auto& c : flt.coupons) {
-    const double bd = c.obs.tau_index * 252.0;
-    EXPECT_NEAR(std::round(bd), bd, 1e-9);
-    EXPECT_GT(c.tau_pay, 0.95);
-    EXPECT_LT(c.tau_pay, 1.02);
-  }
+  ASSERT_TRUE(conv.zero_coupon);
+  const b::Date mat = b::resolve("2y", vd, conv.calendar, conv.bdc, conv.spot_lag);
+  const auto ins = b::par_swap(vd, conv, mat, 0, 0, 0.12);
+  ASSERT_EQ(ins.fixed.coupons.size(), 1u);
+  ASSERT_EQ(ins.fwd.coupons.size(), 1u);
+  const double bd = ins.fixed.coupons.front().tau * 252.0;   // business-day count implied by the accrual
+  EXPECT_NEAR(std::round(bd), bd, 1e-9);                     // BUS/252 => integer/252
+  EXPECT_GT(ins.fixed.coupons.front().tau, 1.9);             // ~2 x 250 business days
+  EXPECT_LT(ins.fixed.coupons.front().tau, 2.05);
+  const double bdi = ins.fwd.coupons.front().obs.tau_index * 252.0;  // telescoped observation, same count
+  EXPECT_NEAR(std::round(bdi), bdi, 1e-9);
+  EXPECT_DOUBLE_EQ(ins.fwd.coupons.front().tau_pay, ins.fixed.coupons.front().tau);
 }

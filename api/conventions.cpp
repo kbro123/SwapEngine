@@ -29,12 +29,12 @@ const json::object* jobj(const json::object& o, const char* k) {
   return o.contains(k) && o.at(k).is_object() ? &o.at(k).as_object() : nullptr;
 }
 
-// Mirrors gen_conventions_hpp.py::leg — fixing_lag -1 = unset (the builders require it where it matters).
+// Mirrors gen_conventions_hpp.py::leg. (The fixing lag is the INDEX row's, never a leg's.)
 cvd::LegConv leg_of(const json::object* l) {
   cvd::LegConv L{};
   if (!l) return L;
   L.index = js(*l, "index"); L.day_count = js(*l, "day_count"); L.frequency = js(*l, "frequency");
-  L.compounding = js(*l, "compounding"); L.fixing_lag = ji(*l, "fixing_lag", -1);
+  L.compounding = js(*l, "compounding");
   L.carries_spread = jb(*l, "carries_spread"); L.notional_resets = jb(*l, "notional_resets"); L.flat = jb(*l, "flat");
   return L;
 }
@@ -44,7 +44,7 @@ void add_product(cvd::Registry& R, std::string_view id, const json::object& p) {
   c.id = id; c.type = js(p, "type"); c.currency = js(p, "currency"); c.calendar = js(p, "calendar"); c.bdc = js(p, "bdc");
   c.frequency = js(p, "frequency"); c.discount_index = js(p, "discount_index"); c.pair = js(p, "pair");
   c.base_currency = js(p, "base_currency");
-  c.spot_lag = ji(p, "spot_lag", -1); c.payment_lag = ji(p, "payment_lag", -1);
+  c.spot_lag = ji(p, "spot_lag", -1); c.payment_lag = ji(p, "payment_lag", -1); c.zero_coupon = jb(p, "zero_coupon");
   c.fixed = leg_of(jobj(p, "fixed_leg"));
   const json::object* fl = jobj(p, "float_leg"); if (!fl) fl = jobj(p, "spread_leg"); if (!fl) fl = jobj(p, "usd_leg");
   const json::object* ol = jobj(p, "flat_leg"); if (!ol) ol = jobj(p, "eur_leg");

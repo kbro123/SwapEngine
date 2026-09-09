@@ -7515,8 +7515,7 @@
       "float_leg": {
         "index": "EUR-EURIBOR-3M",
         "frequency": "3M",
-        "day_count": "ACT/360",
-        "fixing_lag": 2
+        "day_count": "ACT/360"
       },
       "type": "irs"
     },
@@ -7534,8 +7533,7 @@
       "float_leg": {
         "index": "EUR-EURIBOR-6M",
         "frequency": "6M",
-        "day_count": "ACT/360",
-        "fixing_lag": 2
+        "day_count": "ACT/360"
       },
       "type": "irs"
     },
@@ -7610,8 +7608,7 @@
       "float_leg": {
         "index": "AUD-BBSW-3M",
         "frequency": "3M",
-        "day_count": "ACT/365F",
-        "fixing_lag": 0
+        "day_count": "ACT/365F"
       },
       "type": "irs"
     },
@@ -7629,8 +7626,7 @@
       "float_leg": {
         "index": "AUD-BBSW-6M",
         "frequency": "6M",
-        "day_count": "ACT/365F",
-        "fixing_lag": 0
+        "day_count": "ACT/365F"
       },
       "type": "irs"
     },
@@ -7705,8 +7701,7 @@
       "float_leg": {
         "index": "CNY-SHIBOR-3M",
         "frequency": "3M",
-        "day_count": "ACT/360",
-        "fixing_lag": 1
+        "day_count": "ACT/360"
       },
       "type": "irs"
     },
@@ -7730,23 +7725,22 @@
       "type": "ois"
     },
     "BRL-CDI-SWAP": {
-      "description": "BRL DI x Pre swap (fixed vs CDI). Brazil/ANBIMA calendar; BUS/252 both legs, Following. Economically zero-coupon: the CDI leg compounds daily to maturity and settles in one payment; frequency 1Y here is a schedule placeholder. CDI ~ SELIC overnight.",
+      "description": "BRL DI x Pre swap (fixed vs CDI), B3/ANBIMA calendar, BUS/252 both legs, Following. ZERO-COUPON: the CDI leg compounds daily to maturity and the fixed leg pays (1+r)^tau - 1 at maturity, one settlement; r is the annually-compounded (exponential, BUS/252) DI rate = QuoteKind ZeroCouponRate. CDI ~ SELIC overnight.",
       "currency": "BRL",
       "spot_lag": 1,
       "payment_lag": 0,
       "bdc": "Following",
       "calendar": "BRL",
       "fixed_leg": {
-        "day_count": "BUS/252",
-        "frequency": "1Y"
+        "day_count": "BUS/252"
       },
       "float_leg": {
         "index": "BRL-CDI",
         "compounding": "compounded",
-        "frequency": "1Y",
         "day_count": "BUS/252"
       },
-      "type": "irs"
+      "type": "irs",
+      "zero_coupon": true
     },
     "MXN-TIIE-28-IRS": {
       "description": "MXN fixed vs TIIE-28D IRS. Mexico City calendar; both legs every 28 days (13 periods/yr) ACT/360, compounding none. Spot T+1. The standard Mexican swap.",
@@ -7762,8 +7756,7 @@
       "float_leg": {
         "index": "MXN-TIIE-28",
         "frequency": "28D",
-        "day_count": "ACT/360",
-        "fixing_lag": 1
+        "day_count": "ACT/360"
       },
       "type": "irs"
     },
@@ -7838,8 +7831,7 @@
       "float_leg": {
         "index": "ZAR-JIBAR-3M",
         "frequency": "3M",
-        "day_count": "ACT/365F",
-        "fixing_lag": 0
+        "day_count": "ACT/365F"
       },
       "type": "irs"
     },
@@ -7914,8 +7906,7 @@
       "float_leg": {
         "index": "SAR-SAIBOR-3M",
         "frequency": "3M",
-        "day_count": "ACT/360",
-        "fixing_lag": 2
+        "day_count": "ACT/360"
       },
       "type": "irs"
     },
@@ -7933,8 +7924,7 @@
       "float_leg": {
         "index": "ARS-BADLAR",
         "frequency": "1M",
-        "day_count": "ACT/360",
-        "fixing_lag": 0
+        "day_count": "ACT/360"
       },
       "type": "irs"
     },
