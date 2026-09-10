@@ -40,13 +40,13 @@ inline bool has_compounded_obs(const Instrument& ins) {
 }
 
 // True iff the bundle's CURVES rule out the W-cache entirely: a value-dependent (non-linear) interpolation
-// scheme has no constant W (integral_weight_matrix is the authority and throws on it; MonotoneCubic is the
-// one shipped scheme in that class -- keep this check in sync with BundleSession's has_nonlinear_). When
-// true, EVERY row is non-cacheable and the hybrid engine runs pure width-reduced AAD instead of throwing.
+// scheme has no constant W (integral_weight_matrix is the authority and throws on it; curve::scheme_is_linear
+// is the ONE static answer, shared with BundleSession). When true, EVERY row is non-cacheable and the hybrid
+// engine runs pure width-reduced AAD instead of throwing.
 inline bool curves_are_noncacheable(const std::vector<BundleCurveSpec>& curves) {
   for (const auto& c : curves)
     for (const auto& r : c.regions)
-      if (r.scheme == curve::Scheme::MonotoneCubic) return true;
+      if (!curve::scheme_is_linear(r.scheme)) return true;
   return false;
 }
 

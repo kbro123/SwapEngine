@@ -28,6 +28,20 @@
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/regularize.hpp"
+#include "swaps/calibration/residual_engine.hpp"
+
+namespace {
+// E6.1c (2026-09-10): second-difference smoothing = the hybrid engine + the constant curvature block, the same
+// composition BundleSession::calibrate uses (the SmoothedProblem wrapper and its numeric Jacobian are gone).
+swaps::calibration::CalibrationResult regularised(const swaps::calibration::BundleProblem& p, double lambda,
+                                                  const std::vector<int>& curves, const Eigen::VectorXd& x0) {
+  namespace cal = swaps::calibration;
+  const cal::HybridBundleResidual eng(p);
+  const Eigen::MatrixXd R = cal::second_difference_operator(p, lambda, curves);
+  const cal::RegularizedEngine<cal::HybridBundleResidual> sm(eng, R);
+  return cal::calibrate_with(sm, p.n_knots(), sm.n_residuals(), x0);
+}
+}  // namespace
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
 #include <random>
@@ -790,14 +804,17 @@ TEST(EurCurves, OverDeterminedFuturesCarryRealTension) {
       fut.push_back(i);
       ++nfut;
     }
-  const auto sm = cal::smoothed(b.prob, 1.0, {b.EUR3M, b.EUR6M});
-  const auto sol = cal::calibrate(sm, b.x0, /*use_aad=*/false);
+  // E6.1c: the curvature penalty rides the hybrid engine as a constant R block (the one definition).
+  const cal::HybridBundleResidual eng(b.prob);
+  const Eigen::MatrixXd R = cal::second_difference_operator(b.prob, 1.0, {b.EUR3M, b.EUR6M});
+  const cal::RegularizedEngine<cal::HybridBundleResidual> sm(eng, R);
+  const auto sol = cal::calibrate_with(sm, b.prob.n_knots(), sm.n_residuals(), b.x0);
   const Eigen::VectorXd r = b.prob.residuals<double>(sol.x);  // DATA residuals (no reg rows)
   double fut_resid = 0, all_resid = r.cwiseAbs().maxCoeff();
   for (int i : fut) fut_resid = std::max(fut_resid, std::abs(r[i]));
   // First-order optimality of the (regularised) objective actually solved: ‖Jᵀr‖∞ over data + reg rows.
-  const Eigen::MatrixXd Jr = cal::aad_jacobian(sm, sol.x);
-  const Eigen::VectorXd rr = sm.residuals<double>(sol.x);
+  const Eigen::MatrixXd Jr = sm.jacobian(sol.x);
+  const Eigen::VectorXd rr = sm.residuals(sol.x);
   const double stat = (Jr.transpose() * rr).cwiseAbs().maxCoeff();
   std::cout << "  [tension] €STR futures perturbed=" << nfut << "  max futures residual=" << fut_resid
             << "  ||r_data||inf=" << all_resid << "  ||Jᵀr||inf(regularised)=" << stat << "\n";
@@ -812,7 +829,7 @@ TEST(EurCurves, OverDeterminedFuturesCarryRealTension) {
 TEST(EurCurves, SmoothnessRegulariserRecoversTheCoupledTrio) {
   const rb::MultiCcyBundle b = rb::build_eur_curves();
   const double raw = (cal::calibrate(b.prob, b.x0).x - b.x_true).cwiseAbs().maxCoeff();
-  const auto reg = cal::calibrate(cal::smoothed(b.prob, 1.0, {b.EUR3M, b.EUR6M}), b.x0, /*use_aad=*/false);
+  const auto reg = regularised(b.prob, 1.0, {b.EUR3M, b.EUR6M}, b.x0);
   const double err = (reg.x - b.x_true).cwiseAbs().maxCoeff();
   std::cout << "  [eur3-reg] raw ||x*-xtrue||=" << raw << "  regularised=" << err << "\n";
   EXPECT_GT(raw, 1e-3) << "the unregularised basis-only trio wanders in the null space";
@@ -944,7 +961,7 @@ TEST(EurMultiCcy, EurTrioIsOneSccAndXccyDependsOnEstrAndSofr) {
 TEST(EurMultiCcy, RegularisedRecovers) {
   const rb::MultiCcyBundle b = rb::build_eur_multicurrency();  // SOFR ESTR EUR3M EUR6M EUR-in-USD
   // Regularise the basis-only EURIBOR forecast curves (EUR3M=2, EUR6M=3); SOFR/ESTR/EUR-in-USD untouched.
-  const auto sol = cal::calibrate(cal::smoothed(b.prob, 1.0, {2, 3}), b.x0, /*use_aad=*/false);
+  const auto sol = regularised(b.prob, 1.0, {2, 3}, b.x0);
   const char* nm[] = {"SOFR", "ESTR", "EUR3M", "EUR6M", "EUR-in-USD"};
   double worst = 0;
   for (int c = 0; c < 5; ++c) {
@@ -964,7 +981,7 @@ TEST(FullMultiCcy, WholeBundleCalibrates) {
   const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
   // Regularise only the coupled basis-only EURIBOR forecast curves (their forward shape is the null);
   // SOFR/ESTR/EUR-in-USD are shaped/policy-step or self-discounting and are left untouched.
-  const auto sol = cal::calibrate(cal::smoothed(b.prob, 1.0, {b.EUR3M, b.EUR6M}), b.x0, /*use_aad=*/false);
+  const auto sol = regularised(b.prob, 1.0, {b.EUR3M, b.EUR6M}, b.x0);
   const double err = (sol.x - b.x_true).cwiseAbs().maxCoeff();
   std::cout << "  [full] curves=" << b.n_curves() << " knots=" << b.prob.n_knots()
             << " instruments=" << b.prob.n_residuals() << " ||r(x_true)||=" << r << " recovery=" << err

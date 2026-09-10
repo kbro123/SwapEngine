@@ -375,6 +375,13 @@ Scalar par_rate(const std::vector<FloatCoupon>& float_leg, const std::vector<Fix
                 const FCurve& fc, const DCurve& dc) {
   return float_leg_pv<Scalar>(float_leg, fc, dc) / annuity<Scalar>(fixed_leg, dc);
 }
+// The general form (E6.1c, 2026-09-10 -- the ONE ParRate formula, used by instrument_model_quote): the float
+// leg and the fixed annuity may discount on DIFFERENT curves (a cross-currency or CSA-split instrument).
+template <class Scalar, class FCurve, class DFloat, class DFixed>
+Scalar par_rate(const std::vector<FloatCoupon>& float_leg, const std::vector<FixedCoupon>& fixed_leg,
+                const FCurve& fc, const DFloat& dc_float, const DFixed& dc_fixed) {
+  return float_leg_pv<Scalar>(float_leg, fc, dc_float) / annuity<Scalar>(fixed_leg, dc_fixed);
+}
 
 // Quote transform `ParSpread` (basis): (pv_bench − pv_fwd) / annuity.
 // The two float legs are SEPARATE — they may differ in frequency, day count and spread (design §6.7);
@@ -385,6 +392,15 @@ Scalar par_spread(const std::vector<FloatCoupon>& fwd_leg, const std::vector<Flo
                   const BenchCurve& bench, const DCurve& dc) {
   return (float_leg_pv<Scalar>(bench_leg, bench, dc) - float_leg_pv<Scalar>(fwd_leg, fwd, dc)) /
          annuity<Scalar>(annuity_leg, dc);
+}
+// The general form (E6.1c, 2026-09-10 -- the ONE ParSpread formula, used by instrument_model_quote): each leg
+// carries its own discount curve. The sign convention lives HERE and nowhere else: quote = (pv_bench − pv_fwd)/A.
+template <class Scalar, class FwdCurve, class FwdDisc, class BenchCurve, class BenchDisc, class AnnDisc>
+Scalar par_spread(const std::vector<FloatCoupon>& fwd_leg, const std::vector<FloatCoupon>& bench_leg,
+                  const std::vector<FixedCoupon>& annuity_leg, const FwdCurve& fwd, const FwdDisc& fwd_dc,
+                  const BenchCurve& bench, const BenchDisc& bench_dc, const AnnDisc& ann_dc) {
+  return (float_leg_pv<Scalar>(bench_leg, bench, bench_dc) - float_leg_pv<Scalar>(fwd_leg, fwd, fwd_dc)) /
+         annuity<Scalar>(annuity_leg, ann_dc);
 }
 
 // Quote transform `Rate` (any future): rate + convexity. `convexity` is an INPUT NUMBER — the

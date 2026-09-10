@@ -21,6 +21,7 @@
 #include "swaps/curve/parametric.hpp"
 #include "swaps/pricing/bond.hpp"
 #include "swaps/calibration/regularize.hpp"
+#include "swaps/calibration/residual_engine.hpp"
 
 namespace cal = swaps::calibration;
 namespace px = swaps::pricing;
@@ -295,7 +296,7 @@ TEST(BundleApi, StreamUpdateRejectsBadMarkets) {
 // The warm-engine cache: a session compiles its hybrid engine ONCE and every later solve — regularized
 // included — reuses it, with rebind/recalibrate updating only the quote RHS (set_quotes). Pins that
 // (1) the tension-regularized solve on the composed compiled engine lands where the OLD wrapper path
-// (LinearRegularizedProblem -> generic AAD engine) landed, and (2) a warm rebind/recalibrate on the
+// (the generic AAD engine composed with the same R block) landed, and (2) a warm rebind/recalibrate on the
 // cached engine equals a FRESH session cold-solving the identical problem — including a band ADDED
 // after the engine was compiled (bands are quote RHS, not structure).
 TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
@@ -311,9 +312,12 @@ TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
   reg.curves = {0, 1};
   api::BundleSession sess(p);
   sess.calibrate(x0, reg);
-  const auto old_path = cal::calibrate(
-      cal::linearly_regularized(p, cal::tension_energy_operator(p, reg.lambda, reg.sigma, reg.curves)),
-      x0);
+  // The reference path: the GENERIC AAD engine composed with the same constant R block (E6.1c: the
+  // LinearRegularizedProblem wrapper this used to compare against was deleted -- one penalty definition).
+  const cal::AadResidualEngine<cal::BundleProblem> aad(p);
+  const Eigen::MatrixXd R_ref = cal::tension_energy_operator(p, reg.lambda, reg.sigma, reg.curves);
+  const cal::RegularizedEngine<cal::AadResidualEngine<cal::BundleProblem>> composed_ref(aad, R_ref);
+  const auto old_path = cal::calibrate_with(composed_ref, p.n_knots(), composed_ref.n_residuals(), x0);
   EXPECT_LT((sess.x() - old_path.x).cwiseAbs().maxCoeff(), 1e-9)
       << "the compiled+R composition must land where the AAD wrapper landed";
 

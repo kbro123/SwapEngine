@@ -91,6 +91,13 @@ struct TensionHolder final : RegionIface<S> {
 // like NaturalCubic/BSpline, unlike the value-dependent MonotoneCubic. σ travels in CurveModule::sigma.
 enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline, Tension };
 
+// THE static answer to "does this scheme keep the curve a LINEAR MAP of its knot forwards" (so it rides the
+// W-cache): every shipped scheme except MonotoneCubic, whose Hyman filter is value-dependent. The runtime
+// truth is ModularCurve::is_linear_map() (the AND over the built regions' policies); the two are pinned
+// equal per scheme in tests/kernel_pins_test.cpp. E6.1c (2026-09-10): this used to be re-decided by enum
+// in hybrid_residual.hpp and api/bundle_api.cpp.
+inline constexpr bool scheme_is_linear(Scheme s) { return s != Scheme::MonotoneCubic; }
+
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
   std::vector<double> knots;  // knot times (year fractions), ascending, within this region

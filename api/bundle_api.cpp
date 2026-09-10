@@ -36,7 +36,7 @@
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include <type_traits>
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
-#include "swaps/calibration/regularize.hpp"       // smoothed(), second_difference_operator()
+#include "swaps/calibration/regularize.hpp"       // second_difference_operator(), tension_energy_operator()
 #include "swaps/calibration/structure_fingerprint.hpp"  // structure_fingerprint (warm-vs-recompile switch)
 
 namespace swaps::api {
@@ -567,19 +567,6 @@ Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
 // =================================================================================================
 // BundleSession
 // =================================================================================================
-// An FX/MtM LEAF anywhere in an instrument (including nested inside a Portfolio). Since 2026-09-09 a
-// standalone FX forward and a par MtM leg ARE W-cacheable (their values are products of registered DFs);
-// what still rides the hybrid engine's AAD block is an FX/MtM leaf INSIDE a Portfolio (the compiled
-// transforms do not compose in a Σ), an incomplete MtM leg (no reset roles) and a SEASONED MtM coupon
-// (calibration::instrument_is_noncacheable is the authority). `has_fx_` is informational.
-static bool has_noncacheable_leaf(const cal::Instrument& ins) {
-  if (ins.quote == cal::QuoteKind::FxForward || ins.quote == cal::QuoteKind::XccyMtmBasis) return true;
-  if (ins.quote == cal::QuoteKind::Portfolio)
-    for (const auto& c : ins.combination)
-      if (has_noncacheable_leaf(c.instrument)) return true;
-  return false;
-}
-
 // Collect every schedule-carrying RateObservation in an instrument (Rate future obs + float-leg coupons,
 // recursing into portfolio components), so the session can resolve them against the fixing context.
 namespace {
@@ -620,14 +607,16 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   cal::validate_problem(prob_, "BundleSession");  // E1/E2/B12: a malformed bundle is an error, not a crash/NaN
   fingerprint_ = cal::structure_fingerprint(prob_);  // an identity stamp of the compiled document (not a gate)
   for (const auto& ins : prob_.instruments) {
-    if (has_noncacheable_leaf(ins)) has_fx_ = true;  // FX/MtM (incl. inside a Portfolio) -> AAD engine
+    // `has_fx_` reports the ENGINE's partition (E6.1c: the API used to keep a second, disagreeing definition
+    // that called every FX forward / MtM row non-cacheable; standalone ones ride the W-cache since 2026-09-09).
+    if (cal::instrument_is_noncacheable(ins, prob_.curves)) has_fx_ = true;
     if (ins.band_upper > ins.band_lower)
       has_band_ = true;  // soft target: compiled COLD calibrate is fine, streams frozen-Newton (soft LS)
   }
   for (const auto& c : prob_.curves) {
     if (!c.regions.empty()) has_modular_ = true;  // custom interpolation regions
     for (const auto& r : c.regions)        // only a NON-LINEAR scheme forces off the W-cache
-      if (r.scheme == curve::Scheme::MonotoneCubic) has_nonlinear_ = true;
+      if (!curve::scheme_is_linear(r.scheme)) has_nonlinear_ = true;  // the one definition (curve_module.hpp)
   }
   x_ = Eigen::VectorXd::Zero(prob_.n_knots());
   resolve_fixings();  // resolve any schedule-carrying observations (no-op when none carry a schedule)
@@ -651,13 +640,17 @@ const Eigen::MatrixXd& BundleSession::ensure_reg_R(const RegSpec& reg) const {
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
   const auto t0 = std::chrono::steady_clock::now();
   if (reg.on() && !reg.tension) {
-    // Legacy second-difference smoothing: the SmoothedProblem wrapper (generic AAD engine). Kept as-is;
-    // the shipped default is the tension path below.
-    result_ = cal::calibrate(cal::smoothed(prob_, reg.lambda, reg.curves), x0, /*use_aad=*/true);
+    // Legacy second-difference smoothing (E6.1c, 2026-09-10): the SAME engine composition as the tension path
+    // below, with the discrete curvature operator as the constant R block -- the SmoothedProblem wrapper that
+    // paid an AAD sweep per LM iteration for this constant block is gone. The shipped default is tension.
+    const cal::HybridBundleResidual& eng = ensure_engine();
+    const Eigen::MatrixXd R = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+    const cal::RegularizedEngine<cal::HybridBundleResidual> composed(eng, R);
+    result_ = cal::calibrate_with(composed, prob_.n_knots(), prob_.n_residuals() + static_cast<int>(R.rows()), x0);
   } else {
     // EVERY other path drives the ONE cached hybrid engine (compiled W-cache rows + width-reduced AAD
     // rows; for a non-linear scheme the hybrid routes every row to the AAD block, so it subsumes the old
-    // smoothed(0) escape hatch). The engine is built once per structure and reused across warm re-solves
+    // pre-E4.A AAD-only escape hatch). The engine is built once per structure and reused across warm re-solves
     // -- construction (W build, batch registration, MtM guard) is no longer paid per calibrate call.
     const cal::HybridBundleResidual& eng = ensure_engine();
     if (reg.on() && reg.tension) {
@@ -873,22 +866,7 @@ Eigen::MatrixXd BundleSession::jacobian(const RegSpec& reg) const {
 }
 
 Eigen::VectorXd BundleSession::residual_market_scale() const {
-  const auto C = cal::build_bundle_curves<double>(
-      prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });
-  const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
-  Eigen::VectorXd d = Eigen::VectorXd::Ones(prob_.n_residuals());
-  for (int i = 0; i < prob_.n_residuals(); ++i) {
-    const cal::Instrument& ins = prob_.instruments[i];
-    if (ins.quote == cal::QuoteKind::FxForward) {
-      d[i] = 1.0 / (ins.market * ins.fx_time);  // r = (ln F_model − ln q)/T
-    } else if (ins.band_upper > ins.band_lower) {
-      // Huber band (problem.hpp band_residual): the market mid enters only through the decay·(q − m) pull,
-      // on every side of the band (the edges are absolute levels), so −∂r/∂q_market = decay everywhere.
-      d[i] = ins.band_decay;
-    }
-  }
-  (void)curve_of;
-  return d;
+  return cal::residual_market_scale(prob_.instruments);  // the one definition (problem.hpp, E6.1c)
 }
 
 Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {

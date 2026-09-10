@@ -65,11 +65,11 @@ class AadResidualEngine {
 };
 
 // A residual engine COMPOSED with a constant pseudo-residual block R (rows x n_knots): appends R·x rows
-// to the base engine's residual and R itself to its Jacobian. This is the engine-level counterpart of
-// LinearRegularizedProblem (regularize.hpp): where that wraps the PROBLEM (and so routes the whole solve
-// to the generic AAD engine), this wraps the ENGINE -- the instrument rows keep their compiled W-cache
-// residual/Jacobian, and the regulariser costs a GEMV + a block copy. R and the base engine are held by
-// reference; both must outlive the composition (BundleSession owns both).
+// to the base engine's residual and R itself to its Jacobian. This is THE way a regulariser enters a
+// calibrate (E6.1c, 2026-09-10: the problem-wrapping SmoothedProblem / LinearRegularizedProblem, which
+// routed the whole solve to the generic AAD engine, were deleted) -- the instrument rows keep their
+// compiled W-cache residual/Jacobian, and the regulariser costs a GEMV + a block copy. R and the base
+// engine are held by reference; both must outlive the composition (BundleSession owns both).
 template <class Engine>
 class RegularizedEngine {
  public:

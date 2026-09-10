@@ -25,21 +25,8 @@
 namespace swaps::calibration {
 
 // D = diag(−∂r_i/∂q_i) at x for a single-curve problem (see the header note).
-inline Eigen::VectorXd residual_market_scale(const CalibrationProblem& prob, const Eigen::VectorXd& x) {
-  auto c = curve::make_modular_curve<double>(curve::flat_hermite(prob.meeting_times, prob.back_times));
-  c.set_forwards(x);
-  const auto curve_of = [&c](int) -> const curve::ModularCurve<double>& { return c; };
-  Eigen::VectorXd d = Eigen::VectorXd::Ones(prob.n_residuals());
-  for (int i = 0; i < prob.n_residuals(); ++i) {
-    const Instrument& ins = prob.instruments[i];
-    if (ins.quote == QuoteKind::FxForward) {
-      d[i] = 1.0 / (ins.market * ins.fx_time);
-    } else if (ins.band_upper > ins.band_lower) {
-      d[i] = ins.band_decay;  // Huber band: −∂r/∂q_market = decay on every side (problem.hpp band_residual)
-    }
-  }
-  (void)curve_of;
-  return d;
+inline Eigen::VectorXd residual_market_scale(const CalibrationProblem& prob, const Eigen::VectorXd& /*x*/) {
+  return residual_market_scale(prob.instruments);  // problem.hpp: the one definition (D needs no curve)
 }
 
 // The IFT quote-sensitivity operator dx/dq = J⁺ D  (n_knots x n_residuals), rank-safe.
@@ -56,7 +43,7 @@ template <class Scalar, class Portfolio>
 inline Eigen::VectorXd book_curve_grad(const CalibrationProblem& prob, const Eigen::VectorXd& x,
                                        const Portfolio& pf,
                                        const Eigen::Matrix<Scalar, Eigen::Dynamic, 1>& seeded) {
-  auto c = curve::make_modular_curve<Scalar>(curve::flat_hermite(prob.meeting_times, prob.back_times));
+  auto c = prob.template make_curve<Scalar>();
   c.set_forwards(seeded);
   const Scalar pv = pf.template npv<Scalar>(c);
   return Eigen::VectorXd(pv.derivatives());  // length n_knots (empty for a curve-independent book)

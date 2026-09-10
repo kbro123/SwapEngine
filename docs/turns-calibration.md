@@ -133,7 +133,7 @@ if it has changed.
    `base`; `SpreadHandle`). This is the *precedent* the `TurnedCurve` overlay copies. → If the spread
    overlay mechanism changed, mirror the new form in `TurnedCurve`.
 5. **The regulariser is a second-difference penalty over contiguous knot blocks**
-   (`regularize.hpp`, `SmoothedProblem`, `second_difference_operator`). → See §7.3: turn knots must be
+   (`regularize.hpp`, `second_difference_operator` composed via `RegularizedEngine`). → See §7.3: turn knots must be
    excluded from it.
 6. **Warm/streaming build `M` from `J` generically via `residual_engine_t<Problem>`.** → Confirms
    Mode 2 turns flow into warm/streaming/risk without bespoke code.

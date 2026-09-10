@@ -43,71 +43,11 @@ inline std::vector<double> region_knot_lambdas(const CurveSpec& c, double defaul
   return lam;
 }
 
-template <class Problem>
-struct SmoothedProblem {
-  const Problem* prob;
-  std::vector<std::pair<int, int>> segs;  // (global knot offset, n_interp_knots) of each REGULARISED curve
-  std::vector<std::vector<double>> lam;   // per-seg, per-knot smoothing weight (region λ or the default)
-
-  SmoothedProblem(const Problem& p, std::vector<std::pair<int, int>> s, std::vector<std::vector<double>> l)
-      : prob(&p), segs(std::move(s)), lam(std::move(l)) {}
-
-  int n_knots() const { return prob->n_knots(); }
-  int n_reg() const {
-    int n = 0;
-    for (const auto& s : segs)
-      if (s.second > 2) n += s.second - 2;  // one 2nd-difference row per interior knot
-    return n;
-  }
-  int n_residuals() const { return prob->n_residuals() + n_reg(); }
-
-  template <class Scalar, class Vec>
-  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    const auto r0 = prob->template residuals<Scalar>(x);
-    Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
-    for (int i = 0; i < r0.size(); ++i) r[i] = r0[i];
-    int k = static_cast<int>(r0.size());
-    for (std::size_t si = 0; si < segs.size(); ++si) {
-      const int off = segs[si].first, n = segs[si].second;
-      for (int i = 1; i < n - 1; ++i)  // curvature row weighted by the λ of its centre knot's region
-        r[k++] = lam[si][i] * (x[off + i - 1] - 2.0 * x[off + i] + x[off + i + 1]);
-    }
-    return r;
-  }
-};
-
-// Regularise EVERY curve of a bundle problem (uses prob.curves for the segment layout).
-template <class Problem>
-SmoothedProblem<Problem> smoothed(const Problem& p, double lambda) {
-  std::vector<std::pair<int, int>> segs;
-  std::vector<std::vector<double>> lam;
-  int off = 0;
-  for (const auto& c : p.curves) {
-    segs.push_back({off, c.n_interp_knots()});  // penalise the interpolation knots only, NOT turn δ's
-    lam.push_back(region_knot_lambdas(c, lambda));
-    off += c.n_knots();                          // but stride over the WHOLE state block (incl. δ's)
-  }
-  return SmoothedProblem<Problem>(p, std::move(segs), std::move(lam));
-}
-
-// Regularise ONLY the listed curves (leave shaped reference curves like SOFR untouched).
-template <class Problem>
-SmoothedProblem<Problem> smoothed(const Problem& p, double lambda, const std::vector<int>& curves) {
-  std::vector<int> off(p.curves.size(), 0);
-  for (std::size_t c = 1; c < p.curves.size(); ++c) off[c] = off[c - 1] + p.curves[c - 1].n_knots();
-  std::vector<std::pair<int, int>> segs;
-  std::vector<std::vector<double>> lam;
-  for (int c : curves) {
-    segs.push_back({off[c], p.curves[c].n_interp_knots()});  // interp knots only (no δ)
-    lam.push_back(region_knot_lambdas(p.curves[c], lambda));
-  }
-  return SmoothedProblem<Problem>(p, std::move(segs), std::move(lam));
-}
-
 // The explicit second-difference (curvature) operator R = λ·D as a DENSE matrix (n_reg × n_knots), one
 // row λ·(e_{i-1} − 2e_i + e_{i+1}) per interior knot of each listed curve. This is the same penalty
-// SmoothedProblem appends as residual rows, materialised so the STREAMING calibrator can fold RᵀR into
-// its frozen-Newton operator M = (JᵀJ + RᵀR)⁻¹Jᵀ and stream a rank-deficient (basis-only) build directly.
+// the calibrate path composes onto its engine (RegularizedEngine) and the STREAMING calibrator folds as RᵀR
+// into its frozen-Newton operator M = (JᵀJ + RᵀR)⁺Jᵀ -- ONE definition of the penalty (E6.1c, 2026-09-10:
+// the SmoothedProblem / LinearRegularizedProblem wrappers that re-implemented it as AAD residual rows are gone).
 template <class Problem>
 Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, const std::vector<int>& curves) {
   const int nk = p.n_knots();
@@ -299,41 +239,6 @@ Eigen::MatrixXd tension_energy_operator(const Problem& p, double weight, double 
   for (int i = 0; i < ev.size(); ++i)
     if (ev[i] > tol) R.row(r++) = (weight * std::sqrt(ev[i])) * es.eigenvectors().col(i).transpose();
   return R;
-}
-
-// A problem wrapped with an ARBITRARY constant pseudo-residual block R (rows x n_knots): appends R*x as
-// extra residual rows, so `calibrate` / `aad_jacobian` drive the tension-regularised least squares
-// UNCHANGED (duck-types n_knots / n_residuals / residuals<Scalar>, exactly like SmoothedProblem). This is
-// the calibrate-side counterpart of folding R^T R into the streaming operator: the same R, two views.
-template <class Problem>
-struct LinearRegularizedProblem {
-  const Problem* prob;
-  Eigen::MatrixXd R;  // constant Jacobian block for the pseudo-residuals R*x (no AAD; structure-only)
-
-  LinearRegularizedProblem(const Problem& p, Eigen::MatrixXd r) : prob(&p), R(std::move(r)) {}
-
-  int n_knots() const { return prob->n_knots(); }
-  int n_reg() const { return static_cast<int>(R.rows()); }
-  int n_residuals() const { return prob->n_residuals() + n_reg(); }
-
-  template <class Scalar, class Vec>
-  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    const auto r0 = prob->template residuals<Scalar>(x);
-    Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
-    for (int i = 0; i < r0.size(); ++i) r[i] = r0[i];
-    int k = static_cast<int>(r0.size());
-    for (int i = 0; i < R.rows(); ++i) {
-      Scalar acc(0.0);
-      for (int j = 0; j < R.cols(); ++j) acc += R(i, j) * x[j];  // constant row . x
-      r[k++] = acc;
-    }
-    return r;
-  }
-};
-
-template <class Problem>
-LinearRegularizedProblem<Problem> linearly_regularized(const Problem& p, Eigen::MatrixXd R) {
-  return LinearRegularizedProblem<Problem>(p, std::move(R));
 }
 
 }  // namespace swaps::calibration

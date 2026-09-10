@@ -90,6 +90,18 @@ TEST(SchemeValues, MonotoneCubicHymanEndClampMatchesTheHandComputation) {
   EXPECT_NEAR(c.forward(3.0), 0.023333333333333334, tol::literal);
 }
 
+// ---- T4: the static "is this scheme linear" answer equals the built curve's runtime answer, per scheme ----------
+// (E6.1c: curve::scheme_is_linear replaced three enum tests; the runtime truth is ModularCurve::is_linear_map.)
+TEST(SchemeLinearity, StaticAnswerMatchesTheBuiltCurve) {
+  for (cv::Scheme s : {cv::Scheme::Flat, cv::Scheme::Linear, cv::Scheme::NaturalCubic, cv::Scheme::Hermite,
+                       cv::Scheme::MonotoneCubic, cv::Scheme::BSpline, cv::Scheme::Tension}) {
+    cv::CurveModule m{{1.0, 2.0, 3.0, 5.0, 7.0, 10.0}, s};
+    if (s == cv::Scheme::Tension) m.sigma = 1.0;
+    const auto c = cv::make_modular_curve<double>({m});
+    EXPECT_EQ(c.is_linear_map(), cv::scheme_is_linear(s)) << "scheme " << static_cast<int>(s);
+  }
+}
+
 // ---- T5: the tension series helpers ------------------------------------------------------------------------
 // sinhm1(x) = Σ_{k>=1} x^(2k+1)/(2k+1)!, xcoshm(x) = Σ_{k>=1} (2k) x^(2k+1)/(2k+1)!, both evaluated by a
 // truncated series for |x| < 0.5. The references are long-double sums to x²⁵. The series stop at x¹¹, so at

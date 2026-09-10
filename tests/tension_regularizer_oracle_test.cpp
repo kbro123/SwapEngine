@@ -26,6 +26,7 @@
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/regularize.hpp"
+#include "swaps/calibration/residual_engine.hpp"
 
 namespace cal = swaps::calibration;
 namespace rb = swaps::refbuild;
@@ -89,12 +90,15 @@ TEST(TensionRegularizerOracle, FirstOrderOptimalAndDampsTheNullWander) {
   // A LIGHT tension penalty (pure curvature): strong enough to damp the null, light enough that the
   // observable directions are untouched (data residual stays near machine zero).
   const Eigen::MatrixXd R = cal::tension_energy_operator(b.prob, /*weight=*/0.01, /*sigma=*/0.0, {b.EUR3M, b.EUR6M});
-  const auto reg_prob = cal::linearly_regularized(b.prob, R);
-  const cal::CalibrationResult sol = cal::calibrate(reg_prob, b.x0, /*use_aad=*/true);
+  // E6.1c (2026-09-10): the penalty rides the hybrid engine as a constant R block (RegularizedEngine) --
+  // the same composition BundleSession::calibrate uses; the LinearRegularizedProblem wrapper is gone.
+  const cal::HybridBundleResidual eng(b.prob);
+  const cal::RegularizedEngine<cal::HybridBundleResidual> reg_prob(eng, R);
+  const cal::CalibrationResult sol = cal::calibrate_with(reg_prob, b.prob.n_knots(), reg_prob.n_residuals(), b.x0);
 
   // First-order optimality on the AUGMENTED objective (data + tension pseudo-residual rows).
-  const Eigen::MatrixXd Jr = cal::aad_jacobian(reg_prob, sol.x);
-  const Eigen::VectorXd rr = reg_prob.residuals<double>(sol.x);
+  const Eigen::MatrixXd Jr = reg_prob.jacobian(sol.x);
+  const Eigen::VectorXd rr = reg_prob.residuals(sol.x);
   const double stat = (Jr.transpose() * rr).cwiseAbs().maxCoeff();
 
   const double data_resid = b.prob.residuals<double>(sol.x).cwiseAbs().maxCoeff();  // data rows only

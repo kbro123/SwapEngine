@@ -314,7 +314,7 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
       return acc;
     }
     case QuoteKind::Rate:
-      return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + ins.convexity;
+      return pricing::future_rate<Scalar>(ins.obs, ins.convexity, C(ins.forecast));
     case QuoteKind::TurnJump: {
       // The model quote is the raw turn jump δ, read straight off the (turned) curve handle. Linear in
       // x: δ IS a state variable. Only the bundle's CurveHandle exposes turn_jump; a bare ModularCurve
@@ -325,11 +325,10 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
       else
         throw std::logic_error("TurnJump instrument requires a turned bundle curve handle");
     }
-    case QuoteKind::ParSpread:
-      return (pricing::float_leg_pv<Scalar>(ins.bench.coupons, C(ins.bench.forecast),
-                                            C(ins.bench.discount)) -
-              pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount))) /
-             pricing::annuity<Scalar>(ins.fixed.coupons, C(ins.fixed.discount));
+    case QuoteKind::ParSpread:  // E6.1c: the ONE ParSpread formula lives in cashflows.hpp
+      return pricing::par_spread<Scalar>(ins.fwd.coupons, ins.bench.coupons, ins.fixed.coupons,
+                                         C(ins.fwd.forecast), C(ins.fwd.discount), C(ins.bench.forecast),
+                                         C(ins.bench.discount), C(ins.fixed.discount));
     case QuoteKind::FxForward:
       // FX-forward outright = fx_spot · DF_foreign(fx_time) / DF_domestic(fx_time). This is exactly the
       // machinery that converts a forward foreign cashflow back to the domestic currency at any date.
@@ -353,13 +352,13 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
     }
     case QuoteKind::ZeroCouponRate:
       return zero_coupon_transform<Scalar>(
-          pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount)) /
-              pricing::annuity<Scalar>(ins.fixed.coupons, C(ins.fixed.discount)),
+          pricing::par_rate<Scalar>(ins.fwd.coupons, ins.fixed.coupons, C(ins.fwd.forecast),
+                                    C(ins.fwd.discount), C(ins.fixed.discount)),
           zero_coupon_tau(ins));
-    case QuoteKind::ParRate:
+    case QuoteKind::ParRate:  // E6.1c: the ONE ParRate formula lives in cashflows.hpp
     default:
-      return pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount)) /
-             pricing::annuity<Scalar>(ins.fixed.coupons, C(ins.fixed.discount));
+      return pricing::par_rate<Scalar>(ins.fwd.coupons, ins.fixed.coupons, C(ins.fwd.forecast),
+                                       C(ins.fwd.discount), C(ins.fixed.discount));
   }
 }
 
@@ -432,14 +431,36 @@ struct CalibrationProblem {
     return r;
   }
 
+  // THE single-curve layout (flat front over the meeting dates + Hermite back), built once here so every
+  // consumer (residuals, risk.hpp's operators, tests) derives it from the same place (E6.1c: it used to be
+  // re-derived in five headers).
+  template <class Scalar>
+  curve::ModularCurve<Scalar> make_curve() const {
+    return curve::make_modular_curve<Scalar>(curve::flat_hermite(meeting_times, back_times));
+  }
+
   // r(x) with x = the knot forwards of a standalone two-region curve.
   template <class Scalar, class Vec>
   Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    auto c = curve::make_modular_curve<Scalar>(curve::flat_hermite(meeting_times, back_times));
+    auto c = make_curve<Scalar>();
     c.set_forwards(x);
     return price_residuals<Scalar>(c);
   }
 };
+
+// D = diag(−∂r_i/∂q_i): how each residual row scales with ITS market quote (risk.hpp / BundleSession share
+// this one definition, E6.1c). Identity for a hard pin (r = model − q); an FX forward's residual is
+// (ln F − ln q)/T so −∂r/∂q = 1/(q·T); a Huber band's market mid enters only through the decay·(q − m)
+// pull on every side of the band (band_residual), so −∂r/∂q = decay. Needs no curve.
+inline Eigen::VectorXd residual_market_scale(const std::vector<Instrument>& instruments) {
+  Eigen::VectorXd d = Eigen::VectorXd::Ones(static_cast<int>(instruments.size()));
+  for (int i = 0; i < d.size(); ++i) {
+    const Instrument& ins = instruments[static_cast<std::size_t>(i)];
+    if (ins.quote == QuoteKind::FxForward) d[i] = 1.0 / (ins.market * ins.fx_time);
+    else if (ins.band_upper > ins.band_lower) d[i] = ins.band_decay;
+  }
+  return d;
+}
 
 // NOTE: fixed-base spread calibration (the former SpreadCalibrationProblem, with its SpreadCurve) was
 // TEST-ONLY -- production spreads calibrate jointly through the bundle path (SpreadHandle). Both now live
