@@ -17,7 +17,7 @@
 
 #include <vector>
 
-#include "swaps/build/credit_instruments.hpp"
+#include "swaps/calibration/credit_instrument.hpp"  // the row type only (E6.4: no build/ dependency)
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/hazard.hpp"
 
@@ -30,7 +30,7 @@ struct CreditProblem {
   std::vector<double> meeting_times;
   std::vector<double> back_times;
 
-  std::vector<build::CdsInstrument> instruments;
+  std::vector<CdsInstrument> instruments;
 
   int n_knots() const { return static_cast<int>(meeting_times.size() + back_times.size()); }
   int n_residuals() const { return static_cast<int>(instruments.size()); }

@@ -14,7 +14,7 @@
 
 #include <vector>
 
-#include "swaps/build/inflation_instruments.hpp"
+#include "swaps/calibration/inflation_instrument.hpp"  // the row type only (E6.4: no build/ dependency)
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/inflation.hpp"
 
@@ -29,7 +29,7 @@ struct InflationProblem {
 
   double base = 100.0;                 // I(0)
   curve::Seasonality seasonality;      // optional; inactive => no seasonal adjustment
-  std::vector<build::InflationInstrument> instruments;
+  std::vector<InflationInstrument> instruments;
 
   int n_knots() const { return static_cast<int>(meeting_times.size() + back_times.size()); }
   int n_residuals() const { return static_cast<int>(instruments.size()); }

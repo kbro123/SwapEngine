@@ -36,6 +36,7 @@ done
 pass_oracle="SKIP"
 pass_schema="SKIP"
 pass_taxonomy="SKIP"
+pass_graph="SKIP"
 pass_lit="SKIP"
 pass_correctness="SKIP"
 pass_perf="SKIP"
@@ -62,6 +63,16 @@ if bash "${ROOT}/tools/check_oracle_tests.sh" --build "${BUILD_DIR}"; then
   pass_oracle="PASS"
 else
   pass_oracle="FAIL"; rc=1
+fi
+
+# ---- Include-graph guard (E6.4) ---------------------------------------------
+# The layer DAG drawn in ARCHITECTURE.md is the contract: every real cross-layer #include must be a declared
+# arrow, and the graph must stay acyclic. Cheap (a file walk), so it runs even in --bench-only.
+echo ">> include-graph guard (ARCHITECTURE.md's layer DAG vs the real includes)"
+if python3 "${ROOT}/tools/check_include_graph.py"; then
+  pass_graph="PASS"
+else
+  pass_graph="FAIL"; rc=1
 fi
 
 # ---- Test-taxonomy guard (E5) -----------------------------------------------
@@ -155,6 +166,7 @@ echo ""
 echo "========== VERIFY SUMMARY =========="
 printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
 printf "  %-20s %s\n" "test-taxonomy guard:" "${pass_taxonomy}"
+printf "  %-20s %s\n" "include-graph guard:" "${pass_graph}"
 printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
 printf "  %-20s %s\n" "conventions schema:" "${pass_schema}"
 printf "  %-20s %s\n" "no-literal guard:" "${pass_lit}"

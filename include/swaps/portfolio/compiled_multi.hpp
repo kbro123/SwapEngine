@@ -39,8 +39,7 @@
 #include <vector>
 
 #include "swaps/ad/dual.hpp"                       // ad::Dual -- the fallback PV01 forward-AAD pass
-#include "swaps/calibration/bundle_problem.hpp"   // BundleCurveSet / CurveHandle (the fallback path)
-#include "swaps/calibration/hybrid_residual.hpp"  // curves_are_noncacheable -- THE curve-level W guard
+#include "swaps/pricing/curve_handle.hpp"         // BundleCurveSet / CurveHandle / the W guard (E6.4)
 #include "swaps/portfolio/portfolio.hpp"          // MultiCurveBook
 #include "swaps/pricing/compiled_book.hpp"        // CompiledCurveSet + BundleFloatBatch/BundleFixedLegs
 
@@ -65,7 +64,7 @@ class CompiledMultiCurveBook {
 
     // A value-dependent interpolation scheme anywhere means NO curve has a constant W (the same bundle
     // property HybridBundleResidual keys off) -- every position then rides the templated fallback.
-    const bool nonlinear = calibration::curves_are_noncacheable(specs_);
+    const bool nonlinear = pricing::curves_are_noncacheable(specs_);
 
     cs_.init(specs_);
     std::vector<double> notional, rate;
@@ -148,7 +147,7 @@ class CompiledMultiCurveBook {
       // Overwrite the handles' forwards in place (BundleCurveSet reuses its per-curve buffers), then
       // price the non-cacheable minority through the SAME templated kernel BundleSession uses today.
       fb_curves_.update([&](int c, int i) { return x[off_[c] + i]; });
-      const auto cof = [this](int i) -> const calibration::CurveHandle<double>& { return fb_curves_[i]; };
+      const auto cof = [this](int i) -> const pricing::CurveHandle<double>& { return fb_curves_[i]; };
       total += fallback_.value<double>(cof);
     }
     return total;
@@ -269,9 +268,9 @@ class CompiledMultiCurveBook {
     // Width-ONE directional dual (ad::seed_directional, 2026-09-10): the all-ones directional derivative in one
     // heap-free pass, instead of a full-width gradient summed afterwards.
     const auto xd = swaps::ad::seed_directional(x);
-    const auto C = calibration::build_bundle_curves<swaps::ad::DualDir>(
+    const auto C = pricing::build_bundle_curves<swaps::ad::DualDir>(
         specs_, [&](int c, int i) { return xd[off_[c] + i]; });
-    const auto cof = [&C](int i) -> const calibration::CurveHandle<swaps::ad::DualDir>& { return *C[i]; };
+    const auto cof = [&C](int i) -> const pricing::CurveHandle<swaps::ad::DualDir>& { return *C[i]; };
     const swaps::ad::DualDir npv = fallback_.value<swaps::ad::DualDir>(cof);
     return npv.derivatives().size() ? npv.derivatives()[0] : 0.0;
   }
@@ -291,7 +290,7 @@ class CompiledMultiCurveBook {
   // Templated half: the non-cacheable positions (Xccy / compounded / moment), priced through the
   // existing virtual-handle kernel off handles that are reused (values overwritten) every call.
   MultiCurveBook fallback_;
-  mutable calibration::BundleCurveSet<double> fb_curves_;
+  mutable pricing::BundleCurveSet<double> fb_curves_;
 
   Eigen::VectorXd rowsum_;             // per-registered-time Σ_j W[k,j] (constant): parallel-shift DF tangent scale
   mutable Eigen::VectorXd df_, inv_, npv_, t_;  // reusable per-reprice scratch (df_/npv_ npv(); t_ pv01()'s DF tangent)

@@ -29,174 +29,27 @@
 #include "swaps/calibration/problem.hpp"  // the generic FloatLeg/FixedLeg/Instrument model (design §3)
 #include "swaps/curve/curve_module.hpp"   // runtime ModularCurve for user-defined interpolation regions
 #include "swaps/pricing/cashflows.hpp"
+#include "swaps/pricing/curve_handle.hpp"  // CurveHandle & co (E6.4: they are pricing, re-exported below)
 #include "swaps/pricing/curve_spec.hpp"   // CurveStructure -- BundleCurveSpec is an alias of it
 
 namespace swaps::calibration {
 
-// Type-erased curve so a bundle can hold heterogeneous curves (outright / spread) and price through one
-// kernel. Scalar-templated so AAD flows through the virtual calls.
-template <class S>
-struct CurveHandle {
-  virtual ~CurveHandle() = default;
-  virtual S forward(double t) const = 0;
-  virtual S integral(double t) const = 0;
-  virtual S discount(double t) const = 0;
-  // Overwrite this curve's knot forwards IN PLACE (the structure is fixed; only the values change). Lets a
-  // streaming caller reuse one handle across ticks instead of rebuilding the object -- see BundleCurveSet.
-  virtual void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) = 0;
-  // The jump size δⱼ of this curve's j-th turn (docs/turns-calibration.md). Only a TurnedCurve overrides
-  // it; every other handle has no turns. It is the model quote of a TurnJump calibration instrument.
-  virtual S turn_jump(int) const { throw std::logic_error("turn_jump: this curve has no turns"); }
-  // Append the breakpoints between which forward(t) is ONE analytic piece (region knots, de Boor
-  // breakpoints, turn edges, the base chain's pieces): the moment path's knot-aligned quadrature splits
-  // its windows there (cashflows.hpp moment_gauss_nodes). Unknown by default (an empty append).
-  virtual void pieces_into(std::vector<double>&) const {}
-};
-template <class S>
-struct OutrightHandle : CurveHandle<S> {
-  curve::ModularCurve<S> c;
-  explicit OutrightHandle(curve::ModularCurve<S> cc) : c(std::move(cc)) {}
-  S forward(double t) const override { return c.forward(t); }
-  S integral(double t) const override { return c.integral(t); }
-  S discount(double t) const override { return c.discount(t); }
-  void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { c.set_forwards(x); }
-  void pieces_into(std::vector<double>& out) const override { const auto p = c.pieces(); out.insert(out.end(), p.begin(), p.end()); }
-};
-// forward = base + spread ; integral = base + spread ; DF = base_DF * exp(-int spread).
-template <class S>
-struct SpreadHandle : CurveHandle<S> {
-  curve::ModularCurve<S> spread;
-  const CurveHandle<S>* base;
-  SpreadHandle(curve::ModularCurve<S> sp, const CurveHandle<S>* b) : spread(std::move(sp)), base(b) {}
-  S forward(double t) const override { return base->forward(t) + spread.forward(t); }
-  S integral(double t) const override { return base->integral(t) + spread.integral(t); }
-  S discount(double t) const override {
-    using std::exp;
-    return exp(-integral(t));
-  }
-  void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { spread.set_forwards(x); }
-  void pieces_into(std::vector<double>& out) const override {
-    base->pieces_into(out);
-    const auto p = spread.pieces();
-    out.insert(out.end(), p.begin(), p.end());
-  }
-};
-// TURN OVERLAY adapter (docs/turns-calibration.md §3, the templated/AAD/QuantLib-oracle path). Wraps a
-// built curve (outright or spread) and adds each turn's jump δⱼ over its window [aⱼ,bⱼ]:
-//     forward(t)  = base_forward(t)  + Σⱼ δⱼ·1_{[aⱼ,bⱼ]}(t)          (a flat bump inside the window)
-//     integral(t) = base_integral(t) + Σⱼ δⱼ·overlap(t, [aⱼ,bⱼ])     (matches the compiled W overlap col)
-//     discount(t) = base_discount(t)·exp(−Σⱼ δⱼ·overlap(t, [aⱼ,bⱼ]))
-// This is the closed-form analogue of SpreadHandle's additive overlay, and it keeps the templated path
-// bit-consistent with the compiled W-cache (which fills the SAME overlap columns). A dependent SPREAD
-// curve whose base is a TurnedCurve observes the base's turns automatically -- SpreadHandle recurses into
-// base->integral/forward, which already include the base overlay.
-template <class S>
-struct TurnedCurve : CurveHandle<S> {
-  std::unique_ptr<CurveHandle<S>> base;  // the underlying outright/spread curve
-  std::vector<pricing::Turn> windows;    // turn accrual windows (year fractions)
-  Eigen::Matrix<S, Eigen::Dynamic, 1> deltas;  // δⱼ, the free overlay state variables
-  int n_interp = 0;                      // size of `base`'s own state (the interp-knot count)
-
-  TurnedCurve(std::unique_ptr<CurveHandle<S>> b, std::vector<pricing::Turn> w, int ni)
-      : base(std::move(b)), windows(std::move(w)), n_interp(ni) {
-    deltas.setZero(static_cast<int>(windows.size()));
-  }
-  S forward(double t) const override {
-    S f = base->forward(t);
-    for (std::size_t j = 0; j < windows.size(); ++j)
-      if (t >= windows[j].start && t < windows[j].end) f += deltas[static_cast<int>(j)];
-    return f;
-  }
-  S integral(double t) const override {
-    S I = base->integral(t);
-    for (std::size_t j = 0; j < windows.size(); ++j)
-      I += deltas[static_cast<int>(j)] * S(pricing::turn_overlap(t, windows[j]));
-    return I;
-  }
-  S discount(double t) const override {
-    using std::exp;
-    return exp(-integral(t));
-  }
-  // The stacked state is [ interp knots | δ's ]: the first n_interp go to the base curve, the rest are
-  // the turn jumps. Matches the state layout CurveStructure::n_knots() / build_bundle_curves lay out.
-  void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override {
-    base->set_forwards(x.head(n_interp));
-    for (int j = 0; j < deltas.size(); ++j) deltas[j] = x[n_interp + j];
-  }
-  S turn_jump(int j) const override { return deltas[j]; }
-  void pieces_into(std::vector<double>& out) const override {
-    base->pieces_into(out);
-    for (const auto& w : windows) { out.push_back(w.start); out.push_back(w.end); }  // the forward steps there
-  }
-};
+// The curve-ACCESS family lives in pricing/ (E6.4, 2026-09-10 — it mentions no Instrument and no
+// solver, and keeping it here made the portfolio layer include this one). Re-exported so every
+// `cal::CurveHandle` / `cal::build_bundle_curves` spelling in the engine, the api and the tests
+// still names exactly these types.
+using pricing::BundleCurveSet;
+using pricing::build_bundle_curves;
+using pricing::CurveHandle;
+using pricing::curves_are_noncacheable;
+using pricing::OutrightHandle;
+using pricing::SpreadHandle;
+using pricing::TurnedCurve;
 
 // A curve's definition in a bundle: knots (or regions), outright/spread, currency. This is THE SAME
 // TYPE the pricing engine uses -- pricing::CurveStructure (curve_spec.hpp) -- not a mirror of it, so the
 // two can never drift. Named `BundleCurveSpec` here for the calibration layer's vocabulary.
 using BundleCurveSpec = pricing::CurveStructure;
-
-// Build every bundle curve as a handle. `value(c, i)` supplies curve c's local knot i (free from the
-// parameter vector, or a frozen constant). Requires base < c so each spread's base is already built.
-template <class Scalar, class ValueFn>
-std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves(
-    const std::vector<BundleCurveSpec>& specs, ValueFn value) {
-  std::vector<std::unique_ptr<CurveHandle<Scalar>>> C(specs.size());
-  for (int c = 0; c < static_cast<int>(specs.size()); ++c) {
-    const auto& spec = specs[c];
-    if (spec.base >= c) throw std::invalid_argument("bundle curve: base index must be < curve index");
-    const int ni = spec.n_interp_knots();  // the first ni state entries feed the interpolation
-    Eigen::Matrix<Scalar, Eigen::Dynamic, 1> xi(ni);
-    for (int i = 0; i < ni; ++i) xi[i] = value(c, i);
-    auto inner = curve::make_modular_curve<Scalar>(spec.modules());
-    inner.set_forwards(xi);
-    std::unique_ptr<CurveHandle<Scalar>> h;
-    if (spec.base < 0)
-      h = std::make_unique<OutrightHandle<Scalar>>(std::move(inner));
-    else
-      h = std::make_unique<SpreadHandle<Scalar>>(std::move(inner), C[spec.base].get());
-    // Turns overlay this curve's own forwards (and, via the base recursion, any dependent curve's).
-    // The δ's are the LAST turns.size() entries of the state block, after the ni interp knots.
-    if (!spec.turns.empty()) {
-      auto turned = std::make_unique<TurnedCurve<Scalar>>(std::move(h), spec.turns, ni);
-      for (int j = 0; j < static_cast<int>(spec.turns.size()); ++j)
-        turned->deltas[j] = value(c, ni + j);
-      h = std::move(turned);
-    }
-    C[c] = std::move(h);
-  }
-  return C;
-}
-
-// A reusable set of bundle curves for a FIXED structure. Build the handles ONCE, then `update()` their
-// knot forwards in place each tick -- no object reconstruction, no per-tick handle allocation. This is the
-// streaming form of build_bundle_curves: the curve topology (knot times, schemes, spread graph) never
-// changes tick to tick, only the values do, so the objects (and their per-curve knot buffers) are reused.
-template <class Scalar>
-class BundleCurveSet {
- public:
-  BundleCurveSet() = default;
-  // Build the handles once with zero forwards. `specs` must outlive this object (it is not copied).
-  void build(const std::vector<BundleCurveSpec>& specs) {
-    handles_ = build_bundle_curves<Scalar>(specs, [](int, int) { return Scalar(0.0); });
-    scratch_.resize(specs.size());
-    for (std::size_t c = 0; c < specs.size(); ++c) scratch_[c].resize(specs[c].n_knots());
-  }
-  // Overwrite every curve's forwards from value(c, i), reusing the per-curve scratch buffers (no alloc).
-  template <class ValueFn>
-  void update(ValueFn value) {
-    for (int c = 0; c < static_cast<int>(handles_.size()); ++c) {
-      auto& xi = scratch_[c];
-      for (int i = 0; i < static_cast<int>(xi.size()); ++i) xi[i] = value(c, i);
-      handles_[c]->set_forwards(xi);
-    }
-  }
-  const CurveHandle<Scalar>& operator[](int i) const { return *handles_[i]; }
-  bool empty() const { return handles_.empty(); }
-
- private:
-  std::vector<std::unique_ptr<CurveHandle<Scalar>>> handles_;
-  std::vector<Eigen::Matrix<Scalar, Eigen::Dynamic, 1>> scratch_;  // reused per-curve knot buffers
-};
 
 // (mtm_funding_term_negligible retired 2026-09-09: the compiled batch prices the MtM funding leg exactly.)
 

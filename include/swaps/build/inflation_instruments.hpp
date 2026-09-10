@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "swaps/calibration/inflation_instrument.hpp"  // the row type (E6.4); the builders below make one
 #include "swaps/curve/inflation.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
@@ -35,42 +36,11 @@ namespace swaps::build {
 
 namespace px = swaps::pricing;
 
+// The row type lives in calibration/ (E6.4); this alias keeps `build::InflationInstrument` spelling valid.
+using calibration::InflationInstrument;
+
 // One inflation calibration instrument (ZCIS or YoY). Its `model_quote<Scalar>` prices against an
 // InflationIndexCurve; the residual is (model_quote − market), rate units, like every other instrument.
-struct InflationInstrument {
-  enum class Kind { ZCIS, YoY };
-  Kind kind = Kind::ZCIS;
-
-  // ZCIS: the single maturity.
-  double maturity = 0.0;
-
-  // YoY: per-period data. t0[i]/t1[i] are the period start/end (curve time); w_num[i] = DF_n(pay_i) and
-  // w_den[i] = DF_n(pay_i)·τ_i are the build-time nominal-discount weights of the par-rate quotient.
-  std::vector<double> t0, t1, w_num, w_den;
-
-  double market = 0.0;  // quoted breakeven (ZCIS) / par fixed rate (YoY), rate units
-
-  template <class Scalar, class InflCurve>
-  Scalar model_quote(const InflCurve& c) const {
-    if (kind == Kind::ZCIS) return c.zc_breakeven(maturity);
-    // YoY par fixed rate = Σ w_num·R_i / Σ w_den. Seed the numerator from the FIRST curve-dependent term
-    // (R_0 carries the AAD derivatives); the denominator is a pure build-time constant.
-    Scalar num = Scalar(w_num[0]) * c.yoy_forward(t0[0], t1[0]);
-    double den = w_den[0];
-    for (std::size_t i = 1; i < t0.size(); ++i) {
-      num += Scalar(w_num[i]) * c.yoy_forward(t0[i], t1[i]);
-      den += w_den[i];
-    }
-    return num / den;
-  }
-
-  template <class Scalar, class InflCurve>
-  Scalar residual(const InflCurve& c) const {
-    return model_quote<Scalar>(c) - market;
-  }
-};
-
-// ZCIS builder: maturity (curve-time years) + quoted annually-compounded breakeven.
 inline InflationInstrument inflation_zcis(double maturity_years, double breakeven) {
   if (!(maturity_years > 0.0)) throw std::invalid_argument("inflation_zcis: maturity must be > 0");
   InflationInstrument ins;

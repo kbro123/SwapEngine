@@ -39,16 +39,8 @@ inline bool has_compounded_obs(const Instrument& ins) {
   return false;
 }
 
-// True iff the bundle's CURVES rule out the W-cache entirely: a value-dependent (non-linear) interpolation
-// scheme has no constant W (integral_weight_matrix is the authority and throws on it; curve::scheme_is_linear
-// is the ONE static answer, shared with BundleSession). When true, EVERY row is non-cacheable and the hybrid
-// engine runs pure width-reduced AAD instead of throwing.
-inline bool curves_are_noncacheable(const std::vector<BundleCurveSpec>& curves) {
-  for (const auto& c : curves)
-    for (const auto& r : c.regions)
-      if (!curve::scheme_is_linear(r.scheme)) return true;
-  return false;
-}
+// (curves_are_noncacheable — "do these curves have a constant W?" — moved to pricing/curve_handle.hpp in
+// E6.4 and is re-exported by bundle_problem.hpp; it is a curve-set property, not a residual-engine one.)
 
 // True iff this instrument must go to the AAD block rather than the W-cache. Both cross-currency quotes are
 // now W-cacheable in their standard form: a STANDALONE FX forward (affine (ln F − ln q)/T residual) and a
