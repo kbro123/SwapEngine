@@ -277,6 +277,14 @@
     "shape_desk_mixed_jacobian": {
       "target_ns": 4017915,
       "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only -- desk with a MonotoneCubic long end (52 of 70 rows compiled); the all-AAD route it replaced measured 4.73 ms"
+    },
+    "multicurve4_cold_calibrate": {
+      "target_ns": 960000,
+      "note": "initial = 2026-09-10 baseline x1.3 (new 4-curve QuantLib reference: 738 us vs QuantLib 2.87 ms, 3.9x); ratchets DOWN only"
+    },
+    "multicurve4_tick_0p3bp": {
+      "target_ns": 5600,
+      "note": "initial = 2026-09-10 baseline x1.3 (4.3 us vs a QuantLib re-bootstrap at 2.87 ms, 663x); ratchets DOWN only"
     }
   }
 }

@@ -72,9 +72,21 @@ MUTATIONS = [
      "res.rank_deficiency = 0;",
      ["calibration_status_test.cpp", "rank_safety_test.cpp"], "*", "the LM min-norm completion has no non-oracle test (audit M3)"),
     ("averaged_daily_weight_by_curve_time", "include/swaps/build/observations.hpp",
-     "      const double w = obs_weight(dc, cal, s, e, s, e);  // observation window == accrual window => 1",
-     "      const double w = (te > ts) ? year_frac(dc, s, e, cal) / (te - ts) : 1.0;",
+     "      const double w = obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end);",
+     "      const double w = (te > ts) ? year_frac(dc, p.acc_start, p.acc_end, cal) / (te - ts) : 1.0;",
      ["build_instruments_test.cpp"], "*", "the DAILY averaged observation's day-count weight is unpinned (item 17)"),
+    # E3: drop the fixing that applies on a non-business START (roll forward instead of back), which is what
+    # the builder did until 2026-09-10 -- 29/31 of the correct rate for a Saturday-start contract month.
+    ("averaged_window_drops_its_leading_fixing", "include/swaps/build/observations.hpp",
+     "  while (!is_business_day(cal, first)) first = first.plus_days(-1);  // the fixing that applies on `start`",
+     "  while (!is_business_day(cal, first)) first = first.plus_days(1);",
+     ["build_instruments_test.cpp"], "*", "a non-business-day window start is unpinned (E3)"),
+    # E3, mirrored: truncate the TRAILING fixing at the window end, pricing a 2-day rate where the contract
+    # pays Friday's 3-day rate for 2 days.
+    ("averaged_window_truncates_its_trailing_fixing", "include/swaps/build/observations.hpp",
+     "    Date fe = fs.plus_days(1);\n    while (!is_business_day(cal, fe)) fe = fe.plus_days(1);",
+     "    Date fe = fs.plus_days(1);\n    while (!is_business_day(cal, fe)) fe = fe.plus_days(1);\n    if (end < fe) fe = end;",
+     ["build_instruments_test.cpp"], "*", "a non-business-day window end is unpinned (E3)"),
     ("averaged_moment_weight_by_curve_time", "include/swaps/build/observations.hpp",
      "  o.sub_start = {a}; o.sub_end = {b};\n  o.tau_index = year_frac(dc, start, end, cal);",
      "  o.sub_start = {a}; o.sub_end = {b}; if (std::abs(rmax - 1.0) > 1e-15) o.weight = {rmax};\n  o.tau_index = year_frac(dc, start, end, cal);",

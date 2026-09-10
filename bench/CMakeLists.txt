@@ -79,6 +79,11 @@ if(TARGET quantlib_oracle)
   # The committed curve-build baseline: ours vs QuantLib GlobalBootstrap (same algorithm class).
   add_executable(curve_build_bench curve_build_bench.cpp)
   target_link_libraries(curve_build_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
+
+  # THE MULTI-CURVE QuantLib reference: four curves, both engines, cold. (Its own main() asserts the two
+  # arms agree at the pillars before timing them, so `benchmark` not `benchmark_main`.)
+  add_executable(multicurve_ql_bench multicurve_ql_bench.cpp)
+  target_link_libraries(multicurve_ql_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark)
   target_include_directories(curve_build_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 
   # The risk-ladder baseline: our AAD + IFT vs QuantLib bump-and-reprice.

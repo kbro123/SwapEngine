@@ -8,6 +8,7 @@
 // only NUMBERS can differ; a recursive tolerant compare then pins them. QuantLib-free (swaps_api_tests).
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -56,20 +57,50 @@ void expect_json_eq(const json::value& a, const json::value& b, double tol, cons
     case json::kind::array: {
       const auto& aa = a.as_array();
       const auto& ba = b.as_array();
-      // KNOWN, DELIBERATE DIVERGENCE (item 17, 2026-09-10) — the ONE place C++ and the web compiler disagree.
-      // An averaged overnight observation's per-day weight is `accrual earned / index year-fraction of the
-      // observation window`, which is 1 when the two windows coincide (a plain averaged leg). Both compilers
-      // used to divide by the window's CURVE-TIME length instead, making every averaged leg (index dc)/(curve
-      // dc) too high — 365/360 for an ACT/360 index. The C++ builders were fixed; server/conventions.py has
-      // not been (web work is deferred: TASKS-API §A0.5), so these goldens still carry the old weights. Pin the
-      // divergence EXACTLY: our side omits the weights (all-ones), the golden's are all 365/360. Anything else
-      // — a different factor, a partial divergence, a weight difference anywhere but here — still fails.
-      if (path.size() >= 7 && path.compare(path.size() - 7, 7, ".weight") == 0 && aa.empty() != ba.empty()) {
-        const auto& theirs = aa.empty() ? ba : aa;
-        for (std::size_t i = 0; i < theirs.size(); ++i)
-          EXPECT_NEAR(theirs[i].to_number<double>(), 365.0 / 360.0, 1e-12)
-              << "at " << path << "[" << i << "]: the only tolerated C++/Python divergence is the pre-item-17 "
-              << "averaged-observation weight (365/360); this is a different one";
+      // THE TWO KNOWN, DELIBERATE C++/PYTHON DIVERGENCES, both in an averaged overnight observation, both
+      // fixed in C++ and still present in server/conventions.py (web work deferred, TASKS-API §A0.5). They
+      // land in the SAME arrays, so they are pinned together, tightly enough that a third one still fails:
+      //
+      //   item 17  the per-day WEIGHT is `accrual earned / index year-fraction of the observation window`.
+      //            Python still divides by the window's CURVE-TIME length, so every Python weight is exactly
+      //            365/360 for an ACT/360 index where ours is 1 (or a fraction at a partly-earned end).
+      //   E3       a window opening or closing on a NON-BUSINESS DAY keeps the fixing's own overnight window
+      //            and clips only the ACCRUAL. Python enumerates the business days strictly inside the
+      //            window, so it drops a leading fixing entirely and truncates the trailing one. Ours can
+      //            therefore have ONE extra leading entry, and a later final sub_end.
+      const auto ends_with = [&path](const char* suf) {
+        const std::size_t n = std::strlen(suf);
+        return path.size() >= n && path.compare(path.size() - n, n, suf) == 0;
+      };
+      if (ends_with(".sub_start") || ends_with(".sub_end") || ends_with(".weight")) {
+        if (ends_with(".weight")) {
+          // Ours is EMPTY whenever every weight is 1 (the all-ones fast path), so no size relation holds here.
+
+          for (std::size_t i = 0; i < ba.size(); ++i)
+            EXPECT_NEAR(ba[i].to_number<double>(), 365.0 / 360.0, 1e-12)
+                << "at " << path << "[" << i << "]: Python's averaged weight is the pre-item-17 365/360";
+          for (std::size_t i = 0; i < aa.size(); ++i) {
+            const double w = aa[i].to_number<double>();
+            EXPECT_GT(w, 0.0) << "at " << path << "[" << i << "]";
+            EXPECT_LE(w, 1.0) << "at " << path << "[" << i << "]";
+            if (i > 0 && i + 1 < aa.size())
+              EXPECT_NEAR(w, 1.0, 1e-12) << "at " << path << "[" << i << "]: an interior day earns its whole fixing";
+          }
+          return;
+        }
+        // sub_start / sub_end: beyond the recovered leading fixing the windows must match exactly, except
+        // the final sub_end, which E3 may extend to the trailing fixing's own end.
+        ASSERT_TRUE(aa.size() == ba.size() || aa.size() == ba.size() + 1)
+            << "at " << path << ": E3 recovers at most ONE leading fixing";
+        const std::size_t off = aa.size() - ba.size();
+        for (std::size_t i = 0; i + 1 < ba.size(); ++i)
+          EXPECT_NEAR(aa[i + off].to_number<double>(), ba[i].to_number<double>(), tol)
+              << "at " << path << "[" << i << "]";
+        if (!ba.empty()) {
+          const double ours = aa[aa.size() - 1].to_number<double>(), theirs = ba[ba.size() - 1].to_number<double>();
+          if (ends_with(".sub_end")) EXPECT_GE(ours, theirs - tol) << "at " << path << " (last)";
+          else EXPECT_NEAR(ours, theirs, tol) << "at " << path << " (last)";
+        }
         return;
       }
       ASSERT_EQ(aa.size(), ba.size()) << "array size mismatch at " << path;

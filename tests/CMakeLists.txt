@@ -102,6 +102,7 @@ if(TARGET quantlib_oracle)
     ql_test_isolation.cpp
     convexity_test.cpp
     pricing_test.cpp
+  calibration_oracle_test.cpp
     modular_curve_test.cpp
     bond_oracle_test.cpp
     bond_asset_swap_oracle.cpp

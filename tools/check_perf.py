@@ -96,6 +96,16 @@ METRICS = {
     "shape_desk_edge_osc_tick": ("shape_ladder_bench", "BM_Shape_desk_EdgeOscTick", None),
     # --- calibration kernels (single curve, 23x23; QuantLib GlobalBootstrap is the reference) ---
     "sofr_23k_square_cold_calibrate": ("curve_build_bench",   "BM_CurveBuild_Ours",              "BM_CurveBuild_QuantLib"),
+    # THE MULTI-CURVE QuantLib reference (2026-09-10). Every other QuantLib timing reference here is a SINGLE
+    # curve or a bond book, so the engine's headline speedup was a single-currency number; the multi-curve
+    # comparisons were against our own templated kernel. These two are four curves (SOFR, FF on SOFR
+    # discounting, ESTR, EURIBOR-6M on ESTR discounting), with the bench's own main() first proving that
+    # QuantLib's bootstrapped curves reprice OUR instruments to 1e-13 -- so this times one problem, not two.
+    # The cold arms are algorithmically different on purpose (QuantLib: four sequential exactly-determined
+    # bootstraps; ours: one joint least-squares solve), which is why the cold multiple is small and the TICK
+    # multiple is not: a quote change forces QuantLib to re-bootstrap and costs us a frozen-Jacobian re-solve.
+    "multicurve4_cold_calibrate": ("multicurve_ql_bench", "BM_MultiCurve4_Ours", "BM_MultiCurve4_QuantLib"),
+    "multicurve4_tick_0p3bp": ("multicurve_ql_bench", "BM_MultiCurve4_Ours_Tick", "BM_MultiCurve4_QuantLib_Tick"),
     "sofr_23k_risk_ladder_23q_book9": ("risk_bench",          "BM_Risk_Ours_Analytic",           "BM_Risk_QuantLib_Bump"),
     "sofr_23k_book1000_ois_reprice": ("portfolio_bench",     "BM_Portfolio_Ours",               "BM_Portfolio_QuantLib"),
     "sofr_23k_warm_recal_0p3bp": ("warm_bench",          "BM_WarmRecal_Ours",               "BM_WarmRecal_QuantLib"),

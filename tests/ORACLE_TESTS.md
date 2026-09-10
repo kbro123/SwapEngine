@@ -24,7 +24,8 @@ that only ~46 of the 135 tests in the oracle binary compared to a QuantLib numbe
 
 | Test file | What is compared to QuantLib | Tolerance |
 |---|---|---|
-| `pricing_test.cpp` | OIS par, 3M and 1M futures priced by QuantLib off our curve (`YieldTermStructure` adapter) | `curve_rel` 1e-10 |
+| `pricing_test.cpp` | OIS par, 3M and 1M futures priced by QuantLib off our curve (`YieldTermStructure` adapter); the SHIPPED averaged-observation and par-swap builders (DB → `swap_conv` → `build::par_swap`) vs a QuantLib OIS on the same conventions, 1y–30y, with negative controls | `curve_rel` 1e-10; builders measured 7.6e-17 |
+| `calibration_oracle_test.cpp` | A four-curve CALIBRATION (SOFR, FF on SOFR discounting, ESTR, EURIBOR-6M on ESTR discounting): QuantLib's own instrument objects define every residual, our LM solves it, and the **knot forwards** must match the ones our own instruments produce. Both arms build OUR curve from the same `x`, so the comparison is exact and in the unit a client consumes | quotes 5e-13 (measured 1.1e-16); knot forwards 1e-4 bp (measured 9.2e-9 bp) |
 | `modular_curve_test.cpp` | QuantLib prices swaps + futures off our **Hermite** `ModularCurve` through the adapter; runtime builder == compile-time layout | `curve_rel` |
 | `extract_test.cpp` | Every coupon shape (compounded/averaged OIS, IBOR, futures) NPV / fair rate / forecast fixing vs QuantLib, with negative controls | `curve_rel` |
 | `bond_oracle_test.cpp` | Price / yield / accrued / duration / convexity vs `BondFunctions`; curve dirty/clean vs `DiscountingBondEngine`; z-spread vs `ZeroSpreadedTermStructure`; universe sweep | 1e-10 prices; 1e-6 dur/cvx |
@@ -105,6 +106,15 @@ oracle merely might.
 | `portfolio` | 1/4 | book aggregation is cross-path parity only (compiled vs templated) — a shared error cancels |
 | `api` | 0/20 | see below — measured by verb, not by include |
 | `market`, `trade`, `csa`, `xva`, `derive` | 0 | mostly containers and role plumbing (`quote.hpp`, `currency.hpp`, `trade.hpp`, `csa.hpp`) where there is no independent number to compare; `derive/asset_swap.hpp` and `xva/exposure.hpp` DO produce numbers and do not have one |
+
+**Calibration, not just pricing.** Every oracle above except `calibration_oracle_test.cpp` compares a QUOTE at a
+FIXED curve. That checks the pricing kernel; it does not check what a client actually consumes — the curve the
+calibration lands on — and an error in the instrument ASSEMBLY arrives there magnified by the inverse Jacobian.
+`calibration_oracle_test.cpp` closes that: QuantLib's instruments define the residuals, our LM solves them, and
+the answer is compared in knot forwards. It found **E3** (`ASSUMPTIONS.md`) on its first run — an averaged
+window opening on a non-business day dropped that accrual, pricing the August 2026 FF contract at 29/31 of the
+correct rate. Its scope is what QuantLib can express: a soft BAND, a TURN JUMP as a free variable, a BUTTERFLY
+as one combination residual and an MtM XCCY basis have no QuantLib counterpart and stay on cross-path parity.
 
 **The two S1 gaps.**
 

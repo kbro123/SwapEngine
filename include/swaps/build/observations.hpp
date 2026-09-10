@@ -39,14 +39,51 @@ inline std::vector<Date> business_days(const Date& start, const Date& end, const
   }
   return days;
 }
-// (fixing_date, accrual_end) per fixing day covering [start, end) (conventions.daily_periods).
-inline std::vector<std::pair<Date, Date>> daily_periods(const Date& start, const Date& end,
-                                                        const std::string& cal) {
-  const auto days = business_days(start, end, cal);
-  std::vector<std::pair<Date, Date>> out;
-  out.reserve(days.size());
-  for (std::size_t i = 0; i < days.size(); ++i)
-    out.emplace_back(days[i], i + 1 < days.size() ? days[i + 1] : end);
+// ONE fixing day of an overnight window: the FIXING period whose rate applies, and the ACCRUAL the window
+// actually earns at that rate. The two differ only at the ends of the window, and that difference is the
+// whole point of this type (E3, 2026-09-10).
+//
+// A window that STARTS ON A NON-BUSINESS DAY is the case that matters, and it is not exotic: a CME 30-Day
+// Fed Funds future references the CALENDAR month, so its window starts on the 1st whether or not that is a
+// business day -- roughly a third of contract months. The rate applying on Saturday 1 August is the fixing
+// published for Friday 31 July, which runs 31 Jul -> 3 Aug and earns the window 2 of its 3 days.
+//
+// Until 2026-09-10 this enumerated the business days INSIDE [start, end), so those leading days simply
+// vanished from the sum while tau_index still spanned the whole window: a flat 4 % curve priced the August
+// 2026 FF future at 3.6910 % instead of 3.9456 %, exactly 29/31 of it (-25 bp), and a Sunday start lost
+// 29/30. See ASSUMPTIONS.md E3.
+struct FixingPeriod {
+  Date fix_start, fix_end;  // the fixing's own overnight window -- the rate is DF(fix_start)/DF(fix_end) - 1
+  Date acc_start, acc_end;  // the part of it this observation window earns
+};
+
+// The fixing periods covering [start, end) on `cal` (conventions.daily_periods). The first fixing is the
+// business day ON OR BEFORE `start`, so no accrual is lost when the window opens on a weekend or holiday;
+// when `start` IS a business day this is byte-identical to enumerating the business days within it.
+inline std::vector<FixingPeriod> daily_periods(const Date& start, const Date& end, const std::string& cal) {
+  std::vector<FixingPeriod> out;
+  if (!(start < end)) return out;
+  Date first = start;
+  while (!is_business_day(cal, first)) first = first.plus_days(-1);  // the fixing that applies on `start`
+  const auto rest = business_days(start, end, cal);
+  std::vector<Date> fix;
+  fix.reserve(rest.size() + 1);
+  fix.push_back(first);
+  for (const Date& d : rest)
+    if (first < d) fix.push_back(d);
+  out.reserve(fix.size());
+  for (std::size_t i = 0; i < fix.size(); ++i) {
+    const Date fs = fix[i];
+    // A fixing's window ALWAYS runs to the next business day -- for the last fixing that may sit beyond
+    // `end`, and it must, because the rate published on Friday is the three-day rate whether or not the
+    // window closes on the Sunday. Truncating it to `end` would price a two-day rate instead, which is the
+    // same error as dropping a leading day, mirrored: the window's END clips the ACCRUAL, never the FIXING.
+    Date fe = fs.plus_days(1);
+    while (!is_business_day(cal, fe)) fe = fe.plus_days(1);
+    const Date as = (fs < start) ? start : fs;  // the leading fixing accrues only from the window's start
+    const Date ae = (fe < end) ? fe : end;      // the trailing fixing accrues only to the window's end
+    out.push_back(FixingPeriod{fs, fe, as, ae});
+  }
   return out;
 }
 
@@ -79,9 +116,11 @@ inline px::RateObservation observation(const Date& vd, const Date& start, const 
   px::RateObservation o;
   if (accrual == "averaged") {
     bool all_one = true;
-    for (const auto& [s, e] : daily_periods(fwd_from, end, cal)) {
-      const double ts = curve_time(vd, s), te = curve_time(vd, e);
-      const double w = obs_weight(dc, cal, s, e, s, e);  // observation window == accrual window => 1
+    for (const auto& p : daily_periods(fwd_from, end, cal)) {
+      const double ts = curve_time(vd, p.fix_start), te = curve_time(vd, p.fix_end);
+      // The fixing's rate, earning the accrual THIS window takes from it: 1 for every interior day, and a
+      // fraction only where the window opens or closes mid-fixing (a non-business start -- see FixingPeriod).
+      const double w = obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end);
       o.sub_start.push_back(ts);
       o.sub_end.push_back(te);
       o.weight.push_back(w);
@@ -122,10 +161,17 @@ inline px::RateObservation moment_observation(const Date& vd, const Date& start,
   // daily sum by ∫f plus the day-count moments. It is valid only while each day's index accrual is the SAME
   // multiple of its curve-time step (true for any ACT-based day count, false for 30/360, which is refused
   // rather than approximated twice) — that is what makes ∫f / tau_index the correctly annualised average.
+  // The expansion assumes every day is a WHOLE fixing period, so a window opening mid-fixing (a non-business
+  // start, e.g. the CME FF contract month) is refused rather than approximated twice -- the exact daily path
+  // handles it. This is the same refusal the day-count check below makes, for the same reason.
+  if (!is_business_day(cal, start))
+    throw std::invalid_argument(
+        "moment_observation: the window starts on a non-business day, so its first fixing is only partly "
+        "earned; use the exact daily path (observation(..., \"averaged\", ...))");
   double s2 = 0.0, s3 = 0.0, rmin = 1e300, rmax = -1e300;
-  for (const auto& [s, e] : daily_periods(start, end, cal)) {
-    const double dt = curve_time(vd, e) - curve_time(vd, s);
-    const double r = year_frac(dc, s, e, cal) / dt;
+  for (const auto& p : daily_periods(start, end, cal)) {
+    const double dt = curve_time(vd, p.fix_end) - curve_time(vd, p.fix_start);
+    const double r = year_frac(dc, p.fix_start, p.fix_end, cal) / dt;
     s2 += dt * dt; s3 += dt * dt * dt;
     rmin = std::min(rmin, r); rmax = std::max(rmax, r);
   }
@@ -195,26 +241,23 @@ inline px::RateObservation rfr_observation(const Date& vd, const Date& s, const 
   // Lookback / Lockout: a genuine daily compounded product (does NOT telescope).
   o.compounded = true;
   o.tau_index = year_frac(dc, s, e, accr_cal);
-  const auto days = business_days(s, e, lag.cal);
+  const auto per = daily_periods(s, e, lag.cal);  // keeps a non-business start's leading fixing (FixingPeriod)
   const std::size_t lock_from =
-      (lag.style == RfrStyle::Lockout && days.size() > std::size_t(lag.days))
-          ? days.size() - std::size_t(lag.days)
+      (lag.style == RfrStyle::Lockout && per.size() > std::size_t(lag.days))
+          ? per.size() - std::size_t(lag.days)
           : 0;
-  for (std::size_t i = 0; i < days.size(); ++i) {
-    const Date d0 = days[i];
-    const Date d1 = (i + 1 < days.size()) ? days[i + 1] : e;  // ACTUAL accrual span of this fixing day
-    const double acc = year_frac(dc, d0, d1, accr_cal);
-    Date obs0 = d0, obs1 = d1;  // the observation window whose forward rate this day earns
+  for (std::size_t i = 0; i < per.size(); ++i) {
+    Date obs0 = per[i].fix_start, obs1 = per[i].fix_end;  // the window whose forward rate this day earns
     if (lag.style == RfrStyle::Lookback) {
-      obs0 = advance_obs_bd(lag.cal, d0, -lag.days);
-      obs1 = advance_obs_bd(lag.cal, d1, -lag.days);
+      obs0 = advance_obs_bd(lag.cal, obs0, -lag.days);
+      obs1 = advance_obs_bd(lag.cal, obs1, -lag.days);
     } else if (i >= lock_from) {  // Lockout tail: freeze to the lockout-start day's window
-      obs0 = days[lock_from];
-      obs1 = (lock_from + 1 < days.size()) ? days[lock_from + 1] : e;
+      obs0 = per[lock_from].fix_start;
+      obs1 = per[lock_from].fix_end;
     }
     const double ts = curve_time(vd, obs0), te = curve_time(vd, obs1);
     // the looked-back / locked-out window's rate, earning THIS day's accrual (obs_weight above)
-    const double w = obs_weight(dc, accr_cal, d0, d1, obs0, obs1);
+    const double w = obs_weight(dc, accr_cal, per[i].acc_start, per[i].acc_end, obs0, obs1);
     o.sub_start.push_back(ts);
     o.sub_end.push_back(te);
     o.weight.push_back(w);
@@ -228,17 +271,20 @@ inline px::RateObservation scheduled_observation(const Date& vd, const Date& sta
                                                  const std::string& accrual, const std::string& dc,
                                                  const std::string& cal, const std::string& index) {
   const bool compounded = (accrual == "compounded");
-  const auto days = business_days(start, end, cal);
   px::RateObservation o;
   o.fixing_index = index;
   o.compounded = compounded;
   o.tau_index = year_frac(dc, start, end, cal);  // `cal` is ignored unless dc==BUS/252
-  for (std::size_t i = 0; i < days.size(); ++i) {
-    const Date nxt = i + 1 < days.size() ? days[i + 1] : end;
-    const double acc = year_frac(dc, days[i], nxt, cal);
-    const double ts = curve_time(vd, days[i]), te = curve_time(vd, nxt);
-    const double w = compounded ? 1.0 : obs_weight(dc, cal, days[i], nxt, days[i], nxt);
-    o.fixing_schedule.push_back(px::FixingDay{int(days[i].serial()), acc, ts, te, w});
+  // FixingDay carries the ACCRUAL THIS WINDOW EARNS (used directly once the day is realized) and the
+  // FIXING window to forecast over while it is not, with `weight` converting one to the other. They differ
+  // only where the window opens or closes mid-fixing -- a non-business start (FixingPeriod) -- and the
+  // weight is that fraction for a COMPOUNDED product too: the factor is (1 + weight*growth), so hard-wiring
+  // 1.0 there would have earned a partial leading day in full.
+  for (const auto& p : daily_periods(start, end, cal)) {
+    const double acc = year_frac(dc, p.acc_start, p.acc_end, cal);
+    const double ts = curve_time(vd, p.fix_start), te = curve_time(vd, p.fix_end);
+    const double w = obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end);
+    o.fixing_schedule.push_back(px::FixingDay{int(p.fix_start.serial()), acc, ts, te, w});
   }
   return o;
 }

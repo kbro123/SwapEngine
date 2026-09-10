@@ -5,7 +5,11 @@
 // windows and the OIS swap schedule. QuantLib-free (swaps_tests).
 #include <gtest/gtest.h>
 
+#include <cmath>
+
+#include "swaps/build/calendar.hpp"
 #include "swaps/build/instruments.hpp"
+#include "swaps/pricing/cashflows.hpp"
 
 namespace b = swaps::build;
 
@@ -14,16 +18,34 @@ TEST(BuildInstruments, ObservationWindowsMatchPython) {
   // 1M averaged future — whole calendar month Aug-2026, SOFR calendar.
   const auto avg = b::observation(vd, b::Date::from_iso("2026-08-01"), b::Date::from_iso("2026-09-01"),
                                   "averaged", 0.0, "ACT/360", "USD-SOFR");
-  EXPECT_EQ(avg.sub_start.size(), 21u);
+  // CORRECTED AGAIN 2026-09-10 (E3): 22 fixings, not 21. 1 August 2026 is a SATURDAY, and the rate that
+  // applies to it is the fixing published for Friday 31 July, whose overnight window runs 31 Jul -> 3 Aug
+  // and earns this window 2 of its 3 days. Both compilers used to enumerate only the business days INSIDE
+  // [1 Aug, 1 Sep), so 1-2 August contributed nothing to the sum while tau_index still spanned the whole
+  // month: exactly 29/31 of the correct rate, -25 bp on a flat 4 % curve. A CME 30-day Fed funds future
+  // references the CALENDAR month, so about a third of contract months start this way.
+  EXPECT_EQ(avg.sub_start.size(), 22u);
   EXPECT_NEAR(avg.tau_index, 0.0861111111, 1e-10);
   // CORRECTED 2026-09-10 (item 17): a plain averaged leg observes each fixing over exactly the window it
   // accrues, so every weight is 1 and the vector is stored empty. It used to hold 21 copies of 1.0138888889
   // = 365/360 — the index day count divided by CURVE time instead of by the index year-fraction of the
   // observation window — which made every averaged overnight rate 1.389 % too high. That number was pinned
   // here as "C++/Python parity"; the web compiler still produces it (TASKS-API §A0.5).
-  EXPECT_TRUE(avg.weight.empty()) << "observation window == accrual window => unit weights";
-  EXPECT_NEAR(avg.sub_start.front(), 0.0712328767, 1e-10);
+  // ...so the weights are NOT all one here: the leading fixing is earned 2/3, every interior day in full.
+  ASSERT_EQ(avg.weight.size(), 22u) << "a partly-earned leading fixing means the weights are kept";
+  EXPECT_NEAR(avg.weight[0], 2.0 / 3.0, 1e-12) << "31 Jul's fixing runs to 3 Aug; the window earns 1-2 Aug";
+  for (std::size_t i = 1; i < avg.weight.size(); ++i)
+    EXPECT_NEAR(avg.weight[i], 1.0, 1e-12) << "interior day " << i << " earns its whole fixing";
+  EXPECT_NEAR(avg.sub_start.front(), 0.0630136986, 1e-10) << "31 Jul (23/365), not 3 Aug (26/365)";
   EXPECT_NEAR(avg.sub_end.back(), 0.1506849315, 1e-10);
+
+  // The same month with a BUSINESS-DAY start is untouched by the fix -- 21 fixings, all weights one. That is
+  // what makes E3 a pure bug fix: every schedule-generated accrual period is business-day adjusted already.
+  const auto adj = b::observation(vd, b::Date::from_iso("2026-08-03"), b::Date::from_iso("2026-09-01"),
+                                  "averaged", 0.0, "ACT/360", "USD-SOFR");
+  EXPECT_EQ(adj.sub_start.size(), 21u);
+  EXPECT_TRUE(adj.weight.empty()) << "observation window == accrual window => unit weights";
+  EXPECT_NEAR(adj.sub_start.front(), 0.0712328767, 1e-10);
 
   // 3M compounded future — IMM U27..Z27, single telescoped bracket.
   const auto cmp = b::observation(vd, b::resolve("U27", vd, "NONE", "Following", 0), b::resolve("Z27", vd, "NONE", "Following", 0), "compounded", 0.0,
@@ -33,6 +55,57 @@ TEST(BuildInstruments, ObservationWindowsMatchPython) {
   EXPECT_NEAR(cmp.sub_start[0], 1.1890410959, 1e-10);
   EXPECT_NEAR(cmp.sub_end[0], 1.4383561644, 1e-10);
   EXPECT_NEAR(cmp.tau_index, 0.2527777778, 1e-10);
+}
+
+// E3 (2026-09-10), stated as the invariant rather than as pinned digits: on a FLAT curve the arithmetic
+// average of the daily fixings is the same number whatever day the window opens on -- a weekend start does
+// not make the month cheaper. Before the fix a Saturday-start month priced at 29/31 of the correct rate and
+// a Sunday-start month at 29/30, because the leading non-business days were dropped from the sum while
+// tau_index still spanned the whole window. Independent of QuantLib and of any pinned digit.
+TEST(BuildInstruments, AnAveragedWindowEarnsEveryDayWhateverDayItOpensOn) {
+  struct Flat {
+    double f;
+    double discount(double t) const { return std::exp(-f * t); }
+    double forward(double t) const { (void)t; return f; }
+    double integral(double t) const { return f * t; }
+  };
+  const Flat curve{0.04};
+  const b::Date vd = b::Date::from_iso("2026-07-08");
+  const std::string cal = "USD-FED";
+  // The REFERENCE is the contract definition, computed here day by day: a 30-day Fed funds future settles on
+  // the arithmetic mean of the daily EFFR over the CALENDAR month, each calendar day carrying the fixing of
+  // the business day on or before it (so a Friday fixing counts three times). Deriving it from the curve
+  // independently of the builder is the point -- a closed form for the 1-day rate would be wrong, because a
+  // weekend fixing compounds over three days and sits slightly above it.
+  const auto h15_mean = [&](const b::Date& start, const b::Date& end) {
+    double sum = 0.0;
+    int n = 0;
+    for (b::Date d = start; d < end; d = d.plus_days(1)) {
+      b::Date f = d;
+      while (!b::is_business_day(cal, f)) f = f.plus_days(-1);  // the fixing that applies on this day
+      b::Date nxt = f.plus_days(1);
+      while (!b::is_business_day(cal, nxt)) nxt = nxt.plus_days(1);
+      const double g = curve.discount(b::curve_time(vd, f)) / curve.discount(b::curve_time(vd, nxt)) - 1.0;
+      sum += g / b::year_frac("ACT/360", f, nxt, cal);  // that day's annualised fixing
+      ++n;
+    }
+    return sum / n;
+  };
+  struct W { const char* s; const char* e; const char* opens; };
+  const W windows[] = {
+      {"2026-08-01", "2026-09-01", "Saturday"},   // the CME contract month; was 29/31 of `want`
+      {"2026-11-01", "2026-12-01", "Sunday"},     // was 29/30
+      {"2026-09-01", "2026-10-01", "Tuesday"},    // always correct
+      {"2026-10-01", "2026-11-01", "Thursday"},   // always correct
+      {"2026-08-03", "2026-09-01", "Monday"},     // the adjusted start: byte-identical before and after
+  };
+  for (const W& w : windows) {
+    const auto o = b::observation(vd, b::Date::from_iso(w.s), b::Date::from_iso(w.e), "averaged", 0.0,
+                                  "ACT/360", "USD-FED");
+    const double got = swaps::pricing::rate<double>(o, curve);
+    const double want = h15_mean(b::Date::from_iso(w.s), b::Date::from_iso(w.e));
+    EXPECT_NEAR(got, want, 1e-12) << w.s << " opens on a " << w.opens << ": " << (got - want) * 1e4 << " bp off";
+  }
 }
 
 TEST(BuildInstruments, OisSwapScheduleMatchesPython) {
