@@ -18,6 +18,9 @@
 
 namespace swaps::build {
 
+// The DB's default float-leg accrual when a product row is silent (item 17): ISDA OIS-COMPOUND.
+inline const std::string kCompounded = "compounded";
+
 namespace cal = swaps::calibration;
 
 // Per-period notional for an amortizing / step-up / custom-notional leg. `ns` is EMPTY => unit notional
@@ -45,7 +48,18 @@ inline px::FloatCoupon ois_coupon(const Date& vd, const SwapConv& conv, const Da
   const double tau = year_frac(dc, s, e, conv.calendar);  // conv.calendar carries BUS/252's business-day count
   const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
   px::FloatCoupon c;
-  c.obs = rfr_observation(vd, s, e, dc, lag, conv.calendar);
+  // AVERAGED products (DB float_leg.compounding, item 17): the arithmetic average of the daily fixings, taken
+  // on the MOMENT path -- one bracket plus the calendar's day-count moments, ~5e-9 relative to the exact daily
+  // sum (docs/bezier-and-moments.md Part B) and W-cacheable, where the exact daily path is neither. An RFR
+  // observation shift/lookback/lockout is a COMPOUNDED-product feature and is refused here rather than ignored.
+  if (conv.float_compounding == "averaged") {
+    if (lag.active())
+      throw std::invalid_argument("ois_coupon: an RFR lag applies to a compounded leg; product '" +
+                                  conv.product_id + "' averages its fixings");
+    c.obs = moment_observation(vd, s, e, dc, conv.calendar);
+  } else {
+    c.obs = rfr_observation(vd, s, e, dc, lag, conv.calendar);
+  }
   c.pay = curve_time(vd, pay);
   c.tau_pay = tau;
   c.accrual_set = true;  // the accrual period, independent of any observation shift (E3-S2)
@@ -130,7 +144,10 @@ inline cal::FloatLeg float_leg_from(const Date& vd, const SwapConv& conv, const 
     px::FloatCoupon c;
     if (s < vd) {  // accruing: realized part from fixings, forecast part from the curve
       if (overnight) {
-        c.obs = scheduled_observation(vd, s, e, "compounded", dc, conv.calendar, index);
+        // The ACCRUING period always takes the exact daily path (it carries realized fixings; the moment
+        // expansion is forward-only), in the product's own accrual mode.
+        const std::string& mode = conv.float_compounding.empty() ? kCompounded : conv.float_compounding;
+        c.obs = scheduled_observation(vd, s, e, mode, dc, conv.calendar, index);
       } else {
         const Date fixing = advance_bd(conv.calendar, s, -ix.fixing_lag());
         const double tau = year_frac(dc, s, e, conv.calendar);

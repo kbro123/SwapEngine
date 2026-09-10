@@ -56,6 +56,22 @@ void expect_json_eq(const json::value& a, const json::value& b, double tol, cons
     case json::kind::array: {
       const auto& aa = a.as_array();
       const auto& ba = b.as_array();
+      // KNOWN, DELIBERATE DIVERGENCE (item 17, 2026-09-10) — the ONE place C++ and the web compiler disagree.
+      // An averaged overnight observation's per-day weight is `accrual earned / index year-fraction of the
+      // observation window`, which is 1 when the two windows coincide (a plain averaged leg). Both compilers
+      // used to divide by the window's CURVE-TIME length instead, making every averaged leg (index dc)/(curve
+      // dc) too high — 365/360 for an ACT/360 index. The C++ builders were fixed; server/conventions.py has
+      // not been (web work is deferred: TASKS-API §A0.5), so these goldens still carry the old weights. Pin the
+      // divergence EXACTLY: our side omits the weights (all-ones), the golden's are all 365/360. Anything else
+      // — a different factor, a partial divergence, a weight difference anywhere but here — still fails.
+      if (path.size() >= 7 && path.compare(path.size() - 7, 7, ".weight") == 0 && aa.empty() != ba.empty()) {
+        const auto& theirs = aa.empty() ? ba : aa;
+        for (std::size_t i = 0; i < theirs.size(); ++i)
+          EXPECT_NEAR(theirs[i].to_number<double>(), 365.0 / 360.0, 1e-12)
+              << "at " << path << "[" << i << "]: the only tolerated C++/Python divergence is the pre-item-17 "
+              << "averaged-observation weight (365/360); this is a different one";
+        return;
+      }
       ASSERT_EQ(aa.size(), ba.size()) << "array size mismatch at " << path;
       for (std::size_t i = 0; i < aa.size(); ++i)
         expect_json_eq(aa[i], ba[i], tol, path + "[" + std::to_string(i) + "]");

@@ -23,6 +23,11 @@ namespace cvd = swaps::conventions;
 // DB row; -1 / "" mean "not resolved" and the builders treat them as errors, never as a default.
 struct SwapConv {
   std::string calendar, bdc, fixed_dc, float_dc, float_freq_tok, fixed_freq_tok;
+  // DB products[].float_leg.compounding: how the float leg turns daily fixings into its coupon rate.
+  // "compounded" (the ISDA OIS-COMPOUND product, and the default when the row is silent) telescopes to one
+  // DF bracket; "averaged" is the H.15-style arithmetic average (the FF/SOFR basis leg, the FF 1M future).
+  // Empty => compounded. Read by build::float_leg_from (item 17 / E4.E L2, 2026-09-10).
+  std::string float_compounding;
   int spot_lag = -1, pay_lag = -1;
   bool zero_coupon = false;  // DB products[].zero_coupon: ONE period spot->maturity on both legs, quoted as an
                              // annually-compounded rate (QuoteKind::ZeroCouponRate; BRL DI×Pre). No frequencies.
@@ -47,6 +52,10 @@ inline SwapConv conv_from_product(const cvd::ProductConv& p) {
   c.spot_lag = cvd::require_lag(p.spot_lag, "spot_lag", p.id);
   c.pay_lag = cvd::require_lag(p.payment_lag, "payment_lag", p.id);
   c.float_dc = sv_str(cvd::require_field(p.floating.day_count, "float/spread leg day_count", p.id));
+  c.float_compounding = sv_str(p.floating.compounding);  // "" => compounded (the shipped default)
+  if (!c.float_compounding.empty() && c.float_compounding != "compounded" && c.float_compounding != "averaged")
+    throw std::invalid_argument("conventions DB: product '" + sv_str(p.id) + "' float_leg.compounding '" +
+                                c.float_compounding + "' is neither 'compounded' nor 'averaged'");
   c.zero_coupon = p.zero_coupon;
   if (p.zero_coupon) {
     // ONE period spot->maturity on both legs (zero_coupon_swap): the row carries day counts, never frequencies.

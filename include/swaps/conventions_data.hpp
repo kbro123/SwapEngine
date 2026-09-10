@@ -92,7 +92,7 @@ struct CalendarConv {
   bool sandwich;  // Japan: a weekday between two holidays is a holiday
 };
 
-inline constexpr std::array<ProductConv, 33> kProducts = {{
+inline constexpr std::array<ProductConv, 34> kProducts = {{
   {"ARS-BADLAR-IRS", "irs", "ARS", "ARS", "ModifiedFollowing", "", "", "", "", 2, 0, false, {"", "ACT/360", "1M", "", false, false, false}, {"ARS-BADLAR", "ACT/360", "1M", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"AUD-AONIA-OIS", "ois", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 2, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"AUD-AONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
   {"AUD-BBSW-3M-IRS", "irs", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/365F", "3M", "", false, false, false}, {"AUD-BBSW-3M", "ACT/365F", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
@@ -119,6 +119,7 @@ inline constexpr std::array<ProductConv, 33> kProducts = {{
   {"TRY-TLREF-OIS", "ois", "TRY", "TRY", "ModifiedFollowing", "", "", "", "", 1, 0, false, {"", "ACT/360", "1Y", "", false, false, false}, {"TRY-TLREF", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
   {"USD-FEDFUNDS-1M-FUTURE", "future", "USD", "USD-FED", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"USD-FEDFUNDS-OIS", "ois", "USD", "USD-FED", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/360", "1Y", "", false, false, false}, {"USD-FEDFUNDS", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-FF-SOFR-BASIS", "basis", "USD", "USD-FED", "ModifiedFollowing", "", "USD-SOFR", "", "", 2, 2, false, {"", "", "", "", false, false, false}, {"USD-FEDFUNDS", "ACT/360", "3M", "averaged", true, false, false}, {"USD-SOFR", "ACT/360", "3M", "compounded", false, false, false}},
   {"USD-PRIME", "administered-basis", "USD", "USD-FED", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"USD-SOFR-1M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"USD-SOFR-3M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},

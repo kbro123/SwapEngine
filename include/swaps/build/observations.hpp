@@ -3,7 +3,8 @@
 // business_days()/daily_periods(). Emits the engine's pricing::RateObservation directly.
 //
 // rate = ( Σ_k w_k·[DF(s_k)/DF(e_k) − 1] + realized ) / tau_index. AVERAGED (1M): one bracket per fixing day,
-// weight = index-accrual/curve-accrual. COMPOUNDED (3M): one telescoped bracket; a partial-fix prefix rides
+// weight = accrual-earned / index-year-fraction(observation window) (obs_weight). COMPOUNDED (3M): one
+// telescoped bracket; a partial-fix prefix rides
 // in as weight=1+r·τ_past, realized=f-1 (avoids RateObservation::compounded, which the W-cache rejects).
 #ifndef SWAPS_BUILD_OBSERVATIONS_HPP
 #define SWAPS_BUILD_OBSERVATIONS_HPP
@@ -50,6 +51,24 @@ inline std::vector<std::pair<Date, Date>> daily_periods(const Date& start, const
 }
 
 // The obs for a futures-style Rate quote (conventions.observation). `realized_pct` in PERCENT.
+// THE observation weight (fixed 2026-09-10, item 17): a bracket contributes DF(s)/DF(e) − 1, which is the
+// window's GROWTH, not a rate. It becomes "this day's fixing times the accrual it earns" only when divided by
+// the window's length IN THE INDEX'S OWN DAY COUNT:
+//     w = accrual_earned / index_year_fraction(observation window),   rate = Σ w·(DF ratio − 1) / tau_index.
+// Until now these builders divided by the window's CURVE-TIME length instead, so every averaged overnight leg
+// (and every lookback/lockout coupon) came out (index dc)/(curve dc) too high — exactly 365/360 = +1.389 % for
+// an ACT/360 index on the ACT/365F curve clock: a flat 4 % curve produced a 400.04 bp average where the daily
+// EFFR fixings it implies average 394.56 bp. The QuantLib oracle for averaged futures never saw it because its
+// fixture (tests/reference_multicurrency.hpp avg_future_obs_idx) computes this weight correctly, and
+// BuildInstruments.ObservationWindowsMatchPython pinned the wrong number as "C++/Python parity" — parity with
+// the web compiler, which carries the same error (TASKS-API §A0.5).
+// Where the observation window IS the accrual window (a plain averaged leg) this is exactly 1.
+inline double obs_weight(const std::string& dc, const std::string& cal, const Date& acc_start,
+                         const Date& acc_end, const Date& obs_start, const Date& obs_end) {
+  const double obs = year_frac(dc, obs_start, obs_end, cal);
+  return obs > 0.0 ? year_frac(dc, acc_start, acc_end, cal) / obs : 1.0;
+}
+
 inline px::RateObservation observation(const Date& vd, const Date& start, const Date& end,
                                        const std::string& accrual, double realized_pct,
                                        const std::string& dc, const std::string& cal) {  // both REQUIRED (P2)
@@ -61,8 +80,8 @@ inline px::RateObservation observation(const Date& vd, const Date& start, const 
   if (accrual == "averaged") {
     bool all_one = true;
     for (const auto& [s, e] : daily_periods(fwd_from, end, cal)) {
-      const double ts = curve_time(vd, s), te = curve_time(vd, e), crv = te - ts;
-      const double w = crv > 0 ? year_frac(dc, s, e, cal) / crv : 1.0;
+      const double ts = curve_time(vd, s), te = curve_time(vd, e);
+      const double w = obs_weight(dc, cal, s, e, s, e);  // observation window == accrual window => 1
       o.sub_start.push_back(ts);
       o.sub_end.push_back(te);
       o.weight.push_back(w);
@@ -98,21 +117,21 @@ inline px::RateObservation moment_observation(const Date& vd, const Date& start,
   if (start < vd) throw std::invalid_argument("moment_observation: a partially-fixed window needs the daily path (fixings)");
   px::RateObservation o;
   const double a = curve_time(vd, start), b = curve_time(vd, end);
-  // Each day's term is (index accrual τ_d / curve-time step dt_d)·(e^{δ_d} − 1). For an ACT-based index day
-  // count the ratio is the SAME every day (365/360 for ACT/360 on the ACT/365F curve clock), so it factors out
-  // of the whole sum and rides as the bracket's single weight; a day count for which it varies (30/360) has no
-  // moment form and is refused rather than approximated twice.
-  double s2 = 0.0, s3 = 0.0, w = 0.0, wmin = 1e300, wmax = -1e300;
+  // The average of the daily fixings is Σ(e^{δ_d} − 1)/tau_index (each day's growth over the period's index
+  // accrual — obs_weight above is 1 here, the window being the accrual). The moment expansion replaces that
+  // daily sum by ∫f plus the day-count moments. It is valid only while each day's index accrual is the SAME
+  // multiple of its curve-time step (true for any ACT-based day count, false for 30/360, which is refused
+  // rather than approximated twice) — that is what makes ∫f / tau_index the correctly annualised average.
+  double s2 = 0.0, s3 = 0.0, rmin = 1e300, rmax = -1e300;
   for (const auto& [s, e] : daily_periods(start, end, cal)) {
     const double dt = curve_time(vd, e) - curve_time(vd, s);
     const double r = year_frac(dc, s, e, cal) / dt;
     s2 += dt * dt; s3 += dt * dt * dt;
-    w = r; wmin = std::min(wmin, r); wmax = std::max(wmax, r);
+    rmin = std::min(rmin, r); rmax = std::max(rmax, r);
   }
-  if (wmax - wmin > 1e-10 * std::max(1.0, wmax))
+  if (rmax - rmin > 1e-10 * std::max(1.0, rmax))
     throw std::invalid_argument("moment_observation: the index day count '" + dc + "' is not a constant multiple of curve time; use the daily path");
   o.sub_start = {a}; o.sub_end = {b};
-  if (std::abs(w - 1.0) > 1e-15) o.weight = {w};
   o.tau_index = year_frac(dc, start, end, cal);
   o.fixing_step = s2 / (b - a);
   o.fixing_step3 = s3 / (b - a);
@@ -193,8 +212,9 @@ inline px::RateObservation rfr_observation(const Date& vd, const Date& s, const 
       obs0 = days[lock_from];
       obs1 = (lock_from + 1 < days.size()) ? days[lock_from + 1] : e;
     }
-    const double ts = curve_time(vd, obs0), te = curve_time(vd, obs1), crv = te - ts;
-    const double w = crv > 0 ? acc / crv : 1.0;  // rate over the obs window reweighted to the actual accrual
+    const double ts = curve_time(vd, obs0), te = curve_time(vd, obs1);
+    // the looked-back / locked-out window's rate, earning THIS day's accrual (obs_weight above)
+    const double w = obs_weight(dc, accr_cal, d0, d1, obs0, obs1);
     o.sub_start.push_back(ts);
     o.sub_end.push_back(te);
     o.weight.push_back(w);
@@ -216,8 +236,8 @@ inline px::RateObservation scheduled_observation(const Date& vd, const Date& sta
   for (std::size_t i = 0; i < days.size(); ++i) {
     const Date nxt = i + 1 < days.size() ? days[i + 1] : end;
     const double acc = year_frac(dc, days[i], nxt, cal);
-    const double ts = curve_time(vd, days[i]), te = curve_time(vd, nxt), crv = te - ts;
-    const double w = compounded ? 1.0 : (crv > 0 ? acc / crv : 1.0);
+    const double ts = curve_time(vd, days[i]), te = curve_time(vd, nxt);
+    const double w = compounded ? 1.0 : obs_weight(dc, cal, days[i], nxt, days[i], nxt);
     o.fixing_schedule.push_back(px::FixingDay{int(days[i].serial()), acc, ts, te, w});
   }
   return o;

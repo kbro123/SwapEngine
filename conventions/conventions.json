@@ -7482,6 +7482,30 @@
       },
       "type": "ois"
     },
+    "USD-FF-SOFR-BASIS": {
+      "description": "USD Fed Funds / SOFR basis: EFFR + spread vs SOFR flat, both overnight, SOFR-discounted. The FF leg is the H.15 ARITHMETIC AVERAGE of the daily fixings (compounding: averaged) — that is the market convention for the basis leg, and it is what distinguishes this product from USD-FEDFUNDS-OIS, which COMPOUNDS the very same fixings (ISDA OIS-COMPOUND). Spread on the FF leg.",
+      "currency": "USD",
+      "spot_lag": 2,
+      "payment_lag": 2,
+      "bdc": "ModifiedFollowing",
+      "calendar": "USD-FED",
+      "spread_leg": {
+        "index": "USD-FEDFUNDS",
+        "frequency": "3M",
+        "day_count": "ACT/360",
+        "compounding": "averaged",
+        "carries_spread": true
+      },
+      "flat_leg": {
+        "index": "USD-SOFR",
+        "frequency": "3M",
+        "day_count": "ACT/360",
+        "compounding": "compounded",
+        "carries_spread": false
+      },
+      "discount_index": "USD-SOFR",
+      "type": "basis"
+    },
     "EUR-ESTR-OIS": {
       "description": "EUR fixed vs ESTR OIS. Payment lag 2 BD (desk-confirmed; EONIA legacy was 1 BD).",
       "currency": "EUR",
