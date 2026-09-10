@@ -259,34 +259,9 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
 // OvernightIndexFuture (RateAveraging::Simple). All on QuantLib's real FedFunds index
 // (UnitedStates(FederalReserve) calendar, ACT/360).
 
-// A fully-FORECAST arithmetic-average overnight future on ANY overnight index (generalizes
-// reference_curve.hpp avg_future_obs, which is hard-wired to SOFR): one sub-period per business day
-// [fixingDate, d2] with weight accr/yf(fixingDate,d2), mirroring QuantLib 1.35
-// OvernightIndexFuture::averagedRate() EXACTLY. Requires start > today (no realized prefix) so no
-// fixing history is needed.
-inline px::RateObservation avg_future_obs_idx(const QuantLib::ext::shared_ptr<QuantLib::OvernightIndex>& idx,
-                                              const QuantLib::Date& today, const QuantLib::DayCounter& curveDc,
-                                              const QuantLib::Date& start, const QuantLib::Date& end) {
-  using namespace QuantLib;
-  const Calendar fcal = idx->fixingCalendar();
-  const DayCounter idc = idx->dayCounter();
-  std::vector<std::pair<Date, Date>> subs;
-  std::vector<double> weights;
-  Date fixingDate = fcal.adjust(start, Preceding);
-  for (Date d1 = start; d1 < end;) {
-    const Date d2 = fcal.advance(d1, 1, Days);
-    const Date d2cap = std::min(d2, end);
-    const double accr = idc.yearFraction(d1, d2cap);
-    QL_REQUIRE(fixingDate >= today, "avg_future_obs_idx expects a fully-forecast future (start > today)");
-    subs.emplace_back(fixingDate, d2);
-    weights.push_back(accr / idc.yearFraction(fixingDate, d2));
-    fixingDate = d1 = d2;
-  }
-  bool all_one = true;
-  for (double w : weights) if (w != 1.0) { all_one = false; break; }
-  if (all_one) weights.clear();
-  return swaps::qlx::make_observation(subs, 0.0, idc.yearFraction(start, end), today, curveDc, weights);
-}
+// (avg_future_obs_idx now lives in reference_curve.hpp -- ONE implementation, and it handles realized
+// fixings too; this file's fully-forecast-only copy was deleted 2026-09-10.)
+
 
 // Build the USD block: SOFR reference market (reused, curve 0) + Fed Funds spread (curve 1). PRIME is
 // demonstrated as a fixed default spread over FF in the test (like EONIA), so it is not a calibrated

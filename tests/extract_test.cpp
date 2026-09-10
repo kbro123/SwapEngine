@@ -15,10 +15,12 @@
 #include <ql/quantlib.hpp>
 
 #include <cmath>
+#include <sstream>
 #include <vector>
 
 #include "reference_curve.hpp"
 #include "swaps/ql/ql_term_structure.hpp"
+#include "swaps/build/observations.hpp"  // the dates-and-DB builder, compared below
 #include "swaps/ql/extract.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "tolerances.hpp"
@@ -30,6 +32,13 @@ namespace px = swaps::pricing;
 namespace qlx = swaps::qlx;
 
 namespace {
+
+// QuantLib Date -> the engine's Unix-day Date, via ISO text (the two epochs differ).
+swaps::build::Date eng_date(const QuantLib::Date& d) {
+  std::ostringstream os;
+  os << QuantLib::io::iso_date(d);
+  return swaps::build::Date::from_iso(os.str());
+}
 
 ::testing::AssertionResult close(double got, double want, double rel) {
   const double err = std::abs(got - want) / std::max(1.0, std::abs(want));
@@ -124,6 +133,21 @@ TEST_F(Extract, OvernightAveragedLegMatchesQuantLib) {
   EXPECT_GT(fl[0].obs.sub_start.size(), 50u);  // one sub-period per business day, not telescoped
   EXPECT_TRUE(close(px::float_leg_pv<double>(fl, curve, curve), ql_leg_npv(leg, ts),
                     swaps::tol::curve_rel));
+
+  // CLOSE THE TRIANGLE (2026-09-10). The extractor computes the per-day weight from QuantLib's coupon
+  // objects; build::observation computes it from dates and the conventions DB. Both must land on the same
+  // observation, or one of the two ways into the engine prices differently from the other. Until the
+  // averaged-weight fix this pair disagreed by 365/360 and nothing compared them (ASSUMPTIONS.md E2).
+  for (Size i = 0; i < leg.size(); ++i) {
+    const auto cpn = ext::dynamic_pointer_cast<FloatingRateCoupon>(leg[i]);
+    ASSERT_TRUE(cpn);
+    if (cpn->accrualStartDate() <= mk.today) continue;  // fully forward only: no realized prefix here
+    const auto built = swaps::build::observation(eng_date(mk.today), eng_date(cpn->accrualStartDate()),
+                                                 eng_date(cpn->accrualEndDate()), "averaged", 0.0,
+                                                 "ACT/360", "USD-SOFR");
+    EXPECT_NEAR(px::rate<double>(built, curve), px::rate<double>(fl[i].obs, curve), swaps::tol::curve_rel)
+        << "coupon " << i << ": the dates-and-DB builder and the QuantLib extractor disagree";
+  }
 }
 
 // ---- 3./6. Vanilla IBOR swap, single-curve, 30/360 fixed vs ACT/360 float -----------------------

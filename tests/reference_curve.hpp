@@ -134,31 +134,39 @@ inline cal::Instrument swap_instrument(const Market& mk, std::size_t i) {
 // `realized`, future days become sub-periods) is MARKET construction -- the calendar and history come
 // from the index object, not hard-coded -- so it belongs in this test builder, not the engine. It
 // mirrors the retired extract_averaged_future exactly; make_observation does the curve-time mapping.
-inline px::RateObservation avg_future_obs(const Market& mk, const Future& f) {
+// THE arithmetic-average overnight observation, for ANY overnight index (E5 follow-up, 2026-09-10: this was
+// written twice, here hard-wired to SOFR and again in reference_multicurrency.hpp generalised but without
+// realized-fixing support. One function now; the SOFR wrapper below keeps the old call sites).
+//
+// Mirrors QuantLib 1.35 OvernightIndexFuture::averagedRate() EXACTLY (it was refined in 1.35 vs 1.34):
+//   * the fixing for accrual day [d1,d2) is observed at fixingDate = adjust(d1, Preceding) -- i.e. the
+//     rate is accrued from d1 even when its fixing date is earlier (matters when d1 is a holiday);
+//   * the last day's accrual is capped at min(d2, maturity) (d2 can overshoot if maturity is a holiday);
+//   * a forecast day contributes forward(fixingDate,d2,Simple)*accr = (DF(fixingDate)/DF(d2)-1) * accr/
+//     yf(fixingDate,d2), which our engine reproduces as a [fixingDate,d2] sub-period with that weight.
+// The weight is the accrual EARNED over the index year-fraction of the window OBSERVED, both in the index's
+// own day count. It is 1.0 for an interior business day, so the empty-weight fast path still applies. That
+// same quantity, computed against curve time instead, was the 365/360 error fixed in the builders on
+// 2026-09-10 (ASSUMPTIONS.md E2).
+inline px::RateObservation avg_future_obs_idx(const QuantLib::ext::shared_ptr<QuantLib::OvernightIndex>& idx,
+                                              const QuantLib::Date& today, const QuantLib::DayCounter& curveDc,
+                                              const QuantLib::Date& start, const QuantLib::Date& end) {
   using namespace QuantLib;
-  const Calendar fcal = mk.sofr->fixingCalendar();
-  const DayCounter idc = mk.sofr->dayCounter();  // the index's own accrual day count
-  const TimeSeries<Real>& history = IndexManager::instance().getHistory(mk.sofr->name());
-  // Mirror QuantLib 1.35 OvernightIndexFuture::averagedRate() EXACTLY (it was refined in 1.35 vs 1.34):
-  //   * the fixing for accrual day [d1,d2) is observed at fixingDate = adjust(d1, Preceding) -- i.e. the
-  //     rate is accrued from d1 even when its fixing date is earlier (matters when d1 is a holiday);
-  //   * the last day's accrual is capped at min(d2, maturity) (d2 can overshoot if maturity is a holiday);
-  //   * a forecast day contributes forward(fixingDate,d2,Simple)*accr = (DF(fixingDate)/DF(d2)-1) * accr/
-  //     yf(fixingDate,d2), which our engine reproduces as a [fixingDate,d2] sub-period with that weight
-  //     (weight == 1.0 for the common interior day, so the empty-weight fast path and the fully-forecast
-  //     futures stay bit-identical to before).
+  const Calendar fcal = idx->fixingCalendar();
+  const DayCounter idc = idx->dayCounter();  // the index's own accrual day count
+  const TimeSeries<Real>& history = IndexManager::instance().getHistory(idx->name());
   std::vector<std::pair<Date, Date>> subs;
   std::vector<double> weights;
   double realized = 0.0;
-  Date fixingDate = fcal.adjust(f.start, Preceding);
-  for (Date d1 = f.start; d1 < f.end;) {
+  Date fixingDate = fcal.adjust(start, Preceding);
+  for (Date d1 = start; d1 < end;) {
     const Date d2 = fcal.advance(d1, 1, Days);
-    const Date d2cap = std::min(d2, f.end);
+    const Date d2cap = std::min(d2, end);
     const double accr = idc.yearFraction(d1, d2cap);
     Real fx = history[fixingDate];
-    const bool past = fixingDate < mk.today || (fixingDate == mk.today && fx != Null<Real>());
+    const bool past = fixingDate < today || (fixingDate == today && fx != Null<Real>());
     if (past) {
-      QL_REQUIRE(fx != Null<Real>(), "missing " << mk.sofr->name() << " fixing on " << fixingDate);
+      QL_REQUIRE(fx != Null<Real>(), "missing " << idx->name() << " fixing on " << fixingDate);
       realized += fx * accr;
     } else {
       subs.emplace_back(fixingDate, d2);
@@ -171,8 +179,12 @@ inline px::RateObservation avg_future_obs(const Market& mk, const Future& f) {
   bool all_one = true;
   for (double w : weights) if (w != 1.0) { all_one = false; break; }
   if (all_one) weights.clear();
-  return swaps::qlx::make_observation(subs, realized, idc.yearFraction(f.start, f.end), mk.today, mk.dc,
-                                      weights);
+  return swaps::qlx::make_observation(subs, realized, idc.yearFraction(start, end), today, curveDc, weights);
+}
+
+// The SOFR market's 1M averaging future, through the one implementation above.
+inline px::RateObservation avg_future_obs(const Market& mk, const Future& f) {
+  return avg_future_obs_idx(mk.sofr, mk.today, mk.dc, f.start, f.end);
 }
 
 // A future as a generic Rate instrument. Quarterly (3M compounding IMM) => ONE sub-period [start,end]

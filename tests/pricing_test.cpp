@@ -13,9 +13,11 @@
 #include <ql/quantlib.hpp>
 
 #include <cmath>
+#include <sstream>
 
 #include "reference_curve.hpp"
 #include "swaps/ql/ql_term_structure.hpp"
+#include "swaps/build/observations.hpp"  // the SHIPPED observation builder, oracled below
 #include "swaps/ql/extract.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "tolerances.hpp"
@@ -24,6 +26,13 @@ using namespace QuantLib;
 namespace rb = swaps::refbuild;
 
 namespace {
+
+// QuantLib Date -> the engine's Unix-day Date, via ISO text (the two epochs differ).
+swaps::build::Date eng_date(const QuantLib::Date& d) {
+  std::ostringstream os;
+  os << QuantLib::io::iso_date(d);
+  return swaps::build::Date::from_iso(os.str());
+}
 
 ::testing::AssertionResult close(double got, double want, double rel) {
   const double err = std::abs(got - want) / std::max(1.0, std::abs(want));
@@ -83,6 +92,34 @@ TEST_F(Pricing, CompoundedFutureRateMatchesQuantLib) {
   }
   ASSERT_EQ(n, 8);
   std::cout << "  [3m future] max |ours - QuantLib| = " << worst << "\n";
+}
+
+// THE oracle that would have caught the 365/360 error (added 2026-09-10). Every other averaging oracle
+// builds its observation with a test-side reconstruction of QuantLib's averagedRate(), so the SHIPPED
+// builder was never compared to QuantLib at all: its only reference was the Python compiler, which divided
+// by curve time the same wrong way. Here `build::observation` itself produces the observation, and QuantLib
+// prices the same contract off the same curve. Fully-forecast contracts only, since a partially fixed one
+// needs a realized prefix from the fixing history rather than the 0.0 passed here.
+TEST_F(Pricing, AveragedFutureFromTheShippedBuilderMatchesQuantLib) {
+  double worst = 0.0;
+  int n = 0;
+  for (const auto& f : mk.futures) {
+    if (f.quarterly || f.start <= mk.today) continue;  // 1M arithmetic-average, fully forecast
+    OvernightIndexFuture qlf(mk.sofr, f.start, f.end, Handle<Quote>(), RateAveraging::Simple);
+    const double ql_rate = 1.0 - qlf.NPV() / 100.0;
+
+    // The production path: engine dates, the DB's own calendar and day count, no test-side reconstruction.
+    const auto obs = swaps::build::observation(eng_date(mk.today), eng_date(f.start), eng_date(f.end),
+                                               "averaged", 0.0, "ACT/360", "USD-SOFR");
+    const double ours = swaps::pricing::rate<double>(obs, curve);
+
+    EXPECT_TRUE(close(ours, ql_rate, swaps::tol::curve_rel))
+        << " 1M future " << f.start << ".." << f.end << " builder=" << ours << " QuantLib=" << ql_rate;
+    worst = std::max(worst, std::abs(ours - ql_rate));
+    ++n;
+  }
+  ASSERT_GE(n, 8) << "expected the fully-forecast 1M strip";
+  std::cout << "  [1m future, shipped builder] max |ours - QuantLib| = " << worst << "\n";
 }
 
 TEST_F(Pricing, AveragedFutureRateMatchesQuantLib) {

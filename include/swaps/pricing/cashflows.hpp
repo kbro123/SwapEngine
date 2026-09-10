@@ -163,16 +163,26 @@ Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdi
 // Σ_k w_k · (DF(s_k)/DF(e_k) − 1) — the curve-dependent numerator ONLY.
 // Precondition: at least one sub-period (so the accumulator can be seeded from a curve-dependent
 // term and carry derivatives — see the AAD SAFETY note at the top of this header).
+// THE curve growth over sub-period k: DF(s_k)/DF(e_k) − 1. Every rate, coupon and compounding form below
+// is built out of this one quantity, so it is named once rather than re-typed at each use (2026-09-10: it
+// was written out four times in this file; the same shape, written four times in the observation BUILDERS,
+// was wrong in all four — ASSUMPTIONS.md E2). Returns a curve-dependent Scalar, so an accumulator seeded
+// from it carries derivatives under AAD (see the AAD SAFETY note at the top of this header).
+template <class Scalar, class FCurve>
+Scalar sub_growth(const RateObservation& o, std::size_t k, const FCurve& fc) {
+  return fc.discount(o.sub_start[k]) / fc.discount(o.sub_end[k]) - 1.0;
+}
+
 template <class Scalar, class FCurve>
 Scalar obs_forward_sum(const RateObservation& o, const FCurve& fc) {
   assert(!o.sub_start.empty());
   assert(o.sub_start.size() == o.sub_end.size());
   assert(o.weight.empty() || o.weight.size() == o.sub_start.size());
   const bool weighted = !o.weight.empty();
-  Scalar num = fc.discount(o.sub_start[0]) / fc.discount(o.sub_end[0]) - 1.0;
+  Scalar num = sub_growth<Scalar>(o, 0, fc);
   if (weighted) num = num * o.weight[0];
   for (std::size_t k = 1; k < o.sub_start.size(); ++k) {
-    Scalar t = fc.discount(o.sub_start[k]) / fc.discount(o.sub_end[k]) - 1.0;
+    Scalar t = sub_growth<Scalar>(o, k, fc);
     if (weighted)
       num += t * o.weight[k];
     else
@@ -192,7 +202,7 @@ Scalar obs_compound_growth(const RateObservation& o, const FCurve& fc) {
   assert(o.weight.empty() || o.weight.size() == o.sub_start.size());
   const bool weighted = !o.weight.empty();
   auto factor = [&](std::size_t k) {
-    Scalar t = fc.discount(o.sub_start[k]) / fc.discount(o.sub_end[k]) - 1.0;
+    Scalar t = sub_growth<Scalar>(o, k, fc);
     return weighted ? Scalar(1.0 + o.weight[k] * t) : Scalar(1.0 + t);
   };
   Scalar prod = factor(0);
@@ -286,7 +296,7 @@ Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc)
   // stays fast. This is the templated analogue of the compiled BundleFloatBatch cpn_is_plain fast path.
   if (o.sub_start.size() == 1 && o.weight.empty() && o.fixing_step == 0.0 && o.realized == 0.0 &&
       c.spread == 0.0 && c.tau_pay == o.tau_index && c.scale == 1.0) {
-    return dc.discount(c.pay) * (fc.discount(o.sub_start[0]) / fc.discount(o.sub_end[0]) - 1.0);
+    return dc.discount(c.pay) * sub_growth<Scalar>(o, 0, fc);
   }
   const double k = c.tau_pay / c.obs.tau_index * c.scale;  // FX scale folds into the constant k (× 1.0 exact)
   const double konst = c.obs.realized + c.spread * c.obs.tau_index;
