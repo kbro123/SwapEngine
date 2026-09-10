@@ -61,7 +61,7 @@
 //     (an xccy position also needs a surviving mtm leg); a fully-paid book prices to 0.
 //   * For the surviving coupons, subtract dt from every curve-time and FLOOR the forecast/reset times at
 //     0 (a coupon straddling t1 keeps its pay date but its already-elapsed accrual is dropped rather than
-//     evaluated at a negative curve-time — negative times would flat-extrapolate to DF>1). Accrual
+//     evaluated at a negative curve-time — a negative time returns DF ≡ 1, curve_module.hpp integral(t <= 0) == 0, not DF > 1). Accrual
 //     fractions (tau_pay/tau/tau_index) and `realized` are left AS-IS: we do NOT re-fix a partially
 //     elapsed coupon. This is the one approximation, and it lives entirely inside `residual` for a market
 //     move and cancels exactly for a pure roll (both t1-legs use the same rolled book at the same x). It

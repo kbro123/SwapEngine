@@ -604,7 +604,7 @@ class MonotoneCubic {
 // Still a LINEAR MAP of the control points (de Boor is an affine combination with knot-only weights),
 // so is_linear_map = true and the W-cache / analytic-Jacobian fast path is preserved.
 //
-// Interior breakpoints are UNIFORM in time over the region (the standard, well-conditioned default; a
+// Interior breakpoints WERE uniform in time over the region until ce82d89; they are the de Boor knot averages now (see below) (the standard, well-conditioned default; a
 // control-point B-spline is approximating, not interpolating, so instrument maturities need not be
 // breakpoints). n free control points + the pinned P_0 => a clamped cubic over n-2 segments.
 //

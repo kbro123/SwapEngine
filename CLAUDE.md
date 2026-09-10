@@ -12,7 +12,8 @@ Guidance for Claude Code when working in this repository. Read this first, every
 
 ## 0. Design principles
 
-> **The law is [`PRINCIPLES.md`](PRINCIPLES.md) (P0–P13, ratified 2026-09-08).** The bullets below are the
+> **The law is [`PRINCIPLES.md`](PRINCIPLES.md) (P0–P13, ratified 2026-09-08).**
+> **[`ASSUMPTIONS.md`](ASSUMPTIONS.md) is the inventory of every approximation, threshold, premise and default with its pinning test (2026-09-10); update the entry in the same commit as the code.** The bullets below are the
 > original statement kept for history; where they disagree with `PRINCIPLES.md`, `PRINCIPLES.md` wins.
 
 - **Generic building blocks, not special cases.** There is ONE curve type — `ModularCurve` = an ordered
