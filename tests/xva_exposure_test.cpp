@@ -47,9 +47,16 @@ TEST(ExposureProfile, InvariantsAndDeterministicToday) {
     }
     mean /= nP;
     EXPECT_NEAR(pr.epe[j] + pr.ene[j], mean, 1e-6 * std::max(1.0, std::abs(mean))) << "node " << j;
-    // PFE lies within the node's realized range.
-    EXPECT_GE(pr.pfe[j], lo);
-    EXPECT_LE(pr.pfe[j], hi);
+    // PFE is the q-quantile of the POSITIVE exposure max(v, 0) with the lower-index convention: sort the nP
+    // values, take index floor(q (nP - 1)). (E5.2 2026-09-10: the old `lo <= pfe <= hi` accepted the mean, the
+    // median or any wrong quantile.)
+    std::vector<double> pos(nP);
+    for (int p = 0; p < nP; ++p) pos[p] = std::max(v[j * nP + p], 0.0);
+    std::sort(pos.begin(), pos.end());
+    const int qidx = static_cast<int>(std::floor(0.975 * (nP - 1)));
+    EXPECT_DOUBLE_EQ(pr.pfe[j], pos[qidx]) << "node " << j;
+    EXPECT_GE(pr.pfe[j], 0.0);
+    EXPECT_LE(pr.pfe[j], std::max(hi, 0.0));
   }
   // Node 0 is deterministic (all paths equal) -> EPE(0)=max(V,0), ENE(0)=min(V,0), PFE(0)=V exactly.
   const double v0 = v[0];

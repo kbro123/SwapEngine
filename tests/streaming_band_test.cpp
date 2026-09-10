@@ -190,6 +190,34 @@ TEST(StreamingBand, EdgeCrossingIsARescaleNotARefresh) {
   EXPECT_LT((sc.current() - x0).cwiseAbs().maxCoeff() * 1e4, 0.05);
 }
 
+// The same crossing with refreshes FORBIDDEN (max_refresh = 0) and the stall cap out of reach: a wrong
+// re-scale can no longer be rescued by a full Jacobian refresh (E5.2 2026-09-10: the 2026-09-08 audit's
+// mutation M2 -- the re-scale's anchor normalisation dropped -- was caught ONLY by the `refreshes == 0`
+// counter above; here it would fail the accuracy assertion itself).
+TEST(StreamingBand, EdgeCrossingIsExactWhenRefreshesAreForbidden) {
+  cal::BundleProblem p = banded_bundle(0.25, 0.0);
+  const Eigen::VectorXd q0 = p.market();
+  const Eigen::VectorXd x0 = cold(p, q0, Eigen::VectorXd::Constant(6, 0.03), nullptr);
+  cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
+  opt.max_refresh = 0;
+  opt.max_frozen = 1000;
+  opt.adaptive_stall = false;
+  cal::StreamingCalibrator<cal::BundleProblem> sc(p, x0, q0, opt);
+  const Eigen::MatrixXd M0 = sc.sensitivity();
+  Eigen::VectorXd q = q0;
+  q[2] += 3e-4;
+  const cal::StreamTick t1 = sc.update(q);
+  EXPECT_TRUE(t1.converged) << t1.reason();
+  EXPECT_GT(t1.rescales, 0);
+  EXPECT_EQ(t1.refreshes, 0);
+  EXPECT_GT((sc.sensitivity() - M0).cwiseAbs().maxCoeff(), 0.0) << "the re-scale must change the operator";
+  EXPECT_LT((sc.current() - cold(p, q, x0, nullptr)).cwiseAbs().maxCoeff() * 1e4, 0.05);
+  const cal::StreamTick t2 = sc.update(q0);
+  EXPECT_TRUE(t2.converged) << t2.reason();
+  EXPECT_EQ(t2.refreshes, 0);
+  EXPECT_LT((sc.current() - x0).cwiseAbs().maxCoeff() * 1e4, 0.05);
+}
+
 // ---- C2 (2026-09-10): the active set on sub-bp moves and on a quote that lives on its edge -------------------
 // Before: a 0.6 bp move at decay 0.1 burned 54 steps / 6 refreshes / 21 re-scales and gave up 470 % above the
 // optimum (a pin released at s = decay - 9e-4 could never be re-pinned and cycled); a target oscillating

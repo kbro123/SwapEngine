@@ -72,6 +72,7 @@ add_executable(swaps_tests
   vol_cms_test.cpp
   xva_exposure_test.cpp
   gamma_test.cpp
+  kernel_pins_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
 target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -174,19 +174,33 @@ TEST(BandResidual, CompiledMatchesAadWithBand) {
   prob.instruments = {par_swap(2, quote_at(par_swap(2), truth)), s5,
                       par_swap(10, quote_at(par_swap(10), truth))};
 
-  // Evaluate away from truth so the banded model quote sits OUTSIDE its band (w != floor, w' != 0) --
-  // this is where the chain rule is non-trivial.
-  Eigen::VectorXd x(4);
-  x << 0.033, 0.039, 0.047, 0.041;
-
-  const Eigen::VectorXd r_aad = prob.residuals<double>(x);
-  const Eigen::MatrixXd J_aad = cal::aad_jacobian(prob, x);
   cal::CompiledBundleResidual eng(prob);
-  const Eigen::VectorXd r_c = eng.residuals(x);
-  const Eigen::MatrixXd J_c = eng.jacobian(x);
+  // The same problem WITHOUT the band: inside the band the banded row must be exactly decay x the plain row
+  // (the chain rule's non-trivial branch, slope = decay); outside it the slope is 1 and the rows coincide.
+  cal::BundleProblem plain = prob;
+  plain.instruments[1].band_lower = plain.instruments[1].band_upper = 0.0;
+  plain.instruments[1].band_decay = 1.0;
+  cal::CompiledBundleResidual eng_plain(plain);
 
-  EXPECT_LT((r_c - r_aad).cwiseAbs().maxCoeff(), 1e-11) << "compiled banded residual == AAD";
-  EXPECT_LT((J_c - J_aad).cwiseAbs().maxCoeff(), 1e-7) << "compiled banded Jacobian == AAD";
+  // (E5.2 2026-09-10: the 2026-09-08 audit showed this test evaluated ONLY outside the band -- slope 1, the
+  // scaling a no-op -- so deleting the compiled chain-rule scaling passed it. Now three points: at truth (the
+  // quote at its mid, slope = decay), inside but off-centre, and outside.)
+  struct Point { const char* where; Eigen::VectorXd x; double slope; };
+  Eigen::VectorXd inside = truth; inside[2] += 0.00015;  // moves the 5y quote ~1 bp: still inside +-10 bp
+  Eigen::VectorXd outside(4); outside << 0.033, 0.039, 0.047, 0.041;
+  const Point pts[] = {{"at truth (mid)", truth, 0.1}, {"inside the band", inside, 0.1}, {"outside the band", outside, 1.0}};
+  for (const Point& pt : pts) {
+    const Eigen::VectorXd r_aad = prob.residuals<double>(pt.x);
+    const Eigen::MatrixXd J_aad = cal::aad_jacobian(prob, pt.x);
+    const Eigen::VectorXd r_c = eng.residuals(pt.x);
+    const Eigen::MatrixXd J_c = eng.jacobian(pt.x);
+    EXPECT_LT((r_c - r_aad).cwiseAbs().maxCoeff(), 1e-11) << "compiled banded residual == AAD " << pt.where;
+    EXPECT_LT((J_c - J_aad).cwiseAbs().maxCoeff(), 1e-7) << "compiled banded Jacobian == AAD " << pt.where;
+    // the banded row is (slope x the unbanded row) -- the chain rule stated explicitly
+    const Eigen::MatrixXd J_p = eng_plain.jacobian(pt.x);
+    EXPECT_LT((J_c.row(1) - pt.slope * J_p.row(1)).cwiseAbs().maxCoeff(), 1e-12) << "band chain rule " << pt.where;
+    EXPECT_LT((J_c.row(0) - J_p.row(0)).cwiseAbs().maxCoeff(), 1e-12) << "unbanded rows untouched " << pt.where;
+  }
 }
 
 // A banded bundle STREAMS on the frozen-Newton fast path (residuals_vs drives the soft residual, not an
