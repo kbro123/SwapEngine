@@ -7,11 +7,13 @@
 #include <cmath>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "shape_ladder.hpp"
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/capi.h"
 #include "swaps/api/compile.hpp"
+#include "swaps/api/generate_risk.hpp"
 
 namespace api = swaps::api;
 namespace json = boost::json;
@@ -188,4 +190,27 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
     EXPECT_NEAR(f_capi[i], f_ex[i], 1e-10) << i;
     EXPECT_NEAR(f_rw[i], f_ex[i], 1e-10) << i;
   }
+}
+
+// G5: generate_risk's null completion decides "unseen by the quotes" at the engine's ONE rank threshold on the
+// singular values (was: normal-equation eigenvalues at 1e-9 of the largest, i.e. singular values at 3e-5 --
+// a stiff-but-constrained direction was self-quoted as a synthetic pillar).
+TEST(ApiPeriphery, GenerateRiskNullCompletionUsesTheSharedRankThreshold) {
+  std::vector<int> syn;
+  Eigen::MatrixXd J(2, 2);
+  J << 1.0, 0.0, 0.0, 1e-6;  // a stiff (sigma ratio 1e-6) but CONSTRAINED direction: not null
+  Eigen::VectorXd g(2); g << 1.0, 2.0;
+  const Eigen::VectorXd lad = api::null_completed_ladder(J, g, syn);
+  EXPECT_EQ(syn.size(), 0u) << "sigma 1e-6 is constrained at kRankThreshold 1e-10 (the old 3e-5 cut self-quoted it)";
+  ASSERT_EQ(lad.size(), 2);
+  EXPECT_NEAR(lad[0], 1.0, 1e-12);
+  EXPECT_NEAR(lad[1], 2.0 / 1e-6, 1e-3);
+  Eigen::MatrixXd J1(1, 2);
+  J1 << 1.0, 0.0;  // knot 1 genuinely unseen
+  const Eigen::VectorXd lad1 = api::null_completed_ladder(J1, g, syn);
+  ASSERT_EQ(syn.size(), 1u);
+  EXPECT_EQ(syn[0], 1);
+  ASSERT_EQ(lad1.size(), 2);
+  EXPECT_NEAR(lad1[0], 1.0, 1e-12);
+  EXPECT_NEAR(std::abs(lad1[1]), 2.0, 1e-12);  // the synthetic pillar carries the unseen knot's gradient
 }

@@ -51,6 +51,9 @@ class WarmCalibrator {
     // J0 via the engine's Jacobian (ANALYTIC for CalibrationProblem AND BundleProblem; AAD only for the
     // un-compiled staged/spread problem types). First-order curve sensitivity M = (J^T J)^{-1} J^T
     // (= J^{-1} when square) -- the SAME operator as the analytic risk ladder dx/dq. Precomputed once.
+    // Rank-safe at the ONE shared threshold and the SAME minimum-norm operator the streamer and the prefetch
+    // worker factor (a thresholded QR returns a basic, not minimum-norm, solution on a deficient J) -- E3-G5.
+    qr0_.setThreshold(kRankThreshold);
     M_ = qr0_.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
   }
 
@@ -71,8 +74,8 @@ class WarmCalibrator {
   WarmResult recalibrate(const Eigen::VectorXd& dq, const Options& opt) const {
     WarmResult res;
     Eigen::VectorXd x = x0_;
-    Eigen::ColPivHouseholderQR<Eigen::MatrixXd> refreshed;  // used only if we leave the envelope
-    const Eigen::ColPivHouseholderQR<Eigen::MatrixXd>* J = &qr0_;
+    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> refreshed;  // used only if we leave the envelope
+    const Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>* J = &qr0_;
     int frozen = 0;
 
     while (true) {
@@ -89,7 +92,8 @@ class WarmCalibrator {
       // Envelope detection: too many frozen steps without hitting tolerance => J0 is stale.
       if (frozen >= opt.max_frozen) {
         if (res.jacobian_refreshes >= opt.max_refresh) break;  // give up (caller may fall back)
-        refreshed = Eigen::ColPivHouseholderQR<Eigen::MatrixXd>(engine_.jacobian(x));
+        refreshed = Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>(engine_.jacobian(x));
+        refreshed.setThreshold(kRankThreshold);
         J = &refreshed;
         ++res.jacobian_refreshes;
         frozen = 0;
@@ -111,7 +115,7 @@ class WarmCalibrator {
   int n_res_;
   Eigen::VectorXd x0_;
   residual_engine_t<Problem> engine_;                // vectorized residual + Jacobian for this problem
-  Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr0_;  // factorization of J0 (base Jacobian)
+  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> qr0_;  // factorization of J0 (base Jacobian)
   Eigen::MatrixXd M_;                                // first-order sensitivity (J^T J)^{-1} J^T
 };
 

@@ -60,6 +60,7 @@ add_executable(swaps_tests
   calibration_status_test.cpp
   kernel_edges_test.cpp
   moment_quadrature_test.cpp
+  rank_safety_test.cpp
   bus252_daycount_test.cpp
   zero_coupon_swap_test.cpp
   conventions_property_test.cpp

@@ -110,7 +110,8 @@ class StreamingCalibrator {
     double refresh_drift = 1e-3;  // 10 bp
     // SPECULATIVE background Jacobian (EXACT mode): a dedicated thread pre-computes M as drift grows, so
     // a refresh swaps in a ready M (~µs) instead of computing J+factorize inline (0.5-20ms). Pure
-    // tail-latency win; correctness is identical (frozen-Newton is exact for any invertible M).
+    // tail-latency win; correctness is identical (frozen-Newton is exact for any invertible M). Armed
+    // ONLY for a square, unbanded, unregularised problem (the worker hands over M alone; see the ctor).
     bool prefetch = false;
     double prefetch_drift = 5e-4;  // request a background M once drift from the anchor exceeds this (5bp)
     // SMOOTHNESS REGULARISER (empty = off). R = λ·D, the second-difference operator over the chosen
@@ -162,11 +163,16 @@ class StreamingCalibrator {
     }
     if (!x0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor state x0 contains a non-finite value");
     if (!q0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor market q0 contains a non-finite quote");
-    if (opt_.prefetch && opt_.exact) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (opt_.regularizer.size()) RtR_.noalias() = opt_.regularizer.transpose() * opt_.regularizer;
     collect_bands(prob);
     // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0.
     drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || RtR_.size() > 0;
+    // The background worker hands over M ONLY (no B, no band re-scaling, and its private engine copy never
+    // sees a later set_quotes), which is exact for a SQUARE, unbanded, unregularised problem and wrong for
+    // the rest (E3 register S3 / G5): a regularised or banded stream would mix an un-regularised M with a
+    // stale B and converge to the wrong fixed point. So the prefetch is armed only where it is exact;
+    // elsewhere the option is ignored (prefetch_hits() stays 0).
+    if (opt_.prefetch && opt_.exact && !drift_refresh_) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (!set_anchor(x0, q0))
       throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
     x_cur_ = x0;

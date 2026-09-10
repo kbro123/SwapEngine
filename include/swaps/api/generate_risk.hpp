@@ -57,4 +57,9 @@ ConsistentRisk generate_risk(const swaps::portfolio::MultiCurveBook& book,
 // n_residuals, n_synthetic}, ...]}. Parses via bundle_from_json/book_from_json.
 std::string generate_risk_json(const std::string& request);
 
+// The rank-completed risk operator applied to a curve gradient (exposed for its test): null directions of J
+// at the engine's kRankThreshold are self-quoted as unit-pinned rows; returns the length-(n_res + n_null)
+// ladder and each synthetic pillar's dominant knot in `syn_knot`.
+Eigen::VectorXd null_completed_ladder(const Eigen::MatrixXd& J, const Eigen::VectorXd& g, std::vector<int>& syn_knot);
+
 }  // namespace swaps::api

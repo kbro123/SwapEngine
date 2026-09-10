@@ -3,6 +3,7 @@
 // BundleSession public API (calibrate / model_quote / price_portfolio / price_portfolio_risk / jacobian).
 // Boost.JSON's implementation is compiled in bundle_api.cpp; this TU includes only the declarations.
 #include "swaps/api/generate_risk.hpp"
+#include "swaps/calibration/residual_engine.hpp"  // kRankThreshold
 
 #include <algorithm>
 #include <stdexcept>
@@ -17,6 +18,8 @@ namespace pf = swaps::portfolio;
 
 namespace {
 
+}  // namespace
+
 // Left-multiply the book's curve gradient g = dP/dx by the RANK-COMPLETED risk operator. J is the calibration
 // Jacobian dq/dx (n_res x n_knots). Any null direction of JᵀJ (a knot the quotes cannot resolve) is self-
 // quoted: appended to J as a unit-pinned row, so J_full is full column rank and M_full = (J_fullᵀJ_full)⁻¹
@@ -27,30 +30,39 @@ Eigen::VectorXd null_completed_ladder(const Eigen::MatrixXd& J, const Eigen::Vec
   const int n_res = static_cast<int>(J.rows());
   const int nk = static_cast<int>(J.cols());
   syn_knot.clear();
-  const Eigen::MatrixXd A = J.transpose() * J;  // n_knots x n_knots, symmetric PSD
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(A);
-  const Eigen::VectorXd ev = es.eigenvalues();  // ascending
-  const double emax = ev.size() ? ev(ev.size() - 1) : 0.0;
-  // A direction is "unseen by the quotes" when its normal-equation eigenvalue is ~0 relative to the largest.
-  const double tol = std::max(1e-10, emax * 1e-9);
-  std::vector<int> null_j;
-  for (int j = 0; j < ev.size(); ++j)
-    if (ev(j) < tol) null_j.push_back(j);
-  const int n_null = static_cast<int>(null_j.size());
-
+  // A direction is "unseen by the quotes" when its SINGULAR VALUE is null at the engine's ONE rank threshold
+  // (kRankThreshold, relative to sigma_max) -- the same test calibrate()'s rank_deficiency and the streamer's
+  // operator use. Until 2026-09-10 this squared J and cut the normal-equation eigenvalues at 1e-9 of the
+  // largest, i.e. singular values at 3e-5 of sigma_max: a stiff-but-constrained direction (sigma ~1e-5, e.g.
+  // a long knot two instruments barely separate) was self-quoted as if the quotes could not see it (E3-G5).
+  int rank = 0;
+  Eigen::MatrixXd V = Eigen::MatrixXd::Identity(nk, nk);
+  if (n_res > 0) {
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(J, Eigen::ComputeFullV);
+    svd.setThreshold(cal::kRankThreshold);
+    rank = static_cast<int>(svd.rank());
+    V = svd.matrixV();  // columns rank.. are the null directions (singular values descending)
+  }
+  const int n_null = nk - rank;
   Eigen::MatrixXd Jf(n_res + n_null, nk);
   if (n_res) Jf.topRows(n_res) = J;
   for (int j = 0; j < n_null; ++j) {
-    const Eigen::VectorXd v = es.eigenvectors().col(null_j[j]);  // a unit null direction in knot space
-    Jf.row(n_res + j) = v.transpose();                          // self-quote it (a direct pin on that direction)
+    const Eigen::VectorXd v = V.col(rank + j);  // a unit null direction in knot space
+    Jf.row(n_res + j) = v.transpose();          // self-quote it (a direct pin on that direction)
     int idx = 0;
-    v.cwiseAbs().maxCoeff(&idx);                                // the knot it loads on most -> its label
+    v.cwiseAbs().maxCoeff(&idx);                // the knot it loads on most -> its label
     syn_knot.push_back(idx);
   }
-  const Eigen::MatrixXd Af = Jf.transpose() * Jf;               // now full rank
-  const Eigen::MatrixXd Mf = Af.ldlt().solve(Jf.transpose());   // n_knots x (n_res + n_null)
-  return Mf.transpose() * g;                                    // length n_res + n_null
+  // Jf has full column rank by construction; the pseudo-inverse (rank-safe at the same threshold) is
+  // (JfᵀJf)⁻¹Jfᵀ without forming the normal matrix.
+  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
+  cod.setThreshold(cal::kRankThreshold);
+  cod.compute(Jf);
+  const Eigen::MatrixXd Mf = cod.pseudoInverse();  // n_knots x (n_res + n_null)
+  return Mf.transpose() * g;                       // length n_res + n_null
 }
+
+namespace {
 
 // A light calibration floor so RE-LEVELING an under-determined bundle converges (the risk operator itself is
 // NOT smoothed — it is rank-completed). Matches the web's "light" tension preset.
