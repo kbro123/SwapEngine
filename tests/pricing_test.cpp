@@ -18,6 +18,8 @@
 #include "reference_curve.hpp"
 #include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/build/observations.hpp"  // the SHIPPED observation builder, oracled below
+#include "swaps/build/conventions.hpp"   // the SHIPPED DB -> SwapConv assembly, oracled below
+#include "swaps/build/instruments.hpp"   // the SHIPPED instrument builders, oracled below
 #include "swaps/ql/extract.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "tolerances.hpp"
@@ -140,4 +142,71 @@ TEST_F(Pricing, AveragedFutureRateMatchesQuantLib) {
   }
   ASSERT_EQ(n, 12);
   std::cout << "  [1m future] max |ours - QuantLib| = " << worst << "\n";
+}
+
+// THE SHIPPED SWAP BUILDER vs QuantLib (golden-source step 6's S1 gap, 2026-09-10). Every other oracle in
+// this file prices an instrument the FIXTURE assembled: QuantLib defines the trade, the extractor lifts its
+// cashflows, and the kernel reprices them. That checks the KERNEL, and it is exactly why the averaged-weight
+// bug survived -- nothing compared what `build::par_swap` itself produces from the conventions DB to an
+// independent number. Here the engine is given a currency, an index and a maturity, and everything else --
+// spot lag, payment lag, roll convention, both frequencies, both day counts, the compounding mode -- comes
+// from the DB row through the shipped path. QuantLib's OIS is then built to those SAME conventions rather
+// than to MakeOIS's defaults, so a disagreement is a real disagreement and not a convention mismatch.
+TEST_F(Pricing, ParSwapFromTheShippedBuilderMatchesQuantLib) {
+  const swaps::build::SwapConv conv = swaps::build::swap_conv("USD", "USD-SOFR");
+  ASSERT_EQ(conv.product_id, "USD-SOFR-OIS");
+
+  double worst = 0.0;
+  int n = 0;
+  for (int y : {1, 2, 3, 5, 7, 10, 20, 30}) {
+    const ext::shared_ptr<OvernightIndexedSwap> qls = MakeOIS(Period(y, Years), mk.sofr, 0.03)
+                                                          .withDiscountingTermStructure(h)
+                                                          .withSettlementDays(conv.spot_lag)
+                                                          .withPaymentLag(conv.pay_lag)
+                                                          .withPaymentAdjustment(ModifiedFollowing);
+    const double ql_rate = qls->fairRate();
+
+    const swaps::calibration::Instrument ins =
+        swaps::build::par_swap(eng_date(mk.today), conv, eng_date(qls->maturityDate()), 0, 0, 0.0);
+    const double ours = swaps::pricing::par_rate<double>(ins.fwd.coupons, ins.fixed.coupons, curve, curve);
+
+    EXPECT_TRUE(close(ours, ql_rate, swaps::tol::curve_rel))
+        << " " << y << "y OIS  builder=" << ours << " QuantLib=" << ql_rate;
+    worst = std::max(worst, std::abs(ours - ql_rate));
+    ++n;
+  }
+  ASSERT_EQ(n, 8);
+  std::cout << "  [par swap, shipped builder] max |ours - QuantLib| = " << worst << "\n";
+
+  // NEGATIVE CONTROLS -- an oracle that cannot fail is not an oracle. The E2 bug was a day count read from
+  // the wrong window, so perturb exactly that, plus the fixed frequency, and demand a visible disagreement.
+  const ext::shared_ptr<OvernightIndexedSwap> ref = MakeOIS(Period(10, Years), mk.sofr, 0.03)
+                                                        .withDiscountingTermStructure(h)
+                                                        .withSettlementDays(conv.spot_lag)
+                                                        .withPaymentLag(conv.pay_lag)
+                                                        .withPaymentAdjustment(ModifiedFollowing);
+  const swaps::build::Date mat10 = eng_date(ref->maturityDate());
+  const auto rate_with = [&](swaps::build::SwapConv c) {
+    const swaps::calibration::Instrument i =
+        swaps::build::par_swap(eng_date(mk.today), c, mat10, 0, 0, 0.0);
+    return swaps::pricing::par_rate<double>(i.fwd.coupons, i.fixed.coupons, curve, curve);
+  };
+  swaps::build::SwapConv wrong_fixed_dc = conv;
+  wrong_fixed_dc.fixed_dc = "ACT/365F";  // the 365/360 family the E2 bug lived in
+  EXPECT_GT(std::abs(rate_with(wrong_fixed_dc) - ref->fairRate()), 1e-4)
+      << "a wrong FIXED day count must move the par rate well outside tolerance";
+  swaps::build::SwapConv wrong_freq = conv;
+  wrong_freq.fixed_freq_tok = "6M";
+  EXPECT_GT(std::abs(rate_with(wrong_freq) - ref->fairRate()), swaps::tol::curve_rel)
+      << "a wrong fixed frequency must be visible too";
+
+  // And the structural reason the E2 bug could only ever bite an AVERAGED leg, pinned rather than assumed:
+  // on a COMPOUNDED leg the float day count cancels EXACTLY. The coupon is (DF(s)/DF(e) - 1) / tau_index
+  // accrued over tau_pay, and a plain leg's accrual and observation windows coincide, so tau_pay / tau_index
+  // = 1 whatever the day count is. Getting that day count wrong is invisible here -- and was, for a year --
+  // while on an averaged leg the same mistake scaled every rate by (index dc)/(curve dc).
+  swaps::build::SwapConv other_float_dc = conv;
+  other_float_dc.float_dc = "ACT/365F";
+  EXPECT_LT(std::abs(rate_with(other_float_dc) - ref->fairRate()), 1e-15)
+      << "a compounded leg's day count cancels between the accrual factor and the index year fraction";
 }

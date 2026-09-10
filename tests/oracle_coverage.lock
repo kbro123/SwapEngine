@@ -4,10 +4,13 @@
 swaps/ad/dual.hpp
 swaps/build/bond.hpp
 swaps/build/calendar.hpp
+swaps/build/conventions.hpp
 swaps/build/date.hpp
 swaps/build/day_count.hpp
+swaps/build/instruments.hpp
 swaps/build/observations.hpp
 swaps/build/par_asset_swap.hpp
+swaps/build/ref_data.hpp
 swaps/build/schedule.hpp
 swaps/calibration/aad_block.hpp
 swaps/calibration/background_jacobian.hpp

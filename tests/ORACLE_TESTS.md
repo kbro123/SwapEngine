@@ -98,7 +98,7 @@ oracle merely might.
 |---|---|---|
 | `ad`, `ql` | 1/1, 2/2 | complete |
 | `pricing` | 6/9 | `bond_future.hpp`, `ndf.hpp`, `fixings.hpp` — CTD/conversion-factor and NDF numbers, and the past/future fixing split, have no QuantLib comparison |
-| `build` | 7/13 | **`instruments.hpp` is the S1 gap** (below); `conventions.hpp` (the DB → `SwapConv` assembly), `ref_data.hpp`, `swap_spread.hpp`, `credit_instruments.hpp`, `inflation_instruments.hpp` |
+| `build` | 10/13 | `credit_instruments.hpp`, `inflation_instruments.hpp`, `swap_spread.hpp`. (`instruments.hpp` + `conventions.hpp` + `ref_data.hpp` were the S1 gap below and are now oracled by `Pricing.ParSwapFromTheShippedBuilderMatchesQuantLib`.) |
 | `calibration` | 13/21 | `risk.hpp` — the IFT delta ladder clients hedge on — is checked only against the engine's own bump-and-recalibrate; also `bond_fit`, `pnl_explain`, `structure_fingerprint`, credit/inflation problems |
 | `curve` | 2/5 | `hazard.hpp`, `inflation.hpp`, `parametric.hpp`: **credit and inflation curves have no oracle at all**, though QuantLib ships engines for both |
 | `vol` | 3/8 | oracled: Bachelier, general-β SABR vol, `normal`. Not: `swaption.hpp`, `fx_black.hpp`, `fx_vol_surface.hpp`, `sabr_calibration.hpp`, `vega_ladder.hpp` |
@@ -114,7 +114,16 @@ oracle merely might.
    the calibration consumes, and it was wrong by 365/360 for a year. Every oracle prices instruments the
    *fixture* built. The fix is one test that builds a swap **through the shipped builder from the conventions
    DB** and prices it against QuantLib's `VanillaSwap`/`OvernightIndexedSwap` — item 2 of this programme did
-   exactly that for one observation shape (`pricing_test.cpp`, averaged future); the swap builders are next.
+   exactly that for one observation shape (`pricing_test.cpp`, averaged future).
+   **CLOSED 2026-09-10** by `Pricing.ParSwapFromTheShippedBuilderMatchesQuantLib`: the engine is given a
+   currency, an index and a maturity, and everything else — spot lag, payment lag, roll convention, both
+   frequencies, both day counts, the compounding mode — comes from the DB row through `swap_conv` and
+   `build::par_swap`; QuantLib's OIS is built to those same conventions (not `MakeOIS` defaults) at 1y–30y.
+   Agreement is 7.6e-17. Its negative controls also pin *why* E2 hid: on a **compounded** leg the float day
+   count cancels **exactly** (`tau_pay / tau_index` = 1 when the accrual and observation windows coincide),
+   so getting it wrong is invisible there — it was only ever visible on an averaged leg. The fixed day count
+   and the fixed frequency do move the rate, and the test demands that they do. Still open in this layer:
+   `swap_spread.hpp`, `credit_instruments.hpp`, `inflation_instruments.hpp`.
 2. **No oracle names any of the 28 `run_json` verbs.** Every verb is covered by shape and smoke tests only, so
    the request → kernel assembly — role wiring, conventions lookup, unit and sign conventions on the way out —
    is unchecked against an independent number, even where the kernel below it is well oracled. (`portfolio` and
