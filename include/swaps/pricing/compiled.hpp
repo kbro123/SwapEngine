@@ -10,6 +10,8 @@
 #include <Eigen/Core>
 
 #include <type_traits>
+#include <limits>
+#include <string>
 #include <vector>
 
 #include "swaps/ad/dual.hpp"
@@ -33,10 +35,24 @@ namespace swaps::pricing {
 inline Eigen::MatrixXd integral_weight_matrix(const std::vector<curve::CurveModule>& regions,
                                               const std::vector<double>& times) {
   auto c = curve::make_modular_curve<ad::Dual>(regions);
-  if (!c.is_linear_map())
-    throw std::invalid_argument(
-        "integral_weight_matrix: the W-cache requires linear interpolation regions; a value-dependent "
-        "scheme (MonotoneCubic) must calibrate through the AAD engine, not the W-cache.");
+  // LINEARITY IS LOCAL (2026-09-10). A value-dependent region makes the integral non-linear only from where
+  // that region starts; every earlier time still has a constant weight row, because regions are built front
+  // to back and never feed backwards. So refuse the TIMES that reach a non-linear region, not the whole
+  // curve. The router keeps its rows inside `curve_linear_horizon`; this is the backstop that turns a
+  // routing mistake into a loud error rather than a silently wrong W.
+  if (!c.is_linear_map()) {
+    double horizon = -std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < regions.size(); ++i) {
+      if (curve::scheme_is_linear(regions[i].scheme)) continue;
+      if (i > 0 && !regions[i - 1].knots.empty()) horizon = regions[i - 1].knots.back();
+      break;
+    }
+    for (double t : times)
+      if (!(t <= horizon))
+        throw std::invalid_argument(
+            "integral_weight_matrix: time " + std::to_string(t) + " reaches a value-dependent region (the "
+            "curve's linear horizon is " + std::to_string(horizon) + "); that row belongs on the AAD engine.");
+  }
   const int m = c.n_knots();
   Eigen::MatrixXd W(static_cast<int>(times.size()), m);
   c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));

@@ -11,6 +11,7 @@
 #include <Eigen/Core>
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -182,10 +183,40 @@ class BundleCurveSet {
 };
 
 
-// True iff the curve set rules out the W-cache entirely: a value-dependent (non-linear) interpolation scheme
-// has no constant W (`integral_weight_matrix` is the authority and throws on it; `curve::scheme_is_linear` is
-// the ONE static answer). A curve-set property, so it belongs beside the handles rather than in the residual
-// engine that consults it (E6.4).
+// THE LINEAR HORIZON of a curve: the largest time up to which its log-discount integral is a LINEAR map of
+// the state, so a constant W row exists for it (2026-09-10).
+//
+// Regions are built front to back, each from its own knots plus the boundary handed in by its predecessor,
+// and none feeds anything backwards. So a value-dependent region cannot invalidate any time before it: the
+// horizon is the last knot of the maximal LINEAR PREFIX of regions, or −inf if the very first region is
+// non-linear (a leading region flat-extrapolates its first value, so even earlier times use it).
+//
+// A spread curve's weight row is its own PLUS its base's, evaluated at the SAME time (see logdf_weight), so
+// each term must be linear at that time independently. The base therefore only has to be linear up to t as
+// well, which makes the horizon a simple recursive minimum. It replaces the old whole-curve-set veto, under
+// which one MonotoneCubic region anywhere dropped every instrument in the bundle to the AAD path.
+inline double curve_linear_horizon(const std::vector<CurveStructure>& curves, int c) {
+  double h = std::numeric_limits<double>::infinity();
+  const auto& regions = curves[static_cast<std::size_t>(c)].regions;
+  for (std::size_t i = 0; i < regions.size(); ++i) {
+    if (curve::scheme_is_linear(regions[i].scheme)) continue;
+    h = (i == 0 || regions[i - 1].knots.empty()) ? -std::numeric_limits<double>::infinity()
+                                                 : regions[i - 1].knots.back();
+    break;
+  }
+  const int base = curves[static_cast<std::size_t>(c)].base;
+  return base >= 0 ? std::min(h, curve_linear_horizon(curves, base)) : h;
+}
+
+// Every curve's horizon, indexed by curve role.
+inline std::vector<double> curve_linear_horizons(const std::vector<CurveStructure>& curves) {
+  std::vector<double> h(curves.size());
+  for (std::size_t c = 0; c < curves.size(); ++c) h[c] = curve_linear_horizon(curves, static_cast<int>(c));
+  return h;
+}
+
+// True iff NO time on this curve set is W-cacheable (every curve's horizon is −inf). Retained for the
+// callers that only need the all-or-nothing answer.
 inline bool curves_are_noncacheable(const std::vector<CurveStructure>& curves) {
   for (const auto& c : curves)
     for (const auto& r : c.regions)

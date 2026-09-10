@@ -14,6 +14,7 @@
 #include <Eigen/Core>
 
 #include <optional>
+#include <limits>
 #include <vector>
 
 #include "swaps/calibration/aad_block.hpp"
@@ -42,13 +43,56 @@ inline bool has_compounded_obs(const Instrument& ins) {
 // (curves_are_noncacheable — "do these curves have a constant W?" — moved to pricing/curve_handle.hpp in
 // E6.4 and is re-exported by bundle_problem.hpp; it is a curve-set property, not a residual-engine one.)
 
+// A curve handle that forwards to a real curve and records the LATEST time anything asks of it. Running the
+// GENERIC pricer once against these is how the router learns which times a row touches on which curve: the
+// answer comes from the pricer itself, so it cannot drift from what the row really reads (2026-09-10).
+struct MaxTimeProbe : pricing::CurveHandle<double> {
+  const pricing::CurveHandle<double>* real = nullptr;
+  double* seen = nullptr;
+  void note(double t) const { if (t > *seen) *seen = t; }
+  double forward(double t) const override { note(t); return real->forward(t); }
+  double integral(double t) const override { note(t); return real->integral(t); }
+  double discount(double t) const override { note(t); return real->discount(t); }
+  double turn_jump(int j) const override { return real->turn_jump(j); }
+  void pieces_into(std::vector<double>& out) const override { real->pieces_into(out); }
+  void set_forwards(const Eigen::VectorXd&) override {}
+};
+
+// Does every time this instrument touches sit at or below its curve's linear horizon? Only asked when some
+// curve HAS a finite horizon, i.e. when a value-dependent region exists somewhere; otherwise every row is
+// within reach by construction and the probe is skipped entirely (so an all-linear bundle pays nothing).
+// An instrument that cannot even be priced at a dummy state is treated as non-cacheable, not as an error.
+inline bool instrument_within_horizons(const Instrument& ins, const std::vector<BundleCurveSpec>& curves,
+                                       const std::vector<double>& horizons) {
+  const int NC = static_cast<int>(curves.size());
+  std::vector<double> seen(static_cast<std::size_t>(NC), -std::numeric_limits<double>::infinity());
+  const auto real = build_bundle_curves<double>(curves, [](int, int) { return 0.03; });
+  std::vector<MaxTimeProbe> probe(static_cast<std::size_t>(NC));
+  for (int c = 0; c < NC; ++c) {
+    probe[static_cast<std::size_t>(c)].real = real[static_cast<std::size_t>(c)].get();
+    probe[static_cast<std::size_t>(c)].seen = &seen[static_cast<std::size_t>(c)];
+  }
+  const auto of = [&probe](int i) -> const pricing::CurveHandle<double>& {
+    return probe[static_cast<std::size_t>(i)];
+  };
+  try {
+    (void)instrument_model_quote<double>(ins, of);
+  } catch (const std::exception&) {
+    return false;  // unpriceable at a dummy state: let the general path deal with it
+  }
+  for (int c = 0; c < NC; ++c)
+    if (seen[static_cast<std::size_t>(c)] > horizons[static_cast<std::size_t>(c)]) return false;
+  return true;
+}
+
 // True iff this instrument must go to the AAD block rather than the W-cache. Both cross-currency quotes are
 // now W-cacheable in their standard form: a STANDALONE FX forward (affine (ln F − ln q)/T residual) and a
 // MtM-xccy basis with a PAR funding leg (its FX-reset-notional term is identically zero, so it collapses to
 // the ParSpread quotient). Only a non-par MtM funding leg -- a genuine curve-dependent notional -- still
 // needs AAD. FX/MtM INSIDE a Portfolio are excluded too (the compiled transforms don't compose in a Σ).
 // A compounded (RFR lookback/lockout) observation anywhere also forces AAD -- the batch's arithmetic Σ
-// cannot represent the product. (Curve-level non-cacheability is a BUNDLE property: curves_are_noncacheable.)
+// cannot represent the product. This asks only "can the BATCH express this row's shape?"; whether the row's
+// times reach a value-dependent part of a curve is the separate, per-curve horizon question above.
 inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<BundleCurveSpec>& curves) {
   if (has_compounded_obs(ins)) return true;
   // A MtM basis is cacheable only if its FX-reset funding term is NUMERICALLY negligible on the real
@@ -76,17 +120,24 @@ class HybridBundleResidual {
     validate_problem(p, "HybridBundleResidual");  // E1/E2/B12: refuse a malformed bundle before compiling it
     // ONE partition pass. Each instrument's cacheability is decided once (the MtM guard inside
     // instrument_is_noncacheable prices real cashflows, so it is not free -- do not re-ask per consumer).
-    // A value-dependent interpolation scheme anywhere means NO curve has a constant W: every row goes to
-    // the AAD block and the compiled engine is skipped entirely (it would throw building W) -- the hybrid
-    // then IS the generic AAD path, width-reduced, instead of an error.
-    const bool nl = curves_are_noncacheable(p.curves);
+    // Per-curve LINEAR HORIZONS replace the old whole-bundle veto (2026-09-10). A value-dependent region
+    // used to send EVERY instrument in the bundle to the AAD block, including par swaps on curves that never
+    // touched it. Now a row is only pushed off the W-cache if it actually reads past a horizon. When every
+    // curve is fully linear -- which is every shipped bundle -- `mixed` is false and no probe runs at all,
+    // so this costs nothing except where it buys something.
+    const std::vector<double> horizons = pricing::curve_linear_horizons(p.curves);
+    bool mixed = false;
+    for (double h : horizons)
+      if (h < std::numeric_limits<double>::infinity()) mixed = true;
     BundleProblem c;
     c.curves = p.curves;
     std::vector<Instrument> nc;
     std::vector<int> nc_rows;
     cache_pos_.assign(n_res_, -1);
     for (int r = 0; r < n_res_; ++r) {
-      if (nl || instrument_is_noncacheable(p.instruments[r], p.curves)) {
+      const bool off_cache = instrument_is_noncacheable(p.instruments[r], p.curves) ||
+                             (mixed && !instrument_within_horizons(p.instruments[r], p.curves, horizons));
+      if (off_cache) {
         nc.push_back(p.instruments[r]);
         nc_rows.push_back(r);
       } else {
@@ -95,12 +146,20 @@ class HybridBundleResidual {
         cache_rows_.push_back(r);
       }
     }
-    if (!nl) cacheable_.emplace(c);  // engaged for every linear bundle (even an all-AAD instrument mix)
+    // Engaged for every fully-linear bundle (even an all-AAD instrument mix, which keeps n_times() honest),
+    // and for a mixed bundle whenever some row stayed on the W-cache.
+    if (!mixed || !c.instruments.empty()) cacheable_.emplace(c);
     nc_.init(p.curves, std::move(nc), std::move(nc_rows), p.n_knots());
   }
 
   int n_residuals() const { return n_res_; }
   int n_times() const { return cacheable_ ? cacheable_->n_times() : 0; }
+  // The ROW PARTITION, observable (item 5, 2026-09-10): which engine took a given global row. >=0 is the
+  // row's index in the compiled W-cache sub-problem, -1 means it went to the AAD block. Exposed so a test
+  // can pin WHERE a row was routed, not merely that the two routes agree -- a router that quietly sent
+  // everything to the slow path would otherwise pass every parity test it has.
+  int compiled_row(int row) const { return cache_pos_[row]; }
+  int n_compiled_rows() const { return static_cast<int>(cache_rows_.size()); }
 
   // Overwrite the quote RHS (targets + bands) on BOTH halves without touching either's compiled/discovered
   // structure -- the engine-side of a warm rebind. `p` must have this engine's row count and topology

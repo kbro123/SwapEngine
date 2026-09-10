@@ -128,6 +128,20 @@ TEST(KernelEdges, TurnJumpRidesTheAadBlock) {
   const cal::CalibrationResult res = cal::calibrate(p, x0);
   EXPECT_TRUE(res.converged) << res.status;
   EXPECT_NEAR(res.x[delta_col], 0.0004, 1e-9) << "the turn δ is recovered through the AAD block";
+
+  // B11 proper, router-independent: put the TurnJump row on the AAD block by hand and demand the same
+  // residual and delta column from it.
+  cal::AadBlock blk;
+  blk.init(p.curves, {p.instruments[static_cast<std::size_t>(row)]}, {row}, p.n_knots());
+  Eigen::VectorXd rb = Eigen::VectorXd::Zero(p.n_residuals());
+  blk.residuals_into(xt, rb);
+  EXPECT_LT(std::abs(rb[row]), 1e-12) << "the block prices the turn jump, not NaN";
+  Eigen::MatrixXd Jb = Eigen::MatrixXd::Zero(p.n_residuals(), p.n_knots());
+  blk.jacobian_into(xt, Jb);
+  EXPECT_NEAR(Jb(row, delta_col), 1.0, 1e-12) << "the turn's curve is in the block's touched set";
+  Eigen::VectorXd rest_b = Jb.row(row).transpose();
+  rest_b[delta_col] = 0.0;
+  EXPECT_LT(rest_b.cwiseAbs().maxCoeff(), 1e-12);
 }
 
 // B12: an instrument with an empty leg / bad shape is refused at engine construction, never priced to NaN.
