@@ -1,0 +1,40 @@
+# Headers a registered QuantLib ORACLE test's include closure reaches (tools/oracle_coverage.py).
+# Losing an entry means a QuantLib check stopped reaching shipped code -- usually a silent
+# side effect of a refactor, which is exactly how coverage erodes. Gaining one is free.
+swaps/ad/dual.hpp
+swaps/build/bond.hpp
+swaps/build/calendar.hpp
+swaps/build/date.hpp
+swaps/build/day_count.hpp
+swaps/build/observations.hpp
+swaps/build/par_asset_swap.hpp
+swaps/build/schedule.hpp
+swaps/calibration/aad_block.hpp
+swaps/calibration/background_jacobian.hpp
+swaps/calibration/bundle_problem.hpp
+swaps/calibration/bundle_stage.hpp
+swaps/calibration/compiled_bundle.hpp
+swaps/calibration/compiled_residual.hpp
+swaps/calibration/hybrid_residual.hpp
+swaps/calibration/jacobian.hpp
+swaps/calibration/lm.hpp
+swaps/calibration/problem.hpp
+swaps/calibration/regularize.hpp
+swaps/calibration/residual_engine.hpp
+swaps/calibration/streaming.hpp
+swaps/conventions_data.hpp
+swaps/conventions_db.hpp
+swaps/curve/curve_module.hpp
+swaps/curve/regions.hpp
+swaps/portfolio/bond_universe.hpp
+swaps/pricing/bond.hpp
+swaps/pricing/cashflows.hpp
+swaps/pricing/compiled.hpp
+swaps/pricing/compiled_book.hpp
+swaps/pricing/curve_handle.hpp
+swaps/pricing/curve_spec.hpp
+swaps/ql/extract.hpp
+swaps/ql/ql_term_structure.hpp
+swaps/vol/bachelier.hpp
+swaps/vol/normal.hpp
+swaps/vol/sabr.hpp

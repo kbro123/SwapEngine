@@ -75,6 +75,18 @@ else
   pass_graph="FAIL"; rc=1
 fi
 
+# ---- Oracle-REACH guard (golden-source step 6) ------------------------------
+# check_oracle_tests.sh guards the oracle FILES (present, bannered, not gutted). This guards the other
+# direction: which shipped HEADERS a QuantLib comparison can still reach. The 2026-09-10 averaged-weight
+# bug sat in build/observations.hpp while every oracle that could have caught it built its observations
+# test-side -- coverage that no file-level guard could see was missing. A header may only GAIN reach.
+echo ">> oracle-reach guard (a QuantLib number still reaches the locked headers)"
+if python3 "${ROOT}/tools/oracle_coverage.py" --check; then
+  pass_reach="PASS"
+else
+  pass_reach="FAIL"; rc=1
+fi
+
 # ---- Test-taxonomy guard (E5) -----------------------------------------------
 # Every tests/*.cpp says what its assertions compare an engine number TO (tests/TAXONOMY.md). Cheap.
 echo ">> test-taxonomy guard (every test file labelled T1-T6)"
@@ -167,6 +179,7 @@ echo "========== VERIFY SUMMARY =========="
 printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
 printf "  %-20s %s\n" "test-taxonomy guard:" "${pass_taxonomy}"
 printf "  %-20s %s\n" "include-graph guard:" "${pass_graph}"
+printf "  %-20s %s\n" "oracle-reach guard:" "${pass_reach}"
 printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
 printf "  %-20s %s\n" "conventions schema:" "${pass_schema}"
 printf "  %-20s %s\n" "no-literal guard:" "${pass_lit}"

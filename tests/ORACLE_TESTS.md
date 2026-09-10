@@ -79,3 +79,46 @@ gate surface and covered by `tools/check_oracle_tests.sh` indirectly (deleting o
 - Compiled `FxForward` / `XccyMtmBasis` rows vs QuantLib; SABR β∈(0,1) vs `SabrSmileSection`; ZCIS / CDS vs
   QuantLib engines; CME conversion-factor table rows.
 - Loose tolerances: CMS 15 %, asset-swap 5e-5 abs, multicurrency 1e-3 "sub-bp", tension-regularizer 1e-2.
+
+## Coverage BY LAYER — what a QuantLib number actually reaches (2026-09-10)
+
+The tables above answer *"what does each oracle FILE compare?"*. This answers the dual question, the one the
+averaged-weight bug turned on: **for a given piece of shipped code, is there any oracle that could have caught
+a wrong number in it?** That bug lived in `build/observations.hpp`; every oracle that might have caught it
+built its observations **test-side**, so no oracle's include closure entered the shipped builder, and eleven
+green oracles said nothing about it. A file-level guard cannot see that; `tools/oracle_coverage.py` can.
+
+Run `python3 tools/oracle_coverage.py` for the live table. `--check` (a `verify.sh` gate) fails when a header
+**loses** its oracle reach — coverage usually erodes as an unnoticed side effect of a refactor, never as a
+decision. Reachability is a **floor, not a certificate**: an oracle can include a header and still compare only
+numbers that never touch it. A header with no oracle in its closure provably has no QuantLib check; one with an
+oracle merely might.
+
+| Layer | Reached | The gap, and whether it matters |
+|---|---|---|
+| `ad`, `ql` | 1/1, 2/2 | complete |
+| `pricing` | 6/9 | `bond_future.hpp`, `ndf.hpp`, `fixings.hpp` — CTD/conversion-factor and NDF numbers, and the past/future fixing split, have no QuantLib comparison |
+| `build` | 7/13 | **`instruments.hpp` is the S1 gap** (below); `conventions.hpp` (the DB → `SwapConv` assembly), `ref_data.hpp`, `swap_spread.hpp`, `credit_instruments.hpp`, `inflation_instruments.hpp` |
+| `calibration` | 13/21 | `risk.hpp` — the IFT delta ladder clients hedge on — is checked only against the engine's own bump-and-recalibrate; also `bond_fit`, `pnl_explain`, `structure_fingerprint`, credit/inflation problems |
+| `curve` | 2/5 | `hazard.hpp`, `inflation.hpp`, `parametric.hpp`: **credit and inflation curves have no oracle at all**, though QuantLib ships engines for both |
+| `vol` | 3/8 | oracled: Bachelier, general-β SABR vol, `normal`. Not: `swaption.hpp`, `fx_black.hpp`, `fx_vol_surface.hpp`, `sabr_calibration.hpp`, `vega_ladder.hpp` |
+| `portfolio` | 1/4 | book aggregation is cross-path parity only (compiled vs templated) — a shared error cancels |
+| `api` | 0/20 | see below — measured by verb, not by include |
+| `market`, `trade`, `csa`, `xva`, `derive` | 0 | mostly containers and role plumbing (`quote.hpp`, `currency.hpp`, `trade.hpp`, `csa.hpp`) where there is no independent number to compare; `derive/asset_swap.hpp` and `xva/exposure.hpp` DO produce numbers and do not have one |
+
+**The two S1 gaps.**
+
+1. **`build/instruments.hpp` — the shipped instrument builders (`par_swap`, `basis_swap`, `xccy_mtm_basis`,
+   `zero_coupon_swap`, `float_leg_from`) are reached by nine tests and by no oracle.** This is precisely the
+   class of the item-17/E2 bug: the builder assembles conventions, schedules and observations into the rows
+   the calibration consumes, and it was wrong by 365/360 for a year. Every oracle prices instruments the
+   *fixture* built. The fix is one test that builds a swap **through the shipped builder from the conventions
+   DB** and prices it against QuantLib's `VanillaSwap`/`OvernightIndexedSwap` — item 2 of this programme did
+   exactly that for one observation shape (`pricing_test.cpp`, averaged future); the swap builders are next.
+2. **No oracle names any of the 28 `run_json` verbs.** Every verb is covered by shape and smoke tests only, so
+   the request → kernel assembly — role wiring, conventions lookup, unit and sign conventions on the way out —
+   is unchecked against an independent number, even where the kernel below it is well oracled. (`portfolio` and
+   `vol_cube` are not named by any test at all.)
+
+Neither gap means the arithmetic is unchecked; both mean the **assembly** around it is, which is where the last
+S0 lived.
