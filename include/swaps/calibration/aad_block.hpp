@@ -62,6 +62,7 @@ struct CachedDisc : CurveHandle<double> {
   // A TurnJump row reads the turn's δ off the curve (E3-B11: without this forward the base handle threw
   // "this curve has no turns" whenever a MonotoneCubic region sent a turned bundle to the block).
   double turn_jump(int j) const override { return real->turn_jump(j); }
+  void pieces_into(std::vector<double>& out) const override { real->pieces_into(out); }
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}  // real curve owns knots
 };
 
@@ -74,6 +75,7 @@ struct RecordingCurve : CurveHandle<double> {
   double integral(double t) const override { return real->integral(t); }
   double forward(double t) const override { return real->forward(t); }
   double turn_jump(int j) const override { return real->turn_jump(j); }
+  void pieces_into(std::vector<double>& out) const override { real->pieces_into(out); }
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}
 };
 

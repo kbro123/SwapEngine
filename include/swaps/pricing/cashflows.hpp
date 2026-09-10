@@ -126,13 +126,18 @@ struct FixedCoupon {
   double scale = 1.0;  // constant PV multiplier (FX spot for a foreign annuity); default 1.0 unchanged
 };
 
-// Composite ∫f² over the curve for the moment path (defined at the end of this header).
+// ∫f² / ∫f³ over the curve for the moment path (defined at the end of this header). KNOT-ALIGNED since
+// 2026-09-10 (E3-R4 / G2): the window is split at the curve's pieces (region knots, de Boor breakpoints,
+// turn edges, the base chain's pieces) and each piece gets `subdiv` (default 1) Gauss-Legendre panels of 4 (f²)
+// / 5 (f³) points -- exact for the cubic pieces every polynomial scheme produces (one panel suffices; the
+// cubic term's node rows are a per-tick GEMV in the compiled batch, so fewer nodes is cheaper there). The old fixed 32×2 / 8×2 rule was
+// not aligned and lost 3.3e-3 of ∫f² (1.7e-7 of the rate) on the shipped Flat-front Fed-funds shape with
+// policy steps inside the window. The compiled batch (compiled_book.hpp) builds its quadratic forms from
+// the SAME node set (moment_gauss_nodes), so both kernels agree to rounding.
 template <class Scalar, class Curve>
-Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv = 32);
-// The cube feeds a ~1e-9 correction: 8 panels x 2-pt Gauss (exact to degree 3 per panel) bound its quadrature
-// error far below 1e-15 of the rate. The compiled batch (compiled_book.hpp) uses the SAME rule so both agree.
+Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv = 1);
 template <class Scalar, class Curve>
-Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdiv = 8);
+Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdiv = 1);
 
 // Σ_k w_k · (DF(s_k)/DF(e_k) − 1) — the curve-dependent numerator ONLY.
 // Precondition: at least one sub-period (so the accumulator can be seeded from a curve-dependent
@@ -362,41 +367,83 @@ Scalar future_rate(const RateObservation& o, double convexity, const FCurve& fc)
 // `fixing_step` is the (uniform) daily accrual fraction; a real calendar folds Sum_d tau_d^2 per curve
 // segment in here (a precomputed constant) -- that refinement is additive and does not change this API.
 
-// Composite int_a^b f(u)^2 du over the curve (piecewise-polynomial), 2-point Gauss per sub-interval.
+// ---- knot-aligned Gauss quadrature for the moment path ------------------------------------------------
+// The curve's PIECES (breakpoints between which f is one analytic piece): a handle exposes pieces_into()
+// (regions + turn edges + the base chain), a bare ModularCurve exposes pieces(); anything else is treated
+// as a single piece with a fine composite rule.
+template <class Curve>
+void collect_curve_pieces(const Curve& c, std::vector<double>& out) {
+  if constexpr (requires(const Curve& cc, std::vector<double>& o) { cc.pieces_into(o); }) {
+    c.pieces_into(out);
+  } else if constexpr (requires(const Curve& cc) { cc.pieces(); }) {
+    const std::vector<double> p = c.pieces();
+    out.insert(out.end(), p.begin(), p.end());
+  }
+}
+// Gauss-Legendre nodes/weights over [a,b] split at the pieces strictly inside it: `panels` panels of `order`
+// points (4 or 5) per sub-interval. With no known pieces, 16 panels over the whole window. This is THE rule
+// both kernels use (compiled_book.hpp builds its quadratic forms from exactly these nodes).
+inline void moment_gauss_nodes(std::vector<double> pieces, double a, double b, int order, int panels,
+                               std::vector<double>& nodes, std::vector<double>& wts) {
+  static const double gx4[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
+  static const double gw4[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
+  static const double gx5[5] = {-0.9061798459386640, -0.5384693101056831, 0.0, 0.5384693101056831, 0.9061798459386640};
+  static const double gw5[5] = {0.2369268850561891, 0.4786286704993665, 0.5688888888888889, 0.4786286704993665, 0.2369268850561891};
+  const double* gx = order == 5 ? gx5 : gx4;
+  const double* gw = order == 5 ? gw5 : gw4;
+  const int n = order == 5 ? 5 : 4;
+  std::vector<double> pts;
+  pts.push_back(a);
+  std::sort(pieces.begin(), pieces.end());
+  for (double p : pieces)
+    if (p > a + 1e-12 && p < b - 1e-12 && p > pts.back() + 1e-12) pts.push_back(p);
+  pts.push_back(b);
+  const bool known = pts.size() > 2 || !pieces.empty();
+  const int per = known ? panels : 16;
+  nodes.clear();
+  wts.clear();
+  for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+    const double H = (pts[i + 1] - pts[i]) / per;
+    for (int s = 0; s < per; ++s) {
+      const double mid = pts[i] + (s + 0.5) * H, h = 0.5 * H;
+      for (int k = 0; k < n; ++k) {
+        nodes.push_back(mid + gx[k] * h);
+        wts.push_back(gw[k] * h);
+      }
+    }
+  }
+}
+
+// int_a^b f(u)^2 du, knot-aligned (4-pt Gauss per panel: exact for the square of a cubic piece).
 template <class Scalar, class Curve>
 Scalar curve_forward_sq_integral(const Curve& c, double a, double b, int subdiv) {
   if (b <= a) return Scalar(0.0);
-  const double gx = 0.5773502691896257;  // 1/sqrt(3)
-  const double H = (b - a) / subdiv;
+  std::vector<double> pieces, nodes, wts;
+  collect_curve_pieces(c, pieces);
+  moment_gauss_nodes(std::move(pieces), a, b, 4, subdiv, nodes, wts);
   Scalar acc{0.0};
   bool first = true;
-  for (int s = 0; s < subdiv; ++s) {
-    const double mid = a + (s + 0.5) * H, h = 0.5 * H;
-    for (int sg = -1; sg <= 1; sg += 2) {
-      const Scalar f = c.forward(mid + sg * gx * h);
-      const Scalar term = f * f * h;  // 2-pt Gauss weight is h on each node
-      if (first) { acc = term; first = false; } else acc += term;
-    }
+  for (std::size_t k = 0; k < nodes.size(); ++k) {
+    const Scalar f = c.forward(nodes[k]);
+    const Scalar term = f * f * wts[k];
+    if (first) { acc = term; first = false; } else acc += term;
   }
   return acc;
 }
 
-// Composite int_a^b f(u)^3 du (the 3rd-moment term; 2-pt Gauss per sub-interval, enough for the
-// small correction it feeds).
+// int_a^b f(u)^3 du, knot-aligned (5-pt Gauss per panel: exact for the cube of a cubic piece).
 template <class Scalar, class Curve>
 Scalar curve_forward_cube_integral(const Curve& c, double a, double b, int subdiv) {
   if (b <= a) return Scalar(0.0);
-  const double gx = 0.5773502691896257;
-  const double H = (b - a) / subdiv;
+  std::vector<double> pieces, nodes, wts;
+  collect_curve_pieces(c, pieces);
+  moment_gauss_nodes(std::move(pieces), a, b, 5, subdiv, nodes, wts);
   Scalar acc{0.0};
   bool first = true;
-  for (int s = 0; s < subdiv; ++s) {
-    const double mid = a + (s + 0.5) * H, h = 0.5 * H;
-    for (int sg = -1; sg <= 1; sg += 2) {
-      const Scalar f = c.forward(mid + sg * gx * h);
-      const Scalar term = f * f * f * h;
-      if (first) { acc = term; first = false; } else acc += term;
-    }
+  for (std::size_t k = 0; k < nodes.size(); ++k) {
+    const Scalar f = c.forward(nodes[k]);
+    const Scalar term = f * f * f * wts[k];
+    if (first) { acc = term; first = false; } else acc += term;
   }
   return acc;
 }

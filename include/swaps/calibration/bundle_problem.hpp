@@ -47,6 +47,10 @@ struct CurveHandle {
   // The jump size δⱼ of this curve's j-th turn (docs/turns-calibration.md). Only a TurnedCurve overrides
   // it; every other handle has no turns. It is the model quote of a TurnJump calibration instrument.
   virtual S turn_jump(int) const { throw std::logic_error("turn_jump: this curve has no turns"); }
+  // Append the breakpoints between which forward(t) is ONE analytic piece (region knots, de Boor
+  // breakpoints, turn edges, the base chain's pieces): the moment path's knot-aligned quadrature splits
+  // its windows there (cashflows.hpp moment_gauss_nodes). Unknown by default (an empty append).
+  virtual void pieces_into(std::vector<double>&) const {}
 };
 template <class S>
 struct OutrightHandle : CurveHandle<S> {
@@ -56,6 +60,7 @@ struct OutrightHandle : CurveHandle<S> {
   S integral(double t) const override { return c.integral(t); }
   S discount(double t) const override { return c.discount(t); }
   void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { c.set_forwards(x); }
+  void pieces_into(std::vector<double>& out) const override { const auto p = c.pieces(); out.insert(out.end(), p.begin(), p.end()); }
 };
 // forward = base + spread ; integral = base + spread ; DF = base_DF * exp(-int spread).
 template <class S>
@@ -70,6 +75,11 @@ struct SpreadHandle : CurveHandle<S> {
     return exp(-integral(t));
   }
   void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { spread.set_forwards(x); }
+  void pieces_into(std::vector<double>& out) const override {
+    base->pieces_into(out);
+    const auto p = spread.pieces();
+    out.insert(out.end(), p.begin(), p.end());
+  }
 };
 // TURN OVERLAY adapter (docs/turns-calibration.md §3, the templated/AAD/QuantLib-oracle path). Wraps a
 // built curve (outright or spread) and adds each turn's jump δⱼ over its window [aⱼ,bⱼ]:
@@ -114,6 +124,10 @@ struct TurnedCurve : CurveHandle<S> {
     for (int j = 0; j < deltas.size(); ++j) deltas[j] = x[n_interp + j];
   }
   S turn_jump(int j) const override { return deltas[j]; }
+  void pieces_into(std::vector<double>& out) const override {
+    base->pieces_into(out);
+    for (const auto& w : windows) { out.push_back(w.start); out.push_back(w.end); }  // the forward steps there
+  }
 };
 
 // A curve's definition in a bundle: knots (or regions), outright/spread, currency. This is THE SAME

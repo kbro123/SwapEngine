@@ -147,6 +147,23 @@ class CompiledCurveSet {
   }
   int n_times() const { return static_cast<int>(pts_.size()); }
   int n_knots() const { return n_knots_; }
+  // The breakpoints of curve c's forward (its regions' pieces -- de Boor breakpoints for a B-spline -- its
+  // turn edges, and its base chain's), sorted unique. Setup only: the moment path's quadratic forms are
+  // built on knot-aligned Gauss panels between these (cashflows.hpp moment_gauss_nodes), so the compiled
+  // and templated kernels integrate the SAME nodes.
+  std::vector<double> pieces(int c) const {
+    std::vector<double> out;
+    for (int k = c; k >= 0; k = specs_[k].base) {
+      auto crv = curve::make_modular_curve<double>(specs_[k].modules());
+      crv.set_forwards(Eigen::VectorXd::Zero(specs_[k].n_interp_knots()));
+      const std::vector<double> p = crv.pieces();
+      out.insert(out.end(), p.begin(), p.end());
+      for (const auto& w : specs_[k].turns) { out.push_back(w.start); out.push_back(w.end); }
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+  }
 
  private:
   // Log-DF weight rows of curve c at `times`: own knot weights in c's block, PLUS the base's log-DF
@@ -232,7 +249,7 @@ struct BundleFloatBatch {
   // loop — the reason a Fed funds curve can be as cheap as a SOFR curve (shape ladder: 534 → ~5 µs tick).
   // The linear term is exact; the moment correction is the documented ~5e-9 approximation of the daily sum
   // (the exact daily path stays available with fixing_step == 0). Same Gauss rule as the templated
-  // curve_forward_sq_integral (32 panels × 2 nodes) so both paths agree to rounding.
+  // curve_forward_sq_integral (moment_gauss_nodes, knot-aligned) so both paths agree to rounding.
   struct MomentCoupon {
     int cpn = -1, sub = -1;              // coupon index; its single sub-period (the [a,b] bracket)
     double step = 0.0, step3 = 0.0;      // ½·step and ⅙·step3 are applied in set_state
@@ -758,15 +775,13 @@ struct BundleFloatBatch {
       mc.sub = static_cast<int>(ss_.size());
       mc.step = o.fixing_step; mc.step3 = o.fixing_step3;
       push_sub(cs, fc, o.sub_start[0], o.sub_end[0], weighted ? o.weight[0] : 1.0);  // the day-count ratio rides R_sub
-      // The SAME composite 2-point Gauss rule as pricing::curve_forward_sq_integral (subdiv = 32).
+      // KNOT-ALIGNED 4-pt Gauss per piece panel -- the SAME node set as pricing::curve_forward_sq_integral
+      // (moment_gauss_nodes), exact for the square of a cubic piece (E3-R4 / G2, 2026-09-10; the old
+      // unaligned 32×2 rule lost 1.7e-7 of the rate on the Flat-front Fed-funds shape).
       const double a = o.sub_start[0], b = o.sub_end[0];
-      constexpr int subdiv = 32;
-      const double gx = 0.5773502691896257, H = (b - a) / subdiv;
-      std::vector<double> nodes; std::vector<double> wts;
-      for (int s = 0; s < subdiv; ++s) {
-        const double mid = a + (s + 0.5) * H, h = 0.5 * H;
-        for (int sg = -1; sg <= 1; sg += 2) { nodes.push_back(mid + sg * gx * h); wts.push_back(h); }
-      }
+      const std::vector<double> pieces = cs.pieces(fc);
+      std::vector<double> nodes, wts;
+      moment_gauss_nodes(pieces, a, b, 4, 1, nodes, wts);
       const Eigen::MatrixXd P = cs.forward_rows(fc, nodes);  // nodes × n_knots
       for (int j = 0; j < P.cols(); ++j)
         if ((P.col(j).array() != 0.0).any()) mc.support.push_back(j);
@@ -775,14 +790,9 @@ struct BundleFloatBatch {
       for (int j = 0; j < S; ++j) Ps.col(j) = P.col(mc.support[j]);
       mc.Q = Eigen::MatrixXd::Zero(S, S);
       for (int kq = 0; kq < Ps.rows(); ++kq) mc.Q.noalias() += wts[kq] * (Ps.row(kq).transpose() * Ps.row(kq));
-      if (mc.step3 > 0.0) {  // cubic term: 8 panels x 2 nodes (curve_forward_cube_integral's rule), same support
-        constexpr int subdiv3 = 8;
-        const double H3 = (b - a) / subdiv3;
+      if (mc.step3 > 0.0) {  // cubic term: knot-aligned 5-pt Gauss (curve_forward_cube_integral's rule), same support
         std::vector<double> n3, w3;
-        for (int s = 0; s < subdiv3; ++s) {
-          const double mid = a + (s + 0.5) * H3, h = 0.5 * H3;
-          for (int sg = -1; sg <= 1; sg += 2) { n3.push_back(mid + sg * gx * h); w3.push_back(h); }
-        }
+        moment_gauss_nodes(pieces, a, b, 5, 1, n3, w3);
         const Eigen::MatrixXd P3 = cs.forward_rows(fc, n3);
         mc.Psi.resize(static_cast<int>(n3.size()), S);
         for (int j = 0; j < S; ++j) mc.Psi.col(j) = P3.col(mc.support[j]);

@@ -74,14 +74,23 @@ num ≈ ∫_a^b f  +  ½ · (Σ_d τ_d²/(b−a)-weighted) · ∫_a^b f²  +  O(
 - **Correction `½·⟨τ²⟩·∫f²`** couples the curve's `integral2` with a PRECOMPUTED per-window day-count
   moment `Σ_d τ_d²` (encodes weekends/holidays from the real fixing calendar — this is what makes it
   match QuantLib's daily arithmetic, not a pure continuous approximation).
+- QUADRATURE (2026-09-10, E3 register R4/G2): ∫f² and ∫f³ are integrated on KNOT-ALIGNED Gauss panels --
+  the window is split at the curve's pieces (region knots, de Boor breakpoints, turn edges, the base chain)
+  and each piece gets 2 panels of 4-pt (f²) / 5-pt (f³) Gauss-Legendre, exact for cubic pieces
+  (`pricing::moment_gauss_nodes`, the ONE rule both the templated path and the compiled quadratic forms
+  use). The earlier fixed 32×2 / 8×2 rule was not aligned: on the shipped Flat-front Fed-funds shape with
+  policy steps inside a 1Y window it lost 3.3e-3 of ∫f² = 1.7e-7 of the rate (tests/moment_quadrature_test).
 - Truncation & the REAL-CALENDAR floor (measured, honest): on UNIFORM daily fixings 2 moments give
-  ~7e-11. On a REAL calendar (weekend 3-day accruals) the moment averaging floors at ~5e-9 (= 5e-5
-  bp) vs QuantLib's exact averaged future -- the residual is the f-variation x weekend-day-structure
+  ~4e-11 on a smooth curve and ~4e-10 on a 1Y window with 25 bp steps inside it (the truncation term grows
+  with the forward's variation). On a REAL calendar (weekend 3-day accruals) the moment averaging floors at
+  ~3.4e-9 (= 3e-5 bp; re-measured after the quadrature fix -- the old "~5e-9" included a quadrature share)
+  vs QuantLib's exact averaged future -- the residual is the f-variation x weekend-day-structure
   correlation in the 2nd-moment coefficient (exact only for constant f); higher moments do NOT remove
-  it. So the moment path is a FAST APPROXIMATION (~5e-9, far below market relevance), NOT a 1e-10
+  it. So the moment path is a FAST APPROXIMATION (~3e-9, far below market relevance), NOT a 1e-10
   replacement. The exact sub-period path (fixing_step==0) stays available whenever 1e-10 is required.
-  Gate: tests/bspline_oracle_test.cpp isolates moment-vs-exact-daily (~5e-9) from exact-daily-vs-
-  QuantLib (~1e-16, the calendar walk is exact).
+  Gate: tests/bspline_oracle_test.cpp isolates moment-vs-exact-daily (~3.4e-9) from exact-daily-vs-
+  QuantLib (~1e-16, the calendar walk is exact); the shape ladder pins moment-vs-daily on real 1Y FF
+  windows at 1e-9 (measured 2.3e-10).
 
 Terminal transforms:
 - **Averaging:** `rate = num / τ_index`.

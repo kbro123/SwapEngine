@@ -102,7 +102,7 @@ TEST(ShapeLadder, MomentPathAgreesWithTheExactDailyAverageOnFedFundsOis) {
   for (int i = 0; i < daily.prob.n_residuals(); ++i)
     worst = std::max(worst, std::abs(daily.q0[i] - moment.q0[i]));
   std::cout << "  [ladder] moment vs exact daily FF OIS par rates: max |dq| = " << worst << " (" << worst * 1e4 << " bp)\n";
-  EXPECT_LT(worst, 2e-8);
+  EXPECT_LT(worst, 1e-9);  // measured 2.3e-10 with the knot-aligned quadrature (2026-09-10); the pin was 2e-8
   // And the moment rung is a pure W-cache bundle: the hybrid engine must not have routed any row to AAD.
   EXPECT_NO_THROW(cal::CompiledBundleResidual{moment.prob});
 }
