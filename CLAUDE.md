@@ -383,14 +383,11 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
   hard-code `double` there. Extract dates/accruals from QuantLib **once** at setup; keep QuantLib
   objects and virtual dispatch **out of the hot loop** (that per-coupon loop is exactly the baseline
   we are beating).
-- **Never hard-code a SIMD width.** No literal `4`, no `_mm256_*` intrinsics in engine code.
-  Use `swaps::simd::packet_size<Scalar>` and `swaps::simd::padded_count<Scalar>(n)` from
-  `include/swaps/simd.hpp`. The same source must compile optimally to **2 lanes (SSE2/NEON),
-  4 (AVX/AVX2), or 8 (AVX-512)** with no edit. `simd.hpp` `static_assert`s that CMake's detected
-  width agrees with Eigen's `packet_traits<double>::size`, so a misconfigured build fails loudly
-  rather than silently running at the wrong width.
-- Pad the swap dimension of portfolio matrices to `padded_count<Scalar>(P)` so batched loops need
-  no scalar remainder path.
+- **Never hard-code a SIMD width.** No literal `4`, no `_mm256_*` intrinsics in engine code: the
+  kernels are Eigen expressions, and Eigen picks the packet width from the ISA CMake detects
+  (`cmake/DetectISA.cmake` → the arch flags; `generated/swaps/simd_config.hpp` records it for the perf
+  fingerprint). The same source must compile optimally to 2 / 4 / 8 lanes with no edit. (The old
+  `simd.hpp` width helpers had no engine consumer and were deleted in E6.1, 2026-09-10.)
 - Hot paths: **no heap allocation in inner loops** (the scope of this claim is exactly what the T4
   invariant tests prove — `tests/alloc_free_test.cpp` today covers `residuals()` only), no `virtual`
   dispatch, no UB. Prefer Eigen fixed/
@@ -421,7 +418,6 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 ```
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
-include/swaps/simd.hpp       packet_size<T>, padded_count<T>() — the ONLY source of vector width
 include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline region
                              math; ctors reject duplicate/unsorted knots), curve_module.hpp (THE curve:
                              ModularCurve + make_modular_curve from CurveModule{knots,scheme}, plus the
@@ -507,65 +503,12 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   *WarmCalibrator small-perturbation* use, not the live tick feed. Gate: `tests/streaming_test.cpp`
   (round-trip + exactness every tick). Demo: `tools/stream_sim.cpp` (trending day, both modes).
 
-### The async pricer/calibrator split — the "pricing branch" (`calibration/live_curve.hpp`)
-A live desk runs the CALIBRATOR on one thread and PRICES on others; the pricers must never block the
-calibrator and never read a half-updated curve. `LiveCurveFeed` is the lock-free hand-off: ONE writer
-(the `StreamingCalibrator` thread) `publish(x)`es the newest knot vector each tick; any number of
-readers (pricer threads) take a consistent `snapshot(out)` LOCK-FREE and price off it.
-- **Mechanism = atomic pointer swap over a preallocated buffer ring + a per-slot seqlock.** `publish`
-  fills the NEXT ring slot (round-robin, so a slot a reader just grabbed is not overwritten for ring−1
-  more publishes), brackets the payload write with an odd/even generation counter, then **release-stores**
-  the slot index into `published_`. `snapshot` **acquire-loads** `published_`, copies that slot, then
-  re-checks the slot generation AND that `published_` still points there — retrying only if a publish
-  lapped it mid-copy (rare: a publish is per-tick, a copy is ~µs). No locks, **no allocation after the
-  ctor** (the writer never blocks; the reader is bounded-retry).
-- **Guarantees:** release/acquire on `version_` gives a reader a happens-before view of the whole payload,
-  so it always prices off SOME wholly-published `x`, never a blend of two (§5 determinism across threads).
-- Gates (`tests/live_curve_test.cpp`, `tests/streaming_test.cpp` `AsyncPricer…`): 1 writer + 4 readers
-  over 300k publishes → **zero torn reads, zero version regressions**; and a real
-  `StreamingCalibrator` thread + a `CompiledResidual` pricer thread (its OWN scratch — the compiled
-  engine's per-instance memo buffers are NOT shared) → every snapshot equals EXACTLY the curve published
-  at that version. NB each pricer needs its own `CompiledResidual` (mutable DF/scratch memo); the
-  `LiveCurveFeed` is the only shared state and it is all atomics.
-- **Coherent data-parallel reprice (`portfolio/parallel.hpp`, `ParallelPortfolio`).** The OTHER pricing
-  mode: split ONE large book across N threads that all price the SAME pinned curve, for a consistent
-  point-in-time cut (vs the feed's latest-wins, per-reader independence). It partitions the book into N
-  `CompiledPortfolio` slices (each its OWN scratch), and a `reprice(x)` fans them across threads — every
-  slice reads the same `x`, writes a DISJOINT output segment. Because a position's NPV depends only on `x`
-  and its own cashflows (never on the rest of the book), the sliced result is **bit-identical to a
-  single-thread full-book reprice** (`tests/parallel_portfolio_test.cpp`, `== 0.0`), so the cut is
-  deterministic AND coherent. The two compose: `feed.snapshot(x)` ONCE (pin a version) → `book.reprice(x)`
-  fans that one curve across workers. Measured: **~4× wall-clock** on a 20k-swap book, 8 slices
-  (`bench/portfolio_parallel_bench.cpp`, 2.25ms→0.57ms).
-- **Persistent thread pool (`parallel/thread_pool.hpp`, `ThreadPool`).** `std::async` spawns a thread per
-  task; a pool created ONCE and reused amortizes that. `parallel_for(count, fn)` fans fn(i) across workers
-  and blocks. Both `calibrate_staged_parallel(..., pool)` and `ParallelPortfolio(..., pool)` take an
-  optional `ThreadPool*` (nullptr → the `std::async` fallback). Determinism is untouched (the pool changes
-  WHEN a task runs, never WHAT — gated: pool path == serial to 0.0). **Measured, and honest about where it
-  matters:** the portfolio reprice — a FREQUENT fan-out over FAST slices — goes **3.5×→4.3×** (spawn cost
-  per reprice removed; main-thread CPU 167µs→25µs). The bundle COLD staged solve is a **wash** (24.5ms
-  async ≈ 25.1ms pool): each block solve is ~ms-heavy, so a one-time thread spawn is negligible. So the
-  pool is for the repeated real-time fan-outs (per-tick reprice), not one-shot heavy calibration.
-- **DONE — speculative background Jacobian (`calibration/background_jacobian.hpp`, tail-latency win).**
-  The streaming refresh (recompute J + factorize M) was SYNCHRONOUS: the tick that hits the staleness
-  envelope paid the whole cost. Measured (`bench/jacobian_cost_bench.cpp`): a fast tick is **8 µs**, a
-  refresh tick is **47 µs** (single-curve analytic), **~530 µs** (single-curve AAD / non-linear curve),
-  or **20 ms** (8-curve bundle AAD) — a live bundle pricer FROZE for milliseconds on a refresh tick.
-  Now `StreamingCalibrator` (exact mode, `Options::prefetch`) runs a dedicated `BackgroundJacobian<Problem>`
-  worker: as drift passes `prefetch_drift` it `request`s an M at the current x; the worker computes J+M off
-  the critical path (its OWN engine — compiled engines have per-instance scratch, not shareable); when a
-  refresh fires the tick `try_take`s the ready M and swaps it in (~µs) instead of computing inline.
-  **Correctness is FREE (square problems):** frozen-Newton's fixed point is `r=0` for ANY invertible M, so a slightly-stale
-  background M is exact — it only sets the convergence rate; a too-stale one merely triggers another
-  refresh (bounded by `max_refresh`). No accuracy is traded. Gates: `tests/streaming_test.cpp`
-  `PrefetchIsExactMatchesSyncAndFires` (round-trip 2e-12, matches the sync path to 2e-11, 263/384 refreshes
-  served off-thread on a stress feed); `tests/bundle_test.cpp` `StreamingPrefetchHidesTheRefreshSpike` on
-  the realistic 4-curve bundle at a live cadence → **2/2 refreshes prefetch-served, worst tick 949 µs → 110 µs**
-  (~8.6×; an 8-curve/AAD case hides a bigger ms spike). It is a TAIL-LATENCY win (p100), NOT throughput —
-  refreshes are rare and the compute lands on a spare core; value scales with refresh cost (skip it for the
-  cheap 47 µs analytic single-curve; it is transformative for the 0.5–20 ms AAD/bundle refreshes). Hit rate
-  scales with feed cadence vs refresh cost: ~100% on a realistic desk cadence, lower on an aggressive feed
-  that outruns the worker (which then just falls back to the inline compute — never wrong, only slower).
+### Retired (E6.1, 2026-09-10): the pricing-branch and thread-pool machinery
+`LiveCurveFeed` (seqlock curve publish), `ParallelPortfolio` (sliced book reprice), `ThreadPool` and the
+branch-parallel staged solve (`calibrate_staged_parallel` / `bundle_waves`) had no production consumer —
+the API prices on the calling thread off `BundleSession`'s one engine — and were deleted with their
+tests and benches (E3 ledger S2). Across-problem parallelism (a scenario grid, a multi-currency book) is
+trivially available given the allocation-light engine and needs no engine code.
 
 ## 7b. Stage 3 — the curve bundle (N curves calibrated together)
 
@@ -617,23 +560,9 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   mismatched-size derivative vectors → NaN. Honest result: staging beats the joint solve on small
   bundles but ~ties it at production size (curve-rebuild-per-eval dominates); the real win is that both
   are **~20× faster than QuantLib IterativeBootstrap, ~64× vs GlobalBootstrap** (`bench/bundle_build_bench.cpp`).
-- **DONE — branch detection + parallel SCC solve** (`calibrate_staged_parallel`, `bundle_stage.hpp`).
-  The staged solver condenses the dependency graph into SCCs in dependency order; `bundle_waves` now
-  groups those SCCs into topological WAVES (an SCC whose dependencies are all solved joins the current
-  wave), and each wave's mutually-independent SCC blocks are solved CONCURRENTLY (`std::async`
-  thread-per-SCC off a frozen snapshot). It is **DETERMINISTIC and BIT-IDENTICAL to the serial
-  `calibrate_staged`** — same-wave SCCs never reference each other's curves, so thread order cannot change
-  any block's inputs and blocks write disjoint x-segments (no shared FP reduction, §5 holds). On a
-  triangular chain every wave is one SCC (== serial); on a **star/forest** (K curves each spread straight
-  off the base) wave 1 is K concurrent solves. Measured on the **canonical realistic star**
-  (`tests/reference_bundle.hpp`: full-structure SOFR base + K FF-style basis curves off it, each 6 meetings
-  + 12×1M futures + basis swaps): **~3.8× wall-clock** on a K=8 star (`bench/bundle_parallel_bench.cpp`,
-  84ms→22ms, quiesced), bounded by Amdahl (the serial base-curve wave + thread-spawn) — gated by
-  `tests/bundle_test.cpp` `BundleParallel.*` (parallel == serial to 0.0, recovers x_true, on BOTH a
-  synthetic and the realistic star). Threads over independent SCCs, NOT processes (a solve is 1–22 ms, far
-  below IPC overhead). (Across-problem parallelism — a scenario grid / multi-currency book — remains
-  trivially available given the allocation-light engine; needs no new code.) **`reference_bundle.hpp`
-  (`build_realistic_bundle`, chain OR star) is the canonical realistic multi-curve model for benchmarks.**
+- **`reference_bundle.hpp` (`build_realistic_bundle`, chain OR star) is the canonical realistic multi-curve
+  model for benchmarks.** (The branch-parallel SCC solve that used to be documented here was deleted in
+  E6.1, 2026-09-10 — no consumer; the serial `calibrate_staged` stays.)
 - **Outright vs spread is in the curve DEFINITION, not the solver.** `CurveSpec` carries `base`:
   `base < 0` = OUTRIGHT (free vars are its own forwards); `base >= 0` = SPREAD, i.e. the curve IS
   `curves[base] + spread` and its free vars are the forward SPREADs. `build_bundle_curves<Scalar>`

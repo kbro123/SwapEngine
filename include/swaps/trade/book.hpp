@@ -1,9 +1,7 @@
 #pragma once
-// trade::Book and trade::NettingSet — the portfolio grouping objects that compose Trades.
-//
-// Book is the ORGANISATIONAL view: a hierarchy of trades and nested sub-books (desk -> strategy -> trades).
-// It materializes into the engine's fast valuation form (portfolio::MultiCurveBook of Positions) via each
-// trade's to_position, so the whole tree prices/risks through the existing hot path.
+// trade::NettingSet — the exposure-aggregation grouping of Trades (the `exposure` verb's "netting_sets").
+// (trade::Book, the organisational desk -> strategy -> trades tree, lived here too until E6.1 (2026-09-10):
+// it had no consumer and was deleted; a MultiCurveBook is built from trades directly.)
 //
 // NettingSet is the COUNTERPARTY/exposure view: a flat group of trades under one CSA — the exposure
 // aggregation unit. This replaces the engine's hard-coded "netting set = the whole book" (xva/exposure.hpp)
@@ -24,64 +22,6 @@ namespace swaps::trade {
 
 namespace portfolio = swaps::portfolio;
 namespace build = swaps::build;
-
-// A hierarchical portfolio of booked trades.
-class Book {
- public:
-  Book() = default;
-  explicit Book(std::string name) : name_(std::move(name)) {}
-
-  const std::string& name() const { return name_; }
-  Book& add(Trade t) {
-    trades_.push_back(std::move(t));
-    return *this;
-  }
-  Book& add_subbook(Book b) {
-    children_.push_back(std::move(b));
-    return *this;
-  }
-  const std::vector<Trade>& trades() const { return trades_; }      // trades booked directly here
-  const std::vector<Book>& children() const { return children_; }
-
-  // Every trade in this book and all sub-books, flattened.
-  std::vector<Trade> all_trades() const {
-    std::vector<Trade> out = trades_;
-    for (const auto& c : children_) {
-      std::vector<Trade> ct = c.all_trades();
-      out.insert(out.end(), ct.begin(), ct.end());
-    }
-    return out;
-  }
-  // Total trade count across the whole tree.
-  int count() const {
-    int n = static_cast<int>(trades_.size());
-    for (const auto& c : children_) n += c.count();
-    return n;
-  }
-
-  // Materialize the whole tree into the fast valuation book — one Position per trade, priced off the
-  // calibrated bundle curves through the existing MultiCurveBook kernel. This overload applies ONE
-  // caller-supplied convention to every trade — correct only for a single-index book; a mixed book
-  // should use the per-trade-convention overload below.
-  portfolio::MultiCurveBook to_book(const build::Date& value_date, const build::SwapConv& conv) const {
-    portfolio::MultiCurveBook mb;
-    for (const Trade& t : all_trades()) mb.positions.push_back(t.to_position(value_date, conv));
-    return mb;
-  }
-
-  // Materialize with each trade rolling under ITS OWN index's conventions (Trade::to_position(vd) —
-  // conventions DB via build::Index). The honest form for a mixed multi-index book.
-  portfolio::MultiCurveBook to_book(const build::Date& value_date) const {
-    portfolio::MultiCurveBook mb;
-    for (const Trade& t : all_trades()) mb.positions.push_back(t.to_position(value_date));
-    return mb;
-  }
-
- private:
-  std::string name_;
-  std::vector<Trade> trades_;
-  std::vector<Book> children_;
-};
 
 // A netting set: the exposure-aggregation unit — trades under one collateral agreement.
 class NettingSet {

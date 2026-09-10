@@ -1,7 +1,7 @@
 // E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
-// trade::Book (portfolio tree) and trade::NettingSet (exposure unit under a CSA) — the objects that compose
-// Trades. Proves the tree flattens + materializes into the fast MultiCurveBook, and the netting set carries
-// its discounting via the CSA (an object, not the hard-coded "whole book = one netting set").
+// trade::NettingSet (exposure unit under a CSA) — the grouping object that composes Trades for the `exposure`
+// verb: the netting set carries its discounting via the CSA (an object, not the hard-coded "whole book = one
+// netting set"). (The trade::Book tree and its tests were deleted in E6.1, 2026-09-10: no consumer.)
 #include <gtest/gtest.h>
 
 #include "swaps/build/conventions.hpp"
@@ -20,30 +20,6 @@ tr::Trade usd_swap(const std::string& id, double notional, tr::Pay pay, double r
 }
 }  // namespace
 
-TEST(TradeBook, TreeFlattensAndMaterializesToTheFastBook) {
-  const b::Date vd = b::Date::from_iso("2026-09-01");
-  const b::SwapConv conv = b::swap_conv("USD", "USD-SOFR");
-
-  tr::Book desk("USD-Rates");
-  desk.add(usd_swap("t1", 100e6, tr::Pay::Fixed, 0.0375, "10y"))   // payer of fixed
-      .add(usd_swap("t2", 50e6, tr::Pay::Float, 0.0360, "5y"));    // receiver of fixed
-  tr::Book strat("relative-value");
-  strat.add(usd_swap("t3", 25e6, tr::Pay::Fixed, 0.0345, "2y"));
-  desk.add_subbook(strat);
-
-  EXPECT_EQ(desk.count(), 3);                 // recursive count across the tree
-  EXPECT_EQ(desk.trades().size(), 2u);        // booked directly on the desk
-  EXPECT_EQ(desk.all_trades().size(), 3u);    // flattened (incl. the sub-book)
-
-  const auto mb = desk.to_book(vd, conv);     // materialize -> the fast valuation book
-  ASSERT_EQ(mb.positions.size(), 3u);
-  EXPECT_DOUBLE_EQ(mb.positions[0].notional, 100e6);   // payer -> +notional (direction in the sign)
-  EXPECT_DOUBLE_EQ(mb.positions[1].notional, -50e6);   // receiver -> -notional
-  EXPECT_DOUBLE_EQ(mb.positions[0].fixed_rate, 0.0375);
-  EXPECT_FALSE(mb.positions[0].float_coupons.empty());
-  EXPECT_FALSE(mb.positions[0].fixed_coupons.empty());
-}
-
 TEST(TradeNettingSet, GroupsTradesAndDiscountsViaTheCsa) {
   tr::NettingSet ns("CPTY-A", tr::CSA::cash("USD"));
   ns.add(usd_swap("t1", 100e6, tr::Pay::Fixed, 0.0375, "10y"))
@@ -57,7 +33,7 @@ TEST(TradeNettingSet, GroupsTradesAndDiscountsViaTheCsa) {
 }
 
 // The per-trade-convention and CSA-override materializations added with the API wiring: each trade rolls
-// under ITS OWN index's conventions (to_position(vd) / Book::to_book(vd)), and NettingSet::to_book(vd,
+// under ITS OWN index's conventions (to_position(vd)), and NettingSet::to_book(vd,
 // csa_role) forces every trade's discounting onto the CSA's collateral-OIS role.
 TEST(TradeBook, PerTradeConventionsAndCsaDiscountRole) {
   namespace tr = swaps::trade;

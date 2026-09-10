@@ -19,22 +19,20 @@
 //
 // WHY ZCIS is not "just legs": its (1+k)^T convention is a POWER of the index ratio, not a leg-PV ratio,
 // so it uses the dedicated `zc_breakeven` transform rather than a QuoteKind. YoY, by contrast, IS two
-// legs / one indexed and drops straight into the existing QuoteKind::ParRate path — see
-// `yoy_par_swap_instrument` below, which composes it as a genuine calibration::Instrument with NO new
-// QuoteKind (the breakeven curve plays the "forecast" role).
+// legs / one indexed and would drop straight into the existing QuoteKind::ParRate path with the breakeven
+// curve in the "forecast" role (a leg-composed helper that proved this had no consumer and was deleted in
+// E6.1, 2026-09-10; InflationInstrument's YoY model_quote is the shipped form).
 
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
 
-#include "swaps/calibration/problem.hpp"
 #include "swaps/curve/inflation.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
 namespace swaps::build {
 
-namespace cal = swaps::calibration;
 namespace px = swaps::pricing;
 
 // One inflation calibration instrument (ZCIS or YoY). Its `model_quote<Scalar>` prices against an
@@ -110,46 +108,6 @@ inline InflationInstrument inflation_yoy_annual(int years, double par_rate, doub
   std::vector<double> ends;
   for (int y = 1; y <= years; ++y) ends.push_back(static_cast<double>(y));
   return inflation_yoy(ends, par_rate, nom_zero);
-}
-
-// ---- "Two legs, one indexed": YoY as a genuine calibration::Instrument (QuoteKind::ParRate) -------------
-// This composes the YoY swap from the EXISTING generic legs, proving the audit claim that an inflation swap
-// is nothing new to the object model. The inflation (float) leg is one px::FloatCoupon per period whose
-// FORECAST role is the breakeven curve `bei_role`: over [t_{i-1}, t_i] its plain-coupon PV is
-//   DF_nom(t_i) · ( DF_bei(t_{i-1})/DF_bei(t_i) − 1 ) = DF_nom(t_i) · ( I(t_i)/I(t_{i-1}) − 1 ),
-// because the breakeven curve's DF ratio IS the index growth. The fixed annuity discounts on `nom_role`.
-// The resulting ParRate quote equals Σ DF_nom·R_i / Σ DF_nom·τ_i — identical to InflationInstrument's YoY
-// model_quote — so this drops into the standard LM+AAD/W-cache path with NO new QuoteKind.
-//
-// NOTE: this composition is seasonality-FREE (the DF ratio has no seasonal term). For standard ANNUAL YoY
-// periods that is exact — seasonality cancels over a whole year — which is why the two YoY quotes agree.
-inline cal::Instrument yoy_par_swap_instrument(int bei_role, int nom_role,
-                                               const std::vector<double>& period_ends, double market) {
-  if (period_ends.empty()) throw std::invalid_argument("yoy_par_swap_instrument: need >= 1 period");
-  cal::Instrument ins;
-  ins.quote = cal::QuoteKind::ParRate;
-  ins.fwd.forecast = bei_role;
-  ins.fwd.discount = nom_role;
-  ins.fixed.discount = nom_role;
-  double prev = 0.0;
-  for (double e : period_ends) {
-    if (!(e > prev)) throw std::invalid_argument("yoy_par_swap_instrument: ends must increase");
-    const double tau = e - prev;
-    px::FloatCoupon fc;
-    fc.obs.sub_start = {prev};
-    fc.obs.sub_end = {e};
-    fc.obs.tau_index = tau;  // tau_pay == tau_index => the coupon amount is exactly the DF ratio − 1
-    fc.pay = e;
-    fc.tau_pay = tau;
-    ins.fwd.coupons.push_back(fc);
-    px::FixedCoupon xc;
-    xc.pay = e;
-    xc.tau = tau;
-    ins.fixed.coupons.push_back(xc);
-    prev = e;
-  }
-  ins.market = market;
-  return ins;
 }
 
 }  // namespace swaps::build

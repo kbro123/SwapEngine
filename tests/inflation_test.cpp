@@ -58,31 +58,6 @@ TEST(Inflation, ZcisRepricesBreakevenExactly) {
   EXPECT_NEAR(ins.residual<double>(infl), 0.0, 1e-13);
 }
 
-// 2. Flat breakeven => YoY par rate == the ZC rate; leg-composed ParRate instrument agrees exactly.
-TEST(Inflation, FlatBreakevenYoyEqualsZeroCoupon) {
-  const double f = 0.025, nom = 0.03;
-  const auto bei = flat_bei(f, kKnots);
-  const curve::InflationIndexCurve<double> infl{100.0, &bei, nullptr};
-  const double zc = std::exp(f) - 1.0;
-
-  std::vector<double> ends;
-  for (int y = 1; y <= 10; ++y) ends.push_back(static_cast<double>(y));
-
-  const auto yoy = b::inflation_yoy(ends, /*par=*/0.0, nom);
-  EXPECT_NEAR(yoy.model_quote<double>(infl), zc, 1e-12);
-  EXPECT_NEAR(infl.zc_breakeven(1.0), zc, 1e-13);
-
-  // Leg-composed YoY as a QuoteKind::ParRate calibration::Instrument. Nominal is a flat ModularCurve so a
-  // single role->curve map has one type; role 0 = nominal discount, role 1 = the breakeven forecast curve.
-  const auto nomc = flat_bei(nom, kKnots);
-  const auto par = b::yoy_par_swap_instrument(/*bei_role=*/1, /*nom_role=*/0, ends, /*market=*/0.0);
-  const curve::ModularCurve<double>* roles[2] = {&nomc, &bei};
-  const auto C = [&](int r) -> const curve::ModularCurve<double>& { return *roles[r]; };
-  const double q_legs = cal::instrument_model_quote<double>(par, C);
-  EXPECT_NEAR(q_legs, yoy.model_quote<double>(infl), 1e-12);
-  EXPECT_NEAR(q_legs, zc, 1e-12);
-}
-
 // 3. Seasonality shifts the monthly index but not the annual ZC (or integer-year index points).
 TEST(Inflation, SeasonalityShiftsMonthlyNotAnnual) {
   const double f = 0.02;

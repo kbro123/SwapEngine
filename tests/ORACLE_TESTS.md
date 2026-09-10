@@ -42,7 +42,6 @@ that only ~46 of the 135 tests in the oracle binary compared to a QuantLib numbe
 | `sabr_ql_oracle_test.cpp` | General-β Black SABR vol `sabr_black_vol` vs `sabrVolatility`, β∈{0,¼,½,¾,1} × 4 expiries × ±180 bp (E5.3, 2026-09-10; the NORMAL expansion has no QuantLib counterpart — open gap) | 1e-13 (measured 2.5e-16) |
 | `convexity_test.cpp` | Test-side Hull-White futures convexity vs QuantLib (validates the reference builder, not engine code) | 1e-15 |
 | `vol_bachelier_ql_oracle.cpp` | Bachelier price/greeks/implied vol vs QuantLib across a grid | 1e-12; **1e-4 gamma/IV** |
-| `vol_cms_replication_oracle.cpp` | Hagan G-function vs `GFunctionStandard` (1e-10); replicated CMS convexity vs `NumericHaganPricer` | **15 % relative on the adjustment — near-vacuous; E4.5 fixes the pole and tightens to 1e-3** |
 | `calendar_ql_oracle_test.cpp` | EVERY DB calendar vs QuantLib's calendar of the same market, day by day 2024-01-01..coverage year (rule-based markets through 2035; tabulated ones to where QuantLib's tabulation ends); documented exceptions only (IDR May-1); calendars with no oracle must be documented (ARS, RUB) | exact (0 mismatching days) |
 | `ql_test_isolation.cpp` | (listener fixture: clears QuantLib's global `IndexManager` before each test; not a test) | — |
 

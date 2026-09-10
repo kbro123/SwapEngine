@@ -5,13 +5,10 @@ find_package(GTest REQUIRED)
 include(GoogleTest)
 
 add_executable(swaps_tests
-  smoke_test.cpp
   multi_region_test.cpp
   region_combinatorial_test.cpp
   bspline_test.cpp
   monotone_cubic_test.cpp
-  live_curve_test.cpp
-  parallel_portfolio_test.cpp
   compiled_generic_test.cpp
   generic_instrument_test.cpp
   portfolio_instrument_test.cpp
@@ -27,13 +24,12 @@ add_executable(swaps_tests
   market_currency_test.cpp
   market_fx_test.cpp
   market_quote_test.cpp
-  build_tenor_test.cpp
   market_env_test.cpp
   trade_test.cpp
+  trade_book_test.cpp
   market_scenario_test.cpp
   market_fixing_series_test.cpp
   market_vol_surface_test.cpp
-  trade_book_test.cpp
   compiled_multi_test.cpp
   schedule_stub_eom_test.cpp
   rfr_lag_test.cpp
@@ -65,11 +61,8 @@ add_executable(swaps_tests
   curve_property_test.cpp
   fx_black_grid_test.cpp
   rates_fx_grid_test.cpp
-  vol_cap_stripping_test.cpp
-  vol_cube_interp_test.cpp
   vol_swaption_test.cpp
   vega_ladder_test.cpp
-  vol_cms_test.cpp
   xva_exposure_test.cpp
   gamma_test.cpp
   kernel_pins_test.cpp
@@ -115,7 +108,6 @@ if(TARGET quantlib_oracle)
     bundle_test.cpp
     bspline_oracle_test.cpp
     vol_bachelier_ql_oracle.cpp
-    vol_cms_replication_oracle.cpp
     monotone_cubic_oracle_test.cpp
     rfr_coupon_oracle_test.cpp
     ois_weekend_test.cpp

@@ -29,19 +29,13 @@ add_executable(gamma_bench gamma_bench.cpp)
 target_link_libraries(gamma_bench PRIVATE swaps benchmark::benchmark_main)
 
 # Coherent parallel portfolio reprice: serial full-book vs N-slice split off one curve (ours-only).
-add_executable(portfolio_parallel_bench portfolio_parallel_bench.cpp)
-target_link_libraries(portfolio_parallel_bench PRIVATE swaps benchmark::benchmark_main)
 
 add_executable(exposure_grid_bench exposure_grid_bench.cpp)
 target_link_libraries(exposure_grid_bench PRIVATE swaps benchmark::benchmark_main)
 
 # CMS static-replication hot path: Hagan G-derivative fan + Bachelier smile integrand (ours-only, R7).
-add_executable(cms_replication_bench cms_replication_bench.cpp)
-target_link_libraries(cms_replication_bench PRIVATE swaps benchmark::benchmark_main)
 
 # Caplet-vol stripping: full cap-curve bootstrap (ours-only, R9 O(n^2)->O(n) prefix).
-add_executable(cap_stripping_bench cap_stripping_bench.cpp)
-target_link_libraries(cap_stripping_bench PRIVATE swaps benchmark::benchmark_main)
 
 # BundleSession warm paths at desk scale: rebind (plain + tension-regularized) and the streaming tick.
 # Ours-only; session_rebind + stream_tick are fingerprint-GATED metrics (tools/check_perf.py).
@@ -107,9 +101,6 @@ if(TARGET quantlib_oracle)
   target_include_directories(bundle_build_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 
   # Branch-parallel staged bundle calibrate on the REALISTIC star (serial vs thread-per-SCC; ours-only).
-  add_executable(bundle_parallel_bench bundle_parallel_bench.cpp)
-  target_link_libraries(bundle_parallel_bench PRIVATE swaps quantlib_oracle benchmark::benchmark_main)
-  target_include_directories(bundle_parallel_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 
   # The bond baseline: our batched universe sweep + curve-space book vs QuantLib's per-bond loops.
   add_executable(bond_sweep_bench bond_sweep_bench.cpp)

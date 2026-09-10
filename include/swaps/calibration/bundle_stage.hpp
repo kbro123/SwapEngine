@@ -17,14 +17,12 @@
 
 #include <algorithm>
 #include <functional>
-#include <future>
 #include <memory>
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/parallel/thread_pool.hpp"
 
 namespace swaps::calibration {
 
@@ -179,31 +177,7 @@ inline int scatter_block(const BundleProblem& p, const std::vector<int>& block,
   return res.iterations;
 }
 
-// Group the SCCs into topological WAVES: an SCC can be solved once all the SCCs it depends on are
-// solved, so SCCs sharing a level are MUTUALLY INDEPENDENT and can be solved concurrently. `sccs` is
-// already in dependency-first order, so one forward pass assigns each SCC level = 1 + max(dep levels).
-// A triangular chain gives one SCC per wave (no parallelism); a star/forest (several curves each spread
-// straight off the base) gives a fat wave of independent SCCs -- the branch-parallel case.
-inline std::vector<std::vector<int>> bundle_waves(const BundleProblem& p,
-                                                  const std::vector<std::vector<int>>& sccs) {
-  const std::vector<std::vector<int>> adj = bundle_adjacency(p);
-  const int S = static_cast<int>(sccs.size());
-  std::vector<int> scc_of(p.n_curves(), -1);
-  for (int s = 0; s < S; ++s)
-    for (int c : sccs[s]) scc_of[c] = s;
-  std::vector<int> level(S, 0);
-  for (int s = 0; s < S; ++s)
-    for (int c : sccs[s])
-      for (int d : adj[c])
-        if (scc_of[d] != s) level[s] = std::max(level[s], level[scc_of[d]] + 1);
-  int maxlvl = 0;
-  for (int l : level) maxlvl = std::max(maxlvl, l);
-  std::vector<std::vector<int>> waves(maxlvl + 1);
-  for (int s = 0; s < S; ++s) waves[level[s]].push_back(s);
-  return waves;
-}
-
-// Assemble the staged result once the global x is fully solved (shared by serial and parallel).
+// Assemble the staged result once the global x is fully solved.
 inline CalibrationResult staged_result(const BundleProblem& p, Eigen::VectorXd x, int iters) {
   CalibrationResult out;
   out.iterations = iters;
@@ -220,43 +194,6 @@ inline CalibrationResult calibrate_staged(const BundleProblem& p, const Eigen::V
   Eigen::VectorXd x = x0;
   int iters = 0;
   for (const auto& block : blocks) iters += scatter_block(p, block, solve_bundle_block(p, block, x, use_aad), x);
-  return staged_result(p, std::move(x), iters);
-}
-
-// BRANCH-PARALLEL staged solve (CLAUDE.md §7b): identical decomposition, but each topological wave's
-// mutually-independent SCC blocks are solved CONCURRENTLY. DETERMINISTIC and BIT-IDENTICAL to
-// calibrate_staged: same-wave SCCs never reference each other's curves, so each reads only frozen
-// prior-wave results from a snapshot taken before the wave -- thread order cannot change any block's
-// inputs, and blocks write disjoint x-segments. Wall-clock ~ Σ_waves (slowest block in the wave)
-// instead of Σ_all_blocks. On a chain it is exactly the serial solve (one block per wave).
-inline CalibrationResult calibrate_staged_parallel(const BundleProblem& p, const Eigen::VectorXd& x0,
-                                                   bool use_aad = true,
-                                                   swaps::parallel::ThreadPool* pool = nullptr) {
-  const auto sccs = bundle_dependency_order(p);
-  const auto waves = bundle_waves(p, sccs);
-  Eigen::VectorXd x = x0;
-  int iters = 0;
-  for (const auto& wave : waves) {
-    if (wave.size() == 1) {  // no parallelism to be had -- solve inline (avoids a thread hop)
-      iters += scatter_block(p, sccs[wave[0]], solve_bundle_block(p, sccs[wave[0]], x, use_aad), x);
-      continue;
-    }
-    const Eigen::VectorXd frozen = x;  // snapshot: prior waves solved, this wave's blocks still x0
-    const int W = static_cast<int>(wave.size());
-    std::vector<CalibrationResult> results(W);  // per-block result, written from its own thread
-    auto solve_j = [&](int j) { results[j] = solve_bundle_block(p, sccs[wave[j]], frozen, use_aad); };
-    if (pool) {  // persistent pool: reuse workers, no per-wave thread creation
-      pool->parallel_for(W, solve_j);
-    } else {  // fallback: one std::async per SCC (spawns a thread each)
-      std::vector<std::future<void>> futs;
-      futs.reserve(W);
-      for (int j = 0; j < W; ++j) futs.push_back(std::async(std::launch::async, [&, j] { solve_j(j); }));
-      for (auto& f : futs) f.get();
-    }
-    // Merge in a FIXED order (wave order), so accumulated iters and the write order are deterministic
-    // regardless of which thread finished first.
-    for (int j = 0; j < W; ++j) iters += scatter_block(p, sccs[wave[j]], results[j], x);
-  }
   return staged_result(p, std::move(x), iters);
 }
 

@@ -27,7 +27,6 @@
 #include "reference_curve.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
-#include "swaps/parallel/thread_pool.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/calibration/warm.hpp"
@@ -443,82 +442,6 @@ TEST(BundleSpread, JointAndStagedRecoverSpreadCurve) {
             << (staged.x - x_true).cwiseAbs().maxCoeff() << " iters=" << staged.iterations << "\n";
   EXPECT_LT((joint.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "joint solve recovers base + spread";
   EXPECT_LT((staged.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "staged solve recovers base then spread";
-}
-
-TEST(BundleParallel, StarTopologyParallelIsBitIdenticalToSerial) {
-  // Branch-parallel case (CLAUDE.md §7b): curve 0 is the outright base; curves 1..K are each a spread
-  // straight off 0 and mutually independent (a STAR). The dependency waves are [{0}, {1..K}], so wave 1
-  // is K independent block solves run concurrently. Because a spread block's residuals reference only its
-  // own curve + the (already-solved) base, thread order cannot change any block's inputs -> the parallel
-  // result must be BIT-IDENTICAL to the serial staged solve. That determinism IS the correctness gate.
-  const int K = 5;
-  cal::BundleProblem prob;
-  const std::vector<double> meeting{0.5}, back{1.0, 2.0, 3.0, 5.0, 10.0};
-  prob.curves.resize(K + 1);
-  prob.curves[0] = {.base = -1, .regions = swaps::curve::flat_hermite(meeting, back)};  // outright base
-  for (int c = 1; c <= K; ++c) prob.curves[c] = {.base = 0, .regions = swaps::curve::flat_hermite(meeting, back)};  // spread straight off the base
-  const int nk = prob.curves[0].n_knots();
-  const std::vector<double> mats{0.5, 1.0, 2.0, 3.0, 5.0, 10.0};
-  for (double T : mats) prob.instruments.push_back(annual_par_rate(T, 0, 0));            // pin the base
-  for (int c = 1; c <= K; ++c)
-    for (double T : mats) prob.instruments.push_back(annual_basis(T, c, 0, 0));          // pin each spread
-
-  Eigen::VectorXd x_true((K + 1) * nk);
-  for (int i = 0; i < nk; ++i) x_true[i] = 0.040 + 0.001 * i;                            // base forwards
-  for (int c = 1; c <= K; ++c)
-    for (int i = 0; i < nk; ++i) x_true[c * nk + i] = 0.004 * c + 0.0003 * i;            // distinct spreads
-  const Eigen::VectorXd r0 = prob.residuals<double>(x_true);
-  for (int i = 0; i < static_cast<int>(prob.instruments.size()); ++i) prob.instruments[i].market += r0[i];
-  ASSERT_LT(prob.residuals<double>(x_true).cwiseAbs().maxCoeff(), 1e-13);
-
-  // Wave structure: a base wave of one SCC, then a fat wave of K independent SCCs.
-  const auto sccs = cal::bundle_dependency_order(prob);
-  const auto waves = cal::bundle_waves(prob, sccs);
-  ASSERT_EQ(waves.size(), 2u) << "star topology => exactly two dependency waves";
-  std::size_t fat = std::max(waves[0].size(), waves[1].size());
-  EXPECT_EQ(fat, static_cast<std::size_t>(K)) << "the parallel wave must hold all K independent spreads";
-
-  Eigen::VectorXd x0((K + 1) * nk);
-  x0.head(nk).setConstant(0.04);
-  for (int c = 1; c <= K; ++c) x0.segment(c * nk, nk).setConstant(0.004 * c);
-  const auto serial = cal::calibrate_staged(prob, x0);
-  const auto parallel = cal::calibrate_staged_parallel(prob, x0);
-  swaps::parallel::ThreadPool pool(4);
-  const auto pooled = cal::calibrate_staged_parallel(prob, x0, true, &pool);  // pool path == serial too
-  EXPECT_EQ((pooled.x - serial.x).cwiseAbs().maxCoeff(), 0.0) << "thread-pool staged solve == serial";
-  const double diff = (serial.x - parallel.x).cwiseAbs().maxCoeff();
-  std::cout << "  [bundle-parallel] K=" << K << " |x_parallel - x_serial|=" << diff
-            << " iters(serial=" << serial.iterations << ", parallel=" << parallel.iterations << ")"
-            << " ||x*-xtrue||=" << (parallel.x - x_true).cwiseAbs().maxCoeff() << "\n";
-  EXPECT_EQ(diff, 0.0) << "branch-parallel staged solve must be BIT-IDENTICAL to the serial staged solve";
-  EXPECT_EQ(serial.iterations, parallel.iterations) << "same blocks, same iterations";
-  EXPECT_LT((parallel.x - x_true).cwiseAbs().maxCoeff(), 1e-8) << "and it recovers the whole star";
-}
-
-TEST(BundleParallel, RealisticStarIsBitIdenticalToSerialAndRecovers) {
-  // The canonical realistic model (reference_bundle.hpp) as a STAR: a full-structure SOFR base
-  // (6 meetings + 12x1M/8x3M futures + swaps) with K basis curves each spread straight off SOFR
-  // (12x1M futures + basis swaps). Waves = [{SOFR}, {K basis}], so the parallel solve runs K
-  // realistically-sized block solves concurrently. It must be BIT-IDENTICAL to serial and recover x_true.
-  using namespace QuantLib;
-  RelinkableHandle<YieldTermStructure> hh;
-  rb::Market m = rb::build_market(hh);
-  rb::RealisticBundle b = rb::build_realistic_bundle(m, hh, /*n_basis=*/6, rb::BundleTopology::Star);
-  ASSERT_LT(b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff(), 1e-10) << "x_true zeroes the residual";
-
-  const auto sccs = cal::bundle_dependency_order(b.prob);
-  const auto waves = cal::bundle_waves(b.prob, sccs);
-  ASSERT_EQ(waves.size(), 2u) << "star => a SOFR wave then a fat basis wave";
-  EXPECT_EQ(std::max(waves[0].size(), waves[1].size()), 6u) << "6 independent basis SCCs in the parallel wave";
-
-  const auto serial = cal::calibrate_staged(b.prob, b.x0);
-  const auto parallel = cal::calibrate_staged_parallel(b.prob, b.x0);
-  const double diff = (serial.x - parallel.x).cwiseAbs().maxCoeff();
-  std::cout << "  [bundle-parallel-realistic] |x_par - x_ser|=" << diff
-            << " ||x*-xtrue||=" << (parallel.x - b.x_true).cwiseAbs().maxCoeff()
-            << " iters(ser=" << serial.iterations << ",par=" << parallel.iterations << ")\n";
-  EXPECT_EQ(diff, 0.0) << "realistic branch-parallel solve must be BIT-IDENTICAL to serial";
-  EXPECT_LT((parallel.x - b.x_true).cwiseAbs().maxCoeff(), 1e-6) << "and recover the realistic star";
 }
 
 TEST(BundleSpread, CompiledResidualHandlesSpreadCurves) {

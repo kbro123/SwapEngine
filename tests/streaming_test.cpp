@@ -26,7 +26,6 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/compiled_residual.hpp"
-#include "swaps/parallel/live_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 
@@ -79,58 +78,6 @@ TEST_F(Streaming, ExactPathRoundTripsAndMatchesExactSolve) {
             << " recalcs=" << sc.refresh_count() - 1 << "\n";
   EXPECT_LT(worst_rt, 1e-8) << "every tick must reprice the instruments back to the input quotes";
   EXPECT_LT(worst_ex, 1e-8) << "streamed curve must equal an independent exact solve";
-}
-
-TEST_F(Streaming, AsyncPricerThreadPricesLatestCurveLockFree) {
-  // The pricing branch: a CALIBRATOR thread streams solutions into a LiveCurveFeed while a separate
-  // PRICER thread continuously snapshots the feed lock-free and prices off it (model_rates = the par
-  // rates). The pricer must, on every read, get EXACTLY the curve published at that version -- never a
-  // torn/blended one -- proving the async split is correct with the real streaming engine.
-  const int M = 400;
-  std::vector<Eigen::VectorXd> published(static_cast<std::size_t>(M) + 2);
-  swaps::parallel::LiveCurveFeed feed(prob.n_knots());
-  std::atomic<bool> done{false};
-  std::atomic<long> checks{0}, bad{0}, priced{0};
-
-  std::thread pricer([&] {
-    cal::CompiledResidual pricer_cr{prob};  // OWN scratch => safe to run concurrently with the calibrator
-    Eigen::VectorXd out(prob.n_knots());
-    while (!done.load(std::memory_order_acquire)) {
-      const std::uint64_t ver = feed.snapshot(out);
-      if (ver == 0) continue;                          // nothing published yet
-      const Eigen::VectorXd rates = pricer_cr.model_rates(out);  // REAL pricing work off the snapshot
-      const Eigen::VectorXd& px = published[ver];
-      // The snapshot must be exactly the curve published at this version (no tear), and pricing it must
-      // reproduce a synchronous reprice of that same curve.
-      if (px.size() != out.size() || (out - px).cwiseAbs().maxCoeff() != 0.0 ||
-          (rates - pricer_cr.model_rates(px)).cwiseAbs().maxCoeff() != 0.0)
-        bad.fetch_add(1, std::memory_order_relaxed);
-      priced.fetch_add(1, std::memory_order_relaxed);
-      checks.fetch_add(1, std::memory_order_relaxed);
-    }
-  });
-
-  cal::StreamingCalibrator<> sc(prob, x0, q0, {});
-  for (int t = 1; t <= M; ++t) {
-    Eigen::VectorXd q = q0;
-    for (int i = 0; i < q.size(); ++i)
-      q[i] += 20e-4 * std::sin(0.08 * t) * std::sin(0.5 * i + 1.0);
-    sc.update(q);
-    published[feed.version() + 1] = sc.current();  // written BEFORE publish -> visible via the release
-    feed.publish(sc.current());
-  }
-  done.store(true, std::memory_order_release);
-  pricer.join();
-
-  std::cout << "  [async-pricer] published=" << M << " priced=" << priced.load()
-            << " bad=" << bad.load() << "\n";
-  EXPECT_EQ(bad.load(), 0) << "the pricer must always price EXACTLY the curve published at that version";
-  // Scheduler-dependent (the pricer thread may never be scheduled under a loaded ctest -j); the exactness
-  // assertion above is the contract. Timing/scheduling claims run only with SWAPS_TIMING_ASSERTS=1 (nightly).
-  if (std::getenv("SWAPS_TIMING_ASSERTS"))
-    EXPECT_GT(priced.load(), 0) << "the pricer thread must have actually priced";
-  // The last curve the feed published IS the calibrator's final solution (x vs x, bit-identical).
-  EXPECT_EQ((sc.current() - published[M]).cwiseAbs().maxCoeff(), 0.0);
 }
 
 TEST_F(Streaming, PrefetchIsExactMatchesSyncAndFires) {

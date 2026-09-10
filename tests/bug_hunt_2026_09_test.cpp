@@ -6,7 +6,7 @@
 //   1. Bond coupon grids anchored at maturity (month-end dates no longer drift through February).
 //   2. when_issued_bond accepts a month-end WI note (same drift used to throw "not on a common grid").
 //   3. ACT/ACT ISDA of a zero-length span is 0 (was infinite recursion -> stack overflow).
-//   4. ThreadPool::parallel_for completion handshake cannot lock a destroyed mutex.
+//   4. (retired 2026-09-10 with the ThreadPool, E6.1 — no production consumer)
 //   5. A single-knot LEADING Linear/NaturalCubic/Hermite/Tension region throws (was OOB read / SEGV).
 //   6. MonotoneCubic<Dual> survives the Hyman filter zeroing node 0's tangent (was SEGV: empty dual).
 //   7. Two-node NaturalCubic/Tension regions carry AAD derivatives (were silently all-zero).
@@ -39,7 +39,6 @@
 #include "swaps/build/observations.hpp"
 #include "swaps/build/schedule.hpp"
 #include "swaps/conventions_data.hpp"
-#include "swaps/parallel/thread_pool.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 #include "swaps/pricing/cashflows.hpp"
@@ -99,15 +98,6 @@ TEST(BugHunt, ActActIsdaZeroSpanIsZero) {
   EXPECT_EQ(bld::act_act_isda(d, d), 0.0);
   EXPECT_DOUBLE_EQ(bld::act_act_isda(d, d.plus_days(1)), 1.0 / 365.0);
   EXPECT_DOUBLE_EQ(bld::act_act_isda(d.plus_days(1), d), -1.0 / 365.0);
-}
-
-// 4. The completion handshake: many short parallel_for calls, each destroying its stack mutex on return.
-// With the decrement outside the lock this terminated with "mutex lock failed: Invalid argument".
-TEST(BugHunt, ThreadPoolParallelForHandshakeIsSafe) {
-  swaps::parallel::ThreadPool pool(4);
-  std::atomic<long> sum{0};
-  for (int it = 0; it < 20000; ++it) pool.parallel_for(8, [&](int i) { sum.fetch_add(i, std::memory_order_relaxed); });
-  EXPECT_EQ(sum.load(), 20000L * 28L);
 }
 
 // 5. A leading region with ONE knot has no segment to build; every scheme must refuse it loudly.
