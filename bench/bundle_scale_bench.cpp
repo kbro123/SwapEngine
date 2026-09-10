@@ -20,7 +20,7 @@
 #include "swaps/calibration/bundle_stage.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/calibration/warm.hpp"
+#include "swaps/calibration/streaming.hpp"
 
 namespace cal = swaps::calibration;
 namespace px = swaps::pricing;
@@ -75,7 +75,8 @@ struct Fixture {
   Eigen::VectorXd x0, x_true, dq;
   cal::BundleProblem pert;                                    // perturbed market (warm cold-baseline)
   Eigen::VectorXd x_solved;
-  std::unique_ptr<cal::WarmCalibrator<cal::BundleProblem>> wc;
+  std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> sc;  // the warm path (E6.1)
+  mutable bool flip = false;
 
   Fixture() {
     std::vector<double> meeting{0.25}, back;
@@ -110,7 +111,7 @@ struct Fixture {
     for (int i = 0; i < dq.size(); ++i) dq[i] = 1e-4 * std::sin(0.7 * i + 0.3);  // ~1bp tick
     pert = prob;
     for (int i = 0; i < static_cast<int>(pert.instruments.size()); ++i) pert.instruments[i].market += dq[i];
-    wc = std::make_unique<cal::WarmCalibrator<cal::BundleProblem>>(prob, x_solved);
+    sc = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(prob, x_solved, prob.market(), cal::StreamingCalibrator<cal::BundleProblem>::Options{});
   }
 };
 
@@ -142,12 +143,14 @@ static void BM_BundleScale_ColdStaged(benchmark::State& state) {
 }
 BENCHMARK(BM_BundleScale_ColdStaged);
 
-// Warm re-cal on a ~1bp tick: frozen-Jacobian Gauss-Newton, each step a large compiled residual eval.
+// Warm re-cal on a ~1bp tick = a streamed tick: frozen-Jacobian Newton, each step a large compiled residual eval.
 static void BM_BundleScale_WarmRecal(benchmark::State& state) {
   const auto& f = fx();
   for (auto _ : state) {
-    auto r = f.wc->recalibrate(f.dq);
-    benchmark::DoNotOptimize(r.x.data());
+    f.flip = !f.flip;
+    const cal::StreamTick t = f.sc->update(f.flip ? f.pert.market() : f.prob.market());
+    benchmark::DoNotOptimize(t.newton_steps);
+    benchmark::DoNotOptimize(f.sc->current().data());
   }
 }
 BENCHMARK(BM_BundleScale_WarmRecal);

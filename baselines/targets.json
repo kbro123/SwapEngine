@@ -19,8 +19,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 26.1 us x1.3; ratchets DOWN only"
     },
     "sofr_23k_warm_recal_0p3bp": {
-      "target_ns": 21200,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 16.3 us x1.3; ratchets DOWN only"
+      "target_ns": 4470,
+      "note": "re-pointed 2026-09-10 (E6.1b): the metric now times the streamed tick (WarmCalibrator deleted); 3.4 us x1.3; was 21200 ns; ratchets DOWN only"
     },
     "ust_5000_clean_to_yield_sweep": {
       "target_ns": 4500000,
@@ -55,8 +55,8 @@
       "note": "ratcheted 2026-09-10 after E4.D A4/D7 (PV01 by a width-1 directional dual): 2.28 ms x1.3; was 18642000 ns; ratchets DOWN only"
     },
     "sofr_23k_warm_recal_10bp": {
-      "target_ns": 56200,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 43.2 us x1.3; ratchets DOWN only"
+      "target_ns": 13079,
+      "note": "re-pointed 2026-09-10 (E6.1b): the streamed tick at ±10 bp; 10.1 us x1.3; was 56200 ns; ratchets DOWN only"
     },
     "chain8x26_session_cold_build_calibrate": {
       "target_ns": 27161300,

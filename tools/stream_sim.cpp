@@ -47,11 +47,8 @@ int main(int argc, char** argv) {
   for (int j = 0; j < M - nf; ++j) x0[nf + j] = 0.0390 + 0.0015 * (double(j) / (M - nf - 1));
   const Eigen::VectorXd q0 = cr.model_rates(x0);  // exact anchor: residual(x0)=0 at q0
 
-  cal::StreamingCalibrator::Options opt;
-  opt.envelope = 0.35e-4;
-  if (const char* e = std::getenv("SWAPS_ENV_BP")) opt.envelope = std::atof(e) * 1e-4;  // sweep override
-  if (const char* e = std::getenv("SWAPS_EXACT")) opt.exact = std::atoi(e) != 0;  // 1=frozen-Newton exact
-  const char* mode = opt.exact ? "EXACT (frozen-Newton)" : "LINEAR (single-step)";
+  cal::StreamingCalibrator::Options opt;  // exact frozen-Newton (the LINEAR mode was deleted in E6.1, 2026-09-10)
+  const char* mode = "EXACT (frozen-Newton)";
   cal::StreamingCalibrator sc(prob, x0, q0, opt);
 
   // Exact reference (fresh AAD Jacobian each Newton step) for accuracy validation.
@@ -175,7 +172,7 @@ int main(int argc, char** argv) {
   std::sort(moves.begin(), moves.end());
   const double move_med = moves[moves.size() / 2], move_p90 = moves[int(0.9 * moves.size())];
 
-  // ---- Phase 2: stream the SAME market through each mode (exact frozen-Newton vs legacy linear) ----
+  // ---- Phase 2: stream the SAME market through the exact frozen-Newton streamer ----
   const int frame_every = std::max(1, N / 160), time_every = std::max(1, N / 2400);
   struct ModeStats {
     int recalcs = 0, max_steps = 0;
@@ -184,10 +181,8 @@ int main(int argc, char** argv) {
     std::string timeline;
     std::vector<int> recalc_ticks;  // exact tick indices where the Jacobian was recomputed
   };
-  auto run_mode = [&](bool exact_mode, bool want_frames) {
-    cal::StreamingCalibrator::Options o = opt;
-    o.exact = exact_mode;
-    cal::StreamingCalibrator sc(prob, x0, q0, o);
+  auto run_mode = [&](bool want_frames) {
+    cal::StreamingCalibrator sc(prob, x0, q0, opt);
     ModeStats st;
     std::vector<double> ns_all;
     ns_all.reserve(N);
@@ -221,8 +216,7 @@ int main(int argc, char** argv) {
     st.mx = pc(1.0);
     return st;
   };
-  const ModeStats EX = run_mode(true, true);    // exact frozen-Newton (+ curve frames)
-  const ModeStats LIN = run_mode(false, false);  // legacy linear single-step
+  const ModeStats EX = run_mode(true);  // exact frozen-Newton (+ curve frames)
 
   // Reference: one full-from-scratch LM solve, to state the equivalent all-cold cost.
   const double full_lm_us = [&] {
@@ -249,8 +243,7 @@ int main(int argc, char** argv) {
   std::ofstream f(out);
   f.setf(std::ios::fixed);
   f << "{\n";
-  f << "\"n_ticks\":" << N << ",\"trend_bp\":" << trendA * 1e4 << ",\"envelope_bp\":" << opt.envelope * 1e4
-    << ",\"stale_bp\":30,\n";
+  f << "\"n_ticks\":" << N << ",\"trend_bp\":" << trendA * 1e4 << ",\"stale_bp\":30,\n";
   f << "\"move_median_bp\":" << move_med * 1e4 << ",\"move_p90_bp\":" << move_p90 * 1e4
     << ",\"range_bp\":" << maxrange * 1e4 << ",\n";
   f << "\"full_lm_us\":" << full_lm_us << ",\"full_lm_equiv_s\":" << full_lm_us * N / 1e6 << ",\n";
@@ -260,14 +253,12 @@ int main(int argc, char** argv) {
   for (std::size_t k = 0; k < ftenors.size(); ++k) f << (k ? "," : "") << ftenors[k];
   f << "],\n\"frames\":[\n";
   for (std::size_t k = 0; k < frames.size(); ++k) f << (k ? ",\n" : "") << frames[k];
-  f << "\n],\n" << mode_json("exact", EX) << ",\n" << mode_json("linear", LIN) << "\n}\n";
+  f << "\n],\n" << mode_json("exact", EX) << "\n}\n";
 
   std::printf("trending day: trend=%.0fbp  range=%.1fbp  per-tick move median=%.3fbp p90=%.3fbp\n",
               trendA * 1e4, maxrange * 1e4, move_med * 1e4, move_p90 * 1e4);
   std::printf("EXACT : recalcs=%d  avg_steps=%.2f  max_steps=%d  p50=%.0fns p99=%.0fns  round-trip=%.1e bp  err=%.1e bp\n",
               EX.recalcs, double(EX.total_steps) / N, EX.max_steps, EX.p50, EX.p99, EX.max_rt * 1e4, EX.max_err * 1e4);
-  std::printf("LINEAR: recalcs=%d (%.1f%%)  p50=%.0fns p99=%.0fns  round-trip=%.1e bp  err=%.1e bp\n",
-              LIN.recalcs, 100.0 * LIN.recalcs / N, LIN.p50, LIN.p99, LIN.max_rt * 1e4, LIN.max_err * 1e4);
   std::printf("wrote %s\n", out.c_str());
   return 0;
 }

@@ -424,10 +424,9 @@ include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/Monot
                              named layouts flat_hermite -- the SHIPPED one -- flat_bspline, flat_monotone),
                              ql_term_structure.hpp (generic CurveTermStructure<Curve>)
 include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instrument/FloatLeg/FixedLeg/
-                             QuoteKind model -- see §7c), lm.hpp, risk.hpp, warm.hpp (cached-Jacobian +
-                             linear update), streaming.hpp (exact frozen-Newton live feed),
-                             residual_engine.hpp (per-problem residual/Jacobian engine trait driving
-                             warm/streaming),
+                             QuoteKind model -- see §7c), lm.hpp, risk.hpp, streaming.hpp (the exact
+                             frozen-Newton live feed = the warm path), residual_engine.hpp (per-problem
+                             residual/Jacobian engine trait driving the streamer),
                              compiled_residual.hpp (single-curve = 1-curve delegate to compiled_bundle.hpp),
                              compiled_bundle.hpp (CompiledBundleResidual: multi-curve W-cache residual),
                              bundle_problem.hpp + bundle_stage.hpp (Stage 3 multi-curve bundle)
@@ -458,15 +457,14 @@ third_party/                 Eigen, GoogleTest, Google Benchmark, Boost headers,
 Goal: re-calibrate after a *small* market perturbation from a solved curve in microseconds. Three
 measured levers (the order matters — measure before optimising, CLAUDE.md discipline):
 
-- **Cached-Jacobian Newton (`swaps/calibration/warm.hpp`, `WarmCalibrator`).** A warm re-cal doesn't
-  need a full LM: cache `J0` (and its factorization) at the base solution and take frozen-Jacobian
-  Gauss-Newton steps. **Automatic envelope detection** — if frozen steps stop converging, `J0` is
-  stale (perturbation outside the reuse envelope) and it auto-refreshes. Full LM 2.8 ms → **48 µs**
-  exact (matches full LM to ~1e-13).
-- **First-order live-tick update = ONE matvec.** At the base `r(x0) = -dq` exactly, so the first
-  Newton step is `x = x0 + M·dq` with `M = (JᵀJ)⁻¹Jᵀ` precomputed — which is the *same* operator as
-  the analytic risk ladder `dx/dq`. **168 ns**, error `O(|dq|²)` (~1e-6 at 1bp). This is the
-  microsecond path for real-time ticks; `recalibrate()` (48 µs, exact) is the fallback for big moves.
+- **Warm re-calibration IS the streamer (`swaps/calibration/streaming.hpp`, `StreamingCalibrator`).** A
+  warm re-cal doesn't need a full LM: cache `J` (its rank-safe pseudo-inverse `M`) at the anchor and take
+  frozen-Jacobian Newton steps to `step_tol`, refreshing `J` only when the frozen iteration stalls.
+  `BundleSession::recalibrate`/`rebind` are exactly one such tick (E4.A). The gated numbers
+  (`sofr_23k_warm_recal_*`) time this path against a QuantLib re-bootstrap of the same move.
+  (E6.1, 2026-09-10: the separate cached-Jacobian `WarmCalibrator` and its one-matvec `recalibrate_linear`
+  — the "168 ns first-order update" — had no production caller and were deleted; the streamer's exact
+  tick is the µs path and the accuracy story is the one below.)
 - **Vectorized compiled residual (`compiled_residual.hpp` on `pricing/compiled.hpp`).** The
   calibration instruments are just a portfolio valued off `DF = exp(-Wx)`; `CompiledResidual` shares
   that engine. **Honest result: only ~1.3× vs the scalar kernel** — our scalar residual was already
@@ -474,7 +472,7 @@ measured levers (the order matters — measure before optimising, CLAUDE.md disc
   slow per-swap loop gives little here. It's the DRY unification, not the speed lever.
 
 > **Measured, not assumed:** the warm-recal working set is ~9 KB (L1-resident), so cache-placement /
-> memory-hierarchy tuning buys ~0. The wins are algorithmic (cached `J0`, the one-matvec update),
+> memory-hierarchy tuning buys ~0. The wins are algorithmic (the cached operator, predictive convergence),
 > not memory management.
 
 ### The accuracy-first streaming path (`swaps/calibration/streaming.hpp`, `StreamingCalibrator`)
@@ -497,11 +495,10 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   level move; `tools/jacobian_staleness.cpp` measures `ρ` vs move size) vs the linear path's 0.35 bp,
   so ~85× fewer recomputes AND exact. The recompute reuses the cached `W` (analytic `J`, no AAD).
 - **The legacy `linear` single-step path (`x = x_anchor + M·dq`, O(dq²) error, re-anchor at 0.35 bp)
-  is a *smooth-market artifact*.** Under a realistic **~0.15 bp/tick** feed it re-anchors ~20% of
-  ticks (drift crosses 0.35 bp every few ticks); the exact path rides one Jacobian all day. The
-  "168 ns / 98% fast-path" numbers above assume an unrealistically smooth crawl — keep them for the
-  *WarmCalibrator small-perturbation* use, not the live tick feed. Gate: `tests/streaming_test.cpp`
-  (round-trip + exactness every tick). Demo: `tools/stream_sim.cpp` (trending day, both modes).
+  was a *smooth-market artifact* and was DELETED in E6.1 (2026-09-10).** Under a realistic
+  **~0.15 bp/tick** feed it re-anchored ~20% of ticks (drift crosses 0.35 bp every few ticks); the exact
+  path rides one Jacobian all day. Gate: `tests/streaming_test.cpp` (round-trip + exactness every tick).
+  Demo: `tools/stream_sim.cpp` (trending day).
 
 ### Retired (E6.1, 2026-09-10): the pricing-branch and thread-pool machinery
 `LiveCurveFeed` (seqlock curve publish), `ParallelPortfolio` (sliced book reprice), `ThreadPool` and the
@@ -543,13 +540,15 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   unchanged. NB the batches materialize the per-coupon vector BEFORE the sparse reduction `R * v` — handing
   Eigen's sparse×dense an unevaluated gather+divide expression re-does that work per access (~1.28× slower;
   see `BundleFloatLegs::pv`).
-- **Warm & streaming re-cal are problem-generic (`calibration/residual_engine.hpp`).** `WarmCalibrator`
-  and `StreamingCalibrator` are templated on the problem via `residual_engine_t<Problem>`:
+- **The streamed re-cal is problem-generic (`calibration/residual_engine.hpp`).** `StreamingCalibrator`
+  is templated on the problem via `residual_engine_t<Problem>`:
   `CalibrationProblem` → `CompiledResidual`, `BundleProblem` → `CompiledBundleResidual`, anything else →
-  the generic AAD engine. Same frozen-Jacobian control flow, now on the analytic fast path for the bundle.
+  the generic AAD engine. One frozen-Jacobian control flow, on the analytic fast path for the bundle.
   Measured on the 4-curve bundle at a ~1bp tick (`bench/bundle_build_bench.cpp`, `tests/bundle_test.cpp`):
-  warm exact re-cal **~272 µs** (~71× vs a 19 ms cold LM re-solve; matches an independent cold solve to
-  ~1.5e-11), one-matvec linear update **~390 ns**, streaming exact path round-trips every tick to ~3e-12.
+  a warm tick lands within second order of an independent cold LM re-solve (1.3e-7 at ~1 bp on the
+  over-determined bundle: the frozen-J fixed point J_anchorᵀr = 0 vs the LS optimum) and round-trips every
+  tick to ~3e-12 (the separate `WarmCalibrator`, which refreshed J and matched the cold solve to 1e-11,
+  and its one-matvec linear update were deleted in E6.1, 2026-09-10 — no production caller).
   The bundle's frozen envelope is *tighter* than the single curve's (the coupled multi-curve residual is
   more nonlinear), so a 1bp move triggers one Jacobian refresh — but the refresh is now ANALYTIC (no AAD
   sweep), which is what took warm re-cal from ~7× (AAD engine) to ~71×.

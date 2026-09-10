@@ -1,5 +1,6 @@
 // E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
-// Curve-space GAMMA gate (reverse-mode AAD tape, ad/reverse.hpp + calibration/gamma.hpp).
+// Curve-space GAMMA gate (reverse-mode AAD tape, tests/research/reverse.hpp + research/gamma.hpp -- research code
+// since E6.1, 2026-09-10: correct, tested, no production consumer).
 //
 // QuantLib-FREE: the book and the calibration curve are hand-built from plain FloatCoupon/FixedCoupon data
 // (no ql/extract), priced through the REAL templated portfolio::Portfolio / ModularCurve kernels. Two gates:
@@ -16,7 +17,7 @@
 #include <vector>
 
 #include "swaps/ad/dual.hpp"
-#include "swaps/calibration/gamma.hpp"
+#include "research/gamma.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/risk.hpp"
 #include "swaps/curve/curve_module.hpp"

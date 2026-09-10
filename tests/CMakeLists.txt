@@ -131,7 +131,6 @@ if(TARGET quantlib_oracle)
     risk_test.cpp
     portfolio_test.cpp
     spread_test.cpp
-    warm_test.cpp
     streaming_test.cpp
     compiled_residual_test.cpp
     migration_guard_test.cpp

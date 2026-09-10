@@ -12,7 +12,7 @@
 #include <Eigen/Core>
 #include <vector>
 
-#include "swaps/calibration/gamma.hpp"
+#include "research/gamma.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/risk.hpp"
 #include "swaps/pricing/cashflows.hpp"

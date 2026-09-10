@@ -29,7 +29,6 @@
 #include "swaps/calibration/bundle_stage.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
-#include "swaps/calibration/warm.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
@@ -247,8 +246,8 @@ TEST_F(BundleRealistic, CompiledBundleResidualMatchesAad) {
 TEST_F(BundleRealistic, WarmRecalMatchesColdResolveOnMinorPerturbation) {
   // Base cold solve (per-curve flat start), then a MINOR (~1bp) market perturbation. The warm
   // frozen-Jacobian re-cal reusing the base Jacobian must land on an INDEPENDENT cold LM re-solve of
-  // the perturbed market -- and the one-matvec linear update must be first-order accurate. This is the
-  // 4-curve-bundle analogue of the single-curve Warm gate: same WarmCalibrator, driven via BundleProblem.
+  // the perturbed market. This is the
+  // 4-curve-bundle analogue of the single-curve streaming gate, driven via BundleProblem.
   Eigen::VectorXd x0(prob.n_knots());
   const double start[] = {0.043, -0.0006, 0.0306, 0.0050};  // SOFR forward; FF/PRIME/PRIME2 SPREADS
   for (int c = 0; c < NC; ++c) x0.segment(off[c], prob.curves[c].n_knots()).setConstant(start[c]);
@@ -262,19 +261,19 @@ TEST_F(BundleRealistic, WarmRecalMatchesColdResolveOnMinorPerturbation) {
   for (int i = 0; i < static_cast<int>(pert.instruments.size()); ++i) pert.instruments[i].market += dq[i];
   const Eigen::VectorXd x_cold = cal::calibrate(pert, x_solved).x;
 
-  // WARM: reuse the base Jacobian; only refresh if the move leaves the envelope (1bp should not).
-  cal::WarmCalibrator<cal::BundleProblem> wc(prob, x_solved);
-  const cal::WarmResult wr = wc.recalibrate(dq);
-  const Eigen::VectorXd x_lin = wc.recalibrate_linear(dq);
-
-  const double warm_err = (wr.x - x_cold).cwiseAbs().maxCoeff();
-  const double lin_err = (x_lin - x_cold).cwiseAbs().maxCoeff();
-  std::cout << "  [bundle-warm] steps=" << wr.steps << " refreshes=" << wr.jacobian_refreshes
-            << " converged=" << wr.converged << "  warm ||x-x_cold||=" << warm_err
-            << "  linear ||x-x_cold||=" << lin_err << "\n";
-  EXPECT_TRUE(wr.converged);
-  EXPECT_LT(warm_err, 1e-7) << "warm frozen-Newton must match an independent cold LM re-solve";
-  EXPECT_LT(lin_err, 1e-5) << "one-matvec linear update is first-order accurate at ~1bp";
+  // WARM = the streamer (E6.1 2026-09-10: WarmCalibrator retired; StreamingCalibrator is the one warm path):
+  // one tick from the base anchor to the perturbed market, frozen Jacobian, must land on the cold re-solve.
+  cal::StreamingCalibrator<cal::BundleProblem> sc(prob, x_solved, prob.market(), {});
+  const cal::StreamTick tick = sc.update(pert.market());
+  const double warm_err = (sc.current() - x_cold).cwiseAbs().maxCoeff();
+  std::cout << "  [bundle-warm] steps=" << tick.newton_steps << " refreshes=" << tick.refreshes
+            << " converged=" << tick.converged << "  warm ||x-x_cold||=" << warm_err << "\n";
+  EXPECT_TRUE(tick.converged) << tick.reason();
+  // The frozen-Jacobian fixed point (J_anchorᵀ r = 0) differs from the cold least-squares optimum (J(x)ᵀ r = 0)
+  // at SECOND order in the move on an over-determined bundle: measured 1.3e-7 for this ~1 bp move (2026-09-10;
+  // the retired WarmCalibrator re-solved with a refreshed J and matched to 1e-11 -- that path is gone). The
+  // streamer's exactness contract is the tick's own reprice (streaming_test), not the cold optimum.
+  EXPECT_LT(warm_err, 1e-6) << "the streamed tick must land within second order of an independent cold LM re-solve";
 }
 
 TEST_F(BundleRealistic, StreamingPrefetchHidesTheRefreshSpike) {

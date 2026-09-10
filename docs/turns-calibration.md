@@ -82,8 +82,8 @@ x_ext = [x ; δ]      W_ext = [ W | L ]      L(i,j) = overlap(timesᵢ, [aⱼ, b
 ```
 
 Then `J = −(G·diagDF)·W_ext` gains the correct turn columns automatically from the matmul — **no new
-Jacobian code, no AAD.** `WarmCalibrator` / `StreamingCalibrator` build `M = (JᵀJ)⁻¹Jᵀ` from that
-`J`, so they pick up turns automatically; the risk ladder `dx/dq` reports turn sensitivities for
+Jacobian code, no AAD.** `StreamingCalibrator` builds `M = (JᵀJ)⁺Jᵀ` from that
+`J`, so it picks up turns automatically; the risk ladder `dx/dq` reports turn sensitivities for
 free. A calibrated turn column is just a knot whose basis function is a one-day flat bump.
 
 ## 4. Integration points (symbol anchors — confirm each still exists)

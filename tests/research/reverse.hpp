@@ -1,4 +1,6 @@
 #pragma once
+// RESEARCH (moved out of include/ in E6.1, 2026-09-10): the reverse-mode tape behind research/gamma.hpp; no
+// production consumer. Tested by tests/gamma_test.cpp and mutated by tools/mutate.py.
 // Reverse-mode "tape" AAD scalar (CLAUDE.md §1 -- the ADDITIVE second-order companion to ad::Dual).
 //
 // The engine's forward-mode Dual (ad/dual.hpp) carries an M-vector of derivatives and yields one COLUMN
@@ -22,7 +24,7 @@
 //     dual, below)             directional derivative, so ONE reverse sweep produces adjoints that are
 //                              themselves Tangents -- adj[i].v = d(NPV)/dx_i and adj[i].d = d/dx_dir of
 //                              that gradient = one Hessian-vector product (H·dir)_i. n seeds e_j give the
-//                              full Hessian in n reverse sweeps (see calibration/gamma.hpp).
+//                              full Hessian in n reverse sweeps (see research/gamma.hpp).
 // Tangent is a SELF-CONTAINED 2-double forward dual (value + one directional derivative), deliberately NOT
 // Eigen's AutoDiffScalar: a constant Tangent is {v, 0} -- it is never "empty", so the empty-derivative trap
 // the cashflow kernel warns about (mixing a size-0 gradient with a size-M one) simply cannot arise on the

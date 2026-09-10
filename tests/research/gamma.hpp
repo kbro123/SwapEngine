@@ -1,4 +1,6 @@
 #pragma once
+// RESEARCH (moved out of include/ in E6.1, 2026-09-10): correct and tested (tests/gamma_test.cpp, bench/gamma_bench.cpp),
+// but no production consumer -- second-order curve/market gamma via the reverse tape. Lives with its tests.
 // Curve-space GAMMA of a portfolio via the reverse-mode AAD tape (CLAUDE.md §1, north-star #3/#4 -- the
 // SECOND-ORDER companion to risk.hpp's first-order bucketed delta). risk.hpp gives d(NPV)/dq (delta) by a
 // forward-AAD gradient + the implicit-function theorem. This header gives the curvature: the Hessian
@@ -32,7 +34,7 @@
 
 #include <vector>
 
-#include "swaps/ad/reverse.hpp"
+#include "research/reverse.hpp"
 #include "swaps/calibration/jacobian.hpp"       // aad_jacobian (the IFT sensitivity's J)
 #include "swaps/calibration/problem.hpp"        // CalibrationProblem
 #include "swaps/calibration/risk.hpp"           // ift_operator (the shared, rank-safe dx/dq)

@@ -1,11 +1,15 @@
 // Stage-2: warm re-calibration after a market tick — LIKE-FOR-LIKE on both sides (PRINCIPLES.md P6/P10).
 //
 //   BM_WarmRecal_QuantLib        QuantLib IterativeBootstrap re-bootstrap after a ±0.3 bp tick on EVERY quote
-//   BM_WarmRecal_Ours            our cached-Jacobian warm calibrator after the SAME ±0.3 bp tick
-//   BM_WarmRecal_QuantLib_10bp   the same pair at ±10 bp (a move that leaves our Jacobian envelope, so
-//   BM_WarmRecal_Ours_10bp       ours pays a Jacobian refresh — the honest "big move" number)
+//   BM_WarmRecal_Ours            our streamed re-calibration (StreamingCalibrator, exact frozen-Newton tick)
+//                                after the SAME ±0.3 bp tick
+//   BM_WarmRecal_QuantLib_10bp   the same pair at ±10 bp (a move large enough that the streamer may refresh
+//   BM_WarmRecal_Ours_10bp       its Jacobian — the honest "big move" number)
 //   BM_WarmRecal_OursFullLM      our from-scratch AAD LM, warm-started (Stage-1, for context)
-//   BM_WarmRecal_OursLinear      the one-matvec first-order update (context; O(dq²) error)
+//
+// E6.1 (2026-09-10): the cached-Jacobian WarmCalibrator this bench used to time had no production caller
+// (BundleSession::recalibrate IS a streamed tick since E4.A) and was deleted; the metric now times the
+// path production runs. Baselines re-captured with the change (baselines/targets notes).
 //
 // History: until 2026-09-08 the QuantLib side moved every quote ±1e-3 (10 bp on swaps, 0.01 bp on
 // futures) while ours re-solved a fixed 0.3 bp in-envelope tick — apples to oranges. Both sides now see the
@@ -24,7 +28,7 @@
 
 #include "reference_curve.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/calibration/warm.hpp"
+#include "swaps/calibration/streaming.hpp"
 
 using namespace QuantLib;
 namespace rb = swaps::refbuild;
@@ -50,7 +54,12 @@ struct Fixture {
 
   cal::CalibrationProblem prob = rb::build_square_problem(mk);
   Eigen::VectorXd x0 = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
-  cal::WarmCalibrator<> wc{prob, x0};
+  Eigen::VectorXd q0 = [&] {
+    Eigen::VectorXd q(prob.n_residuals());
+    for (int i = 0; i < q.size(); ++i) q[i] = prob.instruments[i].market;
+    return q;
+  }();
+  mutable cal::StreamingCalibrator<> sc{prob, x0, q0, cal::StreamingCalibrator<>::Options{}};
   Eigen::VectorXd dq03 = tick(prob.n_residuals(), 0.3);   // 0.3 bp live tick (inside the J envelope)
   Eigen::VectorXd dq10 = tick(prob.n_residuals(), 10.0);  // 10 bp move (outside: forces a J refresh)
 
@@ -95,9 +104,10 @@ void bm_ours(benchmark::State& state, const Eigen::VectorXd& dq) {
   const auto& f = fx();
   double sign = 1.0;
   for (auto _ : state) {
-    cal::WarmResult r = f.wc.recalibrate(sign * dq);  // adaptive, exact (multi-step + envelope detection)
+    const cal::StreamTick t = f.sc.update(f.q0 + sign * dq);  // exact frozen-Newton tick (refreshes if stale)
     sign = -sign;
-    benchmark::DoNotOptimize(r.x.data());
+    benchmark::DoNotOptimize(t.newton_steps);
+    benchmark::DoNotOptimize(f.sc.current().data());
   }
 }
 
@@ -126,13 +136,5 @@ static void BM_WarmRecal_OursFullLM(benchmark::State& state) {
 }
 BENCHMARK(BM_WarmRecal_OursFullLM);
 
-static void BM_WarmRecal_OursLinear(benchmark::State& state) {
-  const auto& f = fx();
-  for (auto _ : state) {
-    Eigen::VectorXd x = f.wc.recalibrate_linear(f.dq03);  // first-order live-tick update: one matvec
-    benchmark::DoNotOptimize(x.data());
-  }
-}
-BENCHMARK(BM_WarmRecal_OursLinear);
 
 BENCHMARK_MAIN();

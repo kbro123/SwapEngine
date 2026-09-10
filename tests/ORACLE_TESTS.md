@@ -59,7 +59,6 @@ formula-generated `x_true` (`reference_curve.hpp`, `reference_bundle.hpp`, `refe
 | `risk_test.cpp` | Analytic IFT delta ladder vs the engine's own bump-and-recalibrate (1e-4 rel) | T3 parity |
 | `portfolio_test.cpp` | Compiled batched book vs the scalar templated kernel (1e-10) | T3 parity |
 | `spread_test.cpp` | Fixed-base spread decomposition vs `spread_reference.hpp` (test-only re-implementation) + own FD | T2/T3 |
-| `warm_test.cpp` | Warm cached-Jacobian re-solve vs the engine's own full LM (1e-7) | T3 parity |
 | `streaming_test.cpp` | Frozen-Newton streaming round-trips to the tick (1e-8); prefetch assertion gated by `SWAPS_TIMING_ASSERTS` | T3 parity |
 | `compiled_residual_test.cpp` | W-cache residual/Jacobian vs templated/AAD (1e-12 / 1e-9) | T3 parity |
 | `generic_cashflow_test.cpp` | Generic `FloatCoupon` identities vs hand formulas (1e-15); legacy shapes reprice exactly | T3/T5 |

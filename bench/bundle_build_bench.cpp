@@ -15,7 +15,7 @@
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/bundle_stage.hpp"
 #include "swaps/calibration/lm.hpp"
-#include "swaps/calibration/warm.hpp"
+#include "swaps/calibration/streaming.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/ql/ql_term_structure.hpp"
 #include "swaps/ql/extract.hpp"
@@ -156,14 +156,15 @@ const BundleFixture& fx2() { static const BundleFixture f(2); return f; }
 const BundleFixture& fx4() { static const BundleFixture f(4); return f; }
 
 // Warm re-calibration on a MINOR market perturbation of the solved 4-curve bundle. Everything
-// expensive (the base solve + the base Jacobian factorization inside WarmCalibrator) is set up ONCE;
+// expensive (the base solve + the base Jacobian factorization inside the streamer) is set up ONCE;
 // the benchmarks time only the per-tick re-cal, contrasted with a full cold LM re-solve.
 struct BundleWarmFixture {
   cal::BundleProblem prob = fx4().prob;  // own copy (we perturb its markets for the cold baseline)
   Eigen::VectorXd x_solved = cal::calibrate(prob, fx4().x0, true).x;
   Eigen::VectorXd dq;
   cal::BundleProblem pert = prob;                             // perturbed market (cold-resolve target)
-  cal::WarmCalibrator<cal::BundleProblem> wc{prob, x_solved};  // caches J0 + M at the base solution
+  mutable cal::StreamingCalibrator<cal::BundleProblem> sc{prob, x_solved, prob.market(), {}};  // the warm path
+  mutable bool flip = false;
   BundleWarmFixture() {
     dq = Eigen::VectorXd(prob.n_residuals());
     for (int i = 0; i < dq.size(); ++i) dq[i] = 1e-4 * std::sin(0.7 * i + 0.3);  // ~1bp, residual order
@@ -188,19 +189,13 @@ BENCHMARK(BM_BundleWarm4_ColdLM);
 static void BM_BundleWarm4_Warm(benchmark::State& s) {
   const auto& f = warm4();
   for (auto _ : s) {
-    auto r = f.wc.recalibrate(f.dq);
-    benchmark::DoNotOptimize(r.x.data());
+    f.flip = !f.flip;
+    const cal::StreamTick t = f.sc.update(f.flip ? f.pert.market() : f.prob.market());
+    benchmark::DoNotOptimize(t.newton_steps);
+    benchmark::DoNotOptimize(f.sc.current().data());
   }
 }
 BENCHMARK(BM_BundleWarm4_Warm);
-static void BM_BundleWarm4_Linear(benchmark::State& s) {
-  const auto& f = warm4();
-  for (auto _ : s) {
-    auto x = f.wc.recalibrate_linear(f.dq);
-    benchmark::DoNotOptimize(x.data());
-  }
-}
-BENCHMARK(BM_BundleWarm4_Linear);
 
 // Four ways per bundle size: QuantLib GlobalBootstrap, QuantLib IterativeBootstrap (sequential 1-D,
 // the like-for-like for staged), our joint LM, our staged (auto local/global by dependency SCC).

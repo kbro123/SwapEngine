@@ -21,7 +21,7 @@
 //     one AAD sweep -- the only problem types that still AAD on refresh. Refreshes are rare, so fine.
 //
 // The engine is the ONLY thing that knew the concrete problem type, so templating it here is what lets
-// WarmCalibrator / StreamingCalibrator become problem-generic without duplicating their control flow.
+// StreamingCalibrator becomes problem-generic without duplicating its control flow.
 
 #include <Eigen/Dense>
 

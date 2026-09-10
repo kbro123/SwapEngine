@@ -1,8 +1,8 @@
 // E5 taxonomy: T2 calibration (optimum / stationarity / recovery) | T3 cross-path parity (two engine paths, same inputs)
 // RANK SAFETY at the one shared threshold (E3 register G5 / B2 / S3, fixed 2026-09-10). Every operator that
 // inverts a Jacobian does it rank-safely at kRankThreshold: the streamer (already), the background prefetch
-// worker (was an un-thresholded QR: |M| up to 6e14 on a rank-deficient bundle), WarmCalibrator (was the QR's
-// default threshold). The prefetch is armed only where the worker's M-only hand-over is exact.
+// worker (was an un-thresholded QR: |M| up to 6e14 on a rank-deficient bundle). (WarmCalibrator, the third
+// operator, was retired in E6.1 -- the streamer is the warm path.) The prefetch is armed only where the worker's M-only hand-over is exact.
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>
@@ -15,7 +15,6 @@
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
-#include "swaps/calibration/warm.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
@@ -70,15 +69,6 @@ TEST(RankSafety, BackgroundWorkerReturnsTheMinimumNormOperator) {
   }
   EXPECT_LT(M.cwiseAbs().maxCoeff(), 1e6) << "an un-thresholded QR gave |M| ~ 6e14 on this bundle";
   EXPECT_LT((M - ref).cwiseAbs().maxCoeff(), 1e-8 * ref.cwiseAbs().maxCoeff()) << "the worker's M is the same rank-safe pseudo-inverse the streamer factors";
-}
-
-TEST(RankSafety, WarmCalibratorIsRankSafe) {
-  const cal::BundleProblem p = deficient_square();
-  const cal::WarmCalibrator<cal::BundleProblem> wc(p, x0);
-  const cal::HybridBundleResidual eng(p);
-  const Eigen::MatrixXd ref = rank_safe_pinv(eng.jacobian(x0));
-  EXPECT_LT(wc.sensitivity().cwiseAbs().maxCoeff(), 1e6);
-  EXPECT_LT((wc.sensitivity() - ref).cwiseAbs().maxCoeff(), 1e-8 * ref.cwiseAbs().maxCoeff());
 }
 
 // The prefetch is exact only for a square, unbanded, unregularised problem; elsewhere the option is ignored

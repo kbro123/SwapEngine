@@ -28,9 +28,6 @@
 //    AAD). The quote Jacobian stays frozen; only its band scaling follows the market. A row whose anchor
 //    slope was 0 (decay = 0 inside the band) cannot be re-scaled and forces a full refresh instead.
 //
-//  LINEAR (legacy, for comparison): a single linear step x = x_anchor + M*dq while drift < envelope,
-//    re-anchoring (recompute J) on every envelope crossing. Fast (one matvec) but O(drift^2) error.
-//
 // A tick that does NOT converge (refresh cap hit) is reported (StreamTick::converged == false) and NOT
 // committed: current() keeps the last converged solution, so the next tick warm-starts from a good point
 // and a caller never reads a half-solved curve as the answer.
@@ -96,12 +93,10 @@ template <class Problem = CalibrationProblem>
 class StreamingCalibrator {
  public:
   struct Options {
-    double envelope = 1e-4;  // LINEAR mode: drift (rate units) that forces a re-anchor
     double step_tol = 1e-9;  // EXACT mode: converged when ||dx||_inf < step_tol
     int max_frozen = 8;      // EXACT mode: hard cap on frozen steps without convergence -> refresh M
     int max_refresh = 6;     // safety cap on refreshes within one tick
     int max_steps = 64;      // hard cap on corrector steps per tick (then: converged = false, not committed)
-    bool exact = true;       // EXACT (iterate to step_tol) vs LINEAR (single step + drift re-anchor)
     // PREDICTIVE CONVERGENCE (2026-09-10, E4.D): after two consecutive full steps under the SAME frozen
     // operator (no refresh, re-scale or breakpoint between them) the next step is bounded by the observed
     // contraction, |dx_{k+1}| <= (|dx_k| / |dx_{k-1}|) * |dx_k| (exact for the linear rate a frozen M
@@ -195,7 +190,7 @@ class StreamingCalibrator {
     // the rest (E3 register S3 / G5): a regularised or banded stream would mix an un-regularised M with a
     // stale B and converge to the wrong fixed point. So the prefetch is armed only where it is exact;
     // elsewhere the option is ignored (prefetch_hits() stays 0).
-    if (opt_.prefetch && opt_.exact && !drift_refresh_) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
+    if (opt_.prefetch && !drift_refresh_) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (!set_anchor(x0, q0))
       throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
     {
@@ -257,7 +252,7 @@ class StreamingCalibrator {
   StreamTick update(const Eigen::VectorXd& q_new) {
     if (q_new.size() != n_res_) throw std::invalid_argument("StreamingCalibrator::update: market length does not match the instrument count");
     if (!q_new.allFinite()) throw std::invalid_argument("StreamingCalibrator::update: market contains a non-finite quote");
-    return opt_.exact ? update_exact(q_new) : update_linear(q_new);
+    return update_exact(q_new);
   }
 
  private:
@@ -422,43 +417,6 @@ class StreamingCalibrator {
     t.status = why;
     SWAPS_TRACE("  tick FAILED: %s (steps %d refreshes %d rescales %d)\n", to_string(why), t.newton_steps, t.refreshes, t.rescales);
     if (t.refreshes > 0 || t.rescales > 0) (void)set_anchor(x_cur_, q_cur_);
-    return t;
-  }
-
-  // LINEAR (legacy): single linear step inside the envelope, re-anchor (recompute J) outside it.
-  StreamTick update_linear(const Eigen::VectorXd& q_new) {
-    StreamTick t;
-    const Eigen::VectorXd d = q_new - q_anchor_;
-    t.drift = d.cwiseAbs().maxCoeff();
-    if (t.drift < opt_.envelope) {
-      x_cur_.noalias() = x_anchor_ + M_ * d;  // one matvec, O(drift^2) error
-      t.converged = true;
-      t.status = StreamStatus::Converged;
-      return t;
-    }
-    t.refreshed = true;
-    Eigen::VectorXd x = x_anchor_ + M_ * d;
-    int frozen = 0;
-    for (;;) {
-      const Eigen::VectorXd r = engine_->residuals_vs(x, q_new);
-      const Eigen::VectorXd dx = M_ * r;
-      x.noalias() -= dx;
-      ++t.newton_steps;
-      if (dx.cwiseAbs().maxCoeff() < opt_.step_tol) {
-        t.converged = true;
-        t.status = StreamStatus::Converged;
-        break;
-      }
-      if (++frozen >= opt_.max_frozen) {
-        if (t.refreshes >= opt_.max_refresh) break;
-        (void)set_anchor(x, q_new);
-        ++t.refreshes;
-        frozen = 0;
-      }
-    }
-    (void)set_anchor(x, q_new);  // legacy always refreshes at the converged solution
-    x_cur_ = x;
-    t.refreshes += 1;
     return t;
   }
 

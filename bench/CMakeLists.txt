@@ -27,6 +27,7 @@ target_link_libraries(fx_stream_bench PRIVATE swaps benchmark::benchmark_main)
 # Curve-space gamma via the reverse-mode AAD tape: 2nd-order Hessian vs the 1st-order delta ladder.
 add_executable(gamma_bench gamma_bench.cpp)
 target_link_libraries(gamma_bench PRIVATE swaps benchmark::benchmark_main)
+target_include_directories(gamma_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)  # research/gamma.hpp (E6.1)
 
 # Coherent parallel portfolio reprice: serial full-book vs N-slice split off one curve (ours-only).
 

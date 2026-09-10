@@ -1,6 +1,6 @@
 # target|file|TEST count|EXPECT/ASSERT count — written by tools/check_oracle_tests.sh --update. Counts may only
 # grow silently; a reduction must be re-locked deliberately, in a commit that says why (PRINCIPLES.md P11).
-swaps_consistency_tests|__listed__|33|0
+swaps_consistency_tests|__listed__|28|0
 swaps_consistency_tests|aad_test.cpp|4|11
 swaps_consistency_tests|calibration_test.cpp|3|8
 swaps_consistency_tests|compiled_residual_test.cpp|2|5
@@ -11,12 +11,11 @@ swaps_consistency_tests|risk_test.cpp|2|4
 swaps_consistency_tests|spread_test.cpp|3|6
 swaps_consistency_tests|streaming_test.cpp|3|7
 swaps_consistency_tests|tension_regularizer_oracle_test.cpp|2|8
-swaps_consistency_tests|warm_test.cpp|4|11
-swaps_oracle_tests|__listed__|106|0
+swaps_oracle_tests|__listed__|101|0
 swaps_oracle_tests|bond_asset_swap_oracle.cpp|1|2
 swaps_oracle_tests|bond_oracle_test.cpp|6|29
 swaps_oracle_tests|bspline_oracle_test.cpp|2|3
-swaps_oracle_tests|bundle_test.cpp|9|20
+swaps_oracle_tests|bundle_test.cpp|9|19
 swaps_oracle_tests|calendar_ql_oracle_test.cpp|1|2
 swaps_oracle_tests|conventions_test.cpp|10|54
 swaps_oracle_tests|convexity_test.cpp|3|4
