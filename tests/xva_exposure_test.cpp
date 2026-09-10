@@ -55,7 +55,7 @@ TEST(ExposureProfile, InvariantsAndDeterministicToday) {
   const double v0 = v[0];
   EXPECT_DOUBLE_EQ(pr.epe[0], std::max(v0, 0.0));
   EXPECT_DOUBLE_EQ(pr.ene[0], std::min(v0, 0.0));
-  EXPECT_DOUBLE_EQ(pr.pfe[0], v0);
+  EXPECT_DOUBLE_EQ(pr.pfe[0], std::max(v0, 0.0));  // PFE is a quantile of the POSITIVE exposure (2026-09-10)
   // The profile fans out: a later node's PFE strictly exceeds the (deterministic) node-0 exposure.
   EXPECT_GT(pr.pfe[nN - 1], pr.pfe[0]);
 }

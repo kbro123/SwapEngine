@@ -33,6 +33,14 @@ namespace {
 double jd(const json::object& o, const char* k, double d) {
   return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
 }
+// SABR β from a {alpha,rho,nu[,beta]} object: the CEV backbone in [0,1], 0 (normal SABR) when absent. Every
+// vol verb dropped it until 2026-09-10 (E3-F1: {"alpha":0.30,"beta":1.0}, a 30 % Black level, priced as a
+// 3039 bp NORMAL vol); an out-of-range value is refused rather than silently clamped.
+double sabr_beta_of(const json::object& s) {
+  const double b = jd(s, "beta", 0.0);
+  if (!(b >= 0.0 && b <= 1.0)) throw std::invalid_argument("sabr: beta must be in [0, 1] (0 = normal SABR, 1 = lognormal)");
+  return b;
+}
 std::string js(const json::object& o, const char* k, const char* d = "") {
   if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
   return std::string(o.at(k).as_string().c_str());
@@ -124,7 +132,7 @@ std::string swaption_json(const std::string& request) {
       double vol, atm_vol;
       if (t.contains("sabr") && t.at("sabr").is_object()) {
         const auto& s = t.at("sabr").as_object();
-        const v::SabrParams sp{jd(s, "alpha", 0.0), jd(s, "rho", 0.0), jd(s, "nu", 0.0)};
+        const v::SabrParams sp{jd(s, "alpha", 0.0), jd(s, "rho", 0.0), jd(s, "nu", 0.0), sabr_beta_of(s)};
         vol = v::sabr_normal_vol(fs.rate, strike, t_expiry, sp);
         atm_vol = v::sabr_normal_vol(fs.rate, fs.rate, t_expiry, sp);
       } else {
@@ -174,7 +182,7 @@ std::string sabr_calibrate_json(const std::string& request) {
   v::SabrParams guess;
   if (o.contains("guess") && o.at("guess").is_object()) {
     const auto& g = o.at("guess").as_object();
-    guess = v::SabrParams{jd(g, "alpha", 0.0), jd(g, "rho", 0.0), jd(g, "nu", 0.0)};
+    guess = v::SabrParams{jd(g, "alpha", 0.0), jd(g, "rho", 0.0), jd(g, "nu", 0.0), sabr_beta_of(g)};
   }
   const v::SabrCalibResult r = v::sabr_calibrate(forward, expiry, strikes, mvols, guess);
   const double lo = jd(o, "arb_lo", strikes.front());
@@ -184,6 +192,7 @@ std::string sabr_calibrate_json(const std::string& request) {
   out["alpha"] = r.params.alpha;
   out["rho"] = r.params.rho;
   out["nu"] = r.params.nu;
+  out["beta"] = r.params.beta;  // the backbone the fit ran at (fixed at guess.beta; 0 = normal SABR)
   out["rms"] = r.rms;
   out["iterations"] = r.iterations;
   out["converged"] = r.converged;
@@ -216,6 +225,7 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json) {
       cell.sabr_alpha = jd(sj, "alpha", 0.0);
       cell.sabr_rho = jd(sj, "rho", 0.0);
       cell.sabr_nu = jd(sj, "nu", 0.0);
+      cell.sabr_beta = sabr_beta_of(sj);
     } else {
       cell.normal_vol = jd(c, "normal_vol", 0.0);
     }
@@ -347,7 +357,7 @@ VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
     out.cell_annuity.push_back(fs.annuity);
     out.cell_expiry_years.push_back(s.t_expiry);
 
-    const v::SabrParams sp{c.sabr_alpha, c.sabr_rho, c.sabr_nu};
+    const v::SabrParams sp{c.sabr_alpha, c.sabr_rho, c.sabr_nu, c.sabr_beta};
 
     // Strike list: explicit absolute strikes, moneyness offsets (bp from the forward), and/or ATM; default ATM.
     std::vector<double> strikes;
@@ -497,7 +507,7 @@ const VolCube& VolSurface::reprice(const BundleSession& sess) const {
     const double F = fwd_[ci], A = annuity_[ci], T = c.t_expiry;
     out_.cell_forward[ci] = F;
     out_.cell_annuity[ci] = A;
-    const v::SabrParams sp{d.sabr_alpha, d.sabr_rho, d.sabr_nu};
+    const v::SabrParams sp{d.sabr_alpha, d.sabr_rho, d.sabr_nu, d.sabr_beta};
     int k = c.point_offset;
     const auto price_one = [&](double strike) {
       const bool payer = d.payer_set ? d.payer : (strike >= F);

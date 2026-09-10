@@ -22,7 +22,6 @@
 // f(exp(-W·x))).
 #include <chrono>
 #include <cmath>
-#include <deque>
 #include <map>
 #include <random>
 #include <stdexcept>
@@ -36,6 +35,7 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/exposure.hpp"
 #include "swaps/build/date.hpp"
+#include "swaps/calibration/pnl_explain.hpp"  // roll_book: age the book to each exposure node
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/portfolio/compiled.hpp"
 #include "swaps/trade/book.hpp"
@@ -47,6 +47,7 @@ namespace swaps::api {
 
 namespace json = boost::json;
 namespace pf = swaps::portfolio;
+namespace cal = swaps::calibration;
 namespace xva = swaps::xva;
 namespace tr = swaps::trade;
 namespace bld = swaps::build;
@@ -118,10 +119,10 @@ std::string exposure_json(const std::string& request) {
 
   // Legacy whole-book path (behaviour unchanged): book -> native single-curve Portfolio (a straight
   // coupon-field copy; swap-kind, all-curve-0 positions). The whole book is one netting set.
-  pf::Portfolio legacy_port;
+  pf::MultiCurveBook legacy_book;
   if (has_book) {
-    legacy_port = to_single_curve_portfolio(book_from_json(o.at("book")));
-    if (legacy_port.positions.empty())
+    legacy_book = book_from_json(o.at("book"));
+    if (to_single_curve_portfolio(legacy_book).positions.empty())
       throw std::invalid_argument("exposure: no single-curve swap positions in the book");
   }
 
@@ -130,7 +131,8 @@ std::string exposure_json(const std::string& request) {
   // Role resolution mirrors book_from_json ("curve_roles"; an unmapped index fails loudly).
   struct ParsedSet {
     std::string id;
-    pf::Portfolio port;
+    pf::MultiCurveBook book;  // unrolled: aged to every node below
+    int n = 0;
   };
   std::vector<ParsedSet> sets;
   if (has_sets) {
@@ -175,19 +177,14 @@ std::string exposure_json(const std::string& request) {
               role_of(index, "trade index"), csa_role));
         }
       // THE CSA DECIDES: every trade's discounting is forced onto the collateral currency's OIS role.
-      pf::Portfolio port = to_single_curve_portfolio(ns.to_book(vd, csa_role));
-      if (port.positions.empty())
+      pf::MultiCurveBook book = ns.to_book(vd, csa_role);
+      const int n = static_cast<int>(to_single_curve_portfolio(book).positions.size());
+      if (n == 0)
         throw std::invalid_argument("exposure: netting set '" + ns.id() +
                                     "' has no single-curve swap positions");
-      sets.push_back({ns.id(), std::move(port)});
+      sets.push_back({ns.id(), std::move(book), n});
     }
   }
-
-  // Compile every portfolio BEFORE the timed section (as the legacy path always did). deque: the compiled
-  // engines carry per-instance scratch and need no relocation.
-  std::deque<pf::CompiledPortfolio> cps;
-  if (has_book) cps.emplace_back(C0.modules(), legacy_port);
-  for (const auto& s : sets) cps.emplace_back(C0.modules(), s.port);
 
   // Node times 0..horizon (node 0 = today: sqrt(0)=0 -> deterministic, EPE(0)=max(MtM,0)).
   std::vector<double> node_time(n_nodes);
@@ -219,32 +216,51 @@ std::string exposure_json(const std::string& request) {
   // The kernel + aggregation, PER NETTING SET (the legacy whole book is just the first "set" when present):
   // exposure aggregates WITHIN a set — each portfolio gets its own colwise-net + EPE/ENE/PFE reduction —
   // never across sets. Same npv_grid kernel; only the aggregation boundary moved.
+  // THE BOOK IS AGED TO EVERY NODE (E3-F2, 2026-09-10): at node t_j the surviving cashflows are the ones
+  // paying after t_j, re-timed from the node (roll_book, the same helper pnl_explain's roll leg uses), and
+  // priced off the node's simulated curve states. Until now every node repriced TODAY's cashflow set, so a
+  // 2y swap still showed EPE/PFE at 4..10y and CVA carried the whole unmatured tail. A netting set whose
+  // book has fully matured at a node contributes zero there. The per-node compile sits inside the timed
+  // section (it is part of the exposure computation now).
   const auto t0 = std::chrono::steady_clock::now();
-  std::size_t ci = 0;
+  const auto profile_of = [&](const pf::MultiCurveBook& book, double& mtm) {
+    Eigen::MatrixXd net(1, static_cast<Eigen::Index>(n_paths) * n_nodes);  // the netted value per state
+    for (int j = 0; j < n_nodes; ++j) {
+      const pf::Portfolio port = to_single_curve_portfolio(cal::roll_book(book, node_time[j], /*shift=*/true));
+      const Eigen::Index c0 = static_cast<Eigen::Index>(j) * n_paths;
+      if (port.positions.empty()) {
+        net.middleCols(c0, n_paths).setZero();
+        continue;
+      }
+      const pf::CompiledPortfolio cp(mods, port);
+      const Eigen::MatrixXd Xj = X.middleCols(c0, n_paths);
+      net.middleCols(c0, n_paths) = cp.npv_grid(Xj).colwise().sum();
+    }
+    mtm = pf::CompiledPortfolio(mods, to_single_curve_portfolio(book)).total_npv(x_cal);
+    return xva::exposure_profile(net, n_paths, n_nodes, node_time, pfe_q);
+  };
   json::object out;
   if (has_book) {
-    const pf::CompiledPortfolio& cp = cps[ci++];
-    const Eigen::MatrixXd& npvg = cp.npv_grid(X);
-    const xva::ExposureProfile pr = xva::exposure_profile(npvg, n_paths, n_nodes, node_time, pfe_q);
+    double mtm = 0.0;
+    const xva::ExposureProfile pr = profile_of(legacy_book, mtm);
     out["node_time"] = vecf(pr.node_time);
     out["epe"] = vecf(pr.epe);
     out["ene"] = vecf(pr.ene);
     out["pfe"] = vecf(pr.pfe);
-    out["mtm"] = cp.total_npv(x_cal);
+    out["mtm"] = mtm;
   }
   json::array sets_out;
   for (const auto& s : sets) {
-    const pf::CompiledPortfolio& cp = cps[ci++];
-    const Eigen::MatrixXd& npvg = cp.npv_grid(X);
-    const xva::ExposureProfile pr = xva::exposure_profile(npvg, n_paths, n_nodes, node_time, pfe_q);
+    double mtm = 0.0;
+    const xva::ExposureProfile pr = profile_of(s.book, mtm);
     json::object so;
     so["id"] = s.id;
     so["node_time"] = vecf(pr.node_time);
     so["epe"] = vecf(pr.epe);
     so["ene"] = vecf(pr.ene);
     so["pfe"] = vecf(pr.pfe);
-    so["mtm"] = cp.total_npv(x_cal);
-    so["n"] = static_cast<int>(s.port.positions.size());
+    so["mtm"] = mtm;
+    so["n"] = s.n;
     sets_out.push_back(std::move(so));
   }
   const double wall_us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
@@ -252,7 +268,7 @@ std::string exposure_json(const std::string& request) {
   out["wall_us"] = wall_us;
   out["n_paths"] = n_paths;
   out["n_nodes"] = n_nodes;
-  if (has_book) out["n"] = static_cast<int>(legacy_port.positions.size());
+  if (has_book) out["n"] = static_cast<int>(to_single_curve_portfolio(legacy_book).positions.size());
   if (has_sets) out["netting_sets"] = std::move(sets_out);
   return json::serialize(json::value(std::move(out)));
 }

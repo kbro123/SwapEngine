@@ -39,6 +39,7 @@ struct VegaCell {
   bool has_sabr = false;
   double normal_vol = 0.0;                        // flat Bachelier vol (has_sabr == false)
   double sabr_alpha = 0.0, sabr_rho = 0.0, sabr_nu = 0.0;  // SABR triple (has_sabr == true)
+  double sabr_beta = 0.0;                                  // CEV backbone in [0,1] (fixed; not a ladder axis)
 };
 
 // One swaption position, mapped to a cell. It inherits F/A/T from `cells[cell]` (same underlying swap) and
@@ -61,7 +62,7 @@ struct SabrVolParamGrad {
 inline SabrVolParamGrad sabr_normal_vol_param_grad(double fwd, double strike, double expiry,
                                                    const SabrParams& p, double h = 1e-6) {
   const auto vol = [&](double a, double r, double n) {
-    return sabr_normal_vol<double>(fwd, strike, expiry, a, r, n);
+    return sabr_normal_vol<double>(fwd, strike, expiry, a, r, n, p.beta);
   };
   const double rho_hi = std::min(p.rho + h, 1.0 - 1e-12);
   const double rho_lo = std::max(p.rho - h, -1.0 + 1e-12);
@@ -75,7 +76,7 @@ inline SabrVolParamGrad sabr_normal_vol_param_grad(double fwd, double strike, do
 // The implied normal vol a swaption in `c` sees at `strike` (flat cell vol, or the SABR vol at the strike).
 inline double vega_cell_vol(const VegaCell& c, double strike) {
   if (!c.has_sabr) return c.normal_vol;
-  return sabr_normal_vol(c.forward, strike, c.expiry_years, SabrParams{c.sabr_alpha, c.sabr_rho, c.sabr_nu});
+  return sabr_normal_vol(c.forward, strike, c.expiry_years, SabrParams{c.sabr_alpha, c.sabr_rho, c.sabr_nu, c.sabr_beta});
 }
 
 // Total book value = Σ notional · Bachelier(F, K, σ_impl, T, A) — the quantity the ladder differentiates.
@@ -123,7 +124,7 @@ inline VegaLadder vega_ladder(const std::vector<VegaCell>& cells, const std::vec
       // σ_impl == normal_vol at every strike -> dσ/d(normal_vol) = 1.
       L.d_normal_vol[ci] += sw.notional * vega;
     } else {
-      const SabrParams sp{c.sabr_alpha, c.sabr_rho, c.sabr_nu};
+      const SabrParams sp{c.sabr_alpha, c.sabr_rho, c.sabr_nu, c.sabr_beta};
       const SabrVolParamGrad ds = sabr_normal_vol_param_grad(c.forward, sw.strike, c.expiry_years, sp);
       // Chain rule: d(V)/d{param} = (dV/dσ) · (dσ_impl/d{param}).
       L.d_alpha[ci] += sw.notional * vega * ds.d_alpha;

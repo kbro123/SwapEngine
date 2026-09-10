@@ -130,6 +130,7 @@ struct VolCubeCell {
   std::string tenor;
   bool has_sabr = false;
   double sabr_alpha = 0.0, sabr_rho = 0.0, sabr_nu = 0.0;
+  double sabr_beta = 0.0;  // CEV backbone in [0,1]; 0 = normal SABR (E3-F1: was dropped by every verb until 2026-09-10)
   double normal_vol = 0.0;
   bool payer_set = false;
   bool payer = true;

@@ -28,6 +28,7 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_fixings_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_status_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_state_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_periphery_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_reprice_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/vol_cube_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_parity_test.cpp

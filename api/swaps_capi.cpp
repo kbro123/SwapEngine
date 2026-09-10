@@ -57,11 +57,20 @@ json::array darr(const std::vector<double>& v) {
 }
 }  // namespace
 
+// The C-ABI session: the compiled bundle's session PLUS the smoothing the spec asked for (E3-D4: until
+// 2026-09-10 the session calibrated with reg = {} and streamed unregularised, so an under-determined spec
+// gave Excel a rank-deficient curve 25 bp from the web's).
+struct CapiSession {
+  BundleSession sess;
+  swaps::api::RegSpec reg;
+};
+
 extern "C" void* swaps_session_create(const char* spec_json, const char* today) {
   if (!spec_json) return nullptr;
   try {
     auto cr = swaps::api::compile_spec(json::parse(spec_json), today ? today : "");
-    return static_cast<void*>(new BundleSession(std::move(cr.bundle)));
+    const swaps::api::RegSpec reg = swaps::api::compile_reg_spec(cr);
+    return static_cast<void*>(new CapiSession{BundleSession(std::move(cr.bundle)), reg});
   } catch (...) {
     return nullptr;
   }
@@ -70,10 +79,14 @@ extern "C" void* swaps_session_create(const char* spec_json, const char* today) 
 extern "C" const char* swaps_session_calibrate(void* session) {
   if (!session) return err_json("null session");
   try {
-    auto* s = static_cast<BundleSession*>(session);
-    const auto& r = s->calibrate(swaps::api::flat_x0(s->problem()));
-    if (!s->needs_recalibrate()) s->start_streaming();  // anchor the frozen-Newton warm path when eligible
+    auto* cs = static_cast<CapiSession*>(session);
+    BundleSession* s = &cs->sess;
+    const auto& r = s->calibrate(swaps::api::flat_x0(s->problem()), cs->reg);
+    if (!s->needs_recalibrate()) s->start_streaming(cs->reg);  // anchor the frozen-Newton warm path when eligible
     json::object o;
+    o["regularize_applied"] = cs->reg.on();
+    o["regularize_lambda"] = cs->reg.lambda;
+    o["regularize_tension"] = cs->reg.tension;
     o["rms_residual"] = r.rms_residual;
     o["converged"] = r.converged;
     o["status"] = r.status;
@@ -89,11 +102,12 @@ extern "C" const char* swaps_session_calibrate(void* session) {
 extern "C" const char* swaps_session_update(void* session, const char* market_json) {
   if (!session || !market_json) return err_json("null arg");
   try {
-    auto* s = static_cast<BundleSession*>(session);
+    auto* cs = static_cast<CapiSession*>(session);
+    BundleSession* s = &cs->sess;
     const std::vector<double> v = to_vec(json::parse(market_json));
     const Eigen::VectorXd m = Eigen::Map<const Eigen::VectorXd>(v.data(), static_cast<Eigen::Index>(v.size()));
     if (s->needs_recalibrate())
-      s->recalibrate(m);          // non-linear region: general warm re-solve
+      s->recalibrate(m, cs->reg);  // non-linear region: general warm re-solve
     else
       s->stream_update(m);        // frozen-Newton µs tick over the cached statics
     return dup_str("{\"ok\":true}");
@@ -105,7 +119,7 @@ extern "C" const char* swaps_session_update(void* session, const char* market_js
 extern "C" const char* swaps_session_sample(void* session, const char* times_json) {
   if (!session || !times_json) return err_json("null arg");
   try {
-    auto* s = static_cast<BundleSession*>(session);
+    BundleSession* s = &static_cast<CapiSession*>(session)->sess;
     const std::vector<double> times = to_vec(json::parse(times_json));
     json::array curves;
     for (const auto& cs : s->sample(times)) {
@@ -126,7 +140,7 @@ extern "C" const char* swaps_session_sample(void* session, const char* times_jso
 extern "C" const char* swaps_session_price(void* session, const char* book_json) {
   if (!session || !book_json) return err_json("null arg");
   try {
-    auto* s = static_cast<BundleSession*>(session);
+    BundleSession* s = &static_cast<CapiSession*>(session)->sess;
     const auto pr = s->price_portfolio_json(book_json);   // book_from_json schema, repriced off x
     json::object o;
     o["npv"] = pr.npv;
@@ -139,4 +153,4 @@ extern "C" const char* swaps_session_price(void* session, const char* book_json)
   }
 }
 
-extern "C" void swaps_session_free(void* session) { delete static_cast<BundleSession*>(session); }
+extern "C" void swaps_session_free(void* session) { delete static_cast<CapiSession*>(session); }

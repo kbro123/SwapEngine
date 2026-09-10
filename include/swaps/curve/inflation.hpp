@@ -35,6 +35,13 @@ namespace swaps::curve {
 struct Seasonality {
   std::vector<double> g;   // 12 monthly log increments (any real numbers); normalised on construction
   bool active = false;
+  // CALENDAR ANCHOR (E3-F4, 2026-09-10): the calendar position, in months from 1 January in [0, 12), of the
+  // curve's t = 0 -- the BASE REFERENCE MONTH (value date minus the index's observation lag). 0 (the default)
+  // keeps the legacy behaviour byte-identical (t = 0 taken as a January). With it, the seasonal at curve time
+  // t is the factor of the calendar month t years after the base month, relative to the base month, so a
+  // whole-year maturity cancels for ANY value date and a mid-year maturity picks up the seasonal of the month
+  // it actually references (not of "half a year after January").
+  double phase = 0.0;
 
   Seasonality() = default;
   // Build from 12 raw monthly log factors (e.g. estimated seasonal deviations). Recentred to sum zero so
@@ -55,8 +62,16 @@ struct Seasonality {
   // to an AAD Scalar it preserves the derivatives.
   double log_factor(double t) const {
     if (!active || g.size() != 12) return 0.0;
-    const double u = t - std::floor(t);
-    double p = u * 12.0;
+    if (phase == 0.0) {  // legacy path, byte-identical
+      const double u = t - std::floor(t);
+      return cumulant(u * 12.0);
+    }
+    double p = std::fmod(phase + 12.0 * t, 12.0);
+    if (p < 0.0) p += 12.0;
+    return cumulant(p) - cumulant(phase);
+  }
+  // ln S at calendar position p in [0, 12) months: Σ_{k<m} g_k + r·g_m with m = ⌊p⌋, r = p − m.
+  double cumulant(double p) const {
     int m = static_cast<int>(p);
     if (m < 0) m = 0;
     if (m > 11) m = 11;

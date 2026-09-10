@@ -125,3 +125,33 @@ TEST(Inflation, CalibrateZcisStripRecoversBreakevens) {
   for (std::size_t i = 0; i < mats.size(); ++i)
     EXPECT_NEAR(infl.zc_breakeven(mats[i]), tgt[i], 1e-8);
 }
+
+// 5. (E3-F4, 2026-09-10) The seasonal is anchored to the CALENDAR: `phase` is the calendar position (months
+// from January) of curve time 0 -- the base reference month. With it, a whole-year maturity cancels for ANY
+// phase, and the seasonal at t is the cumulant of the calendar month t years after the base month, relative to
+// the base month. phase == 0 is byte-identical to the legacy January anchor.
+TEST(Inflation, SeasonalityPhaseAnchorsToTheReferenceMonth) {
+  std::vector<double> monthly{0.006, 0.004, 0.003, 0.002, 0.001, -0.001, -0.002, -0.003, -0.004, -0.003, -0.002, -0.001};
+  curve::Seasonality jan(monthly), jul(monthly);
+  jul.phase = 6.0;  // t = 0 is a July reference month
+  ASSERT_TRUE(jan.active && jul.active);
+  for (double y : {1.0, 2.0, 3.0, 7.0}) {
+    EXPECT_NEAR(jan.log_factor(y), 0.0, 1e-15);
+    EXPECT_NEAR(jul.log_factor(y), 0.0, 1e-15) << "a whole year cancels for any phase";
+  }
+  EXPECT_DOUBLE_EQ(jul.log_factor(0.0), 0.0);
+  // Half a year after July is January: the seasonal relative to July is C(Jan) - C(Jul) = -C(Jul).
+  EXPECT_NEAR(jul.log_factor(0.5), -jan.cumulant(6.0), 1e-15);
+  // and 2.5 years after July is also January
+  EXPECT_NEAR(jul.log_factor(2.5), -jan.cumulant(6.0), 1e-15);
+  // The January anchor reproduces the legacy formula exactly for a range of t.
+  for (double t : {0.1, 0.37, 1.5, 2.25, 4.9}) {
+    const double u = t - std::floor(t);
+    EXPECT_DOUBLE_EQ(jan.log_factor(t), jan.cumulant(u * 12.0));
+  }
+  // A fractional phase (a daily-interpolated index, mid-month base): continuous in the phase.
+  curve::Seasonality mid(monthly);
+  mid.phase = 6.5;
+  EXPECT_NEAR(mid.log_factor(1.0), 0.0, 1e-15);
+  EXPECT_NEAR(mid.log_factor(0.25), jan.cumulant(9.5) - jan.cumulant(6.5), 1e-15);
+}

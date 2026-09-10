@@ -798,4 +798,25 @@ std::string compile_json(const std::string& spec_json, const std::string& today_
   return json::serialize(compile_to_json(compile_spec(spec, today_iso)));
 }
 
+RegSpec compile_reg_spec(const CompileResult& r) {
+  const bool second_diff = r.has_reg_op && r.reg_op == "second_difference";
+  const auto table = [&](const std::string& s) -> double {
+    if (second_diff) return s == "off" ? 0.0 : s == "strong" ? 5.0 : 0.5;
+    return s == "off" ? 0.0 : s == "strong" ? 0.2 : 0.02;
+  };
+  double lam = table(r.smoothness);
+  if ((r.under_determined || r.has_bands) && lam <= 0.0) lam = table("light");
+  RegSpec reg;
+  if (lam <= 0.0) return reg;
+  reg.lambda = lam;
+  for (int c = 0; c < static_cast<int>(r.curve_names.size()); ++c) reg.curves.push_back(c);
+  if (reg.curves.empty())
+    for (int c = 0; c < static_cast<int>(r.bundle.curves.size()); ++c) reg.curves.push_back(c);
+  if (!second_diff) {
+    reg.tension = true;
+    reg.sigma = r.tension_sigma;
+  }
+  return reg;
+}
+
 }  // namespace swaps::api

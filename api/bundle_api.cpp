@@ -1181,6 +1181,19 @@ std::string run_json(const std::string& request) {
       req2.erase("compile");
       req2.erase("today");
       req2["bundle"] = bundle_to_json(cr.bundle);
+      // The spec's smoothing is the DEFAULT regulariser of the rewrite (E3-D4): a caller that sends a
+      // composer spec gets the same curve the web shows; an explicit `regularize` still wins.
+      if (!req2.contains("regularize")) {
+        const RegSpec reg = compile_reg_spec(cr);
+        if (reg.on()) {
+          json::object r;
+          r["lambda"] = reg.lambda;
+          r["curves"] = json::array(reg.curves.begin(), reg.curves.end());
+          r["tension"] = reg.tension;
+          r["sigma"] = reg.sigma;
+          req2["regularize"] = std::move(r);
+        }
+      }
       return run_json(json::serialize(req2));
     }
 
@@ -1275,6 +1288,9 @@ std::string run_json(const std::string& request) {
       c["info"] = res.info;
       c["converged"] = res.converged;  // LM ended at a stationary point with a finite result
       c["status"] = res.status;        // the LM stopping reason, in words
+      c["regularize_applied"] = reg.on();  // which smoothing this calibration ran under (E3-D4)
+      c["regularize_lambda"] = reg.lambda;
+      c["regularize_tension"] = reg.tension;
       c["rank_deficiency"] = res.rank_deficiency;  // >0: the instrument set under-determines the curve
       out["calibration"] = c;
     }

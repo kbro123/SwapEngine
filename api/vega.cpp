@@ -139,6 +139,8 @@ std::string vega_json(const std::string& request) {
       cell.sabr_alpha = jd(sj, "alpha", 0.0);
       cell.sabr_rho = jd(sj, "rho", 0.0);
       cell.sabr_nu = jd(sj, "nu", 0.0);
+      cell.sabr_beta = jd(sj, "beta", 0.0);  // E3-F1: carried (fixed backbone), not a ladder axis
+      if (!(cell.sabr_beta >= 0.0 && cell.sabr_beta <= 1.0)) throw std::invalid_argument("vega: sabr beta must be in [0, 1]");
     } else {
       cell.normal_vol = jd(c, "normal_vol", 0.0);
     }

@@ -20,6 +20,7 @@
 
 #include <boost/json/fwd.hpp>
 
+#include "swaps/api/bundle_api.hpp"  // RegSpec (compile_reg_spec)
 #include "swaps/calibration/bundle_problem.hpp"
 
 namespace swaps::api {
@@ -66,6 +67,14 @@ struct CompileResult {
 // the value date when the spec omits one (compile_spec defaults to date.today()); pass "" to require the
 // spec to carry `value_date`. Throws CompileError on bad structure.
 CompileResult compile_spec(const boost::json::value& spec, const std::string& today_iso = "");
+
+// The smoothing the spec ASKS for, as an engine RegSpec (E3-D4, 2026-09-10; ported from server/compile.py
+// reg_spec so every host -- web, Excel C-ABI, run_json compile+sample -- calibrates the same curve).
+// Default: the continuous tension-energy operator, "light" 0.02 / "strong" 0.2 / "off" 0; `reg_op ==
+// "second_difference"` selects the discrete operator with its ~25x heavier scale 0.5 / 5.0. An
+// under-determined OR banded spec floors "off" to "light" (a penalty is what makes those well-posed). The
+// RegSpec spans every curve; `sigma` is the spec's tension_sigma. lambda == 0 => RegSpec::on() is false.
+RegSpec compile_reg_spec(const CompileResult& r);
 
 // Serialize a CompileResult to the SAME JSON document server/compile.py's compile_spec returns.
 boost::json::value compile_to_json(const CompileResult& r);

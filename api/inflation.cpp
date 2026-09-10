@@ -11,6 +11,7 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/inflation.hpp"
+#include "swaps/build/date.hpp"
 #include "swaps/conventions_data.hpp"
 #include "swaps/build/inflation_instruments.hpp"
 #include "swaps/calibration/inflation_problem.hpp"
@@ -71,6 +72,33 @@ std::string inflation_json(const std::string& request) {
   prob.base = base;
   const std::vector<double> seas = arrf(o, "seasonality");
   if (seas.size() == 12) prob.seasonality = curve::Seasonality(seas);
+  // CALENDAR ANCHOR of the seasonal (E3-F4): curve time t = 0 is the BASE REFERENCE MONTH = value date minus
+  // the index's observation lag (conventions DB). The seasonal at t is then the factor of the calendar month
+  // the ZCIS actually references. `reference_month` ("YYYY-MM") overrides; without either the legacy
+  // January anchor applies and the response says so. A "linear" (daily-interpolated) index carries the
+  // day-of-month fraction into the phase; a "flat" (monthly step) index anchors on the whole month.
+  std::string base_ref_month;
+  double phase = 0.0;
+  bool anchored = false;
+  {
+    const std::string ref = js(o, "reference_month", ""), vd = js(o, "value_date", "");
+    if (!ref.empty() || !vd.empty()) {
+      const swaps::build::Date d = ref.empty() ? swaps::build::Date::from_iso(vd).plus_months(-ix.observation_lag_months)
+                                              : swaps::build::Date::from_iso(ref + "-01");
+      double frac = 0.0;
+      if (ref.empty() && ix.interpolation == "linear") {
+        const swaps::build::Date first = d.plus_days(-static_cast<int>(d.day()) + 1);  // the 1st of the month
+        const int dim = static_cast<int>(first.plus_months(1).serial() - first.serial());
+        frac = static_cast<double>(d.day() - 1) / dim;
+      }
+      phase = static_cast<double>(d.month() - 1) + frac;
+      char buf[16];
+      std::snprintf(buf, sizeof buf, "%04d-%02u", d.year(), d.month());
+      base_ref_month = buf;
+      anchored = true;
+    }
+  }
+  prob.seasonality.phase = phase;
 
   // Build the instruments and collect their maturities (the default breakeven-curve knots).
   std::vector<double> maturities;
@@ -157,6 +185,12 @@ std::string inflation_json(const std::string& request) {
   out["index_id"] = index_id;
   out["observation_lag_months"] = ix.observation_lag_months;
   out["interpolation"] = std::string(ix.interpolation);
+  // The calendar anchor the seasonal was applied with (E3-F4). Curve time t = 0 IS the base reference month:
+  // the observation lag is consumed here (base month = value date − lag) -- both ends of a ZCIS reference
+  // lagged months, so the lag cancels in the growth and only fixes WHICH calendar month t maps to.
+  out["seasonality_anchored"] = anchored;
+  out["seasonality_phase_months"] = phase;
+  out["base_reference_month"] = base_ref_month.empty() ? json::value(nullptr) : json::value(base_ref_month);
   return json::serialize(json::value(std::move(out)));
 }
 

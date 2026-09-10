@@ -47,7 +47,7 @@ inline ExposureProfile exposure_profile(const Eigen::MatrixXd& npv_grid, int n_p
       const double v = v_net[base + p];
       sp += v > 0.0 ? v : 0.0;
       sn += v < 0.0 ? v : 0.0;
-      col[static_cast<std::size_t>(p)] = v;
+      col[static_cast<std::size_t>(p)] = v > 0.0 ? v : 0.0;  // PFE = quantile of the POSITIVE exposure max(V,0)
     }
     pr.epe[j] = sp / n_paths;
     pr.ene[j] = sn / n_paths;

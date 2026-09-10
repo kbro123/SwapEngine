@@ -11,6 +11,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <boost/json.hpp>
 
 #include <Eigen/Core>
@@ -198,7 +200,9 @@ TEST(ExposureNetting, OffsettingTradesNetWithinASetButNotAcrossSets) {
   ASSERT_EQ(ns.size(), 2u);
   for (const auto& e : ns) {
     const std::vector<double> epe = arr(e.as_object(), "epe");
-    EXPECT_GT(epe.back(), 100.0) << "an un-netted 1mm 5y swap must carry real exposure at the horizon";
+    // The book is aged per node (2026-09-10): at the 5y horizon a 5y swap has days of accrual left, so the
+    // exposure that matters is the interior maximum, not the last node.
+    EXPECT_GT(*std::max_element(epe.begin(), epe.end()), 100.0) << "an un-netted 1mm 5y swap must carry real exposure before it matures";
   }
 }
 
@@ -286,4 +290,33 @@ TEST(ExposureNetting, UnmappedIndexAndUnknownCollateralCurrencyFailLoudly) {
   s["trades"] = json::array{trade("T1", "fixed")};
   bad_ccy["netting_sets"] = json::array{s};
   EXPECT_THROW(run(bad_ccy), std::invalid_argument);
+}
+
+// (E3-F2, 2026-09-10) The book is AGED to every node: a 2y trade has zero exposure at every node at or past its
+// maturity (before the fix every node repriced today's cashflow set: EPE 35k at 4..10y for a matured swap),
+// PFE is a quantile of the POSITIVE exposure (>= 0 everywhere), and node 0 is today's MtM.
+TEST(ExposureNetting, TheBookIsAgedToEveryNode) {
+  const cal::BundleProblem p = build_bundle();
+  json::object req = base_request(p);
+  req["n_nodes"] = 6;  // t = 0, 1, 2, 3, 4, 5
+  req["horizon_years"] = 5.0;
+  req["netting_sets"] = json::array{nset("CP", json::array{trade("t2y", "fixed", 0.03, "2028-09-08")})};
+  const json::object r = run(req);
+  const auto& s = r.at("netting_sets").as_array()[0].as_object();
+  const auto tv = s.at("node_time").as_array();
+  const auto epe = s.at("epe").as_array(), ene = s.at("ene").as_array(), pfe = s.at("pfe").as_array();
+  const double mtm = s.at("mtm").to_number<double>();
+  ASSERT_EQ(epe.size(), 6u);
+  EXPECT_NEAR(epe[0].to_number<double>(), std::max(mtm, 0.0), 1e-9 * std::max(1.0, std::abs(mtm)));
+  EXPECT_NEAR(pfe[0].to_number<double>(), std::max(mtm, 0.0), 1e-9 * std::max(1.0, std::abs(mtm)));
+  EXPECT_GT(epe[1].to_number<double>() + std::abs(ene[1].to_number<double>()), 0.0) << "alive at 1y";
+  for (std::size_t j = 0; j < 6; ++j) {
+    const double t = tv[j].to_number<double>();
+    EXPECT_GE(pfe[j].to_number<double>(), 0.0) << "node " << t;
+    if (t >= 2.5) {  // the trade matures 2028-09-08 = 2.01y; at the 2y node a 4-day stub is still alive
+      EXPECT_EQ(epe[j].to_number<double>(), 0.0) << "matured at node t=" << t;
+      EXPECT_EQ(ene[j].to_number<double>(), 0.0) << "matured at node t=" << t;
+      EXPECT_EQ(pfe[j].to_number<double>(), 0.0) << "matured at node t=" << t;
+    }
+  }
 }
