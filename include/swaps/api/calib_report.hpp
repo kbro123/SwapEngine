@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Calibration-diagnostics seam declaration. The stateless "calib_report" run_json verb takes the SAME
 // input as a normal `bundle` calibration (a resolved BundleProblem object graph, an optional x0 seed, an
 // optional smoothness regulariser), calibrates it through the standard BundleSession path, then reports the
@@ -27,6 +28,7 @@ namespace swaps::api {
 //   }}
 // -> {"rms_residual":..., "rank_deficiency":..., "condition_number":..., "singular_values":[...],
 //     "quotes":[{"model","target","residual","weight","in_band","soft","identifiability"}, ...], "n":...}
+std::string calib_report_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string calib_report_json(const std::string& request);
 
 }  // namespace swaps::api

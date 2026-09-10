@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // GenerateRisk: one portfolio, N curve bundles, ALL risk implied off the FIRST bundle's discount factors.
 //
 // The book is priced once on bundle[0]'s calibrated curve C0 (the anchor). Every other bundle is RE-LEVELED
@@ -55,6 +56,7 @@ ConsistentRisk generate_risk(const swaps::portfolio::MultiCurveBook& book,
 // JSON seam: request = {"book": {...}, "bundles": [ {curves,instruments}, ... ], "regularize": {...}? }.
 // Returns {npv, pv01, n, bundles:[{ladder, synthetic, synthetic_knot, npv, pv01, ladder_dv01,
 // n_residuals, n_synthetic}, ...]}. Parses via bundle_from_json/book_from_json.
+std::string generate_risk_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string generate_risk_json(const std::string& request);
 
 // The rank-completed risk operator applied to a curve gradient (exposed for its test): null directions of J

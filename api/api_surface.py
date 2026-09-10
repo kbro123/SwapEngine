@@ -192,6 +192,34 @@ FREE = [
 # ops that parse their own bespoke sub-schema, e.g. the vol cube). The always-on stages
 # (bundle/x0/regularize/calibrate/x) and the irregular `price` and `sample_times` arms stay hand-written in
 # bundle_api.cpp — their shapes are bespoke.
+# ---- the STATELESS verbs: each takes the PARSED request object and returns its response document. run_json
+# dispatches them through a table generated from this list (api/run_json_stateless.gen.inc); the order is the
+# dispatch order (the first listed key present in the request wins), matching the old hand-written if-chain.
+STATELESS_VERBS = [
+    {"keys": ["generate_risk"], "cpp": "generate_risk_json"},
+    {"keys": ["swaption"], "cpp": "swaption_json"},
+    {"keys": ["sabr_calibrate"], "cpp": "sabr_calibrate_json"},
+    {"keys": ["bonds"], "cpp": "bonds_json"},
+    {"keys": ["asset_swap"], "cpp": "asset_swap_json"},
+    {"keys": ["bond_future"], "cpp": "bond_future_json"},
+    {"keys": ["inflation"], "cpp": "inflation_json"},
+    {"keys": ["credit"], "cpp": "credit_json"},
+    {"keys": ["fx_option", "fx_vol"], "cpp": "fx_option_json"},
+    {"keys": ["conventions"], "cpp": "conventions_json"},
+    {"keys": ["list_conventions"], "cpp": "list_conventions_json"},
+    {"keys": ["ndf"], "cpp": "ndf_json"},
+    {"keys": ["calib_report"], "cpp": "calib_report_json"},
+    {"keys": ["bond_universe"], "cpp": "bond_universe_json"},
+    {"keys": ["govvie_fit"], "cpp": "govvie_fit_json"},
+    {"keys": ["swap_spread"], "cpp": "swap_spread_json"},
+    {"keys": ["exposure"], "cpp": "exposure_json"},
+    {"keys": ["scenario"], "cpp": "scenario_json"},
+    {"keys": ["scenario_grid"], "cpp": "scenario_grid_json"},
+    {"keys": ["var"], "cpp": "var_json"},
+    {"keys": ["pnl"], "cpp": "pnl_json"},
+    {"keys": ["vega"], "cpp": "vega_json"},
+]
+
 RUN_JSON = [
     {"key": "portfolio", "resp": "portfolio", "cpp": "price_portfolio", "payload": "book", "reg": False,
      "ret": "STRUCT:PortfolioReprice"},

@@ -102,9 +102,8 @@ std::vector<b::BondId> universe_from(const json::object& o, const std::string& c
 }  // namespace
 
 // ---- bond_universe: batched yield-space sweep over the whole universe ---------------------------------
-std::string bond_universe_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& o = sub(req.as_object(), "bond_universe");
+std::string bond_universe_json(const json::object& request) {
+  const json::object& o = sub(request, "bond_universe");
   const std::string convention = js(o, "convention");
   if (convention.empty()) throw std::invalid_argument("bond_universe: missing 'convention' (a bonds[] row id, e.g. US-TREASURY)");
   const cvd::BondConv bc = cvd::require_bond(convention);
@@ -152,9 +151,8 @@ std::string bond_universe_json(const std::string& request) {
 }
 
 // ---- govvie_fit: minimum-pricing-error curve over the universe (the RV fair-value fit) ----------------
-std::string govvie_fit_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& o = sub(req.as_object(), "govvie_fit");
+std::string govvie_fit_json(const json::object& request) {
+  const json::object& o = sub(request, "govvie_fit");
   const std::string convention = js(o, "convention");
   if (convention.empty()) throw std::invalid_argument("govvie_fit: missing 'convention' (a bonds[] row id)");
   const cvd::BondConv bc = cvd::require_bond(convention);
@@ -233,9 +231,8 @@ std::string govvie_fit_json(const std::string& request) {
 }
 
 // ---- swap_spread: the headline swap-spread derivation -> the {pin, asw} BASIS rows --------------------
-std::string swap_spread_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& o = sub(req.as_object(), "swap_spread");
+std::string swap_spread_json(const json::object& request) {
+  const json::object& o = sub(request, "swap_spread");
   const b::Date vd = b::Date::from_iso(js(o, "value_date"));
 
   const std::string convention = js(o, "convention");
@@ -294,4 +291,10 @@ std::string swap_spread_json(const std::string& request) {
   return json::serialize(resp);
 }
 
+
+// The STRING seam (tests, the C ABI, hosts holding raw text): parse once, then the object entry
+// point above -- run_json passes its already-parsed object straight through (E6.3, D11).
+std::string bond_universe_json(const std::string& request) { return bond_universe_json(json::parse(request).as_object()); }
+std::string govvie_fit_json(const std::string& request) { return govvie_fit_json(json::parse(request).as_object()); }
+std::string swap_spread_json(const std::string& request) { return swap_spread_json(json::parse(request).as_object()); }
 }  // namespace swaps::api

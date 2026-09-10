@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Credit seam declaration. The stateless "credit" run_json verb calibrates a hazard-rate (survival) curve
 // to a strip of par CDS spreads given a nominal discount curve, then returns the calibrated hazard knots,
 // the survival probability Q(t), the forward hazard h(t) and default density, and the per-instrument fitted
@@ -26,6 +27,7 @@ namespace swaps::api {
 //     "hazard_curve":[...], "default_density":[...],    // forward hazard h(t) and −dQ/dt at output times
 //     "par_spreads":[...],                              // per-instrument fitted model par spread
 //     "recovery":..., "rms_residual":..., "rank_deficiency":..., "stationarity":..., "iterations":..., "n":...}
+std::string credit_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string credit_json(const std::string& request);
 
 }  // namespace swaps::api

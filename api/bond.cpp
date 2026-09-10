@@ -46,9 +46,8 @@ json::array vecf(const std::vector<double>& v) {
 }
 }  // namespace
 
-std::string bonds_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& top = req.as_object();
+std::string bonds_json(const json::object& request) {
+  const json::object& top = request;
   const json::object& o = top.contains("bonds") && top.at("bonds").is_object() ? top.at("bonds").as_object()
                                                                                : top;
   if (!o.contains("bonds") || !o.at("bonds").is_array())
@@ -160,9 +159,8 @@ struct SampledCurve {
 // {"asset_swap": {value_date, bundle, currency?, index?, curve?, bonds:[{issue, settle, maturity, coupon,
 // freq?, clean?|dirty?}]}} -> SoA {asw_spread(decimal), clean_curve, dirty_curve, annuity, accrued, n}.
 // A bond with no clean/dirty is priced par-par (purchase at par); with clean/dirty it's the proceeds spread.
-std::string asset_swap_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& top = req.as_object();
+std::string asset_swap_json(const json::object& request) {
+  const json::object& top = request;
   const json::object& o =
       top.contains("asset_swap") && top.at("asset_swap").is_object() ? top.at("asset_swap").as_object() : top;
 
@@ -250,4 +248,9 @@ std::string asset_swap_json(const std::string& request) {
   return json::serialize(json::value(std::move(out)));
 }
 
+
+// The STRING seam (tests, the C ABI, hosts holding raw text): parse once, then the object entry
+// point above -- run_json passes its already-parsed object straight through (E6.3, D11).
+std::string bonds_json(const std::string& request) { return bonds_json(json::parse(request).as_object()); }
+std::string asset_swap_json(const std::string& request) { return asset_swap_json(json::parse(request).as_object()); }
 }  // namespace swaps::api

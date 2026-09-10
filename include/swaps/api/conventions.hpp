@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Conventions-registry seam (PRINCIPLES.md P2): the two stateless run_json verbs that let ANY API (pybind,
 // the C ABI, Excel, a web server) add or override market conventions at runtime and list what the engine
 // knows. The baked conventions.json is the DEFAULT set; entries added here overlay it for the life of the
@@ -17,7 +18,9 @@
 
 namespace swaps::api {
 
+std::string conventions_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string conventions_json(const std::string& request);
+std::string list_conventions_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string list_conventions_json(const std::string& request);
 
 }  // namespace swaps::api

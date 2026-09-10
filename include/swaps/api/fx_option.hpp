@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // FX-options seam declaration. The stateless "fx_option" (alias "fx_vol") run_json verb prices a book of
 // vanilla FX options with the Garman-Kohlhagen lognormal model (vol/fx_black.hpp) off a supplied market
 // {spot, r_dom, r_for} and a vol source — a flat vol, an interbank delta-quoted smile {ATM, RR, BF}, or
@@ -14,6 +15,7 @@ namespace swaps::api {
 //   -> {forward, expiry, options:[{strike, vol, forward, price, delta, gamma, vega, theta, rho_dom, rho_for,
 //       notional_price, implied_vol?}]}. Units are decimals (rates/vols absolute, strikes/spot in the FX
 //   quote). Greeks are per unit foreign notional; notional_price scales by the option's notional.
+std::string fx_option_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string fx_option_json(const std::string& request);
 
 }  // namespace swaps::api

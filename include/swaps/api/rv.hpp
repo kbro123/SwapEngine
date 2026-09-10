@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // RV seam — the stateless bond-RV / swap-spread verbs (api/rv.cpp): the production entry points of the
 // derive/ + market/ layers. Each takes/returns a JSON document string (the run_json convention).
 //
@@ -20,8 +21,11 @@
 
 namespace swaps::api {
 
+std::string bond_universe_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string bond_universe_json(const std::string& request);
+std::string govvie_fit_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string govvie_fit_json(const std::string& request);
+std::string swap_spread_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string swap_spread_json(const std::string& request);
 
 }  // namespace swaps::api

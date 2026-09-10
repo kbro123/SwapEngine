@@ -60,9 +60,8 @@ std::vector<int> jia(const json::object& o, const char* k) {
 }
 }  // namespace
 
-std::string calib_report_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& top = req.as_object();
+std::string calib_report_json(const json::object& request) {
+  const json::object& top = request;
   const json::object& o = top.contains("calib_report") && top.at("calib_report").is_object()
                               ? top.at("calib_report").as_object()
                               : top;
@@ -154,4 +153,8 @@ std::string calib_report_json(const std::string& request) {
   return json::serialize(json::value(std::move(out)));
 }
 
+
+// The STRING seam (tests, the C ABI, hosts holding raw text): parse once, then the object entry
+// point above -- run_json passes its already-parsed object straight through (E6.3, D11).
+std::string calib_report_json(const std::string& request) { return calib_report_json(json::parse(request).as_object()); }
 }  // namespace swaps::api

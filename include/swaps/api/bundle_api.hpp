@@ -261,7 +261,8 @@ class BundleSession {
   // A hard pin reports in_band=false, weight=1, residual≈0. JSON array, one entry per
   // instrument in residual order:
   //   [{"model","target","residual","soft","in_band","weight"[,"lower","upper","decay"]}, ...]
-  std::string quote_diagnostics_json() const;
+  boost::json::array quote_diagnostics() const;   // the document itself (E6.3: callers stopped re-parsing it)
+  std::string quote_diagnostics_json() const;     // == serialize(quote_diagnostics())
 
   // The calibration Jacobian J = dq/dx (n_residuals x n_knots): ROWS are calibration instruments, COLUMNS
   // are the fitted knot forwards, so J(i,j) = ∂(model quote of instrument i)/∂x_j. This is the SAME J that
@@ -573,5 +574,11 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json);
 // Response mirrors it: { "calibration": {...}, "x": [...], "curves": [...], "priced": [...],
 //                        "risk_operator": [[...]] }. On error: { "error": "..." }.
 std::string run_json(const std::string& request);
+// The PARSE-ONCE entry (E6.3): a host that already holds a parsed document calls this; the string overload
+// parses and forwards. Every stateless verb has the same pair (api/api_surface.py STATELESS_VERBS).
+std::string run_json(const boost::json::object& request);
+// Shared codecs (E6.3): the ONE sample->JSON and the ONE RegSpec<-JSON, used by run_json and the C ABI.
+boost::json::array sample_to_json(const std::vector<CurveSample>& samples);
+RegSpec reg_from_json(const boost::json::object& request);  // reads request["regularize"] when present
 
 }  // namespace swaps::api

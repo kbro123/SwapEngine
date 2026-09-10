@@ -73,9 +73,8 @@ struct DiscountFn {
 };
 }  // namespace
 
-std::string credit_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& top = req.as_object();
+std::string credit_json(const json::object& request) {
+  const json::object& top = request;
   const json::object& o = top.contains("credit") && top.at("credit").is_object()
                               ? top.at("credit").as_object()
                               : top;
@@ -185,4 +184,8 @@ std::string credit_json(const std::string& request) {
   return json::serialize(json::value(std::move(out)));
 }
 
+
+// The STRING seam (tests, the C ABI, hosts holding raw text): parse once, then the object entry
+// point above -- run_json passes its already-parsed object straight through (E6.3, D11).
+std::string credit_json(const std::string& request) { return credit_json(json::parse(request).as_object()); }
 }  // namespace swaps::api

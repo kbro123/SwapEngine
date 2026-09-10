@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Scenario-GRID seam (api/scenario_grid.cpp): the many-scenario twin of the `scenario` verb. Where
 // `scenario` forks the calibrated market once per shock in a flat LIST, `scenario_grid` sweeps a whole
 // MATRIX of shocks — the outer product of one or two shock AXES — and returns a P&L SURFACE for a book.
@@ -46,6 +47,7 @@
 
 namespace swaps::api {
 
+std::string scenario_grid_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string scenario_grid_json(const std::string& request);
 
 }  // namespace swaps::api

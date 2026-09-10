@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Exposure seam declaration. The "exposure" run_json verb computes an EPE/ENE/PFE counterparty-exposure
 // profile off a calibrated SOFR curve, using the MC-exposure kernel (portfolio/compiled.hpp
 // CompiledPortfolio::npv_grid — ~1.9M full-book reprices/sec) + swaps/xva/exposure.hpp aggregation. See
@@ -25,6 +26,7 @@ namespace swaps::api {
 // The state grid is a Gaussian curve-state proxy x(t,path)=x_cal + OU(sigma,kappa;t)·Z shared by every set
 // (illustrative — a calibrated LGM/HW1F is a later step). Single-curve swap-kind positions only (xccy /
 // custom-region / turn'd curves rejected — CompiledPortfolio is single self-discounting Flat+Hermite).
+std::string exposure_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string exposure_json(const std::string& request);
 
 }  // namespace swaps::api

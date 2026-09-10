@@ -509,6 +509,62 @@ TEST(BundleApi, TurnsJsonRoundTripPreservesStructureAndCalibrates) {
   EXPECT_NEAR(sess.x()[delta_index], x_true[delta_index], 1e-8) << "turn δ recovered at its target";
 }
 
+// E6.3 (2026-09-10): run_json parses the request ONCE and hands the PARSED object to every verb (the 22
+// hand-written arms each re-parsed the request string). Two things to pin.
+//
+// (a) The two seams agree -- byte-for-byte wherever no float is re-derived, and to 1e-12 on a calibration.
+//     They are NOT byte-identical on a solve, and that is a property of the TEXT, not of the dispatch:
+//     Boost.JSON's serialize->parse is not bit-exact for ~9.5 % of doubles (up to 1 ULP, 2.2e-16 relative --
+//     measured 2026-09-10 over 200k random rates), so the string seam hands the solver a market that differs
+//     from the caller's in the last bit and the LM lands a few 1e-16 away. The OBJECT entry has no round trip,
+//     so it is the exact one -- which is also why the compile+sample re-entry no longer serialises.
+// (b) Every key in the GENERATED dispatch table actually routes: an entry whose verb was renamed or dropped
+//     would otherwise fall through to the session path's "missing the required 'bundle' object".
+TEST(BundleApi, ParseOnceEntryMatchesTheStringSeamAndEveryVerbKeyRoutes) {
+  Eigen::VectorXd x_true;
+  const cal::BundleProblem p = build_bundle(x_true);
+  json::object calib;
+  calib["bundle"] = api::bundle_to_json(p);
+  calib["sample_times"] = json::array{1.0, 5.0, 10.0};
+
+  // (a1) no float re-derived => the two seams are byte-identical.
+  const json::object exact[] = {
+      json::object{{"list_conventions", true}},
+      json::object{{"conventions", json::object{{"product", "USD-SOFR-OIS"}}}},
+      json::object{{"nonsense_verb", true}},  // the fall-through error, verbatim
+  };
+  for (const json::object& r : exact)
+    EXPECT_EQ(api::run_json(json::serialize(json::value(r))), api::run_json(r))
+        << json::serialize(json::value(r)).substr(0, 120);
+
+  // (a2) a calibration: same answer to 1e-12, the difference bounded by the text round trip (see above).
+  const json::object via_str = json::parse(api::run_json(json::serialize(json::value(calib)))).as_object();
+  const json::object via_obj = json::parse(api::run_json(calib)).as_object();
+  ASSERT_FALSE(via_obj.contains("error")) << json::serialize(via_obj).substr(0, 200);
+  const json::array& xs = via_str.at("x").as_array();
+  const json::array& xo = via_obj.at("x").as_array();
+  ASSERT_EQ(xs.size(), xo.size());
+  double worst = 0.0;
+  for (std::size_t i = 0; i < xs.size(); ++i)
+    worst = std::max(worst, std::abs(xs[i].to_number<double>() - xo[i].to_number<double>()));
+  std::cout << "  [run_json] string seam vs parsed-object seam: max |dx| = " << worst << "\n";
+  EXPECT_LT(worst, 1e-12);
+  EXPECT_EQ(via_str.at("curves").as_array().size(), via_obj.at("curves").as_array().size());
+
+  // (b) every dispatch key reaches ITS verb (each answers with its own document or its own error).
+  const char* keys[] = {"generate_risk", "swaption",         "sabr_calibrate", "bonds",         "asset_swap",
+                        "bond_future",   "inflation",        "credit",         "fx_option",     "fx_vol",
+                        "conventions",   "list_conventions", "ndf",            "calib_report",  "bond_universe",
+                        "govvie_fit",    "swap_spread",      "exposure",       "scenario",      "scenario_grid",
+                        "var",           "pnl",              "vega"};
+  const std::string missing_bundle = api::run_json(json::object{{"nonsense_verb", true}});
+  for (const char* k : keys) {
+    const std::string resp = api::run_json(json::object{{k, json::object{}}});
+    EXPECT_NE(resp, missing_bundle) << "request key '" << k << "' did not reach a verb";
+    EXPECT_NO_THROW((void)json::parse(resp)) << k;  // a verb answers with a document, never a raw throw
+  }
+}
+
 TEST(BundleApi, RunJsonEndToEnd) {
   Eigen::VectorXd x_true;
   const cal::BundleProblem p = build_bundle(x_true);

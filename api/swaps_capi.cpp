@@ -92,7 +92,7 @@ extern "C" const char* swaps_session_calibrate(void* session) {
     o["status"] = r.status;
     o["rank_deficiency"] = r.rank_deficiency;
     o["iterations"] = r.iterations;
-    o["quote_diagnostics"] = json::parse(s->quote_diagnostics_json());  // per-quote in-band fit
+    o["quote_diagnostics"] = s->quote_diagnostics();  // per-quote in-band fit (the document, E6.3)
     return dup_str(json::serialize(o));
   } catch (const std::exception& e) {
     return err_json(e.what());
@@ -121,17 +121,7 @@ extern "C" const char* swaps_session_sample(void* session, const char* times_jso
   try {
     BundleSession* s = &static_cast<CapiSession*>(session)->sess;
     const std::vector<double> times = to_vec(json::parse(times_json));
-    json::array curves;
-    for (const auto& cs : s->sample(times)) {
-      json::object c;
-      c["currency"] = cs.currency;
-      c["t"] = darr(cs.t);
-      c["discount"] = darr(cs.discount);
-      c["zero"] = darr(cs.zero);
-      c["forward"] = darr(cs.forward);
-      curves.push_back(c);
-    }
-    return dup_str(json::serialize(curves));
+    return dup_str(json::serialize(swaps::api::sample_to_json(s->sample(times))));  // the ONE sample codec (E6.3)
   } catch (const std::exception& e) {
     return err_json(e.what());
   }

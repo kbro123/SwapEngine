@@ -829,7 +829,7 @@ double BundleSession::residual(const cal::Instrument& ins) const {
   return cal::instrument_residual<double>(ins, curve_of);
 }
 
-std::string BundleSession::quote_diagnostics_json() const {
+json::array BundleSession::quote_diagnostics() const {
   const auto C = cal::build_bundle_curves<double>(
       prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });
   const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
@@ -854,8 +854,9 @@ std::string BundleSession::quote_diagnostics_json() const {
     }
     out.push_back(d);
   }
-  return json::serialize(out);
+  return out;
 }
+std::string BundleSession::quote_diagnostics_json() const { return json::serialize(quote_diagnostics()); }
 
 Eigen::MatrixXd BundleSession::jacobian(const RegSpec& reg) const {
   (void)reg;  // J = dq/dx is independent of any regulariser (reg only enters M through RᵀR); see header.
@@ -1151,12 +1152,45 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
 }
 
 // =================================================================================================
+// ---- shared codecs (E6.3/D12): ONE sample->JSON and ONE RegSpec<-JSON, used by run_json AND the C ABI ----
+json::array sample_to_json(const std::vector<CurveSample>& samples) {
+  json::array carr;
+  for (const auto& s : samples) {
+    json::object co;
+    co["currency"] = s.currency;
+    co["t"] = da(s.t);
+    co["discount"] = da(s.discount);
+    co["zero"] = da(s.zero);
+    co["forward"] = da(s.forward);
+    carr.push_back(std::move(co));
+  }
+  return carr;
+}
+
+RegSpec reg_from_json(const json::object& o) {
+  RegSpec reg;
+  if (o.contains("regularize") && o.at("regularize").is_object()) {
+    const auto& r = o.at("regularize").as_object();
+    reg.lambda = get_d(r, "lambda", 0.0);
+    reg.curves = get_ia(r, "curves");
+    reg.tension = get_b(r, "tension", false);  // continuous tension energy vs discrete second-difference
+    reg.sigma = get_d(r, "sigma", 0.0);        // tension parameter (tension=true); 0 => pure curvature
+  }
+  return reg;
+}
+
 // One-shot JSON dispatcher
 // =================================================================================================
 std::string run_json(const std::string& request) {
   try {
-    const json::value req = json::parse(request);
-    const auto& o = req.as_object();
+    return run_json(json::parse(request).as_object());  // parse ONCE (E6.3/D11): every verb takes the object
+  } catch (const std::exception& e) {
+    return err(e.what());
+  }
+}
+
+std::string run_json(const json::object& o) {
+  try {
 
     // Stateless COMPILE verb: a composer spec (curves + generic instrument rows + interpolation regions)
     // -> the resolved bundle + streaming config, the C++ analog of server/compile.py's compile_spec. It
@@ -1192,63 +1226,46 @@ std::string run_json(const std::string& request) {
           req2["regularize"] = std::move(r);
         }
       }
-      return run_json(json::serialize(req2));
+      return run_json(req2);  // the compile+sample re-entry: no re-serialise, no re-parse (E6.3)
     }
 
     // Stateless GENERATE_RISK verb: one book + N bundles -> N internally-consistent risk ladders, all off
     // bundles[0]'s DFs (later bundles re-leveled onto the anchor, under-determined ones rank-completed by
     // self-quoted pillars). Like `compile`, it produces rather than consumes a bundle, so dispatch it here.
-    if (o.contains("generate_risk")) return generate_risk_json(request);
+    // Every STATELESS verb (it builds its own session, or needs none). The table is GENERATED from
+    // api/api_surface.py STATELESS_VERBS by tools/gen_dispatch.py: ONE list names them, ONE loop
+    // dispatches them, and the Excel/pybind generators read the same list (E6.3; 22 hand-written
+    // if-arms before, each re-parsing the request string).
+#include "run_json_stateless.gen.inc"
 
     // Stateless SWAPTION verb: price European swaptions off a calibrated curve (Bachelier / SABR).
-    if (o.contains("swaption")) return swaption_json(request);
 
     // Stateless SABR strip calibration (no bundle): fit (alpha,rho,nu) to a market vol strip.
-    if (o.contains("sabr_calibrate")) return sabr_calibrate_json(request);
 
     // Stateless BONDS verb (no bundle): street/yield-space bond math (price<->yield, accrued, duration,
     // convexity) for a list of fixed-rate bonds.
-    if (o.contains("bonds")) return bonds_json(request);
 
     // Stateless ASSET_SWAP verb: par asset-swap spread(s) for bonds off a calibrated bundle (curve-space).
-    if (o.contains("asset_swap")) return asset_swap_json(request);
 
     // Stateless BOND_FUTURE verb: CTD selection, conversion factors, gross/net basis, implied repo.
-    if (o.contains("bond_future")) return bond_future_json(request);
 
     // Stateless INFLATION verb: ZCIS/YoY breakeven-inflation curve calibration + index/breakeven output.
-    if (o.contains("inflation")) return inflation_json(request);
 
     // Stateless CREDIT verb: hazard-rate survival curve calibrated to a par CDS-spread strip.
-    if (o.contains("credit")) return credit_json(request);
 
     // Stateless FX_OPTION / FX_VOL verb: Garman-Kohlhagen vanilla FX options + delta-quoted smile.
-    if (o.contains("fx_option") || o.contains("fx_vol")) return fx_option_json(request);
 
     // Conventions registry (P2): add/override market conventions at runtime; list what the engine knows.
-    if (o.contains("conventions")) return conventions_json(request);
-    if (o.contains("list_conventions")) return list_conventions_json(request);
 
     // Stateless NDF verb: non-deliverable FX forwards / NDS (covered-interest-parity, linear, no vol).
-    if (o.contains("ndf")) return ndf_json(request);
 
     // Stateless CALIB_REPORT verb: calibration diagnostics (Jacobian condition number + identifiability).
-    if (o.contains("calib_report")) return calib_report_json(request);
 
     // Stateless RV verbs (api/rv.cpp): batched bond-universe analytics; the minimum-pricing-error govvie
     // fit (spline / Nelson-Siegel / Svensson) with the per-bond RV ladder; and the headline swap-spread
     // derivation returning the {pin, asw} asset-swap BASIS rows as instrument JSON.
-    if (o.contains("bond_universe")) return bond_universe_json(request);
-    if (o.contains("govvie_fit")) return govvie_fit_json(request);
-    if (o.contains("swap_spread")) return swap_spread_json(request);
 
     // Stateless EXPOSURE verb: EPE/ENE/PFE counterparty-exposure profile for a swap book off a calibrated curve.
-    if (o.contains("exposure")) return exposure_json(request);
-    if (o.contains("scenario")) return scenario_json(request);  // stress/what-if over market::Scenario
-    if (o.contains("scenario_grid")) return scenario_grid_json(request);  // P&L surface over a shock matrix
-    if (o.contains("var")) return var_json(request);            // full-reval VaR / Expected-Shortfall
-    if (o.contains("pnl")) return pnl_json(request);            // carry/roll/market P&L decomposition
-    if (o.contains("vega")) return vega_json(request);          // swaption-book vol-parameter ladder
 
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
@@ -1266,14 +1283,7 @@ std::string run_json(const std::string& request) {
       x0 = flat_x0(P);
     }
 
-    RegSpec reg;
-    if (o.contains("regularize")) {
-      const auto& r = o.at("regularize").as_object();
-      reg.lambda = get_d(r, "lambda", 0.0);
-      reg.curves = get_ia(r, "curves");
-      reg.tension = get_b(r, "tension", false);  // continuous tension energy vs discrete second-difference
-      reg.sigma = get_d(r, "sigma", 0.0);        // tension parameter (tension=true); 0 => pure curvature
-    }
+    const RegSpec reg = reg_from_json(o);  // the ONE RegSpec-from-JSON (E6.3)
 
     const cal::CalibrationResult& res = sess.calibrate(x0, reg);
 
@@ -1293,22 +1303,9 @@ std::string run_json(const std::string& request) {
       out["calibration"] = c;
     }
     out["x"] = da(sess.x());
-    out["quote_diagnostics"] = json::parse(sess.quote_diagnostics_json());  // per-quote in-band fit (soft never silent)
+    out["quote_diagnostics"] = sess.quote_diagnostics();  // per-quote in-band fit (soft never silent)
 
-    if (o.contains("sample_times")) {
-      const auto times = get_da(o, "sample_times");
-      json::array carr;
-      for (const auto& s : sess.sample(times)) {
-        json::object co;
-        co["currency"] = s.currency;
-        co["t"] = da(s.t);
-        co["discount"] = da(s.discount);
-        co["zero"] = da(s.zero);
-        co["forward"] = da(s.forward);
-        carr.push_back(co);
-      }
-      out["curves"] = carr;
-    }
+    if (o.contains("sample_times")) out["curves"] = sample_to_json(sess.sample(get_da(o, "sample_times")));
 
     if (o.contains("price")) {
       json::array parr;

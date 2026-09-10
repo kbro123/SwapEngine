@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Inflation seam declaration. The stateless "inflation" run_json verb calibrates a breakeven-inflation
 // curve to a strip of Zero-Coupon (ZCIS) and Year-on-Year (YoY) inflation-swap quotes, then returns the
 // calibrated curve (breakeven forward knots), the projected price-index level I(t), the annual zero-coupon
@@ -25,6 +26,7 @@ namespace swaps::api {
 //     "forward_breakeven":[...], "zc_breakeven":[...], // fwd breakeven f(t) and annual ZC breakeven at t
 //     "breakevens":[...],                              // per-instrument fitted model breakeven/par rate
 //     "stationarity":..., "rms_residual":..., "rank_deficiency":..., "iterations":..., "n":...}
+std::string inflation_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string inflation_json(const std::string& request);
 
 }  // namespace swaps::api

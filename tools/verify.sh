@@ -110,14 +110,17 @@ fi
 echo ">> api-dispatch sync guard"
 pass_disp="PASS"
 _disp_tmp="$(mktemp)"
+_disp_tmp2="$(mktemp)"
 if python3 "${ROOT}/tools/gen_dispatch.py" --stdout > "${_disp_tmp}" 2>/dev/null \
-   && diff -q "${_disp_tmp}" "${ROOT}/api/run_json_dispatch.gen.inc" >/dev/null; then
+   && diff -q "${_disp_tmp}" "${ROOT}/api/run_json_dispatch.gen.inc" >/dev/null \
+   && python3 "${ROOT}/tools/gen_dispatch.py" --stdout-stateless > "${_disp_tmp2}" 2>/dev/null \
+   && diff -q "${_disp_tmp2}" "${ROOT}/api/run_json_stateless.gen.inc" >/dev/null; then
   pass_disp="PASS"
 else
-  echo "   api/run_json_dispatch.gen.inc is STALE — run: python3 tools/gen_dispatch.py"
+  echo "   api/run_json_{dispatch,stateless}.gen.inc is STALE — run: python3 tools/gen_dispatch.py"
   pass_disp="FAIL"; rc=1
 fi
-rm -f "${_disp_tmp}"
+rm -f "${_disp_tmp}" "${_disp_tmp2}"
 
 # ---- Correctness gate -------------------------------------------------------
 if [ "${BENCH_ONLY}" -eq 0 ]; then

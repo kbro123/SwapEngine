@@ -35,9 +35,8 @@ double dir_of(const json::object& o) {
 }
 }  // namespace
 
-std::string ndf_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& top = req.as_object();
+std::string ndf_json(const json::object& request) {
+  const json::object& top = request;
   const json::object& o = top.contains("ndf") ? top.at("ndf").as_object() : top;
 
   const double spot = jd(o, "spot", 0.0);
@@ -100,4 +99,8 @@ std::string ndf_json(const std::string& request) {
   return json::serialize(json::value(std::move(out)));
 }
 
+
+// The STRING seam (tests, the C ABI, hosts holding raw text): parse once, then the object entry
+// point above -- run_json passes its already-parsed object straight through (E6.3, D11).
+std::string ndf_json(const std::string& request) { return ndf_json(json::parse(request).as_object()); }
 }  // namespace swaps::api

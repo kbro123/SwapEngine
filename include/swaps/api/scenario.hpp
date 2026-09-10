@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Scenario / stress seam (api/scenario.cpp): the production wiring of market::Scenario — the Tier-2
 // analytics "what-if" primitive. It takes ONE bundle, calibrates it ONCE to an anchor state, then forks
 // that fitted state per scenario ("fork over the market") and reports the shocked curve samples and,
@@ -31,6 +32,7 @@
 
 namespace swaps::api {
 
+std::string scenario_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string scenario_json(const std::string& request);
 
 }  // namespace swaps::api

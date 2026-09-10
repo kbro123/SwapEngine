@@ -192,9 +192,8 @@ json::object listing(const cvd::Registry::Listing& L) {
 
 }  // namespace
 
-std::string conventions_json(const std::string& request) {
-  const json::value req = json::parse(request);
-  const json::object& top = req.as_object();
+std::string conventions_json(const json::object& request) {
+  const json::object& top = request;
   const json::object& o = top.contains("conventions") ? top.at("conventions").as_object() : top;
   auto& R = cvd::Registry::instance();
   json::object added;
@@ -232,7 +231,7 @@ std::string conventions_json(const std::string& request) {
   return json::serialize(out);
 }
 
-std::string list_conventions_json(const std::string& /*request*/) {
+std::string list_conventions_json(const json::object& /*request*/) {
   const auto& R = cvd::Registry::instance();
   json::object out;
   out["conventions"] = json::object{
@@ -245,4 +244,9 @@ std::string list_conventions_json(const std::string& /*request*/) {
   return json::serialize(out);
 }
 
+
+// The STRING seam (tests, the C ABI, hosts holding raw text): parse once, then the object entry
+// point above -- run_json passes its already-parsed object straight through (E6.3, D11).
+std::string conventions_json(const std::string& request) { return conventions_json(json::parse(request).as_object()); }
+std::string list_conventions_json(const std::string& request) { return list_conventions_json(json::parse(request).as_object()); }
 }  // namespace swaps::api

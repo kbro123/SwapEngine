@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Bond-future seam declaration. The stateless "bond_future" run_json verb does the deliverable-basket /
 // cheapest-to-deliver (CTD) analytics for a bond future (curve-free, no bundle): the exchange conversion
 // factor, gross & net basis, implied repo rate and invoice price for every bond in a delivery basket, plus
@@ -27,6 +28,7 @@ namespace swaps::api {
 // -> flat SoA {conversion_factor, gross_basis, net_basis, implied_repo, invoice_price, n,
 //             ctd_index, ctd_id}. Basis fields are in price points (per unit face); implied_repo/net_basis
 //             use ACT/360 to the delivery date. The CTD is the max-implied-repo deliverable.
+std::string bond_future_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string bond_future_json(const std::string& request);
 
 }  // namespace swaps::api

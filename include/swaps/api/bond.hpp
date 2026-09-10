@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Bond seam declaration. The stateless "bonds" run_json verb does street/yield-space bond math (curve-free,
 // no bundle): clean/dirty/accrued, yield-to-maturity, and modified/Macaulay duration + convexity for a list
 // of fixed-rate bonds. See api/bond.cpp for the schema. Curve-space z-spread/PV off a calibrated curve is a
@@ -30,12 +31,14 @@ namespace swaps::api {
 // Units are the model's decimals: coupon/yield are absolute rates (0.045 = 4.5%), prices are per unit
 // notional (1.0 = par). Seasoned bonds must have regular coupon periods (an odd LAST stub throws; an odd
 // first period is the when-issued path above).
+std::string bonds_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string bonds_json(const std::string& request);
 
 // Stateless asset-swap verb (curve-space): par asset-swap spread(s) for bonds off a CALIBRATED bundle.
 // request = {"asset_swap": {value_date, bundle, currency?, index?, curve?, bonds:[{issue, settle, maturity,
 // coupon, freq?, clean?|dirty?}]}} -> SoA {asw_spread(decimal), clean_curve, dirty_curve, annuity, accrued,
 // n}. Par-par when no price is given; proceeds spread when clean/dirty is supplied.
+std::string asset_swap_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string asset_swap_json(const std::string& request);
 
 }  // namespace swaps::api

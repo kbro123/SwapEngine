@@ -1,4 +1,5 @@
 #pragma once
+#include <boost/json.hpp>
 // Historical / full-revaluation VaR seam (api/var.cpp): the P&L distribution of a book under a SET of
 // market-move scenarios, plus its Value-at-Risk and Expected-Shortfall quantiles. This is the "full reval,
 // not a delta-approximation, intraday" capability — every scenario is a real fork of the calibrated market
@@ -39,6 +40,7 @@
 
 namespace swaps::api {
 
+std::string var_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string var_json(const std::string& request);
 
 }  // namespace swaps::api
