@@ -315,11 +315,12 @@ Scalar float_leg_pv(const std::vector<FloatCoupon>& leg, const FCurve& fc, const
 // The bracket is the per-period (interest + notional-exchange) value; for a funding-index-FLAT leg
 // (dc == fc, spread == 0) each bracket is exactly 0, so the MtM funding leg is PAR — which is why an MtM
 // xccy basis equals the constant-notional basis in DETERMINISTIC curves (their difference is an FX-vol
-// convexity term, out of scope for a curve engine). The genuinely-new part is that N_i is CURVE-DEPENDENT
-// (a DF ratio), so the coupon PV is a product of TWO curves' discount factors — NOT a single exp(-Wx).
-// It therefore lives ONLY in this templated kernel (AAD-safe) and never on the W-cache (§2 linear-map
-// guard). AAD flows through: N_i, float_coupon_pv and the DF differences all carry derivatives; the
-// accumulator seeds from the first (curve-dependent) contribution.
+// convexity term, out of scope for a curve engine). N_i is CURVE-DEPENDENT (a DF ratio), so the coupon PV
+// is a product of registered discount factors -- which the W-cache batch prices EXACTLY too
+// (BundleFloatBatch::add_mtm, 2026-09-09; the compiled book since 2026-09-10). This templated form is the
+// reference the compiled path is parity-tested against, and the ONLY path for a SEASONED coupon (fixed FX
+// reset / settled exchange, mtm_coupon_is_seasoned). AAD flows through: N_i, float_coupon_pv and the DF
+// differences all carry derivatives; the accumulator seeds from the first (curve-dependent) contribution.
 template <class Scalar, class FCurve, class DCurve, class NumCurve, class DenCurve>
 Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, const FCurve& fc,
                        const DCurve& dc, const NumCurve& numc, const DenCurve& denc) {

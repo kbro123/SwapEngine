@@ -567,9 +567,11 @@ Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
 // =================================================================================================
 // BundleSession
 // =================================================================================================
-// A W-cache-incompatible LEAF anywhere in an instrument (including nested inside a Portfolio): FX/MtM,
-// whose DF-ratio / curve-dependent notional is not a single exp(-Wx). A Portfolio of otherwise-cacheable
-// components (par swaps, futures) IS W-cacheable -- its row is a weighted sum of cacheable transforms.
+// An FX/MtM LEAF anywhere in an instrument (including nested inside a Portfolio). Since 2026-09-09 a
+// standalone FX forward and a par MtM leg ARE W-cacheable (their values are products of registered DFs);
+// what still rides the hybrid engine's AAD block is an FX/MtM leaf INSIDE a Portfolio (the compiled
+// transforms do not compose in a Σ), an incomplete MtM leg (no reset roles) and a SEASONED MtM coupon
+// (calibration::instrument_is_noncacheable is the authority). `has_fx_` is informational.
 static bool has_noncacheable_leaf(const cal::Instrument& ins) {
   if (ins.quote == cal::QuoteKind::FxForward || ins.quote == cal::QuoteKind::XccyMtmBasis) return true;
   if (ins.quote == cal::QuoteKind::Portfolio)

@@ -140,7 +140,7 @@ pf::MultiCurveBook mixed_book(int* n_fallback = nullptr) {
     p.float_coupons[0].obs.realized = 0.004;
     book.positions.push_back(p);
   }
-  // ---- fallback positions ----
+  // ---- Xccy (COMPILED since 2026-09-10: two rows, parity-checked below) ----
   // Xccy: receive a foreign resetting funding leg (curve 2, 50bp basis), pay a domestic leg (curve 0).
   {
     pf::MultiCurveBook::Position xp;
@@ -174,7 +174,7 @@ pf::MultiCurveBook mixed_book(int* n_fallback = nullptr) {
     p.float_coupons[0].obs.fixing_step = 1.0 / 252.0;
     book.positions.push_back(p);
   }
-  if (n_fallback) *n_fallback = 2;
+  if (n_fallback) *n_fallback = 1;  // the compounded position only (Xccy compiles since 2026-09-10)
   return book;
 }
 
@@ -200,7 +200,7 @@ void expect_parity(const pf::CompiledMultiCurveBook& cmb, const std::vector<px::
 
 }  // namespace
 
-// The hybrid split lands exactly the Xccy + compounded + moment positions on the fallback.
+// The hybrid split lands exactly the compounded position on the fallback (Xccy and moment positions compile).
 TEST(CompiledMultiCurveBook, SplitsCompiledAndFallbackPositions) {
   const auto specs = make_curves();
   int n_fb = 0;
@@ -255,9 +255,9 @@ TEST(CompiledMultiCurveBook, RepriceTracksXNotStaleDFs) {
   EXPECT_EQ(v0a, v0b) << "returning to the same x must reproduce the same NPV bitwise";
 }
 
-// The xccy fallback genuinely rides along: bumping ONLY the foreign curve moves the compiled book's
+// The compiled xccy rows track the foreign curve: bumping ONLY the foreign curve moves the compiled book's
 // total by exactly what the templated book moves (the xccy position + foreign-curve swaps).
-TEST(CompiledMultiCurveBook, XccyFallbackTracksTheForeignCurve) {
+TEST(CompiledMultiCurveBook, XccyRowsTrackTheForeignCurve) {
   const auto specs = make_curves();
   const pf::MultiCurveBook book = mixed_book();
   const pf::CompiledMultiCurveBook cmb(specs, book);
@@ -286,9 +286,23 @@ TEST(CompiledMultiCurveBook, DegenerateSplitsPriceCorrectly) {
   expect_parity(all_compiled, specs, swaps_only, x0, "all-compiled book");
 
   pf::MultiCurveBook xccy_only;
-  xccy_only.positions.push_back(mixed_book().positions[18]);  // the Xccy position
+  xccy_only.positions.push_back(mixed_book().positions[18]);  // the Xccy position: two compiled rows, no fallback
   ASSERT_EQ(xccy_only.positions[0].kind, pf::MultiCurveBook::Kind::Xccy);
-  const pf::CompiledMultiCurveBook all_fallback(specs, xccy_only);
+  const pf::CompiledMultiCurveBook xccy_compiled(specs, xccy_only);
+  EXPECT_EQ(xccy_compiled.n_fallback(), 0);
+  EXPECT_EQ(xccy_compiled.n_compiled(), 1);
+  EXPECT_EQ(xccy_compiled.n_rows(), 2);
+  expect_parity(xccy_compiled, specs, xccy_only, x0, "xccy-only compiled book");
+  pf::MultiCurveBook compounded_only;
+  compounded_only.positions.push_back(mixed_book().positions[19]);  // the compounded position: all fallback
+  const pf::CompiledMultiCurveBook all_fallback(specs, compounded_only);
   EXPECT_EQ(all_fallback.n_compiled(), 0);
-  expect_parity(all_fallback, specs, xccy_only, x0, "all-fallback book");
+  expect_parity(all_fallback, specs, compounded_only, x0, "all-fallback book");
+  // A SEASONED xccy position (fixed FX reset on its first foreign coupon) stays on the templated fallback.
+  pf::MultiCurveBook seasoned;
+  seasoned.positions.push_back(mixed_book().positions[18]);
+  seasoned.positions[0].mtm_coupons.front().reset_fx = 1.05;
+  const pf::CompiledMultiCurveBook seasoned_book(specs, seasoned);
+  EXPECT_EQ(seasoned_book.n_fallback(), 1);
+  expect_parity(seasoned_book, specs, seasoned, x0, "seasoned xccy on the fallback");
 }

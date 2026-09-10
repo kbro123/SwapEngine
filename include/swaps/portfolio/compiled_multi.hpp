@@ -15,7 +15,10 @@
 //
 // NOT every position is W-cacheable, and -- mirroring HybridBundleResidual's split -- the ones that are
 // not ride the EXISTING templated path instead of degrading the whole book:
-//   * Kind::Xccy: the MtM leg's FX-reset notional is a DF RATIO of two curves, so its coupon PV is a
+//   * Kind::Xccy: COMPILED since 2026-09-10 (two rows: the resetting foreign leg through the batch's MtM
+//     coupons, the domestic leg + its notional exchanges as a float row and a ±1 annuity row) -- see
+//     xccy_is_compilable for the exceptions (seasoned / principal-flow / compounded / moment positions).
+//   * (Historic note, kept for the file's own archaeology:) the MtM leg's FX-reset notional is a DF RATIO of two curves, so its coupon PV is a
 //     product of exponentials, not a single exp(-Wx) (the §2 linear-map guard). Priced through
 //     MultiCurveBook::position_value over reusable bundle curve handles.
 //   * a Swap whose float leg carries a COMPOUNDED (RFR lookback/lockout) observation -- the batch's
@@ -74,6 +77,32 @@ class CompiledMultiCurveBook {
         // An EMPTY fixed leg registers an annuity row of 0, so notional·(pv − rate·0) reproduces the
         // templated float-only branch exactly (x − rate·0 == x bitwise).
         fixed_.add(cs_, p.fixed_curve, p.fixed_coupons);
+        ++n_compiled_positions_;
+      } else if (!nonlinear && p.kind == MultiCurveBook::Kind::Xccy && xccy_is_compilable(p)) {
+        // A cross-currency position compiles as TWO rows (E3 register G3, 2026-09-10; the MtM leg is a
+        // product of registered DFs since 2026-09-09, BundleFloatBatch::add_mtm):
+        //   row A: +notional·fx_spot · Σ_i R_i·(A_i + DF[e_i] − DF[s_i])   (the batch's R omits fx_spot)
+        //   row B: −notional · (float pv of the domestic leg + DF(e_N) − DF(s_0))
+        // Row B's exchanges ride an "annuity" of two fixed coupons (+1 at the last accrual end, −1 at the
+        // first accrual start, the latter only if not yet settled) with rate −1, so
+        //   notional_B·pv_B − nf_B·ann_B = −N·pv_dom − N·(DF(e_N) − DF(s_0)),  nf_B = notional_B·rate_B = +N.
+        // Exactly MultiCurveBook::position_value's Kind::Xccy formula, term for term.
+        notional.push_back(p.notional * p.fx_spot);
+        rate.push_back(0.0);
+        float_.add_mtm(cs_, p.mtm_fwd_curve, p.mtm_disc_curve, p.mtm_reset_num, p.mtm_reset_den, p.mtm_coupons);
+        fixed_.add(cs_, p.disc_curve, {});  // an empty annuity row keeps the float/fixed rows aligned
+        notional.push_back(-p.notional);
+        rate.push_back(-1.0);
+        float_.add(cs_, p.fwd_curve, p.disc_curve, p.float_coupons);
+        std::vector<pricing::FixedCoupon> exch;
+        const auto& f0 = p.float_coupons.front();
+        const auto& fN = p.float_coupons.back();
+        const double s0 = f0.accrual_set ? f0.accrual_start : f0.obs.sub_start.front();
+        const double eN = fN.accrual_set ? fN.accrual_end : fN.obs.sub_end.back();
+        exch.push_back({eN, 1.0, 1.0});
+        if (s0 >= 0.0) exch.push_back({s0, -1.0, 1.0});  // the initial exchange, unless already settled
+        fixed_.add(cs_, p.disc_curve, exch);
+        ++n_compiled_positions_;
       } else {
         fallback_.positions.push_back(p);
       }
@@ -96,7 +125,8 @@ class CompiledMultiCurveBook {
   }
 
   int n_positions() const { return n_compiled() + n_fallback(); }
-  int n_compiled() const { return static_cast<int>(notional_.size()); }
+  int n_compiled() const { return n_compiled_positions_; }  // positions (an Xccy position is two rows)
+  int n_rows() const { return static_cast<int>(notional_.size()); }
   int n_fallback() const { return static_cast<int>(fallback_.positions.size()); }
   int n_times() const { return cs_.n_times(); }
   int n_knots() const { return n_knots_; }
@@ -105,7 +135,7 @@ class CompiledMultiCurveBook {
   // both halves). Matches MultiCurveBook::value<double> over build_bundle_curves(specs, x) to rounding.
   double npv(const Eigen::VectorXd& x) const {
     double total = 0.0;
-    if (n_compiled() > 0) {
+    if (n_rows() > 0) {
       cs_.df_into(x, df_);  // DF into scratch; pv/annuity return refs into the batches' own scratch
       inv_ = df_.cwiseInverse();  // shared reciprocals (compiled_book.hpp inverse_of)
       if (float_.has_moment()) float_.set_state(x);
@@ -139,7 +169,7 @@ class CompiledMultiCurveBook {
   // aliasing (e_k == s_{k+1}, pay == e_k) for free -- each contribution adds its own term.
   double pv01(const Eigen::VectorXd& x) const {
     double g = 0.0;  // Σⱼ ∂NPV/∂xⱼ = the directional derivative along the all-ones knot direction
-    if (n_compiled() > 0) {
+    if (n_rows() > 0) {
       cs_.df_into(x, df_);
       inv_ = df_.cwiseInverse();
       if (float_.has_moment()) float_.set_state(x);
@@ -148,16 +178,32 @@ class CompiledMultiCurveBook {
       const double* __restrict DF = df_.data();
       const double* __restrict IV = inv_.data();
       const double* __restrict tt = t_.data();
+      // MtM coupons (a compiled Xccy position's foreign leg): value = R·(A + DF[dE] − DF[dS]) with
+      // R = DF[rN]·INV[rD]. Their A-partials below are scaled by R and the reset / exchange partials added:
+      //   d/dε = R·(dA/dε + t[dE] − t[dS]) + value·(t[rN]·INV[rN] − t[rD]·INV[rD]).   (R = 1 elsewhere)
+      const bool mtm = float_.has_mtm();
+      if (mtm) {
+        rmul_.resize(float_.n_coupons());
+        for (int c = 0; c < float_.n_coupons(); ++c)
+          rmul_[c] = float_.rN[c] >= 0 ? DF[float_.rN[c]] * IV[float_.rD[c]] : 1.0;
+      }
       // Float coupons: the pay-column partial (num+konst)·k, weighted by the owning position's notional.
       for (int c = 0; c < float_.n_coupons(); ++c) {
         const int i = float_.inst[c];
-        g += notional_[i] * (num[c] + float_.konst[c]) * float_.k[c] * tt[float_.pay[c]];
+        const double R = mtm ? rmul_[c] : 1.0;
+        g += notional_[i] * R * (num[c] + float_.konst[c]) * float_.k[c] * tt[float_.pay[c]];
+        if (mtm && float_.rN[c] >= 0) {
+          const int rN = float_.rN[c], rD = float_.rD[c], dS = float_.dS[c], dE = float_.dE[c];
+          const double A = DF[float_.pay[c]] * (num[c] + float_.konst[c]) * float_.k[c];
+          const double value = R * (A + DF[dE] - DF[dS]);
+          g += notional_[i] * (R * (tt[dE] - tt[dS]) + value * (tt[rN] * IV[rN] - tt[rD] * IV[rD]));
+        }
       }
       // Float sub-periods: the forecast-curve start/end partials.
       for (int j = 0; j < static_cast<int>(float_.subS.size()); ++j) {
         const int c = float_.sub_cpn[j], i = float_.inst[c];
         const int s = float_.subS[j], e = float_.subE[j];
-        const double f = notional_[i] * DF[float_.pay[c]] * float_.k[c] * float_.sub_w[j];
+        const double f = notional_[i] * (mtm ? rmul_[c] : 1.0) * DF[float_.pay[c]] * float_.k[c] * float_.sub_w[j];
         g += f * (tt[s] * IV[e] - tt[e] * DF[s] * IV[e] * IV[e]);
       }
       if (float_.has_moment()) {
@@ -193,6 +239,27 @@ class CompiledMultiCurveBook {
       if (c.obs.compounded) return false;  // (moment-path coupons compile since 2026-09-09: BundleFloatBatch::set_state)
     return true;
   }
+  // True iff an Xccy position fits the two-row compiled form above: explicit reset roles, no principal-flow
+  // list (the exchanges are derived from the accrual period), no compounded or moment-path coupon on either
+  // leg (the pv01 loop's MtM scaling covers the arithmetic batch only), no SEASONED MtM coupon (a fixed FX
+  // reset or a past reset prices on the templated kernel, cashflows.hpp mtm_coupon_is_seasoned), and a
+  // domestic leg with dates to place the exchanges on.
+  static bool xccy_is_compilable(const MultiCurveBook::Position& p) {
+    if (!p.principal_flows.empty() || !p.fixed_rates.empty()) return false;
+    if (p.mtm_reset_num < 0 || p.mtm_reset_den < 0 || p.mtm_coupons.empty() || p.float_coupons.empty()) return false;
+    for (const auto& c : p.mtm_coupons) {
+      if (c.obs.compounded || c.obs.fixing_step > 0.0) return false;
+      if (pricing::mtm_coupon_is_seasoned(c)) return false;
+      if (!c.accrual_set && (c.obs.sub_start.empty() || c.obs.sub_end.empty())) return false;
+    }
+    for (const auto& c : p.float_coupons)
+      if (c.obs.compounded || c.obs.fixing_step > 0.0) return false;
+    const auto& f0 = p.float_coupons.front();
+    const auto& fN = p.float_coupons.back();
+    if (!f0.accrual_set && f0.obs.sub_start.empty()) return false;
+    if (!fN.accrual_set && fN.obs.sub_end.empty()) return false;
+    return true;
+  }
 
  private:
   // The fallback minority's contribution to Σⱼ ∂NPV/∂xⱼ: ONE templated forward-AAD pass (seed every knot
@@ -220,7 +287,9 @@ class CompiledMultiCurveBook {
   pricing::CompiledCurveSet cs_;
   pricing::BundleFloatBatch float_;
   pricing::BundleFixedLegs fixed_;
-  Eigen::VectorXd notional_, nf_;  // nf_ = notional ⊙ fixed_rate (annuity row-scale)
+  Eigen::VectorXd notional_, nf_;  // nf_ = notional ⊙ fixed_rate (annuity row-scale), per compiled ROW
+  int n_compiled_positions_ = 0;   // compiled POSITIONS (an Xccy position is two rows)
+  mutable Eigen::VectorXd rmul_;   // pv01 scratch: per-coupon MtM reset ratio R (1 for constant-notional coupons)
 
   // Templated half: the non-cacheable positions (Xccy / compounded / moment), priced through the
   // existing virtual-handle kernel off handles that are reused (values overwritten) every call.

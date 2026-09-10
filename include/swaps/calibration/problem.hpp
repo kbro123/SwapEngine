@@ -77,7 +77,8 @@ enum class QuoteKind {
                   // combo directly without pinning each leg's outright rate. Components are full nested
                   // Instruments, so portfolios compose. ONE residual, no knots (knots are in the curve
                   // spec). W-CACHEABLE when every component is: the components register weighted onto the
-                  // one row and accumulate in the compiled batches (an FX/MtM component forces AAD).
+                  // one row and accumulate in the compiled batches (an FX/MtM component NESTED here forces
+                  // AAD -- standalone they compile since 2026-09-09; hybrid_residual.hpp is the authority).
   TurnJump,       // a TURN's jump δ (docs/turns-calibration.md). The model quote is the raw overlay state
                   // variable δ of (turn_curve, turn_index) -- a STATE-PIN, LINEAR in x (Jacobian row is a
                   // unit vector at δ's state index). Almost always BANDED (target/lower/upper): the band's

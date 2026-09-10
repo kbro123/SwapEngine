@@ -147,7 +147,7 @@ pf::MultiCurveBook compilable_book() {
   return book;
 }
 
-// The same book plus one Xccy position (routes to the templated fallback — exercises fallback PV01).
+// The same book plus one Xccy position (COMPILED as two rows since 2026-09-10 -- exercises the MtM PV01 partials).
 pf::MultiCurveBook mixed_book() {
   pf::MultiCurveBook book = compilable_book();
   pf::MultiCurveBook::Position xp;
@@ -211,9 +211,9 @@ TEST(SessionCompiledReprice, MatchesTemplatedAcrossXMoves) {
   expect_reprice_parity(sess.reprice_bound(), sess.price_portfolio(book), "all-compiled @ x back");
 }
 
-// The mixed book (an Xccy position on the templated fallback) matches in npv AND the fallback-inclusive
-// PV01 — the compiled half analytic, the Xccy half a forward-AAD directional pass.
-TEST(SessionCompiledReprice, MixedBookWithXccyFallbackMatches) {
+// The mixed book (an Xccy position compiled as two rows) matches in npv AND PV01 -- both analytic now; the
+// MtM reset / exchange partials are the ones d_pv_from_num carries.
+TEST(SessionCompiledReprice, MixedBookWithXccyMatches) {
   Fixture f;
   api::BundleSession sess(f.prob);
   sess.calibrate(f.x0);

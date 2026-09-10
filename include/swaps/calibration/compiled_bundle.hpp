@@ -410,7 +410,9 @@ class CompiledBundleResidual {
   // Register one instrument's legs into the batches, targeting residual `row` with `weight`. A Portfolio
   // recurses -- each component registers onto the SAME row with the product of weights -- so a butterfly
   // of par swaps becomes three weighted batch entries summed into one row, fully on the W-cache path.
-  // Only a genuinely non-W-cacheable LEAF (FX/MtM, here or nested in a portfolio) forces the AAD engine.
+  // Only a genuinely non-W-cacheable LEAF forces the AAD engine: an FX forward or MtM leg nested in a
+  // Portfolio, an incomplete or SEASONED MtM leg, a compounded observation (hybrid_residual.hpp
+  // instrument_is_noncacheable). A standalone FX forward and a par MtM leg compile (since 2026-09-09).
   void register_at(const Instrument& ins, int row, double weight, const std::vector<BundleCurveSpec>& curves) {
     static const std::vector<pricing::FloatCoupon> no_leg;
     if (ins.quote == QuoteKind::Portfolio) {
