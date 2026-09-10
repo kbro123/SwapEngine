@@ -94,6 +94,23 @@ class AadBlock {
       dst.band_decay = src.band_decay;
     }
   }
+  // Scalar counterparts for one GLOBAL row (a no-op when the row is not in this block; the block is small,
+  // so the linear row lookup is cheaper than a map).
+  void set_quote(int global_row, double market, double lower, double upper, double decay) {
+    for (int j = 0; j < size(); ++j)
+      if (rows_[j] == global_row) {
+        Instrument& d = sub_.instruments[j];
+        d.market = market;
+        d.band_lower = lower;
+        d.band_upper = upper;
+        d.band_decay = decay;
+        return;
+      }
+  }
+  void set_market(int global_row, double market) {
+    for (int j = 0; j < size(); ++j)
+      if (rows_[j] == global_row) { sub_.instruments[j].market = market; return; }
+  }
 
   // True when the AAD sweep runs on the pooled (allocation-free) dual; false = the heap-Dual fallback
   // (touched width > ad::kPooledMaxW, or forced for testing).

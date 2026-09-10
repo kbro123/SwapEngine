@@ -659,40 +659,129 @@ const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0
   return result_;
 }
 
+void BundleSession::set_market(const Eigen::VectorXd& market) {
+  if (market.size() != prob_.n_residuals())
+    throw std::runtime_error("set_market: market length does not match the instrument count");
+  if (!market.allFinite()) throw std::runtime_error("set_market: market contains a non-finite quote");
+  for (int i = 0; i < prob_.n_residuals(); ++i) prob_.instruments[i].market = market[i];
+  if (engine_) engine_->set_market(market);  // scalar row data on the ONE compiled engine; no copy, no recompile
+}
+
+void BundleSession::set_band(int row, double lower, double upper, double decay) {
+  if (row < 0 || row >= prob_.n_residuals()) throw std::runtime_error("set_band: row out of range");
+  if (!std::isfinite(lower) || !std::isfinite(upper) || !std::isfinite(decay))
+    throw std::runtime_error("set_band: non-finite band");
+  cal::Instrument& ins = prob_.instruments[row];
+  ins.band_lower = lower;
+  ins.band_upper = upper;
+  ins.band_decay = decay;
+  has_band_ = false;
+  for (const auto& i : prob_.instruments) has_band_ = has_band_ || (i.band_upper > i.band_lower);
+  if (engine_) engine_->set_quote(row, ins.market, lower, upper, decay);
+  bands_changed_ = true;  // the streamer's active-set table must be re-read before its next tick
+}
+
+const cal::CalibrationResult& BundleSession::resolve(const RegSpec& reg) { return warm_solve(reg); }
+
 const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& new_market,
                                                          const RegSpec& reg) {
   if (new_market.size() != prob_.n_residuals())
     throw std::runtime_error("recalibrate: market length does not match the instrument count");
   if (!new_market.allFinite())
     throw std::runtime_error("recalibrate: market contains a non-finite quote");
-  for (int i = 0; i < prob_.n_residuals(); ++i) prob_.instruments[i].market = new_market[i];
-  if (engine_) engine_->set_quotes(prob_);  // quote RHS only: the cached engine stays compiled
-  return calibrate(x_, reg);  // warm from the current solution
+  set_market(new_market);
+  return warm_solve(reg);
 }
 
 const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p, const RegSpec& reg) {
   if (p.n_residuals() != prob_.n_residuals())
-    throw std::runtime_error("rebind: instrument count differs — the structure changed (recompile instead)");
+    throw std::runtime_error("rebind: instrument count differs — the structure changed (compile a new session)");
   // Same COUNT is not the same STRUCTURE: a bundle with the same number of instruments but different
   // knots/tenors/regions/roles would rebind its new quotes onto the old W-cache rows (a 7y quote applied
-  // to the old 5y row). The fingerprint is the contract the header promises; enforce it.
+  // to the old 5y row). An O(n) structural equality (no hash) is the contract.
   if (!same_structure(p))
-    throw std::runtime_error("rebind: structure fingerprint differs — the structure changed (recompile instead)");
+    throw std::runtime_error("rebind: the structure differs (a knot, scheme, role, schedule or instrument changed) — "
+                             "compile a new session; rebind carries market targets and bands only");
   for (int i = 0; i < prob_.n_residuals(); ++i) {
     const cal::Instrument& src = p.instruments[i];
     if (!std::isfinite(src.market) || !std::isfinite(src.band_lower) || !std::isfinite(src.band_upper) || !std::isfinite(src.band_decay))
       throw std::runtime_error("rebind: instrument " + std::to_string(i) + " carries a non-finite quote or band");
   }
+  bool bands_changed = false;
   for (int i = 0; i < prob_.n_residuals(); ++i) {  // the FULL quote RHS: target AND soft-quote band
     cal::Instrument& dst = prob_.instruments[i];
     const cal::Instrument& src = p.instruments[i];
     dst.market = src.market;
-    dst.band_lower = src.band_lower;
-    dst.band_upper = src.band_upper;
-    dst.band_decay = src.band_decay;
+    if (dst.band_lower != src.band_lower || dst.band_upper != src.band_upper || dst.band_decay != src.band_decay) {
+      bands_changed = true;
+      dst.band_lower = src.band_lower;
+      dst.band_upper = src.band_upper;
+      dst.band_decay = src.band_decay;
+    }
   }
-  if (engine_) engine_->set_quotes(prob_);  // full quote RHS (targets + bands); no recompile
-  return calibrate(x_, reg);  // warm from the current solution, with the new targets + bands
+  if (bands_changed) {
+    has_band_ = false;
+    for (const auto& i : prob_.instruments) has_band_ = has_band_ || (i.band_upper > i.band_lower);
+    bands_changed_ = true;
+  }
+  if (engine_) engine_->set_quotes(prob_);  // scalar row data: no Instrument copy, no recompile
+  return warm_solve(reg);
+}
+
+namespace {
+bool same_reg(const RegSpec& a, const RegSpec& b) {
+  return a.lambda == b.lambda && a.sigma == b.sigma && a.tension == b.tension && a.curves == b.curves;
+}
+}  // namespace
+
+// The warm re-solve: ONE frozen-Newton tick on the shared engine, seeded from the current x. A session that
+// is not streaming yet starts (one Jacobian at x against the live market); a band edit re-anchors the
+// streamer's active set; a regulariser change restarts the streamer under the new one. The tick either
+// converges (committed; result_ reports "streamed") or -- an intrinsically large move -- falls back to an LM
+// warm solve from x, after which the streamer is re-anchored at the LM solution. A bundle with no constant W
+// (MonotoneCubic) has no streamer and takes the LM path directly.
+const cal::CalibrationResult& BundleSession::warm_solve(const RegSpec& reg) {
+  if (needs_recalibrate()) return calibrate(x_, reg);
+  q_scratch_.resize(prob_.n_residuals());
+  for (int i = 0; i < prob_.n_residuals(); ++i) q_scratch_[i] = prob_.instruments[i].market;
+  const auto t0 = std::chrono::steady_clock::now();
+  if (!stream_ || !same_reg(stream_reg_, reg)) {
+    start_streaming(reg, stream_ ? stream_step_tol_ : 0.0);  // anchored at (x_, live market)
+  } else if (bands_changed_) {
+    stream_->resync(prob_, x_, q_scratch_);
+    bands_changed_ = false;
+  }
+  const cal::StreamTick tick = stream_->update(q_scratch_);
+  record_tick(tick, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
+  if (tick.converged) {
+    x_ = stream_->current();
+    result_.x = x_;
+    result_.converged = true;
+    result_.status = "streamed (frozen-Newton tick on the shared engine)";
+    result_.info = 2;
+    result_.iterations = tick.newton_steps;
+    const Eigen::VectorXd& r = ensure_engine().residuals(x_);  // the engine's market IS the live market now
+    result_.rms_residual = std::sqrt(r.squaredNorm() / std::max<Eigen::Index>(1, r.size()));
+    result_.stationarity = 0.0;  // not evaluated on the streamed path (the tick converged to step_tol)
+    result_.solve_micros = last_solve_us_;
+    return result_;
+  }
+  calibrate(x_, reg);  // the LM fallback, warm from x_
+  stream_->resync(prob_, x_, q_scratch_);
+  return result_;
+}
+
+void BundleSession::record_tick(const cal::StreamTick& tick, double solve_us) {
+  last_solve_us_ = solve_us;
+  stream_sum_us_ += solve_us;
+  ++stream_ticks_;
+  last_newton_steps_ = tick.newton_steps;
+  last_refreshes_ = tick.refreshes;
+  last_drift_ = tick.drift;
+  last_converged_ = tick.converged;
+  last_rescales_ = tick.rescales;
+  last_status_ = static_cast<int>(tick.status);
+  last_reason_ = tick.reason();
 }
 
 std::vector<CurveSample> BundleSession::sample(const std::vector<double>& times) const {
@@ -875,19 +964,27 @@ PortfolioReprice BundleSession::price_portfolio_json(const std::string& book_jso
 // ONLY regime where the compiled kernel wins — a single cold reprice keeps paying the templated path
 // (price_portfolio), so this is a SEPARATE entry point, not a swap-in.
 void BundleSession::bind_portfolio(const pf::MultiCurveBook& book) {
-  const auto resolved = resolve_book(book);  // seasoned coupons: realized part from the fixings
-  bound_book_ = std::make_unique<pf::MultiCurveBook>(resolved ? *resolved : book);
-  cbook_ = std::make_unique<pf::CompiledMultiCurveBook>(prob_.curves, *bound_book_);
+  bound_book_ = std::make_unique<pf::MultiCurveBook>(book);  // UNRESOLVED: the twin re-resolves on every rebuild
+  rebuild_cbook();
+}
+
+// The compiled twin is built from the book RESOLVED against the CURRENT fixings/evaluation date -- so a
+// fixing that arrives after bind_portfolio reaches the seasoned coupons on the next reprice (E3-D3: the
+// old code resolved once at bind and rebuilt the twin from that stale copy: 27 % NPV error).
+void BundleSession::rebuild_cbook() const {
+  const auto resolved = resolve_book(*bound_book_);  // seasoned coupons: realized part from the fixings
+  resolved_book_ = std::make_unique<pf::MultiCurveBook>(resolved ? *resolved : *bound_book_);
+  cbook_ = std::make_unique<pf::CompiledMultiCurveBook>(prob_.curves, *resolved_book_);
 }
 
 PortfolioReprice BundleSession::reprice_bound() const {
   if (!bound_book_)
     throw std::runtime_error("reprice_bound(): bind_portfolio() must be called first");
-  // Lazy rebuild: invalidate_engine() drops cbook_ on a structural bundle change, but keeps bound_book_.
-  if (!cbook_) cbook_ = std::make_unique<pf::CompiledMultiCurveBook>(prob_.curves, *bound_book_);
+  // Lazy rebuild: invalidate_engine() drops the twin on a structural bundle change (fixings), keeps the book.
+  if (!cbook_) rebuild_cbook();
 
   PortfolioReprice out;
-  out.n = static_cast<int>(bound_book_->positions.size());
+  out.n = static_cast<int>(resolved_book_->positions.size());
   if (out.n == 0) { last_price_us_ = 0.0; return out; }  // empty book: NPV/PV01 = 0, nothing to time
 
   // Pure ENGINE pricing pass, engine-timed exactly as price_portfolio times its double NPV pass — but here
@@ -952,7 +1049,7 @@ PortfolioRisk BundleSession::price_portfolio_risk_json(const std::string& book_j
 }
 
 bool BundleSession::same_structure(const cal::BundleProblem& p) const {
-  return cal::structure_fingerprint(p) == fingerprint_;
+  return cal::structure_equal(prob_, p);  // O(n) equality; resolution-insensitive on fixing schedules
 }
 
 bool BundleSession::same_curve_set(const cal::BundleProblem& source) const {
@@ -1018,33 +1115,38 @@ void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
                           ? cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)
                           : cal::second_difference_operator(prob_, reg.lambda, reg.curves);
   if (step_tol > 0.0) opt.step_tol = step_tol;  // looser tol -> fewer corrector steps (speed/accuracy knob)
-  stream_ = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(prob_, x_, q0, opt);
+  // The streamer BORROWS the session's one compiled engine (the object model): a scalar set_quotes on the
+  // session is what it prices next tick. It is dropped with the engine (invalidate_engine) and rebuilt
+  // here lazily by the next stream_update/resolve.
+  stream_ = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(ensure_engine(), prob_, x_, q0, opt);
+  stream_reg_ = reg;
+  stream_step_tol_ = step_tol;
+  stream_armed_ = true;
+  bands_changed_ = false;
   stream_sum_us_ = 0;  // reset the running average for this streaming session
   stream_ticks_ = 0;
 }
 
 const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_market) {
-  if (!stream_) throw std::runtime_error("start_streaming() must be called first");
+  if (!stream_) {
+    if (!stream_armed_) throw std::runtime_error("start_streaming() must be called first");
+    start_streaming(stream_reg_, stream_step_tol_);  // rebuilt after a fixings / evaluation-date recompile
+  }
   // Eigen's size asserts are compiled out under -DNDEBUG, so a wrong-length market would be a silent
   // heap over-read/over-write inside the residual kernel (recalibrate() already checks; this must too).
   if (new_market.size() != prob_.n_residuals())
     throw std::runtime_error("stream_update: market length does not match the instrument count");
   if (!new_market.allFinite())
     throw std::runtime_error("stream_update: market contains a non-finite quote");
+  if (bands_changed_) {  // a set_band since the last anchor: re-read the active-set table first
+    stream_->resync(prob_, x_, new_market);
+    bands_changed_ = false;
+  }
   const auto t0 = std::chrono::steady_clock::now();
   const cal::StreamTick tick = stream_->update(new_market);
-  last_solve_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
-  stream_sum_us_ += last_solve_us_;
-  ++stream_ticks_;
-  last_newton_steps_ = tick.newton_steps;
-  last_refreshes_ = tick.refreshes;
-  last_drift_ = tick.drift;
-  last_converged_ = tick.converged;
-  last_rescales_ = tick.rescales;
-  last_status_ = static_cast<int>(tick.status);
-  last_reason_ = tick.reason();
-  // A non-converged tick (refresh cap) is not committed by the streamer either: current() is still the
-  // last converged solution, so x_ never carries a half-solved curve. The caller sees last_converged().
+  record_tick(tick, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
+  // A non-converged tick is not committed by the streamer either: current() is still the last converged
+  // solution, so x_ never carries a half-solved curve. The caller sees last_converged()/last_reason().
   x_ = stream_->current();
   return x_;
 }

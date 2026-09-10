@@ -325,7 +325,10 @@ TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
   sess.rebind(p2, reg);  // warm: same compiled engine, new full quote RHS
   api::BundleSession fresh(p2);
   fresh.calibrate(x0, reg);  // cold: engine compiled directly against p2
-  EXPECT_LT((sess.x() - fresh.x()).cwiseAbs().maxCoeff(), 1e-8)
+  // 1e-6 since 2026-09-10: the warm rebind is a STREAMED tick (the frozen-Newton active set lands exactly on
+  // the band kink), the fresh session is an LM that stalls a hair short of it; they agree to ~4e-7 in the
+  // knots. Before, both were LM and agreed to 1e-8.
+  EXPECT_LT((sess.x() - fresh.x()).cwiseAbs().maxCoeff(), 1e-6)
       << "a warm rebind must reach the same solution as a cold session on the same problem";
 
   // (3) Plain (unregularized) warm recalibrate equals a fresh cold solve of the shifted market.

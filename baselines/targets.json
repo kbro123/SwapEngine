@@ -39,8 +39,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 859.7 us x1.3; ratchets DOWN only"
     },
     "chain8x26_session_rebind": {
-      "target_ns": 16520000,
-      "note": "13.6 ms today is a full LM, not a warm path; E6.2 target: <= 1 ms. Ratchets down only."
+      "target_ns": 344500,
+      "note": "ratcheted 2026-09-10 after E4.A step A (rebind = streamed tick on the shared engine): 265 us x1.3; was 16520000 ns; ratchets DOWN only"
     },
     "chain8x26_session_stream_tick": {
       "target_ns": 97200,
@@ -63,8 +63,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 20893.3 us x1.3; ratchets DOWN only"
     },
     "chain8x26_session_rebind_tension_reg": {
-      "target_ns": 27757000,
-      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+      "target_ns": 420000,
+      "note": "ratcheted 2026-09-10 after E4.A step A (rebind = streamed tick on the shared engine): 323 us x1.3; was 27757000 ns; ratchets DOWN only"
     },
     "chain8x26_kernel_cold_joint_lm": {
       "target_ns": 23969100,

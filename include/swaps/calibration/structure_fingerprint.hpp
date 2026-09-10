@@ -102,6 +102,71 @@ inline void hash_fixed(FnvHasher& H, const FixedLeg& lg) {
   }
 }
 
+// STRUCTURAL EQUALITY (the object model, 2026-09-10): an O(n) walk over the same inputs the hash covers,
+// with no hashing and no allocation -- the check behind BundleSession::same_structure / rebind. Two
+// problems are structurally equal iff a compiled model of one prices the other's rows: same curves
+// (roles, regions, knots), same instrument kinds, legs, cashflow times and observation windows. Quote
+// fields (market, bands) are excluded. A schedule-carrying observation is compared on its FIXING SCHEDULE
+// (endpoints + size), not on its resolved sub-periods / realized part -- those are the RESOLUTION of the
+// schedule against a fixing table, which the session performs on its own copy (a client resends the
+// unresolved document, so comparing resolution outputs made same_structure(problem()) false, E3-D16).
+inline bool obs_equal(const pricing::RateObservation& a, const pricing::RateObservation& b) {
+  if (a.fixing_schedule.size() != b.fixing_schedule.size()) return false;
+  if (a.fixing_index != b.fixing_index) return false;
+  if (a.tau_index != b.tau_index || a.fixing_step != b.fixing_step || a.fixing_step3 != b.fixing_step3) return false;
+  if (a.compounded != b.compounded) return false;
+  if (!a.fixing_schedule.empty()) {
+    const auto &fa = a.fixing_schedule.front(), &fb = b.fixing_schedule.front();
+    const auto &la = a.fixing_schedule.back(), &lb = b.fixing_schedule.back();
+    return fa.fixing_date == fb.fixing_date && fa.t_start == fb.t_start && la.fixing_date == lb.fixing_date && la.t_end == lb.t_end;
+  }
+  if (a.sub_start != b.sub_start || a.sub_end != b.sub_end || a.weight != b.weight) return false;
+  return a.realized == b.realized && a.realized_factor == b.realized_factor;
+}
+inline bool float_equal(const FloatLeg& a, const FloatLeg& b) {
+  if (a.forecast != b.forecast || a.discount != b.discount || a.reset_num != b.reset_num || a.reset_den != b.reset_den) return false;
+  if (a.fx_spot != b.fx_spot || a.coupons.size() != b.coupons.size()) return false;
+  for (std::size_t i = 0; i < a.coupons.size(); ++i) {
+    const auto &c = a.coupons[i], &d = b.coupons[i];
+    if (c.pay != d.pay || c.tau_pay != d.tau_pay || c.spread != d.spread || c.scale != d.scale || c.reset_time != d.reset_time) return false;
+    if (!obs_equal(c.obs, d.obs)) return false;
+  }
+  return true;
+}
+inline bool fixed_equal(const FixedLeg& a, const FixedLeg& b) {
+  if (a.discount != b.discount || a.coupons.size() != b.coupons.size()) return false;
+  for (std::size_t i = 0; i < a.coupons.size(); ++i) {
+    const auto &c = a.coupons[i], &d = b.coupons[i];
+    if (c.pay != d.pay || c.tau != d.tau || c.scale != d.scale) return false;
+  }
+  return true;
+}
+inline bool instrument_equal(const Instrument& a, const Instrument& b) {
+  if (a.quote != b.quote || a.forecast != b.forecast || a.pv_currency != b.pv_currency) return false;
+  if (a.fx_num != b.fx_num || a.fx_den != b.fx_den || a.fx_spot != b.fx_spot || a.fx_time != b.fx_time) return false;
+  if (a.turn_curve != b.turn_curve || a.turn_index != b.turn_index || a.convexity != b.convexity) return false;
+  if (!obs_equal(a.obs, b.obs) || !float_equal(a.fwd, b.fwd) || !float_equal(a.bench, b.bench) || !float_equal(a.mtm, b.mtm)) return false;
+  if (!fixed_equal(a.fixed, b.fixed)) return false;
+  if (a.combination.size() != b.combination.size()) return false;
+  for (std::size_t i = 0; i < a.combination.size(); ++i) {
+    if (a.combination[i].weight != b.combination[i].weight) return false;
+    if (!instrument_equal(a.combination[i].instrument, b.combination[i].instrument)) return false;
+  }
+  return true;
+}
+inline bool curve_equal(const BundleCurveSpec& a, const BundleCurveSpec& b) {
+  if (a.base != b.base || a.currency != b.currency) return false;
+  if (a.regions.size() != b.regions.size()) return false;
+  for (std::size_t i = 0; i < a.regions.size(); ++i) {
+    const auto &r = a.regions[i], &t = b.regions[i];
+    if (r.scheme != t.scheme || r.knots != t.knots || r.sigma != t.sigma) return false;
+    if (r.reg_lambda != t.reg_lambda || r.reg_sigma != t.reg_sigma) return false;
+  }
+  if (a.turns.size() != b.turns.size()) return false;
+  for (std::size_t i = 0; i < a.turns.size(); ++i)
+    if (a.turns[i].start != b.turns[i].start || a.turns[i].end != b.turns[i].end) return false;
+  return true;
+}
 inline void hash_instrument(FnvHasher& H, const Instrument& ins) {
   H.i(static_cast<long long>(ins.quote));
   H.i(ins.forecast);
@@ -151,6 +216,16 @@ inline std::uint64_t structure_fingerprint(const BundleProblem& p) {
   H.i(static_cast<long long>(p.instruments.size()));
   for (const auto& ins : p.instruments) fp_detail::hash_instrument(H, ins);
   return H.h;
+}
+
+// The structural-equality check (no hash): see fp_detail::curve_equal / instrument_equal.
+inline bool structure_equal(const BundleProblem& a, const BundleProblem& b) {
+  if (a.curves.size() != b.curves.size() || a.instruments.size() != b.instruments.size()) return false;
+  for (std::size_t c = 0; c < a.curves.size(); ++c)
+    if (!fp_detail::curve_equal(a.curves[c], b.curves[c])) return false;
+  for (std::size_t i = 0; i < a.instruments.size(); ++i)
+    if (!fp_detail::instrument_equal(a.instruments[i], b.instruments[i])) return false;
+  return true;
 }
 
 }  // namespace swaps::calibration

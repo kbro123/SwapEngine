@@ -87,11 +87,13 @@ class HybridBundleResidual {
     c.curves = p.curves;
     std::vector<Instrument> nc;
     std::vector<int> nc_rows;
+    cache_pos_.assign(n_res_, -1);
     for (int r = 0; r < n_res_; ++r) {
       if (nl || instrument_is_noncacheable(p.instruments[r], p.curves)) {
         nc.push_back(p.instruments[r]);
         nc_rows.push_back(r);
       } else {
+        cache_pos_[r] = static_cast<int>(cache_rows_.size());
         c.instruments.push_back(p.instruments[r]);
         cache_rows_.push_back(r);
       }
@@ -109,13 +111,26 @@ class HybridBundleResidual {
   void set_quotes(const BundleProblem& p) {
     if (p.n_residuals() != n_res_)
       throw std::invalid_argument("HybridBundleResidual::set_quotes: instrument count differs");
-    if (cacheable_) {
-      qprob_.curves.clear();  // sub-problem shell: only instruments matter to set_quotes
-      qprob_.instruments.clear();
-      for (int gr : cache_rows_) qprob_.instruments.push_back(p.instruments[gr]);
-      cacheable_->set_quotes(qprob_);
+    for (int r = 0; r < n_res_; ++r) {
+      const Instrument& ins = p.instruments[r];
+      set_quote(r, ins.market, ins.band_lower, ins.band_upper, ins.band_decay);
     }
-    nc_.set_quotes(p);
+  }
+  // SCALAR quote updates by GLOBAL row (the object model, 2026-09-10): no Instrument is copied -- until now
+  // set_quotes deep-copied every cacheable Instrument to read four doubles (14,641 of a rebind's 15.7k
+  // allocations on the census fixture, E3-D5).
+  void set_quote(int row, double market, double lower, double upper, double decay) {
+    const int j = cache_pos_[row];
+    if (j >= 0) cacheable_->set_quote(j, market, lower, upper, decay);
+    else nc_.set_quote(row, market, lower, upper, decay);
+  }
+  void set_market(const Eigen::VectorXd& q) {
+    if (q.size() != n_res_) throw std::invalid_argument("HybridBundleResidual::set_market: market length differs");
+    for (int r = 0; r < n_res_; ++r) {
+      const int j = cache_pos_[r];
+      if (j >= 0) cacheable_->set_market(j, q[r]);
+      else nc_.set_market(r, q[r]);
+    }
   }
 
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
@@ -189,11 +204,11 @@ class HybridBundleResidual {
 
   int n_res_;
   std::vector<int> cache_rows_;  // cacheable sub-row -> global residual row (identity when nc empty)
+  std::vector<int> cache_pos_;   // global residual row -> cacheable sub-row, or -1 (AAD block)
   // The compiled half. Disengaged ONLY when the curves themselves rule out a constant W (non-linear
   // interpolation scheme) -- then every row rides the AAD block and the hybrid is pure width-reduced AAD.
   std::optional<CompiledBundleResidual> cacheable_;
   AadBlock nc_;
-  BundleProblem qprob_;  // reusable sub-problem shell for set_quotes' gather (instruments only)
   mutable Eigen::VectorXd out_, res_, qsub_;
 };
 

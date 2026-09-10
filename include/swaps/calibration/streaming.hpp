@@ -121,18 +121,65 @@ class StreamingCalibrator {
     Eigen::MatrixXd regularizer;
   };
 
+  using Engine = residual_engine_t<Problem>;
+
+  // OWN engine (compiled from `prob`): tests and stand-alone callers.
   StreamingCalibrator(const Problem& prob, const Eigen::VectorXd& x0,
                       const Eigen::VectorXd& q0, const Options& opt)
-      : n_res_(prob.n_residuals()), engine_(prob), opt_(opt) {
+      : StreamingCalibrator(nullptr, prob, x0, q0, opt) {}
+  // SHARED engine (the object model, 2026-09-10): the calibrator BORROWS the caller's compiled engine --
+  // one engine per compiled model, so a scalar set_quotes on it is seen by every consumer (calibrate, this
+  // streamer, the risk operator). `engine` must outlive the calibrator; `prob` supplies the band table and
+  // the background worker's own copy (a worker computes J on another thread, so it keeps private scratch).
+  StreamingCalibrator(const Engine& engine, const Problem& prob, const Eigen::VectorXd& x0,
+                      const Eigen::VectorXd& q0, const Options& opt)
+      : StreamingCalibrator(&engine, prob, x0, q0, opt) {}
+
+  // Re-anchor after the QUOTE RHS changed underneath the (shared) engine: bands re-read from `prob` (a band
+  // edit changes which rows the active set tracks), the Jacobian re-taken at (x, q), the committed state set
+  // to (x, q). An owned engine is pushed the new quotes first. Throws on a non-finite input/Jacobian.
+  void resync(const Problem& prob, const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
+    if (!x.allFinite() || !q.allFinite()) throw std::invalid_argument("StreamingCalibrator::resync: non-finite state or market");
+    if (owned_engine_) {
+      if constexpr (requires(Engine& e, const Problem& p) { e.set_quotes(p); }) owned_engine_->set_quotes(prob);
+    }
+    collect_bands(prob);
+    drift_refresh_ = (n_res_ != static_cast<int>(x.size())) || !bands_.empty() || RtR_.size() > 0;
+    if (!set_anchor(x, q)) throw std::invalid_argument("StreamingCalibrator::resync: the Jacobian at the anchor is non-finite");
+    x_cur_ = x;
+    q_cur_ = q;
+  }
+
+ private:
+  StreamingCalibrator(const Engine* shared, const Problem& prob, const Eigen::VectorXd& x0,
+                      const Eigen::VectorXd& q0, const Options& opt)
+      : n_res_(prob.n_residuals()), opt_(opt) {
+    if (shared) {
+      engine_ = shared;
+    } else {
+      owned_engine_ = std::make_unique<Engine>(prob);
+      engine_ = owned_engine_.get();
+    }
     if (!x0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor state x0 contains a non-finite value");
     if (!q0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor market q0 contains a non-finite quote");
     if (opt_.prefetch && opt_.exact) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (opt_.regularizer.size()) RtR_.noalias() = opt_.regularizer.transpose() * opt_.regularizer;
-    // The banded rows (FX forwards are never banded): what the per-tick side tracking watches.
+    collect_bands(prob);
+    // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0.
+    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || RtR_.size() > 0;
+    if (!set_anchor(x0, q0))
+      throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
+    x_cur_ = x0;
+    q_cur_ = q0;
+  }
+
+  // The banded rows (FX forwards are never banded): what the per-tick side tracking watches. decay > 0
+  // only: the inside branch must be invertible (q from r) and the frozen row non-zero. A decay-0 (dead-
+  // zone) band is not tracked; it still works through the stall-triggered refresh.
+  void collect_bands(const Problem& prob) {
+    bands_.clear();
     for (int i = 0; i < n_res_; ++i) {
       const Instrument& ins = prob.instruments[i];
-      // decay > 0 only: the inside branch must be invertible (q from r) and the frozen row non-zero. A
-      // decay-0 (dead-zone) band is not tracked; it still works through the stall-triggered refresh.
       if (ins.band_upper > ins.band_lower && ins.quote != QuoteKind::FxForward && ins.band_decay > 0.0)
         bands_.push_back({i, ins.band_lower, ins.band_upper, ins.band_decay});
     }
@@ -144,14 +191,10 @@ class StreamingCalibrator {
     last_side_.assign(bands_.size(), +1);
     releases_.assign(bands_.size(), 0);
     onedge_.assign(bands_.size(), 0);
-    // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0.
-    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || RtR_.size() > 0;
-    if (!set_anchor(x0, q0))
-      throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
-    x_cur_ = x0;
-    q_cur_ = q0;
+    n_pinned_ = 0;
   }
 
+ public:
   const Eigen::VectorXd& current() const { return x_cur_; }
   const Eigen::VectorXd& anchor_market() const { return q_anchor_; }
   const Eigen::MatrixXd& sensitivity() const { return M_; }
@@ -193,7 +236,7 @@ class StreamingCalibrator {
       // The residual is engine-defined against the live market q_new: model_rates - q_new for hard
       // instruments, the Huber band residual for soft (banded) ones. Driving THIS (not the raw reprice)
       // is what makes frozen-Newton solve the soft least-squares -- dx = J⁺·r -> 0 at the soft minimum.
-      r_ = engine_.residuals_vs(x, q_new);
+      r_ = engine_->residuals_vs(x, q_new);
       if (!r_.allFinite()) return fail(t, StreamStatus::NonFinite);
       const double r_inf = r_.cwiseAbs().maxCoeff();
       if (r0_inf < 0.0) r0_inf = r_inf;
@@ -322,7 +365,7 @@ class StreamingCalibrator {
     Eigen::VectorXd x = x_anchor_ + M_ * d;
     int frozen = 0;
     for (;;) {
-      const Eigen::VectorXd r = engine_.residuals_vs(x, q_new);
+      const Eigen::VectorXd r = engine_->residuals_vs(x, q_new);
       const Eigen::VectorXd dx = M_ * r;
       x.noalias() -= dx;
       ++t.newton_steps;
@@ -491,7 +534,7 @@ class StreamingCalibrator {
   // Returns true if any row was released (M must be rebuilt).
   bool verify_pins(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     (void)x;
-    r_ = engine_.residuals_vs(x, q);  // the engine's (Huber) residuals: pinned rows' q_model read off these
+    r_ = engine_->residuals_vs(x, q);  // the engine's (Huber) residuals: pinned rows' q_model read off these
     bool changed = false;
     for (std::size_t k = 0; k < bands_.size(); ++k) {
       if (state_[k] == 0) continue;
@@ -568,7 +611,7 @@ class StreamingCalibrator {
   // Returns false (anchor UNCHANGED) if the Jacobian at (x, q) is not finite.
   bool set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     SWAPS_TRACE("  set_anchor\n");
-    J_ref_ = engine_.jacobian_vs(x, q);  // band term consistent with residuals_vs(·,q)
+    J_ref_ = engine_->jacobian_vs(x, q);  // band term consistent with residuals_vs(·,q)
     if (!J_ref_.allFinite()) {
       if (have_J_) J_ref_ = J_cur_;  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
       return false;
@@ -576,7 +619,7 @@ class StreamingCalibrator {
     x_anchor_ = x;
     q_anchor_ = q;
     if (!bands_.empty()) {
-      const Eigen::VectorXd& mr = engine_.model_rates(x);
+      const Eigen::VectorXd& mr = engine_->model_rates(x);
       for (std::size_t k = 0; k < bands_.size(); ++k) {
         const BandRow& b = bands_[k];
         slope_ref_[k] = band_slope(mr[b.row], b.lower, b.upper, b.decay);  // > 0: tracked rows have decay > 0
@@ -617,7 +660,8 @@ class StreamingCalibrator {
   }
 
   int n_res_;
-  residual_engine_t<Problem> engine_;
+  const Engine* engine_ = nullptr;          // the residual engine driven every tick (borrowed or owned)
+  std::unique_ptr<Engine> owned_engine_;    // set only by the (prob, ...) constructor
   Options opt_;
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
   Eigen::VectorXd q_cur_;  // the market x_cur_ solves (a failed tick restores the anchor here)

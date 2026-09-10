@@ -43,6 +43,11 @@ class CompiledBundleResidual {
   explicit CompiledBundleResidual(const BundleProblem& p)
       : n_gen_(static_cast<int>(p.instruments.size())), market_(p.market()) {
     cs_.init(p.curves);  // p.curves ARE pricing::CurveStructure now (BundleCurveSpec is an alias), no copy
+    fx_row_.assign(n_gen_, 0);
+    band_lo_.assign(n_gen_, 0.0);
+    band_up_.assign(n_gen_, 0.0);
+    band_dc_.assign(n_gen_, 1.0);
+    band_.reserve(n_gen_);  // rebuild_bands() never allocates after this
 
     register_generic(p);
 
@@ -141,15 +146,25 @@ class CompiledBundleResidual {
   void set_quotes(const BundleProblem& p) {
     if (p.n_residuals() != n_gen_)
       throw std::invalid_argument("CompiledBundleResidual::set_quotes: instrument count differs");
-    market_ = p.market();
-    band_.clear();
     for (int row = 0; row < n_gen_; ++row) {
       const Instrument& ins = p.instruments[row];
-      if (ins.band_upper > ins.band_lower && ins.quote != QuoteKind::FxForward)  // FX rows are never banded
-        band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
+      set_quote(row, ins.market, ins.band_lower, ins.band_upper, ins.band_decay);
     }
     // The DF memo (df_x_) keys on x alone -- DF = exp(-Wx) is quote-independent -- so it stays valid.
   }
+  // SCALAR quote updates (the object model, 2026-09-10): the compiled structure is immutable, the quote RHS
+  // is per-row data. No Instrument is copied. An FX-forward row never carries a band (see the ctor).
+  void set_quote(int row, double market, double lower, double upper, double decay) {
+    market_[row] = market;
+    if (!fx_row_[row]) {
+      band_lo_[row] = lower;
+      band_up_[row] = upper;
+      band_dc_[row] = decay;
+      bands_dirty_ = true;
+    }
+  }
+  void set_market(int row, double market) { market_[row] = market; }
+  double market_of(int row) const { return market_[row]; }
   // DF = exp(-W_all x) (memoized on x). Exposed for profiling / downstream analytics.
   const Eigen::VectorXd& discount_factors(const Eigen::VectorXd& x) const { return df_at(x); }
 
@@ -206,7 +221,7 @@ class CompiledBundleResidual {
   const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     const Eigen::VectorXd& mr = model_rates(x);  // model_rates fills out_; res_ (a distinct member) holds r
     res_ = mr - q;
-    for (const auto& b : band_)  // banded rows: the Huber band residual (problem.hpp band_residual)
+    for (const auto& b : bands())  // banded rows: the Huber band residual (problem.hpp band_residual)
       res_[b.row] = band_residual_d(mr[b.row], q[b.row], b.lower, b.upper, b.decay).first;
     // FX rows: the residual is the implied-basis discrepancy (ln F_model − ln q)/T in RATE units, NOT the
     // raw outright difference F − q. (FX rows are never banded, so this cleanly overwrites mr − q.)
@@ -230,10 +245,11 @@ class CompiledBundleResidual {
     const Eigen::VectorXd& INV = inv_;
     if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); gen_mtm_.set_state(x); }
     // Capture the model quotes for banded rows BEFORE the batch scratch below is overwritten.
-    if (!band_.empty()) {
+    const std::vector<Band>& bl = bands();
+    if (!bl.empty()) {
       const Eigen::VectorXd& mr = model_rates(x);
-      qb_.resize(static_cast<int>(band_.size()));
-      for (std::size_t k = 0; k < band_.size(); ++k) qb_[static_cast<int>(k)] = mr[band_[k].row];
+      qb_.resize(static_cast<int>(bl.size()));
+      for (std::size_t k = 0; k < bl.size(); ++k) qb_[static_cast<int>(k)] = mr[bl[k].row];
     }
     G_.setZero();  // reuse the scratch buffer (sized once in the ctor)
     pricing::RowMatrixXd& G = G_;
@@ -294,8 +310,8 @@ class CompiledBundleResidual {
     // matmul is linear, so scaling commutes). Turn rows have a zero G row (no DF dependence), so scaling
     // them here is a no-op -- their band factor is applied to the DIRECT ∂δ/∂x entry below instead.
     if (has_moment_) row_scale_.setOnes(n_residuals());
-    for (std::size_t k = 0; k < band_.size(); ++k) {
-      const Band& b = band_[k];
+    for (std::size_t k = 0; k < bl.size(); ++k) {
+      const Band& b = bl[k];
       const int i = static_cast<int>(k);
       const double sc = band_residual_d(qb_[i], q[b.row], b.lower, b.upper, b.decay).second;
       G.row(b.row) *= sc;
@@ -341,7 +357,7 @@ class CompiledBundleResidual {
     // The band slope dr/dq (decay inside, 1 outside) multiplies that entry (matches residuals_vs).
     for (const auto& t : turn_rows_) {
       double factor = t.weight;
-      for (const auto& b : band_)
+      for (const auto& b : bl)
         if (b.row == t.row) {
           const double qm = t.weight * x[t.state_index];  // the model quote for this row (== mr[t.row])
           factor *= band_residual_d(qm, q[t.row], b.lower, b.upper, b.decay).second;
@@ -381,6 +397,10 @@ class CompiledBundleResidual {
       // NOT for an FX forward: its residual is the log-basis transform, which the templated
       // instrument_residual never bands -- banding it here (residual AND Jacobian row) made the compiled
       // and AAD paths disagree on a banded FX pin.
+      fx_row_[row] = (ins.quote == QuoteKind::FxForward) ? 1 : 0;
+      band_lo_[row] = ins.band_lower;
+      band_up_[row] = ins.band_upper;
+      band_dc_[row] = ins.band_decay;
       if (ins.band_upper > ins.band_lower && ins.quote != QuoteKind::FxForward)
         band_.push_back({row, ins.band_lower, ins.band_upper, ins.band_decay});
       register_at(ins, row, 1.0, p.curves);
@@ -482,7 +502,21 @@ class CompiledBundleResidual {
   // Bid/offer bands: a residual row whose value + Jacobian get the w(q) post-transform (see residuals /
   // jacobian). Empty for a plain bundle, so the fast path is untouched when no instrument is banded.
   struct Band { int row; double lower, upper, decay; };
-  std::vector<Band> band_;
+  // The band table is DERIVED from the per-row arrays below (rebuilt lazily after a scalar set_quote; the
+  // vector was reserved to n_gen_ in the ctor, so a rebuild never allocates).
+  mutable std::vector<Band> band_;
+  mutable bool bands_dirty_ = false;
+  std::vector<char> fx_row_;                       // an FX-forward row: never banded
+  std::vector<double> band_lo_, band_up_, band_dc_;  // per-row band (upper <= lower: none)
+  const std::vector<Band>& bands() const {
+    if (bands_dirty_) {
+      band_.clear();
+      for (int row = 0; row < n_gen_; ++row)
+        if (!fx_row_[row] && band_up_[row] > band_lo_[row]) band_.push_back({row, band_lo_[row], band_up_[row], band_dc_[row]});
+      bands_dirty_ = false;
+    }
+    return band_;
+  }
   Eigen::VectorXd market_;
   // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.

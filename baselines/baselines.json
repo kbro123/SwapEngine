@@ -228,26 +228,26 @@
         "arch_flag": "-march=x86-64-v3",
         "quantlib_toolchain": "1.35|Apple clang version 21.0.0 (clang-2100.1.1.101)|-O3 -DNDEBUG -fno-math-errno -march=x86-64-v3"
       },
-      "captured_utc": "2026-09-10T07:25:01Z",
-      "load_avg_at_capture": 4.2,
+      "captured_utc": "2026-09-10T08:08:25Z",
+      "load_avg_at_capture": 3.72,
       "reps": 5,
       "min_time_s": 0.5,
       "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate).",
       "metrics": {
         "shape_ois_nolag_stream_tick": {
-          "ours_ns": 1689,
+          "ours_ns": 1732,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_nolag_refresh_25bp": {
-          "ours_ns": 12282,
+          "ours_ns": 12360,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_nolag_jacobian": {
-          "ours_ns": 2536,
+          "ours_ns": 2533,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -259,361 +259,361 @@
           "speedup": null
         },
         "shape_ois_lag_refresh_25bp": {
-          "ours_ns": 14546,
+          "ours_ns": 14550,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_lag_jacobian": {
-          "ours_ns": 4025,
+          "ours_ns": 4024,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_stream_tick": {
-          "ours_ns": 4926,
+          "ours_ns": 4919,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_refresh_25bp": {
-          "ours_ns": 44124,
+          "ours_ns": 43838,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_jacobian": {
-          "ours_ns": 14798,
+          "ours_ns": 14328,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_stream_tick": {
-          "ours_ns": 3944,
+          "ours_ns": 3962,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_refresh_25bp": {
-          "ours_ns": 38797,
+          "ours_ns": 38474,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_jacobian": {
-          "ours_ns": 11103,
+          "ours_ns": 10997,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_stream_tick": {
-          "ours_ns": 7540,
+          "ours_ns": 7549,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_refresh_25bp": {
-          "ours_ns": 65364,
+          "ours_ns": 65157,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_jacobian": {
-          "ours_ns": 19102,
+          "ours_ns": 19140,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_stream_tick": {
-          "ours_ns": 365446,
+          "ours_ns": 360521,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_refresh_25bp": {
-          "ours_ns": 1664646,
+          "ours_ns": 1668775,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_jacobian": {
-          "ours_ns": 841794,
+          "ours_ns": 847505,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_stream_tick": {
-          "ours_ns": 52614,
+          "ours_ns": 52502,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_refresh_25bp": {
-          "ours_ns": 139394,
+          "ours_ns": 138858,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_jacobian": {
-          "ours_ns": 13627,
+          "ours_ns": 13496,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_stream_tick": {
-          "ours_ns": 2859,
+          "ours_ns": 2874,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_refresh_25bp": {
-          "ours_ns": 135789,
+          "ours_ns": 133963,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_jacobian": {
-          "ours_ns": 4520,
+          "ours_ns": 4535,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_edge_osc_tick": {
-          "ours_ns": 45601,
+          "ours_ns": 45268,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_stream_tick": {
-          "ours_ns": 2337,
+          "ours_ns": 2390,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_refresh_25bp": {
-          "ours_ns": 88381,
+          "ours_ns": 87218,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_jacobian": {
-          "ours_ns": 5453,
+          "ours_ns": 5101,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_edge_osc_tick": {
-          "ours_ns": 1637,
+          "ours_ns": 1671,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_portfolio_stream_tick": {
-          "ours_ns": 2401,
+          "ours_ns": 2402,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_portfolio_refresh_25bp": {
-          "ours_ns": 44753,
+          "ours_ns": 44376,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_portfolio_jacobian": {
-          "ours_ns": 5538,
+          "ours_ns": 5510,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_zero_coupon_stream_tick": {
-          "ours_ns": 788,
+          "ours_ns": 777,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_zero_coupon_refresh_25bp": {
-          "ours_ns": 1256,
+          "ours_ns": 1236,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_zero_coupon_jacobian": {
-          "ours_ns": 668,
+          "ours_ns": 667,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_fx_xccy_stream_tick": {
-          "ours_ns": 27891,
+          "ours_ns": 27721,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_fx_xccy_refresh_25bp": {
-          "ours_ns": 17205,
+          "ours_ns": 17216,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_fx_xccy_jacobian": {
-          "ours_ns": 60756,
+          "ours_ns": 60276,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_stream_tick": {
-          "ours_ns": 56648,
+          "ours_ns": 56528,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_refresh_25bp": {
-          "ours_ns": 7587303,
+          "ours_ns": 6386434,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_jacobian": {
-          "ours_ns": 179244,
+          "ours_ns": 178343,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_edge_osc_tick": {
-          "ours_ns": 1455610,
+          "ours_ns": 1007911,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "sofr_23k_square_cold_calibrate": {
-          "ours_ns": 481577,
-          "reference_ns": 15116162,
+          "ours_ns": 485093,
+          "reference_ns": 15551140,
           "reference_bm": "BM_CurveBuild_QuantLib",
-          "speedup": 31.39
+          "speedup": 32.06
         },
         "sofr_23k_risk_ladder_23q_book9": {
-          "ours_ns": 111037,
-          "reference_ns": 16736644,
+          "ours_ns": 109635,
+          "reference_ns": 16214034,
           "reference_bm": "BM_Risk_QuantLib_Bump",
-          "speedup": 150.73
+          "speedup": 147.89
         },
         "sofr_23k_book1000_ois_reprice": {
-          "ours_ns": 25562,
-          "reference_ns": 21978266,
+          "ours_ns": 25446,
+          "reference_ns": 21851721,
           "reference_bm": "BM_Portfolio_QuantLib",
-          "speedup": 859.8
+          "speedup": 858.74
         },
         "sofr_23k_warm_recal_0p3bp": {
-          "ours_ns": 16211,
-          "reference_ns": 903381,
+          "ours_ns": 15968,
+          "reference_ns": 882757,
           "reference_bm": "BM_WarmRecal_QuantLib",
-          "speedup": 55.73
+          "speedup": 55.28
         },
         "sofr_23k_warm_recal_10bp": {
-          "ours_ns": 42857,
-          "reference_ns": 1044456,
+          "ours_ns": 42346,
+          "reference_ns": 1021114,
           "reference_bm": "BM_WarmRecal_QuantLib_10bp",
-          "speedup": 24.37
+          "speedup": 24.11
         },
         "ust_5000_clean_to_yield_sweep": {
-          "ours_ns": 3473331,
-          "reference_ns": 2553511410,
+          "ours_ns": 3474550,
+          "reference_ns": 2663863692,
           "reference_bm": "BM_BondSweep_QuantLib",
-          "speedup": 735.18
+          "speedup": 766.68
         },
         "ust_5000_curve_book_dirty_price": {
-          "ours_ns": 409326,
-          "reference_ns": 29847254,
+          "ours_ns": 408994,
+          "reference_ns": 27920114,
           "reference_bm": "BM_BondBook_QuantLib",
-          "speedup": 72.92
+          "speedup": 68.27
         },
         "sofr_swaption_cube17_sabr_reprice_warm": {
-          "ours_ns": 10057,
+          "ours_ns": 10102,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "sofr_swaption_cube17_cold_calibrate_price": {
-          "ours_ns": 859244,
+          "ours_ns": 855629,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_cold_build_calibrate": {
-          "ours_ns": 20476259,
+          "ours_ns": 20652635,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_rebind": {
-          "ours_ns": 13723066,
+          "ours_ns": 264979,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_rebind_tension_reg": {
-          "ours_ns": 21691281,
+          "ours_ns": 323013,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_stream_tick": {
-          "ours_ns": 74644,
+          "ours_ns": 75474,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_book200_price_portfolio_oneshot": {
-          "ours_ns": 14202742,
+          "ours_ns": 14185575,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_kernel_cold_joint_lm": {
-          "ours_ns": 18288743,
+          "ours_ns": 18209232,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_kernel_one_residual": {
-          "ours_ns": 10369,
+          "ours_ns": 10363,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_kernel_one_jacobian": {
-          "ours_ns": 409636,
+          "ours_ns": 406056,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_book200_compiled_reprice": {
-          "ours_ns": 11551,
-          "reference_ns": 707843,
+          "ours_ns": 11575,
+          "reference_ns": 710394,
           "reference_bm": "BM_MultiCurveBook_Templated",
-          "speedup": 61.28
+          "speedup": 61.37
         },
         "usd_eur_xccy_3c8k_hybrid_jacobian": {
-          "ours_ns": 9349,
+          "ours_ns": 9577,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "usd_eur_xccy_3c8k_aad_block_jacobian": {
-          "ours_ns": 5014,
-          "reference_ns": 22807,
+          "ours_ns": 5032,
+          "reference_ns": 22896,
           "reference_bm": "BM_FxStream_AadBlockJacobianHeap",
           "speedup": 4.55
         },
         "usd_eur_xccy_3c8k_stream_tick": {
-          "ours_ns": 52853,
+          "ours_ns": 52074,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         }
       },
-      "cpu_busy_pct_at_capture": 5.5
+      "cpu_busy_pct_at_capture": 5.0
     }
   }
 }

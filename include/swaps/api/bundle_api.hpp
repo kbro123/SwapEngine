@@ -193,25 +193,40 @@ class BundleSession {
   // instrument is present (the compiled engine rejects those) or when a regulariser is requested.
   const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0, const RegSpec& reg = {});
 
-  // Re-solve to a NEW market vector by overwriting the instruments' targets and warm-calibrating from
-  // the current x. This is the streaming fallback for bundles the W-cache can't represent (custom
-  // interpolation regions / non-linear schemes): still a full analytic AAD solve, sub-millisecond.
+  // ---- the object model (E4.A, 2026-09-10): ONE compiled engine, scalar inputs, structure immutable ----
+  // A session compiles its hybrid engine once per STRUCTURE and every consumer borrows it: calibrate, the
+  // streamer, the risk operator, the bound book's twin. The quote RHS (market targets + soft bands) is
+  // per-row SCALAR data on that engine -- set_market / set_band write it with no Instrument copy and no
+  // solve; resolve() then re-solves to it: one frozen-Newton tick on the shared engine seeded from the
+  // current x (an LM warm solve only if the tick cannot converge, e.g. a 500 bp jump, or for a bundle with
+  // no constant W). Anything else -- a knot, scheme, role, schedule, instrument, the evaluation date -- is
+  // STRUCTURE: compile a new session (there is no runtime structure hash gating a warm path any more).
+  void set_market(const Eigen::VectorXd& market);                          // all targets; no solve
+  void set_band(int row, double lower, double upper, double decay);        // one row's band; no solve
+  const cal::CalibrationResult& resolve(const RegSpec& reg = {});          // re-solve to the current inputs
+
+  // set_market + resolve: re-solve to a NEW market vector. On a streaming session this IS a tick (the
+  // streamer shares the engine); on a fresh session it starts streaming first (one Jacobian) -- so a
+  // requote costs a tick, not an LM. `reg` selects the regulariser the streamer runs under.
   const cal::CalibrationResult& recalibrate(const Eigen::VectorXd& new_market, const RegSpec& reg = {});
 
-  // Warm re-solve to a STRUCTURALLY-IDENTICAL problem `p` (same fingerprint), updating the FULL quote RHS
-  // in place — market targets AND the soft-quote bands (band_lower/upper/decay) — then warm-calibrating from
-  // the current x. Unlike recalibrate() (targets only), this carries the complex quote types, so a band edit
-  // stays on the warm path. Throws if `p` has a different residual count (that is a structural change).
+  // The FULL quote RHS from a structurally-identical problem `p` (targets AND bands), then resolve(). `p`
+  // must be the SAME structure (an O(n) structural equality, no hash -- calibration::structure_equal):
+  // a different residual count, knot, scheme, role, schedule or instrument throws -- compile a new
+  // session for that. A band edit is a quote change and re-anchors the streamer's active set in place.
   const cal::CalibrationResult& rebind(const cal::BundleProblem& p, const RegSpec& reg = {});
 
   const cal::CalibrationResult& result() const { return result_; }
   const Eigen::VectorXd& x() const { return x_; }
   const cal::BundleProblem& problem() const { return prob_; }
-  // The topology hash of the problem this session compiled its W-cache for (structure_fingerprint.hpp).
+  // An IDENTITY STAMP of the document this session was compiled from (structure_fingerprint.hpp), for a
+  // client's own caching. NOT a gate: nothing in the engine compares it (2026-09-10) -- a structural edit
+  // is a new session by construction, and rebind checks structure by an O(n) equality, not a hash.
   std::uint64_t structure_fingerprint() const { return fingerprint_; }
-  // True iff `p` differs from this session's problem ONLY in market levels — so the calibrated W-cache is
-  // still valid and the caller can warm-tick (recalibrate) instead of building a fresh session. A false
-  // means the topology moved and W must be recompiled (a new BundleSession). This is the OO/hot-path switch.
+  // True iff `p` is STRUCTURALLY EQUAL to this session's problem -- same curves, regions, knots,
+  // instrument kinds, legs, cashflow times and schedules -- differing at most in market targets and
+  // bands (calibration::structure_equal: an O(n) walk, no hashing, no allocation). True for
+  // same_structure(problem()) on any session, including one carrying resolved fixing schedules.
   bool same_structure(const cal::BundleProblem& p) const;
   bool has_fx() const { return has_fx_; }
   bool has_modular() const { return has_modular_; }
@@ -360,7 +375,10 @@ class BundleSession {
   // knob for a live viewer — while still refreshing the Jacobian on staleness (so it stays robust).
   void start_streaming(const RegSpec& reg = {}, double step_tol = 0.0);
   const Eigen::VectorXd& stream_update(const Eigen::VectorXd& new_market);
-  bool streaming() const { return static_cast<bool>(stream_); }
+  // True once start_streaming() (or a resolve/recalibrate/rebind, which stream) has armed the session. A
+  // fixings / evaluation-date change recompiles the engine and rebuilds the streamer lazily on the next
+  // tick (anchored at the current x), so the flag stays true across it.
+  bool streaming() const { return stream_armed_; }
 
   // ---- solve-time telemetry (measured by default; a steady_clock pair is ~100ns, <0.1% of a solve) --
   // Every calibrate/recalibrate/stream_update stamps the ENGINE-measured wall time of the solve itself
@@ -392,9 +410,11 @@ class BundleSession {
   // Any observation carrying a fixing_schedule is RESOLVED from this session's fixing table against the
   // evaluation date: past days -> `realized` (throwing/flagging MissingFixing if absent), future days ->
   // forecast sub-periods. Resolution runs on construction and on every set_evaluation_date/set_fixings.
-  // It only rewrites `realized`/subs (constants) in prob_ -- it does NOT recompile: the next
-  // calibrate()/stream picks the change up (a `realized`-only change is a residual-constant shift the
-  // streamer absorbs; a past/future boundary move changes subs and refreshes W via streamer staleness).
+  // It rewrites `realized`/subs in prob_ -- STRUCTURE for the compiled tables (registered times, baked
+  // constants) -- so the engine, the streamer and the bound book's compiled twin are all dropped and
+  // rebuilt on their next use (the streamer re-anchors at the current x; the book re-resolves its seasoned
+  // coupons). Until 2026-09-10 the streamer and the bound book kept the stale copies (E3-D2/D3). Making a
+  // fixing a scalar update of a compiled row (daily boundaries registered at compile) is E4.A.3.
 
   // Set the evaluation date (integer serial the caller defines); fixings strictly before it are fixed.
   void set_evaluation_date(int serial) { pricing::check_date_serial(serial, "set_evaluation_date"); eval_date_ = serial; resolve_fixings(); }
@@ -424,11 +444,16 @@ class BundleSession {
   // recalibrate()/rebind() overwrite only the quote RHS (engine_->set_quotes) and re-solve warm on the
   // same engine -- no W rebuild, no batch re-registration, no MtM re-guard. The tension pseudo-residual
   // block R is likewise structure-only (given fixed reg params), so it is cached keyed on (lambda, sigma,
-  // curves) and recomputed only when those change. invalidate_engine() drops both whenever prob_ mutates
-  // STRUCTURALLY -- today that is fixings resolution (it rewrites observation times/realized in place).
-  // Mutable + const ensure: the engine is a pure cache of prob_'s structure, so const queries (jacobian)
-  // may build it lazily.
-  void invalidate_engine() { engine_.reset(); reg_R_valid_ = false; cbook_.reset(); }
+  // curves) and recomputed only when those change. invalidate_engine() drops the engine, R, the book's
+  // compiled twin AND the streamer (it borrows the engine) whenever prob_ mutates STRUCTURALLY -- today
+  // that is fixings resolution (it rewrites observation times/realized in place). The streamer is rebuilt
+  // lazily by the next stream_update/resolve when the session is armed. Mutable + const ensure: the engine
+  // is a pure cache of prob_'s structure, so const queries (jacobian) may build it lazily.
+  void invalidate_engine() { engine_.reset(); reg_R_valid_ = false; cbook_.reset(); resolved_book_.reset(); stream_.reset(); }
+  // The warm re-solve behind resolve/recalibrate/rebind (one streamed tick, LM fallback).
+  const cal::CalibrationResult& warm_solve(const RegSpec& reg);
+  void record_tick(const cal::StreamTick& tick, double solve_us);
+  void rebuild_cbook() const;
   cal::HybridBundleResidual& ensure_engine() const {
     if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);
     return *engine_;
@@ -447,8 +472,15 @@ class BundleSession {
   // The cached warm/streaming reprice twin (bind_portfolio/reprice_bound). bound_book_ is the copied book;
   // cbook_ is its compiled W-cache twin, built once on bind and rebuilt lazily after invalidate_engine()
   // drops it (a structural bundle change moves W). Mutable so the const reprice_bound() can rebuild lazily.
-  mutable std::unique_ptr<swaps::portfolio::MultiCurveBook> bound_book_;
+  mutable std::unique_ptr<swaps::portfolio::MultiCurveBook> bound_book_;     // the UNRESOLVED book as bound
+  mutable std::unique_ptr<swaps::portfolio::MultiCurveBook> resolved_book_;  // its fixings-resolved copy (the twin's source)
   mutable std::unique_ptr<swaps::portfolio::CompiledMultiCurveBook> cbook_;
+  // Streaming session state (the streamer itself may be dropped by invalidate_engine and rebuilt lazily).
+  RegSpec stream_reg_;
+  double stream_step_tol_ = 0.0;
+  bool stream_armed_ = false;
+  bool bands_changed_ = false;  // a set_band/rebind changed a band since the streamer last anchored
+  Eigen::VectorXd q_scratch_;   // the live market gathered from prob_ (reused; no per-solve allocation)
   // The cached hybrid engine + tension-block cache (see ensure_engine/ensure_reg_R above).
   mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
   mutable Eigen::MatrixXd reg_R_;

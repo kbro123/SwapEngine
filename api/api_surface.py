@@ -54,6 +54,7 @@ METHODS = [
      "doc": "Model quote (par rate/spread/future rate/FX fwd) of an arbitrary instrument off the curves."},
     {"name": "same_structure", "cpp": None, "args": [("bundle_json", "STR")], "ret": "INT", "verb": None,
      "body": "return sess_.same_structure(api::bundle_from_json(json::parse(bundle_json))) ? 1 : 0;",
+     "_note": "an O(n) structural equality (no hash, 2026-09-10): 1 iff the bundle differs only in targets/bands",
      "doc": "1 if `bundle_json` differs from this session's problem ONLY in market levels (warm-tickable "
             "over the compiled W-cache); 0 if the topology changed (a recompile is needed). The OO/hot-path "
             "switch a stateful Model asks before choosing warm-vs-recompile."},
@@ -106,11 +107,24 @@ METHODS = [
     {"name": "recalibrate", "cpp": None, "args": [("market", "VEC"), ("reg", "REG")], "ret": "VEC",
      "verb": None,
      "body": "sess_.recalibrate(to_vec(market), reg_from(reg)); return to_list(sess_.x());",
-     "doc": "Warm-recalibrate to a new market (custom-region/non-linear fallback) -> the new x."},
+     "doc": "set_market + resolve: re-solve to a new market -- one frozen-Newton tick on the shared compiled engine "
+            "(LM warm solve only if the tick cannot converge, or for a MonotoneCubic bundle) -> the new x."},
     {"name": "rebind", "cpp": None, "args": [("bundle_json", "STR"), ("reg", "REG")], "ret": "VEC", "verb": None,
      "body": "sess_.rebind(api::bundle_from_json(json::parse(bundle_json)), reg_from(reg)); return to_list(sess_.x());",
-     "doc": "Warm re-solve to a structurally-identical bundle, updating market targets AND soft-quote bands "
-            "(the complex-quote-aware warm path) -> the new x. Throws if the residual count differs (structural)."},
+     "doc": "The full quote RHS (market targets AND soft bands) from a STRUCTURALLY EQUAL bundle, then resolve (a "
+            "streamed tick) -> the new x. Throws if the structure differs (count, knot, scheme, role, schedule, "
+            "instrument): compile a new session for that."},
+    {"name": "set_market", "cpp": None, "args": [("market", "VEC")], "ret": "VOID", "verb": None,
+     "body": "sess_.set_market(to_vec(market));",
+     "doc": "Overwrite every instrument's market target on the compiled engine (no solve, no copy); follow with resolve()."},
+    {"name": "set_band", "cpp": None, "args": [("row", "INT"), ("lower", "SCALAR"), ("upper", "SCALAR"), ("decay", "SCALAR")],
+     "ret": "VOID", "verb": None,
+     "body": "sess_.set_band(row, lower, upper, decay);",
+     "doc": "Overwrite one instrument's soft band (no solve); upper <= lower removes it. Follow with resolve()."},
+    {"name": "resolve", "cpp": None, "args": [("reg", "REG")], "ret": "VEC", "verb": None,
+     "body": "sess_.resolve(reg_from(reg)); return to_list(sess_.x());",
+     "doc": "Re-solve to the current quotes/bands: one frozen-Newton tick on the shared compiled engine seeded from x "
+            "(LM only if the tick cannot converge) -> the new x."},
     {"name": "start_streaming", "cpp": "start_streaming", "args": [("reg", "REG"), ("step_tol", "SCALAR", "0.0")],
      "ret": "VOID", "verb": None,
      "doc": "Anchor the streaming calibrator at the current x (step_tol>0 loosens the corrector tolerance)."},
