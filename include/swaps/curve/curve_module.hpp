@@ -192,6 +192,10 @@ class ModularCurve {
   double tension_sigma_at(double t) const {
     return locate(t, [](const RegionIface<S>& r, double) { return r.tension_sigma(); });
   }
+  // CONVENTION (E3 register D11): integral(t <= 0) == 0, i.e. discount(t) == 1 for ANY non-positive time.
+  // Nothing in pricing may rely on a negative-time discount factor: a seasoned MtM reset in the past must
+  // carry its fixed FX (cashflows.hpp xccy_mtm_leg_pv refuses one that does not), and the P&L roll floors
+  // its shifted times at 0 by design. A negative time here is a stale-input smell, not a curve query.
   S integral(double t) const {
     if (t <= 0.0) return S(0.0);
     return locate(t, [](const RegionIface<S>& r, double u) { return r.integral(u); });

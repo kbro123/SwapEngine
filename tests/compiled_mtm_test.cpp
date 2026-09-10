@@ -6,6 +6,8 @@
 // differences of the templated kernel), then every adversarial configuration against templated + AAD + FD.
 #include <gtest/gtest.h>
 
+#include <boost/json.hpp>
+
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -17,10 +19,13 @@
 #include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/structure_fingerprint.hpp"
+#include "swaps/pricing/cashflows.hpp"
 
 namespace cal = swaps::calibration;
 namespace api = swaps::api;
 namespace b = swaps::build;
+namespace px = swaps::pricing;
 using swaps::shapes::Shape;
 
 namespace {
@@ -107,12 +112,20 @@ TEST(CompiledMtm, AdversarialConfigurationsCompileExactly) {
     const Parity pr = parity(p, base.x_true);
     EXPECT_LT(pr.dr, 1e-12); EXPECT_LT(pr.dj_aad, 1e-9); EXPECT_LT(pr.dj_fd, 1e-6);
   }
-  // a fully-fixed MtM coupon has nowhere to place its notional exchanges: both paths refuse identically
+  // a fully-fixed MtM coupon with NO accrual period carried has nowhere to place its notional exchanges: both
+  // paths refuse identically; with the accrual period carried (the builders do, 2026-09-10) it prices on both.
   {
     cal::BundleProblem p = base.prob;
-    for (auto& in : p.instruments) if (in.quote == cal::QuoteKind::XccyMtmBasis) { in.mtm.coupons.front().obs.sub_start.clear(); in.mtm.coupons.front().obs.sub_end.clear(); break; }
+    for (auto& in : p.instruments) if (in.quote == cal::QuoteKind::XccyMtmBasis) {
+      auto& c0 = in.mtm.coupons.front(); c0.obs.sub_start.clear(); c0.obs.sub_end.clear(); c0.obs.realized = 3e-4; c0.accrual_set = false; break; }
     EXPECT_THROW(p.residuals<double>(base.x_true), std::runtime_error);
     EXPECT_THROW(cal::CompiledBundleResidual{p}, std::runtime_error);
+    cal::BundleProblem q = base.prob;
+    for (auto& in : q.instruments) if (in.quote == cal::QuoteKind::XccyMtmBasis) {
+      auto& c0 = in.mtm.coupons.front(); c0.obs.sub_start.clear(); c0.obs.sub_end.clear(); c0.obs.realized = 3e-4; break; }
+    recentre(q, base.x_true);
+    const Parity pr = parity(q, base.x_true);
+    EXPECT_LT(pr.dr, 1e-12); EXPECT_LT(pr.dj_aad, 1e-9); EXPECT_LT(pr.dj_fd, 1e-6);
   }
 }
 
@@ -173,4 +186,90 @@ TEST(CompiledMtm, StreamedTickMatchesColdCalibrateAfterA25bpMove) {
   const double d = (xs - cold.x()).cwiseAbs().maxCoeff();
   std::cout << "  [mtm] streamed vs cold after 25bp: |dx|max=" << d << "\n";
   EXPECT_LT(d, 1e-7);
+}
+
+// ---- SEASONED MtM coupons (E3 register S2 / G4, fixed 2026-09-10) ---------------------------------------------
+// A partially-fixed MtM coupon's observation window shrinks to its first FUTURE fixing on resolution. Until now
+// the notional exchanges and the reset were read off that window, so (a) −DF(s) was booked at a future date for an
+// exchange that had already settled and (b) a past reset was priced at t < 0, where the curve silently discounts
+// at 1 (N = fx_spot instead of the FIXED FX rate). Now the coupon carries its accrual period and a fixed reset.
+namespace {
+cal::BundleProblem fx_shape_problem(int* mtm_row, Eigen::VectorXd* x) {
+  const Shape s = swaps::shapes::fx_xccy();
+  *x = s.x_true;
+  for (int i = 0; i < s.prob.n_residuals(); ++i)
+    if (s.prob.instruments[i].quote == cal::QuoteKind::XccyMtmBasis) { *mtm_row = i; break; }
+  return s.prob;
+}
+}  // namespace
+
+TEST(CompiledMtm, SeasonedCouponUsesItsFixedResetAndSkipsTheSettledExchange) {
+  int row = -1; Eigen::VectorXd x;
+  cal::BundleProblem p = fx_shape_problem(&row, &x);
+  ASSERT_GE(row, 0);
+  cal::Instrument& ins = p.instruments[row];
+  ASSERT_TRUE(ins.mtm.coupons.front().accrual_set) << "the builders stamp the accrual period";
+  // Season the first funding coupon: it started 0.1y ago (exchange settled), its window shrinks to [0, e] with a
+  // realized part, and its notional was fixed at reset_fx.
+  px::FloatCoupon& c = ins.mtm.coupons.front();
+  const double e = c.accrual_end, fx = ins.mtm.fx_spot;
+  c.accrual_start = -0.1;
+  c.obs.sub_start = {0.0}; c.obs.sub_end = {e}; c.obs.realized = 4e-4;
+  c.reset_fx = 1.07 * fx;
+  EXPECT_TRUE(px::mtm_coupon_is_seasoned(c));
+  EXPECT_TRUE(cal::instrument_is_noncacheable(ins, p.curves)) << "routed to the AAD block";
+  // Hand value of that coupon: reset_fx * (float_coupon_pv + DF(e)) -- NO −DF(s) term, NO curve-implied FX.
+  const auto C = cal::build_bundle_curves<double>(p.curves, [&](int cc, int i) { return x[p.offset(cc) + i]; });
+  const auto& fc = *C[ins.mtm.forecast]; const auto& dc = *C[ins.mtm.discount];
+  const double hand = c.reset_fx * (px::float_coupon_pv<double>(c, fc, dc) + dc.discount(e));
+  const std::vector<px::FloatCoupon> one{c};
+  const double leg = px::xccy_mtm_leg_pv<double>(one, fx, fc, dc, *C[ins.mtm.reset_num], *C[ins.mtm.reset_den]);
+  EXPECT_NEAR(leg, hand, 1e-15 * std::abs(hand));
+  // The seasoned instrument prices identically on the hybrid engine (AAD block) and the templated residual, and
+  // the compiled batch refuses it rather than mis-pricing it.
+  const cal::HybridBundleResidual hy(p);
+  EXPECT_NEAR(hy.residuals(x)[row], p.residuals<double>(x)[row], 1e-14);
+  EXPECT_THROW((cal::CompiledBundleResidual(p)), std::invalid_argument);
+  // ... and the bundle still calibrates with that row on AAD.
+  recentre(p, x);
+  const cal::CalibrationResult res = cal::calibrate(p, x.array() + 1e-3);
+  EXPECT_TRUE(res.converged) << res.status;
+  EXPECT_LT((res.x - x).cwiseAbs().maxCoeff(), 1e-8);
+}
+
+TEST(CompiledMtm, APastResetWithoutItsFixedFxIsRefusedNotDiscountedAtOne) {
+  int row = -1; Eigen::VectorXd x;
+  cal::BundleProblem p = fx_shape_problem(&row, &x);
+  cal::Instrument& ins = p.instruments[row];
+  px::FloatCoupon c = ins.mtm.coupons.front();
+  c.accrual_start = -0.1;  // reset defaults to the (past) accrual start; no reset_fx
+  const auto C = cal::build_bundle_curves<double>(p.curves, [&](int cc, int i) { return x[p.offset(cc) + i]; });
+  const std::vector<px::FloatCoupon> one{c};
+  EXPECT_THROW(px::xccy_mtm_leg_pv<double>(one, ins.mtm.fx_spot, *C[ins.mtm.forecast], *C[ins.mtm.discount], *C[ins.mtm.reset_num], *C[ins.mtm.reset_den]),
+               std::runtime_error);
+  // An explicit future reset time keeps the curve-implied forward (still unseasoned for the reset), but the
+  // settled exchange is dropped: value = N * (float pv + DF(e)).
+  c.reset_time = 0.05;
+  const std::vector<px::FloatCoupon> one2{c};
+  const double N = ins.mtm.fx_spot * C[ins.mtm.reset_num]->discount(0.05) / C[ins.mtm.reset_den]->discount(0.05);
+  const double hand = N * (px::float_coupon_pv<double>(c, *C[ins.mtm.forecast], *C[ins.mtm.discount]) + C[ins.mtm.discount]->discount(c.accrual_end));
+  EXPECT_NEAR(px::xccy_mtm_leg_pv<double>(one2, ins.mtm.fx_spot, *C[ins.mtm.forecast], *C[ins.mtm.discount], *C[ins.mtm.reset_num], *C[ins.mtm.reset_den]), hand, 1e-15 * std::abs(hand));
+}
+
+// The JSON contract round-trips the accrual period and the fixed reset (the seasoned book / trade path).
+TEST(CompiledMtm, AccrualAndFixedResetRoundTripThroughJson) {
+  int row = -1; Eigen::VectorXd x;
+  cal::BundleProblem p = fx_shape_problem(&row, &x);
+  cal::Instrument ins = p.instruments[row];
+  ins.mtm.coupons.front().accrual_start = -0.1;
+  ins.mtm.coupons.front().reset_fx = 1.2345;
+  const cal::Instrument back = api::instrument_from_json(api::instrument_to_json(ins));
+  const px::FloatCoupon &a = ins.mtm.coupons.front(), &b = back.mtm.coupons.front();
+  EXPECT_TRUE(b.accrual_set);
+  EXPECT_DOUBLE_EQ(b.accrual_start, a.accrual_start);
+  EXPECT_DOUBLE_EQ(b.accrual_end, a.accrual_end);
+  EXPECT_DOUBLE_EQ(b.reset_fx, 1.2345);
+  EXPECT_TRUE(cal::fp_detail::instrument_equal(ins, back));
+  cal::Instrument moved = back; moved.mtm.coupons.front().reset_fx = 1.3;
+  EXPECT_FALSE(cal::fp_detail::instrument_equal(ins, moved)) << "the fixed reset is structure (it changes the priced flows)";
 }

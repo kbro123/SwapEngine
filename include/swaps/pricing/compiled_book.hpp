@@ -317,11 +317,20 @@ struct BundleFloatBatch {
   // folded in (the XccyMtmBasis quote divides it out: mtm/(fx·ann)); the caller scales if it wants the raw PV.
   void add_mtm(CompiledCurveSet& cs, int fc, int dc, int num, int den, const std::vector<FloatCoupon>& leg) {
     for (const auto& c : leg) {
-      if (c.obs.sub_start.empty() || c.obs.sub_end.empty())
+      // A SEASONED coupon (fixed FX reset, settled initial exchange, past reset) is a constant times a
+      // reduced flow set, not a product of registered DFs: it prices on the templated kernel. The hybrid
+      // router (instrument_is_noncacheable) sends such instruments to the AAD block, so this only fires
+      // when a caller compiles one directly.
+      if (!c.accrual_set && (c.obs.sub_start.empty() || c.obs.sub_end.empty()))
         throw std::runtime_error(
-            "CompiledBook: a fully-fixed MtM coupon has no observation window to place its notional exchanges on "
-            "(accrual dates are not carried on FloatCoupon yet)");  // identical to pricing::xccy_mtm_leg_pv
-      const double s = c.obs.sub_start.front(), e = c.obs.sub_end.back();
+            "CompiledBook: a fully-fixed MtM coupon has no accrual period or observation window to place its "
+            "notional exchanges on (set accrual_start/accrual_end)");  // identical to pricing::xccy_mtm_leg_pv
+      if (mtm_coupon_is_seasoned(c))
+        throw std::invalid_argument(
+            "CompiledBook: a seasoned MtM coupon (fixed reset_fx, settled or past-reset accrual) is not W-cacheable; "
+            "price it through the templated kernel (the hybrid engine routes it there)");
+      const double s = c.accrual_set ? c.accrual_start : c.obs.sub_start.front();
+      const double e = c.accrual_set ? c.accrual_end : c.obs.sub_end.back();
       const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;
       push_obs(cs, fc, c.obs);
       push_coupon(cs.reg(dc, c.pay), c.obs.realized + c.spread * c.obs.tau_index,

@@ -144,13 +144,20 @@ struct MultiCurveBook {
       if (!p.principal_flows.empty()) {
         dom = dom + principal_pv<Scalar>(p.principal_flows, C(p.disc_curve));
       } else if (!p.float_coupons.empty()) {
-        const auto& first = p.float_coupons.front().obs;
-        const auto& last = p.float_coupons.back().obs;
-        if (first.sub_start.empty() || last.sub_end.empty())
+        const auto& fc0 = p.float_coupons.front();
+        const auto& fcN = p.float_coupons.back();
+        if (!fc0.accrual_set && fc0.obs.sub_start.empty())
           throw std::runtime_error(
-              "Xccy position: a fully-fixed domestic coupon has no accrual window to place the notional "
-              "exchange on; supply principal_flows explicitly");
-        dom = dom + (C(p.disc_curve).discount(last.sub_end.back()) - C(p.disc_curve).discount(first.sub_start.front()));
+              "Xccy position: a fully-fixed domestic coupon has no accrual period or observation window to place "
+              "the notional exchange on; supply principal_flows explicitly or set accrual_start/accrual_end");
+        if (!fcN.accrual_set && fcN.obs.sub_end.empty())
+          throw std::runtime_error(
+              "Xccy position: a fully-fixed domestic coupon has no accrual period or observation window to place "
+              "the notional exchange on; supply principal_flows explicitly or set accrual_start/accrual_end");
+        const double s0 = fc0.accrual_set ? fc0.accrual_start : fc0.obs.sub_start.front();
+        const double eN = fcN.accrual_set ? fcN.accrual_end : fcN.obs.sub_end.back();
+        dom = dom + C(p.disc_curve).discount(eN);
+        if (s0 >= 0.0) dom = dom - C(p.disc_curve).discount(s0);  // the initial exchange, unless already settled (s0 < 0)
       }
       return p.notional * (mtm - dom);
     }

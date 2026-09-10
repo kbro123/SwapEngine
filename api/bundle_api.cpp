@@ -153,6 +153,12 @@ px::FloatCoupon fcpn_from(const json::object& o) {
   c.spread = get_d(o, "spread", 0.0);
   c.scale = get_d(o, "scale", 1.0);
   c.reset_time = get_d(o, "reset_time", -1.0);
+  if (o.contains("accrual_start") && o.contains("accrual_end")) {  // the accrual period (E3-S2; may start in the past)
+    c.accrual_set = true;
+    c.accrual_start = get_d(o, "accrual_start", 0.0);
+    c.accrual_end = get_d(o, "accrual_end", 0.0);
+  }
+  c.reset_fx = get_d(o, "reset_fx", -1.0);  // a seasoned MtM coupon's FIXED FX reset
   return c;
 }
 px::FixedCoupon xcpn_from(const json::object& o) {
@@ -273,6 +279,16 @@ json::object fcpn_to(const px::FloatCoupon& c) {
   o["spread"] = c.spread;
   o["scale"] = c.scale;
   o["reset_time"] = c.reset_time;
+  // The accrual period rides the wire only when it differs from the observation window (a seasoned or
+  // observation-shifted coupon): the common coupon stays byte-identical to the legacy document, and the
+  // structural equality / fingerprint compare EFFECTIVE dates, so a resent document is the same structure.
+  const bool same_as_window = !c.obs.sub_start.empty() && !c.obs.sub_end.empty() &&
+                              c.accrual_start == c.obs.sub_start.front() && c.accrual_end == c.obs.sub_end.back();
+  if (c.accrual_set && !same_as_window) {
+    o["accrual_start"] = c.accrual_start;
+    o["accrual_end"] = c.accrual_end;
+  }
+  if (c.reset_fx >= 0.0) o["reset_fx"] = c.reset_fx;
   return o;
 }
 json::object xcpn_to(const px::FixedCoupon& c) {

@@ -89,6 +89,9 @@ inline void hash_float(FnvHasher& H, const FloatLeg& lg) {
     H.d(c.spread);
     H.d(c.scale);  // FX-spot constant baked into the W-cache's per-coupon k, so it belongs to the structure
     H.d(c.reset_time);
+    H.d(c.accrual_set ? c.accrual_start : (c.obs.sub_start.empty() ? -1.0 : c.obs.sub_start.front()));  // effective exchange dates
+    H.d(c.accrual_set ? c.accrual_end : (c.obs.sub_end.empty() ? -1.0 : c.obs.sub_end.back()));
+    H.d(c.reset_fx);
   }
 }
 
@@ -129,6 +132,11 @@ inline bool float_equal(const FloatLeg& a, const FloatLeg& b) {
   for (std::size_t i = 0; i < a.coupons.size(); ++i) {
     const auto &c = a.coupons[i], &d = b.coupons[i];
     if (c.pay != d.pay || c.tau_pay != d.tau_pay || c.spread != d.spread || c.scale != d.scale || c.reset_time != d.reset_time) return false;
+    // EFFECTIVE exchange dates (the accrual period when carried, else the observation window): a document
+    // resent without explicit accrual fields is the same structure as the builder's coupon.
+    const auto eff_s = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_start : (x.obs.sub_start.empty() ? -1.0 : x.obs.sub_start.front()); };
+    const auto eff_e = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_end : (x.obs.sub_end.empty() ? -1.0 : x.obs.sub_end.back()); };
+    if (eff_s(c) != eff_s(d) || eff_e(c) != eff_e(d) || c.reset_fx != d.reset_fx) return false;
     if (!obs_equal(c.obs, d.obs)) return false;
   }
   return true;

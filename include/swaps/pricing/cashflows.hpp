@@ -116,7 +116,28 @@ struct FloatCoupon {
   // N = fx_spot · DF_num(reset_time)/DF_den(reset_time) is CURVE-DEPENDENT (a DF ratio of two curves) — a
   // product of registered DFs like every other coupon, so it rides the W-cache (BundleFloatBatch::add_mtm).
   double reset_time = -1.0;
+  // ACCRUAL PERIOD (curve times) -- carried by the builders since 2026-09-10 (E3-S2/G4). When set, an MtM
+  // coupon's notional exchanges (−DF(start), +DF(end)) and its default reset sit on the accrual period, not
+  // on the observation window: a SEASONED coupon's window shrinks to its first future fixing on resolution,
+  // which used to book an exchange that had already settled at a future date and evaluate a past reset at
+  // DF ≡ 1. accrual_start < 0 = the period started in the past (the initial exchange has settled).
+  bool accrual_set = false;
+  double accrual_start = 0.0, accrual_end = 0.0;
+  // FIXED FX reset (same quoting as the leg's fx_spot) for an MtM coupon whose reset date is in the past:
+  // the notional is this number, not a curve-implied forward. < 0 = not fixed (the reset must then be >= 0).
+  double reset_fx = -1.0;
 };
+
+// True iff an MtM coupon is SEASONED -- a fixed FX reset, a settled initial exchange or a past reset date --
+// so it must price on the templated kernel (xccy_mtm_leg_pv), never on the W-cache batch (whose value is a
+// product of registered DFs at non-negative times). Shared by the hybrid router and the compiled guard.
+inline bool mtm_coupon_is_seasoned(const FloatCoupon& c) {
+  if (c.reset_fx >= 0.0) return true;
+  const double s = c.accrual_set ? c.accrual_start : (c.obs.sub_start.empty() ? -1.0 : c.obs.sub_start.front());
+  if (s < 0.0) return true;  // strictly in the past: an exchange dated today (t = 0, DF = 1) is still to be paid
+  const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;
+  return reset < 0.0;
+}
 
 // One fixed coupon. The RATE is supplied by the instrument/quote, not stored here, so this type
 // serves both a par-rate annuity and a fixed leg at a contract rate.
@@ -304,18 +325,34 @@ Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, cons
                        const DCurve& dc, const NumCurve& numc, const DenCurve& denc) {
   if (leg.empty()) return Scalar(0.0);
   auto contrib = [&](const FloatCoupon& c) -> Scalar {
-    // A FULLY-FIXED coupon (every fixing realized -> resolve() strips its observation window) has no
-    // sub_start/sub_end to place the notional exchanges on. Only the observation window is stored, so the
-    // exchange dates are unknown here; refuse loudly rather than read .front() of an empty vector (which
-    // was a segfault in release during every payment-lag window of an xccy position).
-    if (c.obs.sub_start.empty() || c.obs.sub_end.empty())
-      throw std::runtime_error(
-          "xccy_mtm_leg_pv: a fully-fixed MtM coupon has no observation window to place its notional "
-          "exchanges on (accrual dates are not carried on FloatCoupon yet)");
-    const double s = c.obs.sub_start.front(), e = c.obs.sub_end.back();
+    // The notional exchanges sit on the ACCRUAL period when the coupon carries it (the builders do); a coupon
+    // without it falls back to its observation window -- and a fully-fixed one without either has no dates
+    // to place them on: refuse loudly rather than read .front() of an empty vector.
+    double s, e;
+    if (c.accrual_set) {
+      s = c.accrual_start;
+      e = c.accrual_end;
+    } else {
+      if (c.obs.sub_start.empty() || c.obs.sub_end.empty())
+        throw std::runtime_error(
+            "xccy_mtm_leg_pv: a fully-fixed MtM coupon has no accrual period or observation window to place "
+            "its notional exchanges on (set accrual_start/accrual_end)");
+      s = c.obs.sub_start.front();
+      e = c.obs.sub_end.back();
+    }
     const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;  // notional fixes at the period start
+    // The coupon's value: the float PV, the final exchange +DF(e), and the initial exchange −DF(s) ONLY if it
+    // has not settled yet (s > 0). A seasoned coupon's initial exchange is cash already paid.
+    Scalar v = float_coupon_pv<Scalar>(c, fc, dc) + dc.discount(e);
+    if (s >= 0.0) v -= dc.discount(s);  // a start dated today is still a flow to pay (DF = 1)
+    if (c.reset_fx >= 0.0) return v * c.reset_fx;  // the notional was FIXED at the reset
+    if (reset < 0.0)
+      throw std::runtime_error(
+          "xccy_mtm_leg_pv: the MtM notional reset at t=" + std::to_string(reset) +
+          " is in the past; supply reset_fx (the fixed FX rate) -- a curve-implied forward at a negative time is "
+          "not defined (the curve would silently discount at 1)");
     const Scalar N = fx_spot * (numc.discount(reset) / denc.discount(reset));  // FX-forward notional
-    return N * (float_coupon_pv<Scalar>(c, fc, dc) + (dc.discount(e) - dc.discount(s)));
+    return N * v;
   };
   Scalar pv = contrib(leg[0]);
   for (std::size_t i = 1; i < leg.size(); ++i) pv += contrib(leg[i]);

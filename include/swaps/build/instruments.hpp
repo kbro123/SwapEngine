@@ -48,6 +48,9 @@ inline px::FloatCoupon ois_coupon(const Date& vd, const SwapConv& conv, const Da
   c.obs = rfr_observation(vd, s, e, dc, lag, conv.calendar);
   c.pay = curve_time(vd, pay);
   c.tau_pay = tau;
+  c.accrual_set = true;  // the accrual period, independent of any observation shift (E3-S2)
+  c.accrual_start = curve_time(vd, s);
+  c.accrual_end = curve_time(vd, e);
   return c;
 }
 
@@ -137,6 +140,9 @@ inline cal::FloatLeg float_leg_from(const Date& vd, const SwapConv& conv, const 
       }
       c.pay = curve_time(vd, pay);
       c.tau_pay = year_frac(dc, s, e, conv.calendar);
+      c.accrual_set = true;  // the seasoned period: its start is in the past (negative curve time)
+      c.accrual_start = curve_time(vd, s);
+      c.accrual_end = curve_time(vd, e);
     } else {
       c = ois_coupon(vd, conv, s, e, dc);
     }

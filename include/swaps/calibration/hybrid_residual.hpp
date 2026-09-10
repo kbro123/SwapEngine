@@ -63,8 +63,12 @@ inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<
   // (until 2026-09-09 a numeric "funding term negligible" test decided this; the batch now prices the leg exactly)
   // An MtM xccy basis row is W-cacheable EXACTLY since 2026-09-09 (BundleFloatBatch::add_mtm prices the resetting
   // notional as a product of registered DFs); only an incomplete MtM leg (no reset roles) stays on AAD.
-  if (ins.quote == QuoteKind::XccyMtmBasis)
-    return ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0;
+  if (ins.quote == QuoteKind::XccyMtmBasis) {
+    if (ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0) return true;
+    for (const auto& c : ins.mtm.coupons)
+      if (pricing::mtm_coupon_is_seasoned(c)) return true;  // E3-S2/G4: a seasoned coupon prices on the templated kernel
+    return false;
+  }
   if (ins.quote == QuoteKind::Portfolio)
     for (const auto& c : ins.combination)
       if (c.instrument.quote == QuoteKind::FxForward ||
