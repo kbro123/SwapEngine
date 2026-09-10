@@ -75,10 +75,12 @@ void jacobian(benchmark::State& state, const Shape& s) {
 
 int main(int argc, char** argv) {
   for (const Shape& s : ladder()) {
-    benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_StreamTick").c_str(), [&s](benchmark::State& st) { stream_tick(st, s); });
-    benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_RefreshTick25bp").c_str(), [&s](benchmark::State& st) { refresh_tick(st, s); });
+    if (s.streams) {  // a non-streaming rung (Shape::streams) still gets its Jacobian metric
+      benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_StreamTick").c_str(), [&s](benchmark::State& st) { stream_tick(st, s); });
+      benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_RefreshTick25bp").c_str(), [&s](benchmark::State& st) { refresh_tick(st, s); });
+    }
     benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_Jacobian").c_str(), [&s](benchmark::State& st) { jacobian(st, s); });
-    if (s.has_bands)
+    if (s.has_bands && s.streams)  // the band-edge stress is a STREAMING benchmark
       benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_EdgeOscTick").c_str(), [&s](benchmark::State& st) { edge_osc_tick(st, s); });
   }
   benchmark::Initialize(&argc, argv);

@@ -131,3 +131,8 @@ target_compile_definitions(hotpath_census PRIVATE SOFR_BUNDLE_JSON="${CMAKE_CURR
 add_executable(shape_ladder_bench shape_ladder_bench.cpp)
 target_link_libraries(shape_ladder_bench PRIVATE swaps swaps_api benchmark::benchmark)
 target_include_directories(shape_ladder_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+
+# The router's per-row partition vs the whole-bundle veto it replaced, on every rung of the same ladder.
+add_executable(routing_bench routing_bench.cpp)
+target_link_libraries(routing_bench PRIVATE swaps swaps_api benchmark::benchmark)
+target_include_directories(routing_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)

@@ -56,7 +56,7 @@
     },
     "sofr_23k_warm_recal_10bp": {
       "target_ns": 13079,
-      "note": "re-pointed 2026-09-10 (E6.1b): the streamed tick at ±10 bp; 10.1 us x1.3; was 56200 ns; ratchets DOWN only"
+      "note": "re-pointed 2026-09-10 (E6.1b): the streamed tick at \u00b110 bp; 10.1 us x1.3; was 56200 ns; ratchets DOWN only"
     },
     "chain8x26_session_cold_build_calibrate": {
       "target_ns": 27161300,
@@ -257,6 +257,26 @@
     "shape_averaged_leg_moment_jacobian": {
       "target_ns": 18000,
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 13.8 us x1.3; ratchets DOWN only"
+    },
+    "shape_all_schemes_stream_tick": {
+      "target_ns": 2850,
+      "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only -- one SOFR curve through all six W-cacheable schemes"
+    },
+    "shape_all_schemes_refresh_25bp": {
+      "target_ns": 40285,
+      "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only"
+    },
+    "shape_all_schemes_jacobian": {
+      "target_ns": 10407,
+      "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only"
+    },
+    "shape_mixed_scheme_jacobian": {
+      "target_ns": 127977,
+      "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only -- MonotoneCubic back end; the router's per-row partition (17 of 29 rows compiled)"
+    },
+    "shape_desk_mixed_jacobian": {
+      "target_ns": 4017915,
+      "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only -- desk with a MonotoneCubic long end (52 of 70 rows compiled); the all-AAD route it replaced measured 4.73 ms"
     }
   }
 }

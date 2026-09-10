@@ -60,6 +60,19 @@ METRICS = {
     "shape_averaged_leg_moment_stream_tick": ("shape_ladder_bench", "BM_Shape_averaged_leg_moment_StreamTick", None),
     "shape_averaged_leg_moment_refresh_25bp": ("shape_ladder_bench", "BM_Shape_averaged_leg_moment_RefreshTick25bp", None),
     "shape_averaged_leg_moment_jacobian": ("shape_ladder_bench", "BM_Shape_averaged_leg_moment_Jacobian", None),
+    # all_schemes: one SOFR curve through all six W-cacheable schemes (Flat/Linear/NaturalCubic/Hermite/
+    # BSpline/Tension). Until 2026-09-10 every rung was flat_hermite, so a scheme's build cost was measured
+    # nowhere. mixed_scheme adds the seventh (MonotoneCubic) as a value-dependent BACK region, which is what
+    # exercises the router's per-row partition; it has no tick metrics because the session still refuses to
+    # stream a bundle with a non-linear region (Shape::streams).
+    "shape_all_schemes_stream_tick": ("shape_ladder_bench", "BM_Shape_all_schemes_StreamTick", None),
+    "shape_all_schemes_refresh_25bp": ("shape_ladder_bench", "BM_Shape_all_schemes_RefreshTick25bp", None),
+    "shape_all_schemes_jacobian": ("shape_ladder_bench", "BM_Shape_all_schemes_Jacobian", None),
+    "shape_mixed_scheme_jacobian": ("shape_ladder_bench", "BM_Shape_mixed_scheme_Jacobian", None),
+    # desk_mixed: the FULL-COVERAGE rung (desk's 5 curves, bands, turn, butterflies, FX/xccy) with the SOFR
+    # long end on MonotoneCubic -- identical to `desk` in every other respect, so the pair isolates what a
+    # value-dependent region costs on the shape a desk actually runs. No tick metrics (it cannot stream yet).
+    "shape_desk_mixed_jacobian": ("shape_ladder_bench", "BM_Shape_desk_mixed_Jacobian", None),
     "shape_banded_stream_tick": ("shape_ladder_bench", "BM_Shape_banded_StreamTick", None),
     "shape_banded_refresh_25bp": ("shape_ladder_bench", "BM_Shape_banded_RefreshTick25bp", None),
     "shape_banded_jacobian": ("shape_ladder_bench", "BM_Shape_banded_Jacobian", None),

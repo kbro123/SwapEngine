@@ -42,6 +42,15 @@ struct Shape {
   Eigen::VectorXd q_edge_hi, q_edge_lo;
   bool has_bands = false;
   bool expect_compiled = true;  // every row is W-cacheable => the tick must be allocation-free (T4)
+  // Can this bundle ride the frozen-Newton STREAMER (BundleSession::start_streaming)? False only for
+  // mixed_scheme, and NOT because the maths forbids it: BundleSession::needs_recalibrate() is still the
+  // whole-bundle veto `has_nonlinear_` -- the same over-approximation the ROUTER carried until 2026-09-10,
+  // one layer up. The hybrid engine underneath already partitions a mixed bundle (front rows on the W-cache,
+  // long rows on the AAD block, refreshed on staleness) exactly as it does for FX/MtM, which streams. This
+  // rung is what makes that gap visible; closing it is a router-style change to the session, with its own
+  // parity tests, not something to slip in with a fixture. Until then the streaming tests and the tick
+  // metrics skip this rung and its Jacobian/parity coverage still runs.
+  bool streams = true;
 };
 
 namespace detail {
@@ -52,6 +61,20 @@ inline px::CurveStructure spec(const std::vector<double>& knots, int base = -1) 
   px::CurveStructure s;
   s.base = base;
   s.regions = swaps::curve::flat_hermite({}, knots);
+  return s;
+}
+// The SAME knots split into a LINEAR-MAP front (Hermite, W-cacheable) and a VALUE-DEPENDENT back
+// (MonotoneCubic, Hyman-filtered). Every other rung is linear end to end, so until 2026-09-10 nothing in
+// the ladder exercised the router's per-row partition at all: a scheme is not an instrument shape, and the
+// ladder only varied instruments. `split` is the first knot that belongs to the non-linear region, so the
+// curve's LINEAR HORIZON is knots[split - 1] and a row is compiled iff every time it reads sits at or below it.
+inline px::CurveStructure spec_mixed(const std::vector<double>& knots, std::size_t split, int base = -1) {
+  px::CurveStructure s;
+  s.base = base;
+  const std::vector<double> front(knots.begin(), knots.begin() + static_cast<std::ptrdiff_t>(split));
+  const std::vector<double> back(knots.begin() + static_cast<std::ptrdiff_t>(split), knots.end());
+  s.regions = {swaps::curve::CurveModule{front, swaps::curve::Scheme::Hermite},
+               swaps::curve::CurveModule{back, swaps::curve::Scheme::MonotoneCubic}};
   return s;
 }
 // Par swaps of `conv` at the pillar tenors, forecasting fc / discounting disc; returns the knot times (the last
@@ -184,8 +207,9 @@ inline cal::Instrument butterfly(const cal::BundleProblem& p, int lo, int belly,
   return f;
 }
 inline Shape make(std::string name, std::string note, cal::BundleProblem prob, bool compiled = true,
-                  void (*after_markets)(Shape&) = nullptr) {
+                  void (*after_markets)(Shape&) = nullptr, bool streams = true) {
   Shape s; s.name = std::move(name); s.note = std::move(note); s.prob = std::move(prob); s.expect_compiled = compiled;
+  s.streams = streams;
   fill_x(s); set_markets(s);
   if (after_markets) after_markets(s);
   finish(s);
@@ -244,6 +268,59 @@ inline Shape averaged_leg_moment() {  // the same FF OIS legs on the MOMENT path
   p.curves = {detail::spec(k0), detail::spec(k1, 0)};
   return detail::make("averaged_leg_moment", "USD SOFR OIS + FF OIS with daily-averaged float coupons on the MOMENT path", std::move(p));
 }
+// EVERY LINEAR-MAP SCHEME IN ONE CURVE (2026-09-10). The ladder's promise is that a kernel change is measured
+// on every shape it accepts, but until now "shape" meant only the INSTRUMENT: every rung interpolated with
+// flat_hermite, so Flat, Linear, NaturalCubic, BSpline and Tension appeared nowhere in it. This rung walks one
+// SOFR curve through all six W-cacheable schemes in region order -- which also exercises the claim that regions
+// compose in ANY order -- and mixed_scheme() below adds the seventh, MonotoneCubic. Together the two cover
+// curve::Scheme exhaustively, and ShapeLadder.CoversEveryQuoteKindAndScheme fails if a new scheme is added
+// without a rung.
+inline Shape all_schemes() {
+  cal::BundleProblem p;
+  // 18 pillars, not the usual 12: a cubic B-spline region needs >= 3 knots, so every region gets 3.
+  const std::vector<std::string> tenors = {"1Y",  "2Y",  "3Y",  "4Y",  "5Y",  "6Y",  "7Y",  "8Y",  "9Y",
+                                           "10Y", "11Y", "12Y", "15Y", "20Y", "25Y", "30Y", "35Y", "40Y"};
+  const auto k = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0, tenors);
+  const swaps::curve::Scheme order[] = {swaps::curve::Scheme::Flat,        swaps::curve::Scheme::Linear,
+                                        swaps::curve::Scheme::NaturalCubic, swaps::curve::Scheme::Hermite,
+                                        swaps::curve::Scheme::BSpline,     swaps::curve::Scheme::Tension};
+  px::CurveStructure s0;
+  s0.base = -1;
+  const std::size_t per = k.size() / 6;  // 18 knots -> 3 per region (the B-spline minimum)
+  for (std::size_t r = 0; r < 6; ++r) {
+    const std::size_t lo = r * per, hi = (r == 5) ? k.size() : (r + 1) * per;
+    s0.regions.push_back(swaps::curve::CurveModule{
+        std::vector<double>(k.begin() + static_cast<std::ptrdiff_t>(lo), k.begin() + static_cast<std::ptrdiff_t>(hi)),
+        order[r]});
+  }
+  p.curves = {s0};
+  return detail::make("all_schemes",
+                      "USD SOFR OIS over six regions, one per LINEAR-MAP scheme: Flat, Linear, NaturalCubic, "
+                      "Hermite, BSpline, Tension (all W-cacheable)",
+                      std::move(p));
+}
+
+// THE MIXED-SCHEME RUNG (2026-09-10). The `averaged` bundle -- SOFR OIS + FF averaged futures and basis on a
+// spread curve -- with the SOFR curve's long end interpolated by MonotoneCubic instead of Hermite. This is the
+// desk shape the router was rewritten for: FF futures and short swaps sit under the linear horizon and keep the
+// W-cache, while the long swaps that read into the value-dependent region go to the AAD block. Before the
+// rewrite ONE such region sent every row in the bundle to AAD; the ladder could not see that, because every
+// rung was linear. expect_compiled is false: with a partition the tick is not allocation-free.
+inline Shape mixed_scheme() {
+  cal::BundleProblem p;
+  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  auto k1 = detail::add_averaged_futures(p, "USD-FEDFUNDS", 1, 6);
+  const auto P = detail::pillars();
+  const std::vector<std::string> longer(P.begin() + 1, P.end());  // 2Y..30Y basis
+  const auto k1b = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, longer);
+  k1.insert(k1.end(), k1b.begin(), k1b.end());
+  // pillars() is 1Y..30Y; split at index 6 => Hermite through 10Y, MonotoneCubic over 12Y..30Y.
+  p.curves = {detail::spec_mixed(k0, 6), detail::spec(k1, 0)};
+  return detail::make("mixed_scheme",
+                      "averaged + the SOFR long end on MonotoneCubic: the router's per-row partition "
+                      "(front rows W-cached, long rows on the AAD block)",
+                      std::move(p), false, nullptr, /*streams=*/false);
+}
 inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row; q_cross crosses the upper edge on odd rows
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
   p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
@@ -293,9 +370,14 @@ inline Shape fx_xccy() {  // USD SOFR + EUR ESTR + EUR-in-USD collateral curve: 
   p.curves = {detail::spec(k0), detail::spec(k1), detail::spec(k2)};
   return detail::make("fx_xccy", "USD SOFR + EUR ESTR + EUR-in-USD: 5 FX forwards + 8 MtM xccy basis rows", std::move(p), true);  // compiled since 2026-09-09
 }
-inline Shape desk() {  // everything at once: 5 curves, every quote kind, bands, a turn, butterflies
+// everything at once: 5 curves, every quote kind, bands, a turn, butterflies. `mixed` puts the SOFR curve's
+// long end on MonotoneCubic, which is the ONLY difference between the desk and desk_mixed rungs -- so the pair
+// isolates what the router's per-row partition costs and buys on the full-coverage bundle, with nothing else
+// varying between them.
+inline Shape desk_impl(bool mixed) {
   cal::BundleProblem p;
-  auto s0 = detail::spec(detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0));
+  const auto k_sofr = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  auto s0 = mixed ? detail::spec_mixed(k_sofr, 6) : detail::spec(k_sofr);
   const int n_sofr = p.n_residuals();
   s0.turns = {px::Turn{b::curve_time(detail::vd(), b::Date::from_iso("2026-12-31")), b::curve_time(detail::vd(), b::Date::from_iso("2027-01-04"))}};
   auto k1 = detail::add_averaged_futures(p, "USD-FEDFUNDS", 1, 6);
@@ -321,17 +403,24 @@ inline Shape desk() {  // everything at once: 5 curves, every quote kind, bands,
   p.instruments.push_back(detail::butterfly(p, 1, 4, 6));
   p.instruments.push_back(detail::butterfly(p, 4, 6, 11));
   p.curves = {s0, detail::spec(k1, 0), detail::spec(k2), detail::spec(k3), detail::spec(k4, 2)};
-  return detail::make("desk", "5 curves: SOFR (banded, turn, butterflies) + FF basis & averaged futures + ESTR + EUR-in-USD (FX/xccy) + EURIBOR", std::move(p), true,
+  return detail::make(mixed ? "desk_mixed" : "desk",
+                      mixed ? "desk with the SOFR long end on MonotoneCubic: the full-coverage bundle across "
+                              "the router's partition (front rows W-cached, long rows on the AAD block)"
+                            : "5 curves: SOFR (banded, turn, butterflies) + FF basis & averaged futures + ESTR + EUR-in-USD (FX/xccy) + EURIBOR",
+                      std::move(p), !mixed,
                       [](Shape& s) {
                         auto& ins = s.prob.instruments;
                         for (int i = 0; i < 12; ++i) { ins[i].band_lower = ins[i].market - 1e-4; ins[i].band_upper = ins[i].market + 1e-4; ins[i].band_decay = 0.5; }
                         auto& t = ins[ins.size() - 3]; t.band_lower = t.market - 5e-4; t.band_upper = t.market + 5e-4; t.band_decay = 0.3;
-                      });
+                      },
+                      /*streams=*/!mixed);
   (void)n_sofr;
 }
+inline Shape desk() { return desk_impl(false); }
+inline Shape desk_mixed() { return desk_impl(true); }
 
 inline std::vector<Shape> ladder() {
-  return {ois_nolag(), ois_lag(), ibor_multicurve(), basis_spread(), averaged(), averaged_leg(), averaged_leg_moment(), banded(), turns(), portfolio(), zero_coupon(), fx_xccy(), desk()};
+  return {ois_nolag(), ois_lag(), ibor_multicurve(), basis_spread(), averaged(), averaged_leg(), averaged_leg_moment(), all_schemes(), mixed_scheme(), banded(), turns(), portfolio(), zero_coupon(), fx_xccy(), desk(), desk_mixed()};
 }
 
 }  // namespace swaps::shapes

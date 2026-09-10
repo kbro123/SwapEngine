@@ -7,7 +7,9 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <functional>
 #include <iostream>
+#include <set>
 
 #include "malloc_count.hpp"
 #include "shape_ladder.hpp"
@@ -18,6 +20,7 @@
 #include "swaps/calibration/jacobian.hpp"
 
 namespace cal = swaps::calibration;
+namespace cv = swaps::curve;
 namespace api = swaps::api;
 using swaps::shapes::Shape;
 using swaps::testing::AllocScope;
@@ -29,6 +32,39 @@ double rel(const Eigen::MatrixXd& a, const Eigen::MatrixXd& b) {
 }  // namespace
 
 // T3: compiled/hybrid == templated == AAD on every rung, at x_true and off it.
+// THE LADDER'S PROMISE, ENFORCED (2026-09-10). Its header says it carries "every instrument shape the
+// compiled / hybrid hot path accepts", and for QuoteKind that was true -- but "shape" had silently meant only
+// the INSTRUMENT: every rung built its curves with flat_hermite, so five of the seven interpolation schemes
+// appeared nowhere in the ladder and the router's per-row partition could not be measured by it at all. A
+// promise that nothing checks decays exactly this quietly, so both dimensions are now asserted here: adding a
+// QuoteKind or a curve::Scheme without a rung that uses it fails this test.
+TEST(ShapeLadder, CoversEveryQuoteKindAndScheme) {
+  std::set<cal::QuoteKind> kinds;
+  std::set<cv::Scheme> schemes;
+  const std::function<void(const cal::Instrument&)> note = [&](const cal::Instrument& in) {
+    kinds.insert(in.quote);
+    for (const auto& c : in.combination) note(c.instrument);  // a Portfolio's components are instruments too
+  };
+  for (const Shape& s : swaps::shapes::ladder()) {
+    for (const auto& in : s.prob.instruments) note(in);
+    for (const auto& c : s.prob.curves)
+      for (const auto& r : c.regions) schemes.insert(r.scheme);
+  }
+  // The enums are the authority; this list only has to stay in step with them, which the loops below enforce.
+  for (const cal::QuoteKind k : {cal::QuoteKind::ParRate, cal::QuoteKind::ParSpread, cal::QuoteKind::Rate,
+                                 cal::QuoteKind::ZeroCouponRate, cal::QuoteKind::FxForward,
+                                 cal::QuoteKind::XccyMtmBasis, cal::QuoteKind::Portfolio,
+                                 cal::QuoteKind::TurnJump})
+    EXPECT_TRUE(kinds.count(k)) << "no ladder rung uses QuoteKind #" << static_cast<int>(k)
+                                << " -- add one to bench/fixtures/shape_ladder.hpp";
+  for (const cv::Scheme sc : {cv::Scheme::Flat, cv::Scheme::Linear, cv::Scheme::NaturalCubic, cv::Scheme::Hermite,
+                              cv::Scheme::MonotoneCubic, cv::Scheme::BSpline, cv::Scheme::Tension})
+    EXPECT_TRUE(schemes.count(sc)) << "no ladder rung interpolates with Scheme #" << static_cast<int>(sc)
+                                   << " -- add one to bench/fixtures/shape_ladder.hpp";
+  std::cout << "  [ladder] covers " << kinds.size() << " quote kinds and " << schemes.size() << " schemes over "
+            << swaps::shapes::ladder().size() << " rungs\n";
+}
+
 TEST(ShapeLadder, HybridResidualAndJacobianMatchTemplatedAndAadOnEveryShape) {
   for (const Shape& s : swaps::shapes::ladder()) {
     const cal::HybridBundleResidual h(s.prob);
@@ -53,6 +89,7 @@ TEST(ShapeLadder, HybridResidualAndJacobianMatchTemplatedAndAadOnEveryShape) {
 TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
   if (!swaps::testing::alloc_counting_available()) GTEST_SKIP() << "allocation counting needs libmalloc's logger (macOS)";
   for (const Shape& s : swaps::shapes::ladder()) {
+    if (!s.streams) continue;  // see Shape::streams -- the session's whole-bundle streaming veto, not the maths
     api::BundleSession sess(s.prob);
     sess.calibrate(s.x0);
     ASSERT_LT(sess.result().rms_residual, 1e-8) << s.name << ": cold calibrate must converge";
@@ -118,6 +155,24 @@ TEST(ShapeLadder, MomentPathAgreesWithTheExactDailyAverageOnFedFundsOis) {
 // pins the fixture's ticks themselves.
 TEST(ShapeLadder, EveryRungConvergesOnTheGateTicks) {
   for (const Shape& s : swaps::shapes::ladder()) {
+    if (!s.streams) {  // it cannot stream (Shape::streams), but it MUST still cold-calibrate every tick
+      api::BundleSession sess(s.prob);
+      sess.calibrate(s.x0);
+      EXPECT_TRUE(sess.needs_recalibrate()) << s.name << ": the session should say why it cannot stream";
+      for (const Eigen::VectorXd* q : {&s.q_big, &s.q_small, &s.q0}) {
+        cal::BundleProblem p = s.prob;
+        for (int i = 0; i < p.n_residuals(); ++i) p.instruments[static_cast<std::size_t>(i)].market = (*q)[i];
+        api::BundleSession re(p);
+        re.calibrate(s.x0);
+        EXPECT_TRUE(re.result().converged) << s.name << ": " << re.result().status;
+        EXPECT_TRUE(re.x().allFinite()) << s.name;
+        // A HARD square rung must reprice; a banded / over-determined one is a soft least-squares fit whose
+        // residual legitimately does not go to zero (same distinction the streaming branch below makes).
+        if (s.prob.n_residuals() == s.prob.n_knots() && !s.has_bands)
+          EXPECT_LT(re.result().rms_residual, 1e-8) << s.name << ": recalibrate must reprice every gate tick";
+      }
+      continue;
+    }
     api::BundleSession sess(s.prob);
     sess.calibrate(s.x0);
     sess.start_streaming();
