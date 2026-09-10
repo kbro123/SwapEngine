@@ -101,24 +101,87 @@ class CompiledCurveSet {
       const Eigen::MatrixXd Wc = logdf_weight(c, tms[c]);
       for (int k = 0; k < static_cast<int>(rows[c].size()); ++k) W_.row(rows[c][k]) = Wc.row(k);
     }
+    // BLOCK-SPARSE form of W for the per-tick DF stage (E4.D "per-curve W ancestry", 2026-09-10): a curve's
+    // log-DF row is nonzero only on its OWN knot block and its base chain's, so the dense n_times x n_knots
+    // GEMV multiplied zeros for every other curve (the desk: 857 times x 67 knots, ~2.8x the nonzeros --
+    // the DF stage was 73 % of a Newton step there). Per curve: its registered rows, and one dense
+    // (rows x n_knots_a) block per ancestry curve a; df_into sums the blocks and scatters. W_ stays dense
+    // for the Jacobian's transposed product, rowsum_ and the batched (matrix) overloads.
+    blk_rows_.assign(specs_.size(), {});
+    blk_.assign(specs_.size(), {});
+    blk_contig_.assign(specs_.size(), -1);
+    int max_rows = 0;
+    for (int c = 0; c < static_cast<int>(specs_.size()); ++c) {
+      if (rows[c].empty()) continue;
+      blk_rows_[c] = rows[c];
+      max_rows = std::max(max_rows, static_cast<int>(rows[c].size()));
+      // Rows registered in one unbroken ascending run (every single-curve bundle) write straight into `out`.
+      bool contig = true;
+      for (std::size_t k = 1; k < rows[c].size() && contig; ++k) contig = rows[c][k] == rows[c][k - 1] + 1;
+      if (contig) blk_contig_[c] = rows[c].front();
+      // The ancestry's knot blocks, MERGED where they are adjacent in the state (a spread chain c -> c-1 -> ... -> 0
+      // is one contiguous prefix): one GEMV per maximal column range, so a deep chain costs one call, not one per
+      // ancestor (36 tiny GEMVs on the 8-curve chain cost more in call overhead than the zeros they skipped).
+      std::vector<std::pair<int, int>> ranges;  // [off, off + nk) per ancestry curve
+      for (int a = c; a >= 0; a = specs_[a].base)
+        if (specs_[a].n_knots() > 0) ranges.emplace_back(knot_offset_[a], knot_offset_[a] + specs_[a].n_knots());
+      std::sort(ranges.begin(), ranges.end());
+      std::vector<std::pair<int, int>> merged;
+      for (const auto& r : ranges) {
+        if (!merged.empty() && merged.back().second == r.first) merged.back().second = r.second;
+        else merged.push_back(r);
+      }
+      for (const auto& r : merged) {
+        const int off = r.first, nk = r.second - r.first;
+        Eigen::MatrixXd B(static_cast<int>(rows[c].size()), nk);
+        for (int k = 0; k < static_cast<int>(rows[c].size()); ++k) B.row(k) = W_.row(rows[c][k]).segment(off, nk);
+        blk_[c].push_back({off, nk, std::move(B)});
+      }
+    }
+    blk_tmp_.resize(max_rows);
   }
 
-  Eigen::VectorXd df(const Eigen::VectorXd& x) const { return (-(W_ * x).array()).exp(); }
-  // Allocation-free DF: writes exp(-W_all x) into the caller's `out` scratch (bit-identical to df(x)).
+  Eigen::VectorXd df(const Eigen::VectorXd& x) const {
+    Eigen::VectorXd out;
+    df_into(x, out);
+    return out;
+  }
+  // Allocation-free DF: writes exp(-W_all x) into the caller's `out` scratch (df(x) calls this, so the two are
+  // identical). Block-sparse: each curve's rows sum their ancestry blocks only (see finalize); the batched
+  // matrix overloads below still use the dense W, so a column of those agrees with this to rounding, not bit.
   void df_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const {
-    out.noalias() = W_ * x;
+    out.resize(static_cast<int>(pts_.size()));
+    for (std::size_t c = 0; c < blk_.size(); ++c) {
+      const auto& rows = blk_rows_[c];
+      if (rows.empty()) continue;
+      const int m = static_cast<int>(rows.size());
+      auto acc = blk_contig_[c] >= 0 ? out.segment(blk_contig_[c], m) : blk_tmp_.head(m);
+      bool first = true;
+      for (const auto& b : blk_[c]) {
+        if (first) { acc.noalias() = b.W * x.segment(b.off, b.nk); first = false; }
+        else acc.noalias() += b.W * x.segment(b.off, b.nk);
+      }
+      if (first) acc.setZero();
+      if (blk_contig_[c] < 0) {
+        double* __restrict o = out.data();
+        const double* __restrict a = acc.data();
+        const int* __restrict r = rows.data();
+        for (int k = 0; k < m; ++k) o[r[k]] = a[k];
+      }
+    }
     out = (-out.array()).exp();
   }
   // BATCHED DF (hot-path design R12): a MATRIX of curve-states X (n_knots x n_states) -> DF grid
   // (n_times x n_states) = exp(-W_all·X), one GEMM + one vectorized exp. This is the exposure/MC lever:
-  // repricing 10k paths x 100 nodes shares ONE W·X matmul instead of N_states separate matvecs. Column j is
-  // bit-identical to df_into(X.col(j), .). Alloc-free after the first sizing of `out`.
+  // repricing 10k paths x 100 nodes shares ONE W·X matmul instead of N_states separate matvecs. Column j
+  // equals df_into(X.col(j), .) to rounding (dense GEMM vs the block-sparse vector path). Alloc-free after
+  // the first sizing of `out`.
   void df_into(const Eigen::MatrixXd& X, Eigen::MatrixXd& out) const {
     out.noalias() = W_ * X;
     out = (-out.array()).exp();
   }
   // ROW-MAJOR batched DF grid (design R12 coupon-batch): the SAME exp(-W_all·X) as the column-major
-  // overload above (column j bit-identical to df_into(X.col(j),·)), but stored ROW-MAJOR so that each
+  // overload above (column j equal to df_into(X.col(j),·) to rounding), but stored ROW-MAJOR so that each
   // DFg.row(t) is contiguous. The per-coupon row gathers in BundleFloatBatch::pv_grid /
   // BundleFixedLegs::annuity_grid then run unit-stride across states instead of striding a column-major
   // grid by n_times. Calibration NEVER calls this — its df_into(VectorXd/MatrixXd) overloads are UNCHANGED.
@@ -194,6 +257,12 @@ class CompiledCurveSet {
   std::map<std::pair<int, double>, int> idx_;
   std::vector<std::pair<int, double>> pts_;  // global index -> (curve, time)
   Eigen::MatrixXd W_;
+  // Block-sparse W for df_into (finalize): per curve its global rows and one dense block per ancestry curve.
+  struct AncestryBlock { int off, nk; Eigen::MatrixXd W; };
+  std::vector<std::vector<int>> blk_rows_;
+  std::vector<std::vector<AncestryBlock>> blk_;
+  std::vector<int> blk_contig_;  // first global row when a curve's rows are one ascending run (no scatter), else -1
+  mutable Eigen::VectorXd blk_tmp_;
 };
 
 // THE float batch (design §4) -- the compiled form of the generic FloatCoupon/RateObservation model.

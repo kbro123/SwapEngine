@@ -371,7 +371,7 @@ class CompiledBundleResidual {
  private:
   // DF = exp(-W_all x), memoized on x. model_rates(x) and jacobian(x) are called at the SAME x within
   // an LM step (the accepted point), so they share ONE W*x + exp instead of recomputing it. The gate is
-  // exact equality on x (short-circuit on size), so the returned DF is bit-identical to cs_.df(x).
+  // exact equality on x (short-circuit on size), so the returned DF is identical to cs_.df(x) (the same path).
   const Eigen::VectorXd& df_at(const Eigen::VectorXd& x) const {
     if (x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {
       cs_.df_into(x, df_);  // allocation-free recompute into the df_ scratch
