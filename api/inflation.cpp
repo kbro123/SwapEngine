@@ -11,6 +11,7 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/inflation.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/build/date.hpp"
 #include "swaps/conventions_data.hpp"
 #include "swaps/build/inflation_instruments.hpp"
@@ -27,19 +28,6 @@ namespace b = swaps::build;
 namespace cal = swaps::calibration;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-std::string js(const json::object& o, const char* k, const std::string& d = "") {
-  if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
-  return std::string(o.at(k).as_string().c_str());
-}
-json::array vecf(const std::vector<double>& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (double x : v) a.push_back(x);
-  return a;
-}
 std::vector<double> arrf(const json::object& o, const char* k) {
   std::vector<double> v;
   if (o.contains(k) && o.at(k).is_array())

@@ -19,6 +19,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/vega.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/build/calendar.hpp"
 #include "swaps/build/conventions.hpp"
 #include "swaps/build/day_count.hpp"
@@ -34,22 +35,6 @@ namespace b = swaps::build;
 namespace v = swaps::vol;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-std::string js(const json::object& o, const char* k, const char* d = "") {
-  if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
-  return std::string(o.at(k).as_string().c_str());
-}
-bool jb(const json::object& o, const char* k, bool d) {
-  return o.contains(k) && o.at(k).is_bool() ? o.at(k).as_bool() : d;
-}
-json::array vecf(const std::vector<double>& x) {
-  json::array a;
-  a.reserve(x.size());
-  for (double e : x) a.push_back(e);
-  return a;
-}
 
 // One cell's CURVE-INDEPENDENT schedule in curve time (ACT/365F): expiry, swap start, annual fixed pay times +
 // accruals — the same walk options.cpp uses for the vol cube.

@@ -33,6 +33,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/calib_report.hpp"
+#include "swaps/api/json_util.hpp"
 
 namespace swaps::api {
 
@@ -40,24 +41,6 @@ namespace json = boost::json;
 namespace cal = swaps::calibration;
 
 namespace {
-json::array vecf(const Eigen::VectorXd& v) {
-  json::array a;
-  a.reserve(static_cast<std::size_t>(v.size()));
-  for (Eigen::Index i = 0; i < v.size(); ++i) a.push_back(v[i]);
-  return a;
-}
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-bool jb(const json::object& o, const char* k, bool d) {
-  return o.contains(k) && o.at(k).is_bool() ? o.at(k).as_bool() : d;
-}
-std::vector<int> jia(const json::object& o, const char* k) {
-  std::vector<int> v;
-  if (o.contains(k) && o.at(k).is_array())
-    for (const auto& e : o.at(k).as_array()) v.push_back(static_cast<int>(e.to_number<double>()));
-  return v;
-}
 }  // namespace
 
 std::string calib_report_json(const json::object& request) {

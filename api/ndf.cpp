@@ -9,6 +9,7 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/ndf.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/pricing/ndf.hpp"
 
 namespace swaps::api {
@@ -17,13 +18,6 @@ namespace json = boost::json;
 namespace p = swaps::pricing;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-std::string js(const json::object& o, const char* k, const char* d = "") {
-  if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
-  return std::string(o.at(k).as_string().c_str());
-}
 bool has_num(const json::object& o, const char* k) {
   return o.contains(k) && (o.at(k).is_number() || o.at(k).is_double() || o.at(k).is_int64() ||
                            o.at(k).is_uint64());

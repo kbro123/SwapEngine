@@ -26,6 +26,7 @@
 #include "swaps/api/scenario.hpp"
 
 #include "swaps/api/bundle_api.hpp"        // bundle_from_json / book_from_json / flat_x0 / BundleSession / RegSpec
+#include "swaps/api/json_util.hpp"
 #include "swaps/calibration/bundle_problem.hpp"  // build_bundle_curves / CurveHandle
 #include "swaps/market/scenario.hpp"       // market::Scenario — the shock model wired in here
 
@@ -38,31 +39,6 @@ namespace pf = swaps::portfolio;
 
 namespace {
 
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-std::string js(const json::object& o, const char* k, const std::string& d = "") {
-  if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
-  return std::string(o.at(k).as_string().c_str());
-}
-std::vector<double> darr(const json::object& o, const char* k) {
-  std::vector<double> out;
-  if (o.contains(k) && o.at(k).is_array())
-    for (const auto& e : o.at(k).as_array()) out.push_back(e.to_number<double>());
-  return out;
-}
-json::array vecf(const std::vector<double>& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (double x : v) a.push_back(x);
-  return a;
-}
-json::array vecf(const Eigen::VectorXd& v) {
-  json::array a;
-  a.reserve(static_cast<std::size_t>(v.size()));
-  for (int i = 0; i < v.size(); ++i) a.push_back(v[i]);
-  return a;
-}
 
 // Parse a shift_curve key as an integer curve role. A bundle has no string curve names, so a non-integer
 // key is an error (documented on the header) rather than a silent no-op.

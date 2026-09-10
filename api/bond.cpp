@@ -14,6 +14,7 @@
 
 #include "swaps/api/bond.hpp"
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/build/par_asset_swap.hpp"
 #include "swaps/build/bond.hpp"
 #include "swaps/build/conventions.hpp"
@@ -31,19 +32,6 @@ namespace px = swaps::pricing;
 namespace cal = swaps::calibration;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-std::string js(const json::object& o, const char* k, const std::string& d = "") {
-  if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
-  return std::string(o.at(k).as_string().c_str());
-}
-json::array vecf(const std::vector<double>& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (double x : v) a.push_back(x);
-  return a;
-}
 }  // namespace
 
 std::string bonds_json(const json::object& request) {

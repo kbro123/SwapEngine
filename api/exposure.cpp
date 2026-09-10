@@ -34,6 +34,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/exposure.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/build/date.hpp"
 #include "swaps/calibration/pnl_explain.hpp"  // roll_book: age the book to each exposure node
 #include "swaps/curve/curve_module.hpp"
@@ -53,18 +54,6 @@ namespace tr = swaps::trade;
 namespace bld = swaps::build;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-std::string js(const json::object& o, const char* k, const char* d) {
-  return o.contains(k) && o.at(k).is_string() ? std::string(o.at(k).as_string()) : std::string(d);
-}
-json::array vecf(const std::vector<double>& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (double x : v) a.push_back(x);
-  return a;
-}
 
 // The single-curve filter shared by the legacy whole-book path and the per-netting-set path: keep only
 // swap-kind positions priced entirely off curve 0 (CompiledPortfolio is single self-discounting curve).

@@ -25,6 +25,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/rv.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/build/bond.hpp"
 #include "swaps/build/calendar.hpp"
 #include "swaps/build/date.hpp"
@@ -51,34 +52,6 @@ namespace pf = swaps::portfolio;
 namespace px = swaps::pricing;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-std::string js(const json::object& o, const char* k, const std::string& d = "") {
-  if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
-  return std::string(o.at(k).as_string().c_str());
-}
-json::array vecf(const std::vector<double>& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (double x : v) a.push_back(x);
-  return a;
-}
-json::array vecf(const Eigen::VectorXd& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (int i = 0; i < v.size(); ++i) a.push_back(v[i]);
-  return a;
-}
-std::vector<double> darr(const json::object& o, const char* k) {
-  std::vector<double> out;
-  if (o.contains(k) && o.at(k).is_array())
-    for (const auto& e : o.at(k).as_array()) out.push_back(e.to_number<double>());
-  return out;
-}
-const json::object& sub(const json::object& top, const char* key) {
-  return top.contains(key) && top.at(key).is_object() ? top.at(key).as_object() : top;
-}
 
 // One BondId row: {id, issue, maturity, coupon, first_coupon?}; `convention` is shared across the universe.
 b::BondId bond_id_from(const json::object& o, const std::string& convention) {

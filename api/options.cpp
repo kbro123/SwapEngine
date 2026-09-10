@@ -14,6 +14,7 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/build/calendar.hpp"
 #include "swaps/build/conventions.hpp"
 #include "swaps/build/day_count.hpp"
@@ -30,9 +31,6 @@ namespace b = swaps::build;
 namespace v = swaps::vol;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
 // SABR β from a {alpha,rho,nu[,beta]} object: the CEV backbone in [0,1], 0 (normal SABR) when absent. Every
 // vol verb dropped it until 2026-09-10 (E3-F1: {"alpha":0.30,"beta":1.0}, a 30 % Black level, priced as a
 // 3039 bp NORMAL vol); an out-of-range value is refused rather than silently clamped.
@@ -40,13 +38,6 @@ double sabr_beta_of(const json::object& s) {
   const double b = jd(s, "beta", 0.0);
   if (!(b >= 0.0 && b <= 1.0)) throw std::invalid_argument("sabr: beta must be in [0, 1] (0 = normal SABR, 1 = lognormal)");
   return b;
-}
-std::string js(const json::object& o, const char* k, const char* d = "") {
-  if (!o.contains(k) || o.at(k).is_null() || !o.at(k).is_string()) return d;
-  return std::string(o.at(k).as_string().c_str());
-}
-bool jb(const json::object& o, const char* k, bool d) {
-  return o.contains(k) && o.at(k).is_bool() ? o.at(k).as_bool() : d;
 }
 
 // The swap's DB index is REQUIRED (it carries the product conventions); `currency` is optional and, if given,

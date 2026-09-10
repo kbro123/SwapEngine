@@ -12,6 +12,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/compile.hpp"
+#include "swaps/api/json_util.hpp"
 
 extern "C" const char* swaps_run_json(const char* req) {
   if (!req) return nullptr;
@@ -43,18 +44,6 @@ const char* dup_str(const std::string& s) {
 }
 const char* err_json(const std::string& what) { return dup_str("{\"error\":\"" + what + "\"}"); }
 
-std::vector<double> to_vec(const json::value& v) {
-  std::vector<double> out;
-  if (v.is_array())
-    for (const auto& e : v.as_array()) out.push_back(e.to_number<double>());
-  return out;
-}
-json::array darr(const std::vector<double>& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (double x : v) a.push_back(x);
-  return a;
-}
 }  // namespace
 
 // The C-ABI session: the compiled bundle's session PLUS the smoothing the spec asked for (E3-D4: until
@@ -104,7 +93,7 @@ extern "C" const char* swaps_session_update(void* session, const char* market_js
   try {
     auto* cs = static_cast<CapiSession*>(session);
     BundleSession* s = &cs->sess;
-    const std::vector<double> v = to_vec(json::parse(market_json));
+    const std::vector<double> v = swaps::api::to_vec(json::parse(market_json));
     const Eigen::VectorXd m = Eigen::Map<const Eigen::VectorXd>(v.data(), static_cast<Eigen::Index>(v.size()));
     if (s->needs_recalibrate())
       s->recalibrate(m, cs->reg);  // non-linear region: general warm re-solve
@@ -120,7 +109,7 @@ extern "C" const char* swaps_session_sample(void* session, const char* times_jso
   if (!session || !times_json) return err_json("null arg");
   try {
     BundleSession* s = &static_cast<CapiSession*>(session)->sess;
-    const std::vector<double> times = to_vec(json::parse(times_json));
+    const std::vector<double> times = swaps::api::to_vec(json::parse(times_json));
     return dup_str(json::serialize(swaps::api::sample_to_json(s->sample(times))));  // the ONE sample codec (E6.3)
   } catch (const std::exception& e) {
     return err_json(e.what());

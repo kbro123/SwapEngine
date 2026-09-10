@@ -18,6 +18,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/pnl.hpp"
+#include "swaps/api/json_util.hpp"
 #include "swaps/calibration/pnl_explain.hpp"
 
 namespace swaps::api {
@@ -27,36 +28,6 @@ namespace cal = swaps::calibration;
 namespace pf = swaps::portfolio;
 
 namespace {
-double jd(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
-bool jb(const json::object& o, const char* k, bool d) {
-  return o.contains(k) && o.at(k).is_bool() ? o.at(k).as_bool() : d;
-}
-std::vector<double> darr(const json::object& o, const char* k) {
-  std::vector<double> out;
-  if (o.contains(k) && o.at(k).is_array())
-    for (const auto& e : o.at(k).as_array()) out.push_back(e.to_number<double>());
-  return out;
-}
-std::vector<int> iarr(const json::object& o, const char* k) {
-  std::vector<int> out;
-  if (o.contains(k) && o.at(k).is_array())
-    for (const auto& e : o.at(k).as_array()) out.push_back(static_cast<int>(e.to_number<double>()));
-  return out;
-}
-json::array vecf(const std::vector<double>& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (double x : v) a.push_back(x);
-  return a;
-}
-json::array vecf(const Eigen::VectorXd& v) {
-  json::array a;
-  a.reserve(v.size());
-  for (int i = 0; i < v.size(); ++i) a.push_back(v[i]);
-  return a;
-}
 Eigen::VectorXd to_vec(const std::vector<double>& v) {
   return Eigen::Map<const Eigen::VectorXd>(v.data(), static_cast<Eigen::Index>(v.size()));
 }
