@@ -68,30 +68,22 @@ def actual_edges():
 
 
 def cycles(edges):
-    """Every simple cycle in the edge set (small graph — plain DFS)."""
+    """Every SIMPLE cycle, each reported once (canonical: a cycle is recorded only from its smallest node)."""
     adj = {}
     for a, b in edges:
         adj.setdefault(a, set()).add(b)
-    found, stack, on = [], [], set()
+    out = []
 
-    def walk(n):
-        stack.append(n)
-        on.add(n)
-        for m in sorted(adj.get(n, ())):
-            if m in on:
-                found.append(stack[stack.index(m):] + [m])
-            elif m not in seen:
-                walk(m)
-        stack.pop()
-        on.discard(n)
+    def walk(start, node, path, on):
+        for nxt in sorted(adj.get(node, ())):
+            if nxt == start:
+                out.append(path + [start])
+            elif nxt not in on and nxt > start:  # only paths whose nodes all exceed the start => one per cycle
+                walk(start, nxt, path + [nxt], on | {nxt})
 
-    seen = set()
     for n in sorted(adj):
-        if n not in seen:
-            walk(n)
-            seen.update(stack)
-            seen.add(n)
-    return found
+        walk(n, n, [n], {n})
+    return out
 
 
 def main():
