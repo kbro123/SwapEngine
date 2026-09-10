@@ -897,9 +897,10 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   // Stack the regulariser rows under J: the IFT on min ||r||² + ||Rx||² reads [J; R]ᵀ[J; R] dx = Jᵀ D dq.
   Eigen::MatrixXd S = J;
   if (reg.on()) {
-    const Eigen::MatrixXd R = reg.tension
-                                  ? cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)
-                                  : cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+    // The tension block comes from the session cache (ensure_reg_R: structure-only, built once per reg) --
+    // E3-D6: rebuilding it here cost 4,449 allocations per risk_operator call.
+    const Eigen::MatrixXd& R = reg.tension ? ensure_reg_R(reg)
+                                           : (reg_second_diff_ = cal::second_difference_operator(prob_, reg.lambda, reg.curves));
     S.resize(m + R.rows(), n);
     S << J, R;
   }
@@ -959,17 +960,18 @@ PortfolioReprice BundleSession::price_portfolio(const pf::MultiCurveBook& book_i
   // straight off the derivative vector. PV01 = 1bp · Σⱼ ∂NPV/∂xⱼ = the book's NPV change for a +1bp
   // PARALLEL shift of every fitted knot forward -- no bump-and-reprice. (Left-multiplying this same
   // gradient by risk_operator() would instead give the full per-quote delta ladder, CLAUDE.md #4.)
-  // R11: pooled (heap-free) forward AAD for a narrow bundle, heap Dual beyond MaxW.
-  auto pv01_pass = [&](const auto& xd) {
-    using S = typename std::decay_t<decltype(xd)>::Scalar;
-    const auto Cad = cal::build_bundle_curves<S>(
+  // A WIDTH-ONE directional dual (ad::seed_directional, 2026-09-10): every knot seeded with the same unit
+  // derivative, so one heap-free pass returns Σⱼ ∂NPV/∂xⱼ directly -- the quantity PV01 needs -- instead of
+  // a full-width gradient (E3-A4/D7: 96 % of the one-shot's 71k allocations were the 208-wide heap duals of
+  // that pass, spent to compute one sum). Identical to the gradient's sum to rounding.
+  {
+    const auto xd = ad::seed_directional(x_);
+    const auto Cad = cal::build_bundle_curves<ad::DualDir>(
         prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
-    const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<S>& { return *Cad[i]; };
-    const S npv_ad = book.value<S>(curve_ad);
-    out.pv01 = npv_ad.derivatives().size() ? 1e-4 * npv_ad.derivatives().sum() : 0.0;
-  };
-  if (prob_.n_knots() <= ad::kPooledMaxW) pv01_pass(ad::seed_pooled<ad::kPooledMaxW>(x_));
-  else pv01_pass(ad::seed(x_));
+    const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::DualDir>& { return *Cad[i]; };
+    const ad::DualDir npv_ad = book.value<ad::DualDir>(curve_ad);
+    out.pv01 = npv_ad.derivatives().size() ? 1e-4 * npv_ad.derivatives()[0] : 0.0;
+  }
   return out;
 }
 

@@ -486,6 +486,7 @@ class BundleSession {
   mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
   mutable Eigen::MatrixXd reg_R_;
   mutable bool reg_R_valid_ = false;
+  mutable Eigen::MatrixXd reg_second_diff_;  // risk_operator's legacy second-difference block (uncached, rare)
   mutable double reg_R_lambda_ = 0, reg_R_sigma_ = 0;
   mutable std::vector<int> reg_R_curves_;
   swaps::pricing::FixingTable fixings_;

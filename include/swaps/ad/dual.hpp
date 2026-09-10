@@ -38,6 +38,18 @@ using DualPooled = Eigen::AutoDiffScalar<Eigen::Matrix<double, Eigen::Dynamic, 1
 // the in-object gradient buffer modest (MaxW doubles per scalar).
 inline constexpr int kPooledMaxW = 48;
 
+// DIRECTIONAL seed (E3-A4/D7, 2026-09-10): every knot carries the SAME single derivative slot with value 1, so
+// one heap-free pass of a Scalar = DualPooled<1> function f yields f.derivatives()[0] = Σⱼ ∂f/∂xⱼ -- the
+// all-ones directional derivative (a parallel-shift PV01) -- at the cost of one double pass, instead of a
+// full-width gradient (208 heap-vector duals on the chain fixture: 71k allocations to compute ONE sum).
+using DualDir = DualPooled<1>;
+inline Eigen::Matrix<DualDir, Eigen::Dynamic, 1> seed_directional(const Eigen::VectorXd& x) {
+  const int m = static_cast<int>(x.size());
+  Eigen::Matrix<DualDir, Eigen::Dynamic, 1> xd(m);
+  for (int i = 0; i < m; ++i) xd[i] = DualDir(x[i], 1, 0);  // value x[i], derivative [1]
+  return xd;
+}
+
 template <int MaxW>
 inline Eigen::Matrix<DualPooled<MaxW>, Eigen::Dynamic, 1> seed_pooled(const Eigen::VectorXd& x) {
   const int m = static_cast<int>(x.size());

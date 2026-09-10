@@ -51,8 +51,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 413.8 us x1.3; ratchets DOWN only"
     },
     "chain8x26_book200_price_portfolio_oneshot": {
-      "target_ns": 18642000,
-      "note": "ratcheted 2026-09-08 (like-for-like re-baseline x1.3); ratchets DOWN only"
+      "target_ns": 2970000,
+      "note": "ratcheted 2026-09-10 after E4.D A4/D7 (PV01 by a width-1 directional dual): 2.28 ms x1.3; was 18642000 ns; ratchets DOWN only"
     },
     "sofr_23k_warm_recal_10bp": {
       "target_ns": 56200,

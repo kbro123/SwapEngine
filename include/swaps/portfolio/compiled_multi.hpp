@@ -266,17 +266,14 @@ class CompiledMultiCurveBook {
   // with derivative 1, read the summed derivative). Heap-allocating (full-width ad::Dual), but reached
   // ONLY for a book carrying Xccy/compounded/moment positions -- never the all-compilable streaming path.
   double fallback_directional(const Eigen::VectorXd& x) const {
-    using Dual = swaps::ad::Dual;
-    Eigen::Matrix<Dual, Eigen::Dynamic, 1> xd(n_knots_);
-    for (int k = 0; k < n_knots_; ++k) {
-      xd[k].value() = x[k];
-      xd[k].derivatives() = Eigen::VectorXd::Unit(n_knots_, k);
-    }
-    const auto C = calibration::build_bundle_curves<Dual>(
+    // Width-ONE directional dual (ad::seed_directional, 2026-09-10): the all-ones directional derivative in one
+    // heap-free pass, instead of a full-width gradient summed afterwards.
+    const auto xd = swaps::ad::seed_directional(x);
+    const auto C = calibration::build_bundle_curves<swaps::ad::DualDir>(
         specs_, [&](int c, int i) { return xd[off_[c] + i]; });
-    const auto cof = [&C](int i) -> const calibration::CurveHandle<Dual>& { return *C[i]; };
-    const Dual npv = fallback_.value<Dual>(cof);
-    return npv.derivatives().size() ? npv.derivatives().sum() : 0.0;
+    const auto cof = [&C](int i) -> const calibration::CurveHandle<swaps::ad::DualDir>& { return *C[i]; };
+    const swaps::ad::DualDir npv = fallback_.value<swaps::ad::DualDir>(cof);
+    return npv.derivatives().size() ? npv.derivatives()[0] : 0.0;
   }
 
   std::vector<pricing::CurveStructure> specs_;  // owned copy (fb_curves_ references it; ctor arg may die)
