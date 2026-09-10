@@ -52,10 +52,5 @@ TEST(Swaption, AtmPriceAndParity) {
   EXPECT_NEAR(pay - rec, fs.annuity * (fs.rate - K), 1e-12);
 }
 
-TEST(Swaption, SabrFlatMatchesNormal) {
-  const v::ForwardSwap fs{0.030, 4.3};
-  const v::SabrParams flat{0.0088, -0.3, 0.0};  // nu=0 -> flat smile at alpha
-  const double T = 2.0, K = 0.025;
-  EXPECT_NEAR(v::swaption_price_sabr(fs.rate, fs.annuity, K, T, flat, v::Payoff::Payer),
-              v::swaption_price(fs.rate, fs.annuity, K, 0.0088, T, v::Payoff::Payer), 1e-13);
-}
+// (E5 2026-09-10: `SabrFlatMatchesNormal` deleted -- at nu=0 sabr_normal_vol returns alpha and both sides
+// then make the identical bachelier_price call; it could not fail.)

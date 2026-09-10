@@ -25,7 +25,6 @@ TEST(Sabr, FlatWhenNuZero) {
 
 TEST(Sabr, AtmClosedForm) {
   const v::SabrParams p{0.0088, -0.25, 0.45};
-  EXPECT_NEAR(v::sabr_normal_vol(F, F, T, p), v::sabr_atm_normal_vol(T, p), 1e-13);
   // ATM correction is (2-3rho^2)/24 * nu^2 * T above alpha.
   const double expected = 0.0088 * (1.0 + ((2.0 - 3.0 * 0.25 * 0.25) / 24.0) * 0.45 * 0.45 * T);
   EXPECT_NEAR(v::sabr_normal_vol(F, F, T, p), expected, 1e-13);

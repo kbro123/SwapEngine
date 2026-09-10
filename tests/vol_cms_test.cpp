@@ -31,9 +31,8 @@ TEST(Cms, ConvexityPositiveAndMonotone) {
 
 TEST(Cms, CapletReducesToBachelierAndIntrinsic) {
   const double K = 0.036, kvol = 0.0095;
-  // theta = 0 -> the CMS caplet is a plain Bachelier on the un-adjusted forward (annuity 1).
-  EXPECT_NEAR(v::cms_optionlet<double>(S0, VOL, T, 0.0, K, kvol, /*cap=*/true),
-              v::bachelier_price<double>(S0, K, kvol, T, 1.0, v::Payoff::Payer), 1e-14);
+  // (E5 2026-09-10: the theta=0 `cms_optionlet == bachelier_price` line was deleted -- cms.hpp makes that
+  // exact call at theta=0; it could not fail.)
   // strike vol -> 0, theta -> 0: intrinsic max(S0-K,0) for a cap.
   EXPECT_NEAR(v::cms_optionlet<double>(S0, VOL, T, 0.0, K, 0.0, true), std::max(S0 - K, 0.0), 1e-14);
   EXPECT_NEAR(v::cms_optionlet<double>(S0, VOL, T, 0.0, 0.030, 0.0, true), std::max(S0 - 0.030, 0.0), 1e-14);

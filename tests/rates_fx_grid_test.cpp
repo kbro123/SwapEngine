@@ -1,10 +1,14 @@
-// EXHAUSTIVE cross-product analytic-oracle gate spanning the three "rates/FX" derivative kernels:
+// GRID gate (T5 identities + finite differences + regression freezes, NOT an oracle -- renamed from
+// *_oracle_test on 2026-09-10; the only independent literals here are the Hull conversion factor, the z=0
+// 6 %-yield hand sum and covered interest parity) spanning the three "rates/FX" derivative kernels:
 //   * NDF / NDS         (pricing/ndf.hpp)          — linear covered-interest-parity forward layer,
 //   * bond future / CTD (pricing/bond_future.hpp)  — CME conversion factor + basis / implied repo,
 //   * full-beta SABR    (vol/sabr.hpp)             — Hagan normal-vol smile across the backbone.
 // This COMPLEMENTS ndf_test.cpp / bond_future_test.cpp / vol_sabr_beta_test.cpp: those pin representative
-// points; this sweeps dense GRIDs, adds independent literal oracles (a from-scratch Hagan B.65 evaluation, a
-// hand-rolled 6%-yield clean-price sum), and goes adversarial (randomised seeded baskets, deep-carry NDFs).
+// points; this sweeps dense GRIDs, adds a hand-rolled 6%-yield clean-price sum, freezes the general-β normal
+// SABR expansion against a transcription of its own derivation (a REGRESSION freeze -- the β∈(0,1) VALUE is
+// pinned by the QuantLib SABR oracle in swaps_oracle_tests), and goes adversarial (randomised seeded
+// baskets, deep-carry NDFs).
 // QuantLib-free (targets swaps_tests); deterministic — every random draw is a fixed-seed mt19937.
 #include <gtest/gtest.h>
 
@@ -41,7 +45,7 @@ bool bit_identical(double x, double y) { return std::memcmp(&x, &y, sizeof(doubl
 
 // Covered-interest parity F = S·e^{(r_settle−r_nd)T} to 1e-14 over a grid, and PV=0 exactly at the fair
 // forward for both directions and any notional.
-TEST(RatesFxOracle, NdfCoveredInterestParityAndFairPvGrid) {
+TEST(RatesFxGrid, NdfCoveredInterestParityAndFairPvGrid) {
   const double spots[] = {0.02, 0.20, 1.0, 5.0};
   const double Ts[] = {0.08, 0.5, 2.0, 7.0};
   const double rss[] = {-0.01, 0.0, 0.045, 0.09};
@@ -66,7 +70,7 @@ TEST(RatesFxOracle, NdfCoveredInterestParityAndFairPvGrid) {
 }
 
 // PV is exactly linear in notional, sign-flips with direction, and its Greeks match central FD — over a grid.
-TEST(RatesFxOracle, NdfLinearityAndGreeksGrid) {
+TEST(RatesFxGrid, NdfLinearityAndGreeksGrid) {
   std::mt19937 rng(0x11DEADu);
   std::uniform_real_distribution<double> uS(0.05, 3.0), uK(0.05, 3.0), uT(0.05, 8.0), ur(-0.02, 0.20);
   for (int i = 0; i < 300; ++i) {
@@ -94,7 +98,7 @@ TEST(RatesFxOracle, NdfLinearityAndGreeksGrid) {
 
 // NDS fair rate reprices the strip to ~0, sits inside the per-period forward range, and is notional-weighting
 // dependent but direction independent — over several strips.
-TEST(RatesFxOracle, NdsFairRateRepricesStripGrid) {
+TEST(RatesFxGrid, NdsFairRateRepricesStripGrid) {
   const double S = 0.20, rs = 0.045;
   for (double rn : {0.02, 0.105, 0.18}) {
     const std::vector<double> mats{0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0};
@@ -149,7 +153,7 @@ double clean_6pct_zzero(double coupon, int two_n) {  // two_n = number of semian
 
 // (1) cme_conversion_factor == the engine's own 6%-yield clean price (bond_clean_from_yield), AND ==
 // the from-scratch closed-form oracle for z=0 — over a grid of (n, z, coupon). ~1e-10.
-TEST(RatesFxOracle, ConversionFactorEqualsSixPercentClean) {
+TEST(RatesFxGrid, ConversionFactorEqualsSixPercentClean) {
   struct Case { int n; int z; int half_years; double coupon; };
   const Case cases[] = {
       {2, 0, 4, 0.02},  {2, 6, 5, 0.02},  {5, 0, 10, 0.0375}, {5, 6, 11, 0.0375},
@@ -174,7 +178,7 @@ TEST(RatesFxOracle, ConversionFactorEqualsSixPercentClean) {
 
 // (2) Net basis == 0 at the implied repo, and is strictly monotone increasing in the funding repo — over a
 // randomised seeded set of deliverables and futures/day settings.
-TEST(RatesFxOracle, NetBasisZeroAtImpliedRepoAndMonotone) {
+TEST(RatesFxGrid, NetBasisZeroAtImpliedRepoAndMonotone) {
   std::mt19937 rng(20240906u);
   std::uniform_real_distribution<double> uClean(0.90, 1.08), uCf(0.85, 1.05), uAcc(0.0, 0.03),
       uFut(0.90, 1.08), uDays(30.0, 180.0);
@@ -201,7 +205,7 @@ TEST(RatesFxOracle, NetBasisZeroAtImpliedRepoAndMonotone) {
 
 // (3) CTD = argmax implied repo across a randomised seeded basket, cross-checked by a brute-force scan; and
 // select_ctd agrees with a direct argmax over the results.
-TEST(RatesFxOracle, CtdIsArgmaxImpliedRepoRandomBasket) {
+TEST(RatesFxGrid, CtdIsArgmaxImpliedRepoRandomBasket) {
   std::mt19937 rng(0xBA5Eu);
   std::uniform_real_distribution<double> uClean(0.85, 1.10), uCf(0.80, 1.10), uAcc(0.0, 0.03),
       uFut(0.92, 1.05), uRepo(0.01, 0.08), uDays(45.0, 150.0);
@@ -218,17 +222,14 @@ TEST(RatesFxOracle, CtdIsArgmaxImpliedRepoRandomBasket) {
     std::vector<p::DeliverableResult<double>> res;
     for (const auto& in : basket) res.push_back(p::analyze_deliverable<double>(in, fut, repo, days, kRepoBasis));
 
-    // Brute-force argmax of implied repo (ties -> first, matching select_ctd).
-    std::size_t want = 0;
-    for (std::size_t i = 1; i < res.size(); ++i)
-      if (res[i].implied_repo > res[want].implied_repo) want = i;
+    // The CTD is the deliverable with the highest implied repo -- the specification of select_ctd, asserted
+    // against every other deliverable. (E5 2026-09-10: the former "brute-force argmax" was select_ctd's own
+    // loop re-typed, and the "implied_repo independent of `repo`" check was vacuous -- `repo` is not an input
+    // of bond_future_implied_repo; both deleted.)
     const std::size_t ctd = p::select_ctd(res);
-    EXPECT_EQ(ctd, want) << "trial=" << trial;
+    ASSERT_LT(ctd, res.size()) << "trial=" << trial;
     for (std::size_t i = 0; i < res.size(); ++i)
-      EXPECT_GE(res[ctd].implied_repo, res[i].implied_repo);
-    // implied_repo is intrinsic (independent of the funding repo passed to analyze_deliverable).
-    auto res2 = p::analyze_deliverable<double>(basket[ctd], fut, repo + 0.03, days, kRepoBasis);
-    EXPECT_NEAR(res2.implied_repo, res[ctd].implied_repo, 1e-13);
+      EXPECT_GE(res[ctd].implied_repo, res[i].implied_repo) << "trial=" << trial;
   }
 }
 
@@ -237,9 +238,10 @@ TEST(RatesFxOracle, CtdIsArgmaxImpliedRepoRandomBasket) {
 // =========================================================================================================
 
 namespace {
-// An independent, from-scratch evaluation of Hagan's general-β NORMAL-vol expansion (A.67a / the arc-length
-// Obłój backbone documented in sabr.hpp). Written separately from the header so it is a genuine oracle, not a
-// paraphrase of the code under test.
+// A TRANSCRIPTION of the general-β normal-vol expansion as sabr.hpp derives it (arc-length ζ, the L²/24 +
+// L⁴/1920 brackets, the same T-term). It is a REGRESSION FREEZE of the header's own derivation, not an
+// oracle (E5 2026-09-10 -- the 2026-09-08 audit showed it is term-for-term the code under test; the
+// independent β∈(0,1) VALUE pin is the QuantLib SabrSmileSection oracle in swaps_oracle_tests).
 double hagan_normal_vol_ref(double F, double K, double T, double alpha, double rho, double nu, double beta) {
   const double e = 1.0 - beta;
   const double L = std::log(F / K);
@@ -280,7 +282,7 @@ double legacy_normal_vol(double fwd, double strike, double expiry, double alpha,
 
 // Over β∈{0,0.25,0.5,0.75,1} and a strike grid: sabr_normal_vol is finite/positive, byte-identical to the
 // legacy closed form at β=0, and matches the independent Hagan reference off-ATM for β>0.
-TEST(RatesFxOracle, SabrNormalVolGridAndOracles) {
+TEST(RatesFxGrid, SabrNormalVolGridAndOracles) {
   const double F = 0.030, T = 5.0, alpha0 = 0.0090, rho = -0.30, nu = 0.45;
   std::vector<double> Ks;
   for (int bp = -180; bp <= 180; bp += 12) Ks.push_back(F + bp / 1e4);
@@ -297,7 +299,7 @@ TEST(RatesFxOracle, SabrNormalVolGridAndOracles) {
         // β=0 must be BIT-FOR-BIT the frozen legacy formula.
         EXPECT_TRUE(bit_identical(got, legacy_normal_vol(F, K, T, alpha, rho, nu))) << "K=" << K;
       } else {
-        // β>0: match the independent Hagan reference (same math, separately coded). ATM handled below.
+        // β>0: freeze against the transcription (drift guard; the value pin is the QuantLib oracle).
         if (std::abs(K - F) > 1e-9)
           EXPECT_NEAR(got, hagan_normal_vol_ref(F, K, T, alpha, rho, nu, beta), 1e-13) << "beta=" << beta;
       }
@@ -307,7 +309,7 @@ TEST(RatesFxOracle, SabrNormalVolGridAndOracles) {
 
 // ATM continuity across β (the ζ/x̂→1 removable singularity), the 3-arg ATM helper == the smile at K=F, and
 // the normal/Black ATM consistency σ_N ≈ F·σ_B·(1 − σ_B²T/24).
-TEST(RatesFxOracle, SabrAtmContinuityAndNormalBlackConsistency) {
+TEST(RatesFxGrid, SabrAtmContinuityAndNormalBlackConsistency) {
   const double F = 0.030, T = 4.0, rho = -0.28, nu = 0.50;
   for (double beta : {0.0, 0.25, 0.5, 0.75, 1.0}) {
     const double alpha = 0.0090 * std::pow(F, -beta);
@@ -334,7 +336,7 @@ TEST(RatesFxOracle, SabrAtmContinuityAndNormalBlackConsistency) {
 
 // Free-beta calibration recovers a KNOWN backbone from a strip generated at that beta (β=0.5 here), from a
 // deliberately different seed — the adversarial recovery test.
-TEST(RatesFxOracle, SabrFreeBetaRecoversKnownBackbone) {
+TEST(RatesFxGrid, SabrFreeBetaRecoversKnownBackbone) {
   const double Fc = 0.028, Tc = 3.0, betaTrue = 0.5;
   const v::SabrParams truth{0.0092 * std::pow(Fc, -betaTrue), -0.31, 0.46, betaTrue};
   std::vector<double> K, mv;

@@ -499,7 +499,9 @@ TEST(BundleApi, TurnsJsonRoundTripPreservesStructureAndCalibrates) {
   api::BundleSession sess(q);
   const cal::CalibrationResult& r = sess.calibrate(x0);
   EXPECT_LT(r.stationarity, 1e-7) << "banded-turn bundle must reach ‖Jᵀr‖∞ ≈ 0";
-  EXPECT_NEAR(sess.x()[delta_index], x_true[delta_index], 5e-4) << "turn δ recovered near its target";
+  // Every quote (the turn pin included) is consistent at x_true, so x_true is the exact zero-residual optimum:
+  // δ is recovered to the reprice contract, not "within half the band" (E5: the old 5e-4 was 17 % of δ).
+  EXPECT_NEAR(sess.x()[delta_index], x_true[delta_index], 1e-8) << "turn δ recovered at its target";
 }
 
 TEST(BundleApi, RunJsonEndToEnd) {
@@ -718,15 +720,24 @@ TEST(BundleApi, RankDeficientBundleStreamsFinite) {
   api::BundleSession sess(p);
   sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
   ASSERT_TRUE(sess.x().allFinite());
+  const double x_anchor = sess.x()[p.n_knots() - 1];  // the unpinned knot after the anchored calibration
   sess.start_streaming({}, 1e-6);
   Eigen::VectorXd q = p.market();
   for (int i = 1; i <= 3; ++i) {
     const Eigen::VectorXd& x = sess.stream_update(q.array() + 1e-5 * i);
     ASSERT_TRUE(x.allFinite()) << "tick " << i << " must stay finite on a rank-deficient bundle";
   }
-  // The solve genuinely tracked the move (not a frozen no-op): model rates follow the shifted market.
-  const Eigen::VectorXd r = p.residuals<double>(sess.x());
-  (void)r;  // residual vs the ORIGINAL market is ~3e-5 (the shift); finiteness is the contract here
+  // The solve genuinely tracked the move (not a frozen no-op): every PINNED instrument reprices the SHIFTED
+  // market to the tick's step_tol contract (E5 2026-09-10: the old test computed the residual and discarded
+  // it -- a solver returning the frozen seed every tick would have passed).
+  cal::BundleProblem shifted = p;
+  for (int i = 0; i < shifted.n_residuals(); ++i) shifted.instruments[i].market = q[i] + 3e-5;
+  const Eigen::VectorXd r = shifted.residuals<double>(sess.x());
+  EXPECT_LT(r.cwiseAbs().maxCoeff(), 1e-7) << "pinned rows must track the shifted market on a rank-deficient bundle";
+  // ... while the unpinned 20y knot stays where the calibration anchored it (the min-norm contract).
+  // (near-null, not null: the Hermite derivative coupling lets a 3e-5 market shift move it by ~2e-6 -- the
+  // min-norm operator does not INVERT the direction, which is the contract; measured 2.3e-6 on 2026-09-10)
+  EXPECT_NEAR(sess.x()[p.n_knots() - 1], x_anchor, 1e-5) << "the near-null direction must not be inverted on a tick";
   EXPECT_LT(sess.last_drift(), 1e-3);
 }
 
@@ -750,7 +761,8 @@ TEST(BundleApi, MinNormCalibrationPinsUnconstrainedStatesToTheSeed) {
   // ~seed, not exactly: the 20y knot is only NEAR-null (Hermite derivative coupling gives the market a
   // weak say), so the anchored optimum is the compromise — deterministic and within bp of the seed,
   // instead of the multi-hundred-percent LM wander this guards against.
-  EXPECT_NEAR(sess.x()[unpinned], seed, 5e-4)
+  // Measured 1.27e-4 on 2026-09-10 (E5: the old 5e-4 pin predates the min-norm completion).
+  EXPECT_NEAR(sess.x()[unpinned], seed, 2e-4)
       << "the null direction must sit near the seed, not at an arbitrary LM endpoint";
   EXPECT_LT(sess.result().rms_residual, 1e-6) << "the anchored re-solve must not disturb the fit";
 }

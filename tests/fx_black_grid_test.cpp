@@ -1,7 +1,9 @@
-// EXHAUSTIVE analytic-oracle gate for the FX lognormal (Garman-Kohlhagen) layer (vol/fx_black.hpp) and the
-// delta-quoted smile (vol/fx_vol_surface.hpp). This COMPLEMENTS fx_black_test.cpp: where that file pins a
-// handful of representative points, this sweeps a dense GRID of (spot, strike, expiry, r_dom, r_for, vol)
-// — including deep ITM/OTM wings and near-zero vol — and asserts the closed-form identities everywhere:
+// GRID gate (T5 identities + finite differences, NOT an oracle -- renamed from *_oracle_test on 2026-09-10:
+// there is no external reference value in this file; the repo's oracle criteria are tests/ORACLE_TESTS.md)
+// for the FX lognormal (Garman-Kohlhagen) layer (vol/fx_black.hpp) and the delta-quoted smile
+// (vol/fx_vol_surface.hpp). This COMPLEMENTS fx_black_test.cpp: where that file pins a handful of
+// representative points, this sweeps a dense GRID of (spot, strike, expiry, r_dom, r_for, vol) — including
+// deep ITM/OTM wings and near-zero vol — and asserts the closed-form identities everywhere:
 //   * put-call parity   C − P = DF_dom·(F − K)   to 1e-12 (absolute, per unit foreign notional),
 //   * every analytic Greek (delta, gamma, vega, theta, rho_dom, rho_for) vs a central finite difference,
 //     with a relative tolerance SCALED by the bump so a wing with a tiny value is not held to an absolute
@@ -61,7 +63,7 @@ std::vector<Pt> make_grid() {
 }  // namespace
 
 // --- 1. Put-call parity across the whole grid --------------------------------------------------------------
-TEST(FxBlackOracle, PutCallParityGrid) {
+TEST(FxBlackGrid, PutCallParityGrid) {
   for (const Pt& p : make_grid()) {
     const double df_dom = std::exp(-p.rd * p.T), df_for = std::exp(-p.rf * p.T);
     const double c = v::gk_price<double>(p.S, p.K, p.vol, p.T, p.rd, p.rf, v::CallPut::Call);
@@ -75,7 +77,7 @@ TEST(FxBlackOracle, PutCallParityGrid) {
 }
 
 // --- 2. vega ≥ 0, gamma ≥ 0, and the zero-vol discounted-intrinsic limit ----------------------------------
-TEST(FxBlackOracle, VegaGammaNonNegativeAndZeroVolIntrinsic) {
+TEST(FxBlackGrid, VegaGammaNonNegativeAndZeroVolIntrinsic) {
   for (const Pt& p : make_grid()) {
     EXPECT_GE(v::gk_vega<double>(p.S, p.K, p.vol, p.T, p.rd, p.rf), 0.0);
     EXPECT_GE(v::gk_gamma<double>(p.S, p.K, p.vol, p.T, p.rd, p.rf), 0.0);
@@ -92,7 +94,7 @@ TEST(FxBlackOracle, VegaGammaNonNegativeAndZeroVolIntrinsic) {
 // The FD error of a central difference is O(bump²·|f'''|); asserting |analytic − FD| ≤ rel·|analytic| + abs
 // with rel≈a few·bump² and a small abs floor keeps deep-wing points (tiny Greeks) honest without a spurious
 // absolute floor. Each Greek is differenced along its own axis with a bump chosen for its curvature.
-TEST(FxBlackOracle, AllGreeksVsFiniteDifference) {
+TEST(FxBlackGrid, AllGreeksVsFiniteDifference) {
   for (const Pt& p : make_grid()) {
     for (auto cp : {v::CallPut::Call, v::CallPut::Put}) {
       // delta = ∂/∂S
@@ -156,7 +158,7 @@ TEST(FxBlackOracle, AllGreeksVsFiniteDifference) {
 // gk_greeks forms d2 = d1 − σ√T. These are algebraically identical but round differently in the LAST bit, so
 // rho_dom agrees only to ~1 ULP (observed max relative diff 5.6e-16), not byte-for-byte. It is therefore
 // pinned with a tight ULP-scale relative tolerance rather than memcmp.
-TEST(FxBlackOracle, OnePassMatchesIndividual) {
+TEST(FxBlackGrid, OnePassMatchesIndividual) {
   for (const Pt& p : make_grid()) {
     for (auto cp : {v::CallPut::Call, v::CallPut::Put}) {
       const v::GkGreeks<double> g = v::gk_greeks<double>(p.S, p.K, p.vol, p.T, p.rd, p.rf, cp);
@@ -183,7 +185,7 @@ TEST(FxBlackOracle, OnePassMatchesIndividual) {
 // (max(intr,0)). These are VALUE-equal (−0.0 == +0.0) but not byte-identical, so price is asserted with ==
 // (which treats signed zeros as equal). delta/rho_dom/rho_for share the same intrinsic expression and ARE
 // byte-identical here.
-TEST(FxBlackOracle, OnePassMatchesIndividualAtZeroVol) {
+TEST(FxBlackGrid, OnePassMatchesIndividualAtZeroVol) {
   for (const Pt& p : make_grid()) {
     for (auto cp : {v::CallPut::Call, v::CallPut::Put}) {
       const v::GkGreeks<double> g = v::gk_greeks<double>(p.S, p.K, 0.0, p.T, p.rd, p.rf, cp);
@@ -199,7 +201,7 @@ TEST(FxBlackOracle, OnePassMatchesIndividualAtZeroVol) {
 }
 
 // --- 5. Implied vol round-trips IN PRICE SPACE (1e-12); vol recovery only where vega is not vanishing -------
-TEST(FxBlackOracle, ImpliedVolPriceRoundTrip) {
+TEST(FxBlackGrid, ImpliedVolPriceRoundTrip) {
   for (const Pt& p : make_grid()) {
     for (auto cp : {v::CallPut::Call, v::CallPut::Put}) {
       const double price = v::gk_price<double>(p.S, p.K, p.vol, p.T, p.rd, p.rf, cp);
@@ -226,7 +228,7 @@ TEST(FxBlackOracle, ImpliedVolPriceRoundTrip) {
 // A strike placed at |Δ| via fx_strike_from_delta must read back that spot-delta magnitude under the same vol,
 // for both rights, over a grid of (T, r_for, vol). The smile's own strike_for_delta fixed point (vol varies
 // with strike) must likewise resolve to the target delta.
-TEST(FxBlackOracle, DeltaStrikeRoundTripGrid) {
+TEST(FxBlackGrid, DeltaStrikeRoundTripGrid) {
   const double S = 1.10;
   for (double rd : {0.0, 0.03, 0.06}) {
     for (double rf : {0.0, 0.02, 0.05}) {

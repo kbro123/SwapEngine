@@ -169,11 +169,10 @@ TEST(Gamma, MarketGammaGaussNewtonTransportIsConsistentAndSymmetric) {
   ASSERT_EQ(Hq.rows(), m);
   ASSERT_EQ(Hq.cols(), m);
 
-  // market_gamma_gn == S^T H_x S with S = dx/dq (the IFT sensitivity), computed independently here.
-  const Eigen::MatrixXd Hx = cal::curve_gamma(prob, x, pf);
+  // (E5 2026-09-10: the former `Hq == Sᵀ H_x S` assertion was a tautology -- gamma.hpp computes exactly that
+  // product from the same two calls -- and was deleted. The transport is pinned below by a finite difference
+  // of the book NPV along each quote direction, compared to Hq's own diagonal.)
   const Eigen::MatrixXd S = cal::ift_quote_sensitivity(prob, x);
-  const Eigen::MatrixXd expect = S.transpose() * Hx * S;
-  EXPECT_LT((Hq - expect).cwiseAbs().maxCoeff(), 1e-9 * (1.0 + Hq.cwiseAbs().maxCoeff()));
 
   // Symmetric by construction.
   EXPECT_LT((Hq - Hq.transpose()).cwiseAbs().maxCoeff(), 1e-9 * (1.0 + Hq.cwiseAbs().maxCoeff()));
@@ -194,7 +193,7 @@ TEST(Gamma, MarketGammaGaussNewtonTransportIsConsistentAndSymmetric) {
     const double fp = npv_at(x + dq * sj);
     const double fm = npv_at(x - dq * sj);
     const double fd = (fp - 2 * f0 + fm) / (dq * dq);
-    const double an = sj.transpose() * Hx * sj;  // == Hq(j,j)
+    const double an = Hq(j, j);  // the operator under test, not a recomputation of its formula
     const double sc = 1.0 + std::abs(an);
     EXPECT_LT(std::abs(fd - an), 1e-3 * sc) << "quote " << j << " fd=" << fd << " analytic=" << an;
   }

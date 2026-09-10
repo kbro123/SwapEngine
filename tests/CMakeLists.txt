@@ -23,7 +23,6 @@ add_executable(swaps_tests
   calendar_data_test.cpp
   build_instruments_test.cpp
   instrument_params_test.cpp
-  build_ref_data_test.cpp
   structure_fingerprint_test.cpp
   market_currency_test.cpp
   market_fx_test.cpp
@@ -31,7 +30,6 @@ add_executable(swaps_tests
   build_tenor_test.cpp
   market_env_test.cpp
   trade_test.cpp
-  trade_csa_test.cpp
   market_scenario_test.cpp
   market_fixing_series_test.cpp
   market_vol_surface_test.cpp
@@ -65,8 +63,8 @@ add_executable(swaps_tests
   zero_coupon_swap_test.cpp
   conventions_property_test.cpp
   curve_property_test.cpp
-  fx_black_oracle_test.cpp
-  rates_fx_oracle_test.cpp
+  fx_black_grid_test.cpp
+  rates_fx_grid_test.cpp
   vol_cap_stripping_test.cpp
   vol_cube_interp_test.cpp
   vol_swaption_test.cpp

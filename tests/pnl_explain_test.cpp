@@ -5,7 +5,8 @@
 // production verb uses (BundleSession::calibrate + price_portfolio_risk for the analytic delta ladder).
 //
 // Proves:
-//   (a) the components SUM to total EXACTLY — residual closes the identity to 1e-9 (the non-negotiable
+//   (a) the residual IS the horizon market move minus its linear explanation, recomputed from the pricing
+//       primitives outside pnl_explain (the sum identity itself is definitional and is not asserted; the
 //       contract), on a combined move (time AND market together);
 //   (b) a PURE MARKET move (dt = 0, q1 != q0) lands ~entirely in `market`, which equals ladder·dq and
 //       explains almost all of `total` (residual is the small second-order piece);
@@ -146,7 +147,15 @@ TEST(PnlExplain, ComponentsSumToTotal) {
   const cal::PnlExplain e =
       cal::pnl_explain(s0->problem(), book, s0->x(), s1->x(), /*dt=*/0.25, ladder, dq);
 
-  EXPECT_NEAR(e.carry + e.roll + e.market + e.residual, e.total, 1e-9);
+  // The residual is DEFINED in pnl_explain.hpp as total − carry − roll − market, so the sum identity cannot
+  // fail (E5 2026-09-10: the old `carry+roll+market+residual == total` line was a tautology). What can fail
+  // is the residual's MEANING -- the horizon market move minus its linear explanation -- so pin that against
+  // the primitives composed OUTSIDE pnl_explain: residual == [NPV(x1, t1) − NPV(x0, t1)] − ladder·dq.
+  const pf::MultiCurveBook rolled = cal::roll_book(book, 0.25, /*shift=*/true);
+  const double npv1_t1 = cal::book_npv(s0->problem(), rolled, s1->x());
+  const double npv0_t1 = cal::book_npv(s0->problem(), rolled, s0->x());
+  EXPECT_NEAR(e.residual, (npv1_t1 - npv0_t1) - ladder.dot(dq), 1e-9);
+  EXPECT_NEAR(e.total, npv1_t1 - cal::book_npv(s0->problem(), book, s0->x()), 1e-9);
   // per-instrument ladder sums to the aggregate market term.
   double lad_sum = 0.0;
   for (double v : e.market_ladder) lad_sum += v;

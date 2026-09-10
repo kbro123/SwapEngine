@@ -153,10 +153,11 @@ TEST(ScenarioVerb, ParallelShiftLowersDiscountsAndRaisesZeros) {
 
   for (std::size_t i = 0; i < bt.size(); ++i) {
     EXPECT_LT(sd[i], bd[i]) << "shocked DF must be below base at t=" << bt[i];
-    EXPECT_NEAR(sz[i] - bz[i], 0.0025, 2e-4) << "zero must rise ~25bp at t=" << bt[i];
+    // A parallel shift of every instantaneous forward moves every zero rate by EXACTLY the shift.
+    EXPECT_NEAR(sz[i] - bz[i], 0.0025, 1e-9) << "zero must rise by exactly 25bp at t=" << bt[i];  // E5: was 2e-4 (8 %)
   }
-  // DF(0.5) shift is dominated by exp(-0.0025*0.5): a small but strictly-negative move.
-  EXPECT_NEAR(sd[3], bd[3] * std::exp(-0.0025 * 10.0), 5e-4) << "DF(10) ~ base·exp(-25bp·10y)";
+  // and DF(10) = base · exp(−25bp · 10y) exactly.
+  EXPECT_NEAR(sd[3], bd[3] * std::exp(-0.0025 * 10.0), 1e-12) << "DF(10) = base·exp(-25bp·10y)";  // E5: was 5e-4
 }
 
 // (b) The book NPV delta under a parallel shift matches PV01·25 to first order (sign + rough magnitude).

@@ -64,7 +64,10 @@ TEST(Credit, FlatHazardRepricesParSpreadExactly) {
   EXPECT_NEAR(surv.survival(T), std::exp(-h * T), 1e-12);
   const auto probe = b::make_cds(T, /*spread=*/0.0, R, FlatDf{r}, 4, 4, 365.0 / 360.0);
   const double s_model = probe.model_quote<double>(surv);
-  EXPECT_NEAR(s_model, (1.0 - R) * h, 5e-4);  // discretised leg ≈ closed-form credit triangle
+  // The quarterly protection/premium discretisation of a flat-hazard CDS sits a few bp off the continuous
+  // credit triangle (1−R)·h = 180 bp: the closed form is a sanity band only; the VALUE pin is the QuantLib
+  // MidPointCdsEngine oracle (swaps_oracle_tests, E5 T1).
+  EXPECT_NEAR(s_model, (1.0 - R) * h, 5e-4);
   EXPECT_GT(s_model, 0.0);
 
   // Build the instrument AT its own par spread => residual is exactly zero.

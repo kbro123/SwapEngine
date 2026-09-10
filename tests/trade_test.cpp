@@ -38,9 +38,11 @@ TEST(Trade, VanillaPayerSwapToPosition) {
   EXPECT_FALSE(pos.float_coupons.empty());
   EXPECT_FALSE(pos.fixed_coupons.empty());
 
-  // Last pay ~ 10y (curve time, ACT/365F from the value date; a couple of days of spot+pay lag on top).
-  EXPECT_NEAR(pos.float_coupons.back().pay, 10.0, 0.1);
-  EXPECT_NEAR(pos.fixed_coupons.back().pay, 10.0, 0.1);
+  // Last pay: maturity 2036-01-15 (a Tuesday, unadjusted) + the SOFR 2-business-day payment lag =
+  // 2036-01-17, i.e. 3654 days from the value date = 10.010958904109590 ACT/365F (hand computation,
+  // 2026-09-10). E5: the old ±0.1y bound could not see a dropped pay lag or an unadjusted maturity.
+  EXPECT_NEAR(pos.float_coupons.back().pay, 3654.0 / 365.0, 1e-12);
+  EXPECT_NEAR(pos.fixed_coupons.back().pay, 3654.0 / 365.0, 1e-12);
 }
 
 TEST(Trade, ReceiverFlipsTheNotionalSign) {

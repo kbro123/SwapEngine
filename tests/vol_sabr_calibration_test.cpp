@@ -57,7 +57,15 @@ TEST(SabrCalib, FitsNonSabrStripWithinTolerance) {
   }
   const v::SabrCalibResult r = v::sabr_calibrate(F, T, K, mv);
   EXPECT_GT(r.rms, 0.0);
-  EXPECT_LT(r.rms, 5e-4);  // within ~5bp rms of an imperfect market strip
+  // The fit must do materially better than the best CONSTANT vol (E5 2026-09-10: the old `rms < 5e-4` bound
+  // was ~3x the rms of a do-nothing flat fit, so a calibrator that never moved off its seed passed).
+  double mean = 0.0;
+  for (double m : mv) mean += m / mv.size();
+  double rms_const = 0.0;
+  for (double m : mv) rms_const += (m - mean) * (m - mean) / mv.size();
+  rms_const = std::sqrt(rms_const);
+  std::cout << "  [sabr] non-SABR strip: fit rms " << r.rms << " vs best-constant rms " << rms_const << "\n";
+  EXPECT_LT(r.rms, 0.25 * rms_const);  // measured 0.17 (2.6e-5 vs 1.5e-4)
 }
 
 TEST(VolRisk, VannaVolgaMatchFiniteDiff) {

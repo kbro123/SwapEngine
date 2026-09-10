@@ -99,13 +99,9 @@ TEST(SabrBeta, AtmContinuousAllBetas) {
     EXPECT_GT(atm, 0.0) << "beta=" << beta;
     EXPECT_NEAR(below, atm, 1e-7) << "beta=" << beta;   // continuous through K=F
     EXPECT_NEAR(above, atm, 1e-7) << "beta=" << beta;
-    // The 3-arg ATM helper equals the smile evaluated exactly at the money.
-    EXPECT_NEAR(v::sabr_atm_normal_vol(F, T, p), atm, 1e-15) << "beta=" << beta;
   }
-  // The 2-arg legacy ATM helper is the β=0 closed form.
-  const v::SabrParams p0{alpha, rho, nu};
-  EXPECT_TRUE(bit_identical(v::sabr_atm_normal_vol(T, p0),
-                            alpha * (1.0 + ((2.0 - 3.0 * rho * rho) / 24.0) * nu * nu * T)));
+  // (E5 2026-09-10: the `sabr_atm_normal_vol == smile at K=F` and `2-arg helper == hand formula` lines were
+  // deleted -- both sides were the same expression in sabr.hpp; the ATM literal lives in vol_sabr_test.)
 }
 
 // --- 4. Fixed-beta calibration recovers known params for beta in {0, 0.5, 1} -------------------------------

@@ -6,6 +6,8 @@
 // {ATM,RR,BF} -> strikes -> vols / delta round-trips.
 #include <gtest/gtest.h>
 
+#include "tolerances.hpp"
+
 #include <cmath>
 
 #include "swaps/vol/fx_black.hpp"
@@ -45,9 +47,12 @@ TEST(FxBlack, ZeroVolIsDiscountedIntrinsic) {
 
 TEST(FxBlack, GarmanKohlhagenBenchmark) {
   // Haug, "Complete Guide to Option Pricing Formulas": S=1.56, K=1.60, T=0.5, r_dom=0.06, r_for=0.08,
-  // sigma=0.12 -> call = 0.0291.
+  // sigma=0.12 -> call = 0.0291 (4 dp). The 15-digit literal is an INDEPENDENT evaluation of the same
+  // formula (Python math.erf, 2026-09-10) -- the E5 audit showed the 4-dp literal at 1e-3 passed a 2 % vol
+  // scaling, a wrong discount rate and a missing ½σ²T term.
   const double call = v::gk_price<double>(1.56, 1.60, 0.12, 0.5, 0.06, 0.08, v::CallPut::Call);
-  EXPECT_NEAR(call, 0.0291, 1e-3);
+  EXPECT_NEAR(call, 0.029099253149440, swaps::tol::literal);
+  EXPECT_NEAR(call, 0.0291, 5e-5);  // Haug's printed value
 }
 
 TEST(FxBlack, DeltaMatchesFiniteDifference) {

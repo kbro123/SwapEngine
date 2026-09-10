@@ -12,7 +12,7 @@ swaps_consistency_tests|spread_test.cpp|3|6
 swaps_consistency_tests|streaming_test.cpp|4|10
 swaps_consistency_tests|tension_regularizer_oracle_test.cpp|2|8
 swaps_consistency_tests|warm_test.cpp|4|11
-swaps_oracle_tests|__listed__|106|0
+swaps_oracle_tests|__listed__|104|0
 swaps_oracle_tests|bond_asset_swap_oracle.cpp|1|2
 swaps_oracle_tests|bond_oracle_test.cpp|6|29
 swaps_oracle_tests|bspline_oracle_test.cpp|2|3
@@ -23,7 +23,7 @@ swaps_oracle_tests|convexity_test.cpp|3|4
 swaps_oracle_tests|extract_test.cpp|9|41
 swaps_oracle_tests|modular_curve_test.cpp|3|8
 swaps_oracle_tests|monotone_cubic_oracle_test.cpp|2|2
-swaps_oracle_tests|multicurrency_test.cpp|41|96
+swaps_oracle_tests|multicurrency_test.cpp|39|100
 swaps_oracle_tests|ois_weekend_test.cpp|2|12
 swaps_oracle_tests|pricing_test.cpp|3|5
 swaps_oracle_tests|rfr_coupon_oracle_test.cpp|3|7

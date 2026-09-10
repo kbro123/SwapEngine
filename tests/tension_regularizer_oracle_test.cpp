@@ -111,5 +111,7 @@ TEST(TensionRegularizerOracle, FirstOrderOptimalAndDampsTheNullWander) {
   // wandering. The tension penalty remains the way to choose the SMOOTHEST completion (its answer is a
   // different, deliberate selection — smooth-consistent, not near-seed), and both fit the market rows.
   EXPECT_GT(raw.rank_deficiency, 0) << "the basis-only trio must be REPORTED rank-deficient";
-  EXPECT_LT(raw_err, 1e-2) << "the anchored completion must not wander (the old failure mode)";
+  // Measured 2.2e-3 (22 bp) on 2026-09-10 -- this is the null-space distance the seed-anchored completion
+  // leaves, not an accuracy claim; the pin guards the multi-hundred-bp wander the un-anchored LM produced.
+  EXPECT_LT(raw_err, 5e-3) << "the anchored completion must not wander (the old failure mode)";  // E5: was 1e-2
 }
