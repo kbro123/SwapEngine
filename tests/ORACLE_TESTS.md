@@ -38,6 +38,8 @@ that only ~46 of the 135 tests in the oracle binary compared to a QuantLib numbe
 | `ois_weekend_test.cpp` | OIS weekend/holiday accrual vs QuantLib and a hand walk | 1e-12 |
 | `multicurrency_test.cpp` | 5 of 41 tests vs QuantLib (par rates, payment delay, FF OIS + basis, FF averaging future, instruments); the rest are self-consistency (E5 splits the file; two `SUCCEED()`-only diagnostics to be removed) | `curve_rel`; **two tests at 1e-3 (10 bp) labelled "sub-bp" — E5** |
 | `conventions_test.cpp` | Conventions DB strings vs QuantLib's index conventions; one bond price vs QuantLib | 1e-9 |
+| `scheme_value_oracle_test.cpp` | Linear / NaturalCubic / Hermite interpolant VALUE and PRIMITIVE vs `LinearInterpolation` / `CubicNaturalSpline` / `CubicInterpolation(Parabolic)` (E5.3, 2026-09-10) | `literal` 1e-12 (measured 7e-18) |
+| `sabr_ql_oracle_test.cpp` | General-β Black SABR vol `sabr_black_vol` vs `sabrVolatility`, β∈{0,¼,½,¾,1} × 4 expiries × ±180 bp (E5.3, 2026-09-10; the NORMAL expansion has no QuantLib counterpart — open gap) | 1e-13 (measured 2.5e-16) |
 | `convexity_test.cpp` | Test-side Hull-White futures convexity vs QuantLib (validates the reference builder, not engine code) | 1e-15 |
 | `vol_bachelier_ql_oracle.cpp` | Bachelier price/greeks/implied vol vs QuantLib across a grid | 1e-12; **1e-4 gamma/IV** |
 | `vol_cms_replication_oracle.cpp` | Hagan G-function vs `GFunctionStandard` (1e-10); replicated CMS convexity vs `NumericHaganPricer` | **15 % relative on the adjustment — near-vacuous; E4.5 fixes the pole and tightens to 1e-3** |
