@@ -4,6 +4,8 @@
 // most complex, so an optimisation cannot be measured on annual OIS alone. Ours-only, QuantLib-free.
 #include <benchmark/benchmark.h>
 
+#include <stdexcept>
+
 #include <Eigen/Core>
 #include <memory>
 #include <string>
@@ -30,6 +32,7 @@ void stream_tick(benchmark::State& state, const Shape& s) {
     flip = !flip;
     const Eigen::VectorXd& x = sess.stream_update(flip ? s.q_small : s.q0);
     benchmark::DoNotOptimize(x.data());
+    if (!sess.last_converged()) throw std::runtime_error(s.name + " stream tick did not converge: " + sess.last_reason());
   }
 }
 void refresh_tick(benchmark::State& state, const Shape& s) {  // a 25 bp move each way: every tick refreshes J
@@ -42,6 +45,8 @@ void refresh_tick(benchmark::State& state, const Shape& s) {  // a 25 bp move ea
     flip = !flip;
     const Eigen::VectorXd& x = sess.stream_update(flip ? s.q_big : s.q0);
     benchmark::DoNotOptimize(x.data());
+    // A metric must never time a FAILING tick (the fx_xccy refresh was 17 us of non-finite ticks until 2026-09-10).
+    if (!sess.last_converged()) throw std::runtime_error(s.name + " refresh tick did not converge: " + sess.last_reason());
   }
 }
 // The active-set stress (C2, 2026-09-10): the banded rows' market oscillates 0.05 bp either side of their
@@ -56,6 +61,7 @@ void edge_osc_tick(benchmark::State& state, const Shape& s) {
     flip = !flip;
     const Eigen::VectorXd& x = sess.stream_update(flip ? s.q_edge_hi : s.q_edge_lo);
     benchmark::DoNotOptimize(x.data());
+    if (!sess.last_converged()) throw std::runtime_error(s.name + " edge tick did not converge: " + sess.last_reason());
   }
 }
 void jacobian(benchmark::State& state, const Shape& s) {

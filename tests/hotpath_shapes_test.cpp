@@ -13,6 +13,7 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/hybrid_residual.hpp"
+#include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/jacobian.hpp"
 
 namespace cal = swaps::calibration;
@@ -76,7 +77,9 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   averaged_leg (compiled, 18/tick = 6 per residual x 3 Newton steps): E3-A3, Eigen IndexedView copies on
     //   pv()'s general branch — the one compiled shape that is NOT allocation-free today.
     //   fx_xccy / desk small ticks: 0 since the MtM leg compiles (2026-09-09); desk crossings are the C7 rescale cost.
-    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 1900}, {"fx_xccy", 0, 0}, {"desk", 0, 3000}};
+    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 150}, {"fx_xccy", 0, 0}, {"desk", 0, 100}};
+    //   banded 1900 -> 150, desk 3000 -> 100 on 2026-09-10 (C7 fixed: a band re-scale is a rank-one operator update,
+    //   not a factor()); measured 123 / 54 -- the rest is the pin/release bookkeeping, next.
     //   (banded / desk crossing pins carry a few % of slack: the count of refreshes 20 crossing ticks trigger moves with
     //    rounding when the kernel's summation order changes — 1733 sparse, 1757 segment.)
     //   banded 1800 -> 1900 on 2026-09-10 (C1/C2 active-set fix): the corrected walk (pins as stiff constraint rows
@@ -105,4 +108,36 @@ TEST(ShapeLadder, MomentPathAgreesWithTheExactDailyAverageOnFedFundsOis) {
   EXPECT_LT(worst, 1e-9);  // measured 2.3e-10 with the knot-aligned quadrature (2026-09-10); the pin was 2e-8
   // And the moment rung is a pure W-cache bundle: the hybrid engine must not have routed any row to AAD.
   EXPECT_NO_THROW(cal::CompiledBundleResidual{moment.prob});
+}
+
+// Every rung's 25 bp move (the refresh metric's tick) and its small tick CONVERGE, in both directions, and the
+// converged curve reprices the live market at the step_tol contract. Until 2026-09-10 the fx_xccy rung's 25 bp
+// fixture contradicted covered interest parity (FX forwards scaled 0.25 % under a parallel rate move) and its
+// refresh metric timed a tick that FAILED non-finite -- the bench now throws on a failed tick, and this test
+// pins the fixture's ticks themselves.
+TEST(ShapeLadder, EveryRungConvergesOnTheGateTicks) {
+  for (const Shape& s : swaps::shapes::ladder()) {
+    api::BundleSession sess(s.prob);
+    sess.calibrate(s.x0);
+    sess.start_streaming();
+    const cal::HybridBundleResidual eng(s.prob);
+    for (int rep = 0; rep < 3; ++rep)
+      for (const Eigen::VectorXd* q : {&s.q_big, &s.q0, &s.q_small, &s.q0, &s.q_cross, &s.q0}) {
+        const Eigen::VectorXd& x = sess.stream_update(*q);
+        EXPECT_TRUE(sess.last_converged()) << s.name << ": " << sess.last_reason() << " after " << sess.last_newton_steps() << " steps";
+        EXPECT_TRUE(x.allFinite()) << s.name;
+        const Eigen::VectorXd r = eng.residuals_vs(x, *q);
+        if (s.prob.n_residuals() == s.prob.n_knots() && !s.has_bands) {
+          // SQUARE, hard: every row reprices at the step_tol contract
+          EXPECT_LT(r.cwiseAbs().maxCoeff(), 1e-8) << s.name;
+        } else if (rep == 0) {
+          // over-determined / banded: a least-squares fit -- the streamed objective is no worse than a cold LM's
+          cal::BundleProblem pq = s.prob;
+          for (int i = 0; i < pq.n_residuals(); ++i) pq.instruments[i].market = (*q)[i];
+          const Eigen::VectorXd xc = cal::calibrate(pq, s.x0).x;
+          const double f_s = eng.residuals_vs(x, *q).squaredNorm(), f_c = eng.residuals_vs(xc, *q).squaredNorm();
+          EXPECT_LE(f_s, f_c * (1.0 + 1e-6) + 1e-20) << s.name << ": streamed objective " << f_s << " vs cold " << f_c;
+        }
+      }
+  }
 }

@@ -268,3 +268,41 @@ TEST(StreamingBand, AQuoteOscillatingAroundItsEdgeConvergesEveryTickWithBoundedR
   EXPECT_LE(worst_steps, 12);  // measured 9 (was 56)
   EXPECT_GT(worst_wd, -1e-7);
 }
+
+// A band re-scale updates the frozen operator in place (rank-one Sherman–Morrison on (JᵀJ+RᵀR)⁺, E3-C7,
+// 2026-09-10) instead of re-factorising. Reference: the SAME calibrator with Options::rescale_update off, which
+// re-factorises the identically re-scaled frozen Jacobian on every re-scale; the two operators must agree to
+// rounding after every tick of a crossing sequence, pins and releases included.
+TEST(StreamingBand, RescaledOperatorEqualsARefactorisation) {
+  for (double lambda : {0.0, 0.02}) {
+    for (double decay : {0.1, 0.5}) {
+      cal::BundleProblem p = banded_bundle(0.25, 2.0);  // inconsistent quotes: pins and releases happen
+      for (int i = 1; i < 10; i += 2) p.instruments[i].band_decay = decay;
+      const Eigen::VectorXd q0 = p.market();
+      Eigen::MatrixXd R;
+      cal::StreamingCalibrator<cal::BundleProblem>::Options upd, ref;
+      const Eigen::MatrixXd* Rp = nullptr;
+      if (lambda > 0.0) { R = cal::tension_energy_operator(p, lambda, 0.0, {0}); upd.regularizer = R; ref.regularizer = R; Rp = &R; }
+      ref.rescale_update = false;
+      const Eigen::VectorXd x0 = cold(p, q0, Eigen::VectorXd::Constant(6, 0.03), Rp);
+      cal::StreamingCalibrator<cal::BundleProblem> a(p, x0, q0, upd), b(p, x0, q0, ref);
+      int rescales = 0;
+      double worst_m = 0.0, worst_x = 0.0;
+      for (double bp : {0.2, 0.6, 3.0, -1.0, 1.5, 0.0}) {
+        Eigen::VectorXd q = q0;
+        for (int i = 0; i < 10; ++i) q[i] += bp * 1e-4 * (i % 2 == 1 ? 1.0 : -0.3);
+        const cal::StreamTick ta = a.update(q), tb = b.update(q);
+        ASSERT_TRUE(ta.converged && tb.converged) << ta.reason() << " / " << tb.reason();
+        rescales += ta.rescales;
+        const double scale = b.sensitivity().cwiseAbs().maxCoeff();
+        worst_m = std::max(worst_m, (a.sensitivity() - b.sensitivity()).cwiseAbs().maxCoeff() / scale);
+        worst_x = std::max(worst_x, (a.current() - b.current()).cwiseAbs().maxCoeff());
+      }
+      std::cout << "  [band] lambda " << lambda << " decay " << decay << ": " << rescales << " rescales, |M_upd - M_ref|/|M| = " << worst_m
+                << ", |x_upd - x_ref| = " << worst_x << "\n";
+      EXPECT_GT(rescales, 0);
+      EXPECT_LT(worst_m, 1e-9) << "lambda " << lambda << " decay " << decay;
+      EXPECT_LT(worst_x, 1e-10) << "lambda " << lambda << " decay " << decay;
+    }
+  }
+}

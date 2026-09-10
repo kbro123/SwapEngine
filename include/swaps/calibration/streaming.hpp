@@ -38,6 +38,8 @@
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -96,7 +98,7 @@ class StreamingCalibrator {
   struct Options {
     double envelope = 1e-4;  // LINEAR mode: drift (rate units) that forces a re-anchor
     double step_tol = 1e-9;  // EXACT mode: converged when ||dx||_inf < step_tol
-    int max_frozen = 4;      // EXACT mode: frozen steps without convergence -> refresh M (staleness)
+    int max_frozen = 8;      // EXACT mode: hard cap on frozen steps without convergence -> refresh M
     int max_refresh = 6;     // safety cap on refreshes within one tick
     int max_steps = 64;      // hard cap on corrector steps per tick (then: converged = false, not committed)
     bool exact = true;       // EXACT (iterate to step_tol) vs LINEAR (single step + drift re-anchor)
@@ -110,6 +112,17 @@ class StreamingCalibrator {
     // stays inside the step_tol contract. Ladder ticks 0.68x on every compiled rung. false = iterate to the
     // measured step every time (the reference behaviour).
     bool predict_convergence = true;
+    // BAND RE-SCALE by a rank-one operator update (E3-C7, 2026-09-10; see rescale_row) instead of a full
+    // re-factorisation. false = re-factorise on every re-scale (the reference the parity test compares to).
+    bool rescale_update = true;
+    // ADAPTIVE STALL (E4.D, 2026-09-10): refresh M when the frozen iteration's REMAINING steps, predicted from
+    // its observed contraction ρ = |dx_k|/|dx_{k-1}| as log(step_tol/|dx_k|)/log(ρ), would cost more than a
+    // refresh. The break-even step count is MEASURED per calibrator at construction (one Jacobian +
+    // factorisation vs one residual evaluation), so a 12-knot OIS curve (~50 steps per refresh) never refreshes
+    // on a 25 bp move while a daily-averaged Fed-funds leg (~4) refreshes after a few slow steps. A fixed
+    // count (the old max_frozen = 4) refreshed a converging OIS tick for nothing and let the desk's slow frozen
+    // rate run; max_frozen is now only the hard cap. false = count-based stalls only.
+    bool adaptive_stall = true;
     // ACCURACY refresh for problems whose fixed point is NOT r = 0 (over-determined, banded, regularised):
     // there the frozen operator's answer is exact only to second order in the drift, and along a weakly
     // determined direction (a decay-weighted band) that second-order term is amplified -- measured 0.4 bp
@@ -185,6 +198,28 @@ class StreamingCalibrator {
     if (opt_.prefetch && opt_.exact && !drift_refresh_) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (!set_anchor(x0, q0))
       throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
+    {
+      // The refresh-vs-step break-even for the adaptive stall: ONE (warm) Jacobian + factorisation against ONE
+      // residual evaluation at a NEW state (the engines memoise DF on x, so the anchor state would time a cache
+      // hit). A construction-time cost only; nothing on the tick.
+      // MIN of a few repetitions on each side: single-shot timings of a 100 us residual varied 3x (caches).
+      double step_ns = 1e300, refresh_ns = 1e300;
+      for (int rep = 0; rep < 4; ++rep) {
+        const Eigen::VectorXd xp = x0.array() + 1e-9 * (rep + 1);  // a NEW state each time (no memo hit)
+        const auto t0 = std::chrono::steady_clock::now();
+        r_ = engine_->residuals_vs(xp, q0);
+        const auto t1 = std::chrono::steady_clock::now();
+        step_ns = std::min(step_ns, std::chrono::duration<double, std::nano>(t1 - t0).count());
+      }
+      for (int rep = 0; rep < 2; ++rep) {
+        const auto t1 = std::chrono::steady_clock::now();
+        J_cur_ = engine_->jacobian_vs(x0, q0);
+        factor(J_cur_);
+        const auto t2 = std::chrono::steady_clock::now();
+        refresh_ns = std::min(refresh_ns, std::chrono::duration<double, std::nano>(t2 - t1).count());
+      }
+      breakeven_steps_ = std::min(64.0, std::max(2.0, refresh_ns / std::max(1.0, step_ns)));
+    }
     x_cur_ = x0;
     q_cur_ = q0;
   }
@@ -217,6 +252,7 @@ class StreamingCalibrator {
   int refresh_count() const { return refresh_count_; }
   int prefetch_hits() const { return prefetch_hits_; }  // refreshes served from the background worker
   int rescale_count() const { return rescale_count_; }  // band-edge re-scales (cheap M refactors) so far
+  double breakeven_steps() const { return breakeven_steps_; }  // the adaptive stall's refresh-vs-step ratio
 
   StreamTick update(const Eigen::VectorXd& q_new) {
     if (q_new.size() != n_res_) throw std::invalid_argument("StreamingCalibrator::update: market length does not match the instrument count");
@@ -289,8 +325,7 @@ class StreamingCalibrator {
             t.refreshed = true;
             ++t.refreshes;
           } else {
-            factor(J_cur_);
-            ++t.rescales;
+            ++t.rescales;  // the operator was updated row by row inside track_bands (rescale_row)
             ++rescale_count_;
           }
           frozen = 0;
@@ -308,8 +343,7 @@ class StreamingCalibrator {
       if (!x.allFinite()) return fail(t, StreamStatus::NonFinite);
       SWAPS_TRACE("  step %d |dx|=%.2e alpha=%.3f pinned=%d rescales=%d refreshes=%d\n", t.newton_steps, dx_.cwiseAbs().maxCoeff(), alpha, n_pinned_, t.rescales, t.refreshes);
       if (alpha < 1.0) {  // stopped on a band edge: switch that row there and carry on
-        switch_row(hit, hit_side);
-        factor(J_cur_);
+        switch_row(hit, hit_side);  // (updates the operator in place, rescale_row)
         ++t.rescales;
         ++rescale_count_;
         frozen = 0;
@@ -324,11 +358,21 @@ class StreamingCalibrator {
         const double ratio = dx_inf / dx_prev;
         predicted = ratio < 0.5 && ratio * dx_inf < 0.05 * opt_.step_tol;  // 2x margin on the bound
       }
+      // Adaptive stall: with two full steps under one operator, would the steps still to come cost more than a
+      // refresh? (ρ ≥ 1: the frozen iteration is not contracting at all.)
+      bool slow = false;
+      if (opt_.adaptive_stall && dx_prev > 0.0 && dx_inf >= opt_.step_tol && !predicted) {
+        const double rho = dx_inf / dx_prev;
+        // The observed ratio is the OPTIMISTIC one (the first frozen steps contract fastest; the stale-M error
+        // then dominates and the rate halves, measured), so the remaining-steps estimate carries a factor 2.
+        slow = rho >= 1.0 || 2.0 * std::log(opt_.step_tol / dx_inf) / std::log(rho) > breakeven_steps_;
+        SWAPS_TRACE("  adaptive: |dx| %.2e prev %.2e rho %.3f steps_left %.1f K %.1f -> %s\n", dx_inf, dx_prev, rho,
+                    rho < 1.0 ? 2.0 * std::log(opt_.step_tol / dx_inf) / std::log(rho) : -1.0, breakeven_steps_, slow ? "REFRESH" : "continue");
+      }
       dx_prev = dx_inf;
       if (dx_inf < opt_.step_tol || predicted) {  // converged for the CURRENT active set
         if (!bands_.empty() && n_pinned_ > 0 && verify_pins(x, q_new)) {
-          factor(J_cur_);  // a pin was released onto its true side, or its multiplier moved: iterate on
-          ++t.rescales;
+          ++t.rescales;  // a pin was released onto its true side (rescale_row updated the operator): iterate on
           ++rescale_count_;
           frozen = 0;
           dx_prev = -1.0;
@@ -352,7 +396,7 @@ class StreamingCalibrator {
         break;
       }
       if (t.newton_steps >= opt_.max_steps) return fail(t, StreamStatus::StepCap);
-      if (++frozen >= opt_.max_frozen) {  // M stale as a preconditioner -> refresh
+      if (++frozen >= opt_.max_frozen || slow) {  // M stale as a preconditioner -> refresh
         if (t.refreshes >= opt_.max_refresh) return fail(t, StreamStatus::RefreshCap);
         if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);
         frozen = 0;
@@ -508,13 +552,11 @@ class StreamingCalibrator {
       state_[k] = edge_side > 0 ? +1 : -1;
       ++n_pinned_;
       s_pin_[k] = 0.0;  // the multiplier slope is known only at convergence (verify_pins)
-      J_cur_.row(b.row) = J_ref_.row(b.row) * (kPinWeight / slope_ref_[k]);
-      slope_cur_[k] = kPinWeight;
+      rescale_row(k, kPinWeight);
       return;
     }
     const double slope = side == 0 ? b.decay : 1.0;
-    J_cur_.row(b.row) = J_ref_.row(b.row) * (slope / slope_ref_[k]);
-    slope_cur_[k] = slope;
+    rescale_row(k, slope);
     if (side != 0) last_side_[k] = side;
   }
 
@@ -547,8 +589,7 @@ class StreamingCalibrator {
         continue;
       }
       SWAPS_TRACE("  row %d actual side %d slope %.2f->%.2f\n", b.row, side, slope_cur_[k], slope);
-      J_cur_.row(b.row) = J_ref_.row(b.row) * (slope / slope_ref_[k]);
-      slope_cur_[k] = slope;
+      rescale_row(k, slope);
       if (side != 0) last_side_[k] = side;
     }
     return changed;
@@ -594,8 +635,7 @@ class StreamingCalibrator {
         state_[k] = 0;
         --n_pinned_;
         ++releases_[k];  // one release per row per tick; a re-pin after it is final (termination)
-        J_cur_.row(b.row) = J_ref_.row(b.row) * (slope / slope_ref_[k]);
-        slope_cur_[k] = slope;
+        rescale_row(k, slope);
         changed = true;
       }
     }
@@ -683,11 +723,50 @@ class StreamingCalibrator {
       cod.compute(S);
       const Eigen::MatrixXd P = cod.pseudoInverse();  // n_knots x (n_res + n_reg)
       M_ = P.leftCols(J.rows());
-      B_.noalias() = (P * P.transpose()) * RtR_;
+      G_.noalias() = P * P.transpose();  // (JᵀJ + RᵀR)⁺ -- kept for the O(n·m) band re-scale updates
+      B_.noalias() = G_ * RtR_;
     } else {
       cod.compute(J);
       M_ = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
+      G_.noalias() = M_ * M_.transpose();  // (JᵀJ)⁺ = J⁺ J⁺ᵀ
     }
+  }
+
+  // A band re-scale (E3-C7, 2026-09-10): row `row` of the frozen Jacobian changes slope by c = new/old, a
+  // RANK-ONE change of JᵀJ (β·u uᵀ, β = c² − 1, u = the old row). The operator is updated exactly by
+  // Sherman–Morrison on G = (JᵀJ + RᵀR)⁺ (u lies in G's range, so the pseudo-inverse form holds):
+  //     v = G u,  d = 1 + β uᵀv,   G' = G − (β/d) v vᵀ,
+  //     M' = G' J'ᵀ = M − (β/d) v (J v)ᵀ + ((c−1)/d) v e_rowᵀ,   B' = G' RᵀR = B − (β/d) v (RᵀR v)ᵀ,
+  // O(n·m) and allocation-free after first use, where a re-factorisation is O(n³) (300 µs on the desk rung
+  // and 1.75 MB of temporaries, 12–16 times per 25 bp tick). Rounding in G moves no fixed point (any
+  // non-singular preconditioner leaves the stationarity condition alone); the pins' 1e3 weight gives d ~ 1e6.
+  void rescale_row(std::size_t k, double new_slope) {
+    const int row = bands_[k].row;
+    const double c = new_slope / slope_cur_[k];
+    if (have_J_ && c != 1.0 && opt_.rescale_update) {
+      u_ = J_cur_.row(row).transpose();
+      v_.noalias() = G_ * u_;
+      const double s = u_.dot(v_), beta = c * c - 1.0, d = 1.0 + beta * s;
+      // Releasing a PIN (c = decay / 1e3) on a row whose leverage s is close to 1 cancels d = 1 + βs
+      // catastrophically; such a row is rare (one release per row per tick) -- re-factorise instead.
+      if (std::isfinite(d) && std::abs(d) > 1e-3) {
+        jv_.noalias() = J_cur_ * v_;  // the OLD J
+        const double f = beta / d;
+        M_.noalias() -= f * v_ * jv_.transpose();
+        M_.col(row) += ((c - 1.0) / d) * v_;
+        if (RtR_.size()) {
+          rv_.noalias() = RtR_ * v_;
+          B_.noalias() -= f * v_ * rv_.transpose();
+        }
+        G_.noalias() -= f * v_ * v_.transpose();
+        J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
+        slope_cur_[k] = new_slope;
+        return;
+      }
+    }
+    J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
+    slope_cur_[k] = new_slope;
+    if (have_J_) factor(J_cur_);  // degenerate update: fall back to a full factorisation
   }
 
   int n_res_;
@@ -698,6 +777,8 @@ class StreamingCalibrator {
   Eigen::VectorXd q_cur_;  // the market x_cur_ solves (a failed tick restores the anchor here)
   Eigen::MatrixXd M_;
   Eigen::MatrixXd RtR_, B_;  // smoothness regulariser: RᵀR and the per-step curvature pull B=(JᵀJ+RᵀR)⁻¹RᵀR
+  Eigen::MatrixXd G_;        // (JᵀJ + RᵀR)⁺ from the last factor(), updated rank-one per band re-scale
+  Eigen::VectorXd u_, v_, jv_, rv_;  // rescale_row scratch (no per-rescale allocation after first use)
   int refresh_count_ = 0;
   int prefetch_hits_ = 0;
   int rescale_count_ = 0;
@@ -716,6 +797,7 @@ class StreamingCalibrator {
   bool have_J_ = false;
   bool need_full_ = false;
   bool drift_refresh_ = false;  // Options::refresh_drift applies (non-square / banded / regularised)
+  double breakeven_steps_ = 8.0;  // adaptive stall: measured refresh cost in residual-evaluation units
   // Speculative background Jacobian (null unless opt_.prefetch): a dedicated thread computes the next M.
   std::unique_ptr<BackgroundJacobian<Problem>> bg_;
   Eigen::VectorXd bg_x_;  // scratch for a taken background result

@@ -95,8 +95,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 1.6 us x1.3; ratchets DOWN only"
     },
     "shape_ois_nolag_refresh_25bp": {
-      "target_ns": 16300,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 12.5 us x1.3; ratchets DOWN only"
+      "target_ns": 4397,
+      "note": "ratcheted 2026-09-10 after C7 (rank-one band re-scale) + adaptive stall: x1.3 of the re-captured baseline; was 16300 ns; ratchets DOWN only"
     },
     "shape_ois_nolag_jacobian": {
       "target_ns": 3500,
@@ -107,8 +107,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 2.0 us x1.3; ratchets DOWN only"
     },
     "shape_ois_lag_refresh_25bp": {
-      "target_ns": 19300,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 14.8 us x1.3; ratchets DOWN only"
+      "target_ns": 5184,
+      "note": "ratcheted 2026-09-10 after C7 (rank-one band re-scale) + adaptive stall: x1.3 of the re-captured baseline; was 19300 ns; ratchets DOWN only"
     },
     "shape_ois_lag_jacobian": {
       "target_ns": 5500,
@@ -131,8 +131,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 4.0 us x1.3; ratchets DOWN only"
     },
     "shape_basis_spread_refresh_25bp": {
-      "target_ns": 51300,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 39.4 us x1.3; ratchets DOWN only"
+      "target_ns": 10284,
+      "note": "ratcheted 2026-09-10 after C7 (rank-one band re-scale) + adaptive stall: x1.3 of the re-captured baseline; was 51300 ns; ratchets DOWN only"
     },
     "shape_basis_spread_jacobian": {
       "target_ns": 15000,
@@ -167,8 +167,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 2.8 us x1.3; ratchets DOWN only"
     },
     "shape_banded_refresh_25bp": {
-      "target_ns": 176300,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 135.6 us x1.3; ratchets DOWN only"
+      "target_ns": 64476,
+      "note": "ratcheted 2026-09-10 after C7 (rank-one band re-scale) + adaptive stall: x1.3 of the re-captured baseline; was 176300 ns; ratchets DOWN only"
     },
     "shape_banded_jacobian": {
       "target_ns": 6100,
@@ -179,8 +179,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 2.3 us x1.3; ratchets DOWN only"
     },
     "shape_turns_refresh_25bp": {
-      "target_ns": 140000,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 107.7 us x1.3; ratchets DOWN only"
+      "target_ns": 50529,
+      "note": "ratcheted 2026-09-10 after C7 (rank-one band re-scale) + adaptive stall: x1.3 of the re-captured baseline; was 140000 ns; ratchets DOWN only"
     },
     "shape_turns_jacobian": {
       "target_ns": 7400,
@@ -215,8 +215,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 121.0 us x1.3; ratchets DOWN only"
     },
     "shape_fx_xccy_refresh_25bp": {
-      "target_ns": 48300,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 37.1 us x1.3; ratchets DOWN only"
+      "target_ns": 62000,
+      "note": "RESET 2026-09-10: the previous target (48300 ns) was captured on a tick that FAILED non-finite (the fixture scaled FX forwards under a parallel rate move); the converging tick is 47.6 us, target x1.3; ratchets DOWN from here"
     },
     "shape_fx_xccy_jacobian": {
       "target_ns": 460500,
@@ -235,8 +235,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 605.3 us x1.3; ratchets DOWN only"
     },
     "shape_banded_edge_osc_tick": {
-      "target_ns": 59300,
-      "note": "set 2026-09-10 with the C1/C2 active-set fix: 45.6 us x1.3 (kink every tick: pins + re-scales; each re-scale a full factor(), C7); ratchets DOWN only"
+      "target_ns": 13478,
+      "note": "ratcheted 2026-09-10 after C7 (rank-one band re-scale) + adaptive stall: x1.3 of the re-captured baseline; was 59300 ns; ratchets DOWN only"
     },
     "shape_turns_edge_osc_tick": {
       "target_ns": 2200,

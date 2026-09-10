@@ -158,7 +158,11 @@ inline void finish(Shape& s) {
     const double bump = std::sin(0.7 * i + 0.3);
     s.q0[i] = ins.market;
     s.q_small[i] = fx ? ins.market * (1.0 + 1e-5 * bump) : ins.market + 1e-5 * bump;
-    s.q_big[i] = fx ? ins.market * (1.0 + 25e-4 * bump) : ins.market + 25e-4 * bump;
+    // A ~25 bp PARALLEL rate move leaves an FX forward where it is (covered interest parity: both curves move
+    // together); scaling the forwards by 0.25 % on top contradicted the rate rows and drove the xccy basis
+    // curve to an absurd state whose next tick diverged (found 2026-09-10 -- the gate had been timing a
+    // FAILING fx_xccy refresh tick at 17 us). Basis rows move a tenth of the rate move.
+    s.q_big[i] = fx ? ins.market : (ins.quote == cal::QuoteKind::XccyMtmBasis ? ins.market + 2.5e-4 * bump : ins.market + 25e-4 * bump);
     const bool banded = ins.band_upper > ins.band_lower;
     s.q_cross[i] = (banded && (i % 2)) ? ins.market + 1.5e-4 : s.q_small[i];
     s.q_edge_hi[i] = (banded && (i % 2)) ? ins.band_upper + 0.05e-4 : ins.market;
