@@ -100,6 +100,16 @@ class StreamingCalibrator {
     int max_refresh = 6;     // safety cap on refreshes within one tick
     int max_steps = 64;      // hard cap on corrector steps per tick (then: converged = false, not committed)
     bool exact = true;       // EXACT (iterate to step_tol) vs LINEAR (single step + drift re-anchor)
+    // PREDICTIVE CONVERGENCE (2026-09-10, E4.D): after two consecutive full steps under the SAME frozen
+    // operator (no refresh, re-scale or breakpoint between them) the next step is bounded by the observed
+    // contraction, |dx_{k+1}| <= (|dx_k| / |dx_{k-1}|) * |dx_k| (exact for the linear rate a frozen M
+    // converges at; conservative for the quadratic rate of a fresh one). When that bound is below
+    // step_tol / 20 the tick stops here instead of spending a third residual evaluation + solve just to
+    // read a ~1e-15 step. The committed x is within ~step_tol / 10 of the fully iterated one (measured
+    // 1.2e-10 at step_tol 1e-9 on the chain fixture; streaming_contract_test pins 1e-10) and its reprice
+    // stays inside the step_tol contract. Ladder ticks 0.68x on every compiled rung. false = iterate to the
+    // measured step every time (the reference behaviour).
+    bool predict_convergence = true;
     // ACCURACY refresh for problems whose fixed point is NOT r = 0 (over-determined, banded, regularised):
     // there the frozen operator's answer is exact only to second order in the drift, and along a weakly
     // determined direction (a decay-weighted band) that second-order term is amplified -- measured 0.4 bp
@@ -238,6 +248,7 @@ class StreamingCalibrator {
       releases_[k] = 0;  // the per-tick release budget (verify_pins) starts fresh every tick
     }
     double r0_inf = -1.0;  // the tick's first residual size: the divergence yardstick
+    double dx_prev = -1.0;  // |dx| of the previous FULL step under the same operator (-1: none)
     for (;;) {
       // The residual is engine-defined against the live market q_new: model_rates - q_new for hard
       // instruments, the Huber band residual for soft (banded) ones. Driving THIS (not the raw reprice)
@@ -283,6 +294,7 @@ class StreamingCalibrator {
             ++rescale_count_;
           }
           frozen = 0;
+          dx_prev = -1.0;  // a new operator: the contraction history no longer applies
         }
       }
       dx_.noalias() = M_ * r_;
@@ -301,14 +313,25 @@ class StreamingCalibrator {
         ++t.rescales;
         ++rescale_count_;
         frozen = 0;
+        dx_prev = -1.0;
         continue;
       }
-      if (dx_.cwiseAbs().maxCoeff() < opt_.step_tol) {  // converged for the CURRENT active set
+      const double dx_inf = dx_.cwiseAbs().maxCoeff();
+      // Predictive convergence (Options::predict_convergence): two full steps under one operator, contracting,
+      // and the contraction-bounded next step already far below tolerance -- stop here.
+      bool predicted = false;
+      if (opt_.predict_convergence && dx_prev > 0.0 && dx_inf < dx_prev && dx_inf >= opt_.step_tol) {
+        const double ratio = dx_inf / dx_prev;
+        predicted = ratio < 0.5 && ratio * dx_inf < 0.05 * opt_.step_tol;  // 2x margin on the bound
+      }
+      dx_prev = dx_inf;
+      if (dx_inf < opt_.step_tol || predicted) {  // converged for the CURRENT active set
         if (!bands_.empty() && n_pinned_ > 0 && verify_pins(x, q_new)) {
           factor(J_cur_);  // a pin was released onto its true side, or its multiplier moved: iterate on
           ++t.rescales;
           ++rescale_count_;
           frozen = 0;
+          dx_prev = -1.0;
           continue;
         }
         // A drift refresh anchored J at the PREVIOUS solution; the frozen-J answer is then exact only to
@@ -321,6 +344,7 @@ class StreamingCalibrator {
           if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
           ++t.refreshes;
           frozen = 0;
+          dx_prev = -1.0;
           continue;
         }
         t.converged = true;
@@ -332,6 +356,7 @@ class StreamingCalibrator {
         if (t.refreshes >= opt_.max_refresh) return fail(t, StreamStatus::RefreshCap);
         if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);
         frozen = 0;
+        dx_prev = -1.0;
       }
     }
     x_cur_ = x;  // committed: the exact solution at q_new

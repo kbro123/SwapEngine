@@ -151,3 +151,33 @@ TEST(StreamingContract, NonFiniteInputsThrow) {
   EXPECT_TRUE(t.converged);
   EXPECT_LT((sc.current() - xc).cwiseAbs().maxCoeff(), 1e-12);
 }
+
+// Predictive convergence (Options::predict_convergence, E4.D 2026-09-10): the tick stops one step early when the
+// observed contraction bounds the next step below step_tol / 10. The committed curve must stay within that bound of
+// the fully iterated (non-predictive) reference on every tick, and the saving must be real (fewer steps).
+TEST(StreamingContract, PredictiveConvergenceMatchesTheFullyIteratedReference) {
+  const Chain f;
+  const Eigen::VectorXd xc = cal::calibrate(f.prob, f.x0).x;
+  cal::StreamingCalibrator<cal::BundleProblem>::Options ref_opt;
+  ref_opt.predict_convergence = false;
+  cal::StreamingCalibrator<cal::BundleProblem> pred(f.prob, xc, f.q0, {});
+  cal::StreamingCalibrator<cal::BundleProblem> ref(f.prob, xc, f.q0, ref_opt);
+  const cal::HybridBundleResidual eng(f.prob);
+  long steps_pred = 0, steps_ref = 0;
+  double worst = 0.0, worst_rt = 0.0;
+  for (int k = 1; k <= 200; ++k) {
+    Eigen::VectorXd q = f.q0;
+    for (int i = 0; i < q.size(); ++i) q[i] += 1e-5 * std::sin(0.05 * k + 0.3 * i) + 3e-4 * std::sin(0.01 * k);  // 0.1 bp jitter on a slow 3 bp swing
+    const cal::StreamTick tp = pred.update(q), tr = ref.update(q);
+    ASSERT_TRUE(tp.converged && tr.converged) << k << ": " << tp.reason() << " / " << tr.reason();
+    steps_pred += tp.newton_steps;
+    steps_ref += tr.newton_steps;
+    worst = std::max(worst, (pred.current() - ref.current()).cwiseAbs().maxCoeff());
+    worst_rt = std::max(worst_rt, eng.residuals_vs(pred.current(), q).cwiseAbs().maxCoeff());
+  }
+  std::cout << "  [predict] steps predictive " << steps_pred << " vs reference " << steps_ref << ", worst |x_pred - x_ref| "
+            << worst << ", worst round-trip " << worst_rt << "\n";
+  EXPECT_LT(worst, 1e-10);   // the skipped step: within step_tol / 10 of the fully iterated curve (measured ~6e-11)
+  EXPECT_LT(worst_rt, 1e-9);  // the reprice stays at the step_tol contract
+  EXPECT_LT(steps_pred, steps_ref) << "the prediction must actually skip steps";
+}
