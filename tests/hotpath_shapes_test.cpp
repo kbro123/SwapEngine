@@ -76,9 +76,13 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   averaged_leg (compiled, 18/tick = 6 per residual x 3 Newton steps): E3-A3, Eigen IndexedView copies on
     //   pv()'s general branch — the one compiled shape that is NOT allocation-free today.
     //   fx_xccy / desk small ticks: 0 since the MtM leg compiles (2026-09-09); desk crossings are the C7 rescale cost.
-    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 1800}, {"fx_xccy", 0, 0}, {"desk", 0, 3000}};
+    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 1900}, {"fx_xccy", 0, 0}, {"desk", 0, 3000}};
     //   (banded / desk crossing pins carry a few % of slack: the count of refreshes 20 crossing ticks trigger moves with
     //    rounding when the kernel's summation order changes — 1733 sparse, 1757 segment.)
+    //   banded 1800 -> 1900 on 2026-09-10 (C1/C2 active-set fix): the corrected walk (pins as stiff constraint rows
+    //   with a verified multiplier, budgeted releases) does 152 re-scales over the 20 crossing ticks where the old
+    //   walk did 145 -- every one a full factor() (C7, unchanged per call): 1860 allocs. The per-call cost is the
+    //   thing to fix (C7); when it is, this pin drops to 0.
     Pin pin{s.name.c_str(), 0, 0};
     bool pinned = false;
     for (const auto& q : pins) if (s.name == q.name) { pin = q; pinned = true; }

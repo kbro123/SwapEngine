@@ -36,6 +36,11 @@ struct Shape {
   Eigen::VectorXd q_small;  // a ~0.1 bp tick (FX rows: relative)
   Eigen::VectorXd q_cross;  // banded shapes: a 1.5 bp tick that crosses the band edge on odd rows; else == q_small
   Eigen::VectorXd q_big;    // a ~25 bp move (forces a Jacobian refresh)
+  // banded shapes: the odd banded rows' market alternating 0.05 bp ABOVE / BELOW their upper band edge (the
+  // active-set stress: the model quote sits on a kink every tick); else both == q0. has_bands says whether
+  // the pair means anything (the EdgeOscTick benchmark / metric exists only for banded rungs).
+  Eigen::VectorXd q_edge_hi, q_edge_lo;
+  bool has_bands = false;
   bool expect_compiled = true;  // every row is W-cacheable => the tick must be allocation-free (T4)
 };
 
@@ -145,6 +150,8 @@ inline void finish(Shape& s) {
   auto& p = s.prob;
   const int m = p.n_residuals();
   s.q0.resize(m); s.q_small.resize(m); s.q_cross.resize(m); s.q_big.resize(m);
+  s.q_edge_hi.resize(m); s.q_edge_lo.resize(m);
+  s.has_bands = false;
   for (int i = 0; i < m; ++i) {
     const auto& ins = p.instruments[i];
     const bool fx = ins.quote == cal::QuoteKind::FxForward;
@@ -154,6 +161,9 @@ inline void finish(Shape& s) {
     s.q_big[i] = fx ? ins.market * (1.0 + 25e-4 * bump) : ins.market + 25e-4 * bump;
     const bool banded = ins.band_upper > ins.band_lower;
     s.q_cross[i] = (banded && (i % 2)) ? ins.market + 1.5e-4 : s.q_small[i];
+    s.q_edge_hi[i] = (banded && (i % 2)) ? ins.band_upper + 0.05e-4 : ins.market;
+    s.q_edge_lo[i] = (banded && (i % 2)) ? ins.band_upper - 0.05e-4 : ins.market;
+    if (banded) s.has_bands = true;
   }
 }
 inline void band_all(cal::BundleProblem& p, double half_width, double decay) {

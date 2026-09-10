@@ -11,6 +11,7 @@
 #include <unsupported/Eigen/NumericalDiff>
 
 #include <cmath>
+#include <stdexcept>
 
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/jacobian.hpp"        // aad_jacobian (re-exported here for back-compat)
@@ -56,7 +57,47 @@ struct CalibrationResult {
   // instrument, an unreached long knot): surface it to the user -- add an instrument or enable
   // smoothing -- rather than treating the completed values as market-implied.
   int rank_deficiency = 0;
+  // Did the solve END at a stationary point -- LM's own xtol/ftol/gtol criteria, or "tolerance too small"
+  // (= already at machine precision) -- with a finite x, rms and stationarity? false for the evaluation
+  // cap (info 5), improper input (info 0) or a non-finite result. `status` names the stopping reason
+  // (Eigen::LevenbergMarquardtSpace::Status). Non-finite INPUT (a NaN/inf quote or seed) never reaches
+  // here: calibrate()/calibrate_with() throw std::invalid_argument up front (2026-09-10; before that a NaN
+  // quote returned the seed curve with info 4 "converged" and rms = NaN -- probe C-lm-status).
+  bool converged = false;
+  const char* status = "not started";
 };
+
+inline const char* lm_status_text(int info) {
+  switch (info) {
+    case -2: return "not started";
+    case -1: return "running";
+    case 0: return "improper input parameters";
+    case 1: return "relative reduction too small";
+    case 2: return "relative error too small";
+    case 3: return "relative error and reduction too small";
+    case 4: return "cosine too small";
+    case 5: return "too many function evaluations";
+    case 6: return "ftol too small";
+    case 7: return "xtol too small";
+    case 8: return "gtol too small";
+    case 9: return "user asked";
+  }
+  return "unknown";
+}
+inline void finish_status(CalibrationResult& res) {
+  res.status = lm_status_text(res.info);
+  const bool lm_ok = res.info >= 1 && res.info <= 8 && res.info != 5;
+  res.converged = lm_ok && res.x.allFinite() && std::isfinite(res.rms_residual) && std::isfinite(res.stationarity);
+}
+// A NaN/inf quote, FX rate or seed is an INPUT error, not a solve outcome: refuse it here so no path can
+// hand back a finite-looking "converged" seed curve for a poisoned market.
+inline void require_finite_seed(const Eigen::VectorXd& x0) {
+  if (!x0.allFinite()) throw std::invalid_argument("calibrate: the seed x0 contains a non-finite value");
+}
+inline void require_finite_residual(const Eigen::VectorXd& r0) {
+  if (!r0.allFinite())
+    throw std::invalid_argument("calibrate: the residual at the seed is non-finite -- a quote (market, band or FX rate) is NaN/inf");
+}
 
 // LM functor over ANY residual engine (residuals(x) + jacobian(x)), not tied to residual_engine_t --
 // what lets a caller drive the SAME LM loop with an engine it built once and keeps across solves
@@ -102,6 +143,11 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
                                  const Eigen::VectorXd& x0) {
   CalibrationResult res;
   res.x = x0;
+  require_finite_seed(x0);
+  {
+    const Eigen::VectorXd r0 = engine.residuals(x0);  // a copy: engines may hand back an internal buffer
+    require_finite_residual(r0);
+  }
   AnyEngineFunctor<Engine> functor(engine, n_knots, n_residuals);
   Eigen::LevenbergMarquardt<AnyEngineFunctor<Engine>> lm(functor);
   lm.parameters.xtol = 1e-14;
@@ -151,7 +197,7 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
     alm.parameters.ftol = 1e-14;
     alm.parameters.maxfev = 4000;
     res.x = x0;  // the anchored problem is full-rank: one clean solve from the seed
-    alm.minimize(res.x);
+    res.info = alm.minimize(res.x);  // the status of the solve that produced x (the first one refused m < n as "improper input")
     res.iterations += alm.iter;
     J = engine.jacobian(res.x);
   }
@@ -159,6 +205,7 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
   const Eigen::VectorXd r = engine.residuals(res.x);
   res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
   res.stationarity = (J.transpose() * r).cwiseAbs().maxCoeff();
+  finish_status(res);
   return res;
 }
 
@@ -175,6 +222,8 @@ CalibrationResult calibrate(const Problem& prob, const Eigen::VectorXd& x0, bool
     return calibrate_with(engine, prob.n_knots(), prob.n_residuals(), x0);
   }
 
+  require_finite_seed(x0);
+  require_finite_residual(prob.template residuals<double>(x0));
   ResidualFunctor<Problem> functor(prob);
   Eigen::NumericalDiff<ResidualFunctor<Problem>> num_diff(functor);
   Eigen::LevenbergMarquardt<Eigen::NumericalDiff<ResidualFunctor<Problem>>> lm(num_diff);
@@ -187,6 +236,7 @@ CalibrationResult calibrate(const Problem& prob, const Eigen::VectorXd& x0, bool
   res.rms_residual = std::sqrt(r.squaredNorm() / r.size());
   const Eigen::MatrixXd J = aad_jacobian(prob, res.x);
   res.stationarity = (J.transpose() * r).cwiseAbs().maxCoeff();
+  finish_status(res);
   return res;
 }
 

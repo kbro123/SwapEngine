@@ -139,6 +139,10 @@ PROPS = [
     ("last_price_us", "SCALAR"), ("stream_avg_us", "SCALAR"), ("stream_ticks", "INT"),
     ("last_newton_steps", "INT"), ("last_refreshes", "INT"), ("last_drift", "SCALAR"),
     ("last_converged", "BOOL"), ("last_rescales", "INT"),
+    # WHY the last stream tick ended (calibration::StreamStatus): 0 converged, 1 step cap, 2 refresh cap,
+    # 3 band re-scale budget, 4 non-finite, 5 diverged. (last_reason(), the text, needs a STR prop kind --
+    # TASKS-API A0.)
+    ("last_status", "INT"),
 ]
 # props whose C++ getter lives on BundleSession vs is derived from problem()
 PROP_CPP = {
@@ -151,6 +155,7 @@ PROP_CPP = {
     "stream_ticks": "sess_.stream_ticks()", "last_newton_steps": "sess_.last_newton_steps()",
     "last_refreshes": "sess_.last_refreshes()", "last_drift": "sess_.last_drift()",
     "last_converged": "sess_.last_converged()", "last_rescales": "sess_.last_rescales()",
+    "last_status": "sess_.last_status()",
 }
 
 # ---- module-level free functions --------------------------------------------------------------------

@@ -189,3 +189,82 @@ TEST(StreamingBand, EdgeCrossingIsARescaleNotARefresh) {
   EXPECT_GT(t2.rescales, 0);
   EXPECT_LT((sc.current() - x0).cwiseAbs().maxCoeff() * 1e4, 0.05);
 }
+
+// ---- C2 (2026-09-10): the active set on sub-bp moves and on a quote that lives on its edge -------------------
+// Before: a 0.6 bp move at decay 0.1 burned 54 steps / 6 refreshes / 21 re-scales and gave up 470 % above the
+// optimum (a pin released at s = decay - 9e-4 could never be re-pinned and cycled); a target oscillating
+// 0.05 bp either side of its upper edge cost 673 re-scales + 96 refreshes with 16 failed ticks over 200 ticks.
+// Now pins are stiff equality rows with the multiplier read off the converged gap, releases are budgeted, and
+// the re-scale budget ends the tick honestly instead of switching the breakpoint search off.
+namespace {
+// First-order optimality in EVERY direction: F(x + d) >= F(x) for 240 random d at |d|_inf = 1e-7. Valid AT a
+// kink, where an LM polish is not (LM cannot step along a kink). Second-order terms are ~1e-14 relative.
+double worst_descent(const cal::BundleProblem& p, const Eigen::VectorXd& q, const Eigen::VectorXd& x) {
+  std::mt19937 rng(11);
+  std::normal_distribution<double> g;
+  const double f0 = objective(p, q, x, nullptr);
+  double worst = 0.0;
+  for (int k = 0; k < 240; ++k) {
+    Eigen::VectorXd d(x.size());
+    for (int i = 0; i < d.size(); ++i) d[i] = g(rng);
+    d *= 1e-7 / d.cwiseAbs().maxCoeff();
+    worst = std::min(worst, (objective(p, q, x + d, nullptr) - f0) / f0);
+  }
+  return worst;
+}
+}  // namespace
+
+TEST(StreamingBand, SubBpMovesAtSmallDecayConvergeToAFirstOrderOptimum) {
+  for (double decay : {0.1, 0.5}) {
+    cal::BundleProblem p = banded_bundle(0.25, 0.0);  // consistent quotes: everything starts at its mid
+    for (int i = 1; i < 10; i += 2) p.instruments[i].band_decay = decay;
+    const Eigen::VectorXd q0 = p.market();
+    const Eigen::VectorXd x0 = cold(p, q0, Eigen::VectorXd::Constant(6, 0.03), nullptr);
+    cal::StreamingCalibrator<cal::BundleProblem> sc(p, x0, q0, {});
+    for (double bp : {0.2, 0.6, 3.0, 12.0}) {
+      Eigen::VectorXd q = q0;
+      for (int i = 0; i < 10; ++i) q[i] += bp * 1e-4 * (i % 2 == 1 ? 1.0 : -0.3);
+      const cal::StreamTick t = sc.update(q);
+      const std::string tag = "decay " + std::to_string(decay) + " move " + std::to_string(bp) + " bp: " + t.reason() +
+                              " steps " + std::to_string(t.newton_steps) + " rescales " + std::to_string(t.rescales);
+      EXPECT_TRUE(t.converged) << tag;
+      EXPECT_LE(t.newton_steps, 40) << tag;
+      if (bp * 1e-4 < 10e-4)  // below Options::refresh_drift: a crossing is a re-scale, never a Jacobian refresh
+        EXPECT_EQ(t.refreshes, 0) << tag;
+      const double wd = worst_descent(p, q, sc.current());
+      EXPECT_GT(wd, -1e-7) << tag << ": a direction of descent exists (relative " << wd << ")";
+      const Eigen::VectorXd xp = cold(p, q, sc.current(), nullptr);
+      EXPECT_LE(objective(p, q, sc.current(), nullptr), objective(p, q, xp, nullptr) * (1.0 + 1e-6)) << tag;
+      if (bp * 1e-4 <= 0.25e-4)  // the market still inside its band: the objective is convex, cold LM is a bound
+        EXPECT_LE(objective(p, q, sc.current(), nullptr), objective(p, q, cold(p, q, x0, nullptr), nullptr) * (1.0 + 1e-6)) << tag;
+      std::cout << "  [band] " << tag << " worst_descent " << wd << "\n";
+      const cal::StreamTick back = sc.update(q0);
+      EXPECT_TRUE(back.converged) << tag << " (back to q0: " << back.reason() << ")";
+    }
+  }
+}
+
+TEST(StreamingBand, AQuoteOscillatingAroundItsEdgeConvergesEveryTickWithBoundedRescales) {
+  cal::BundleProblem p = banded_bundle(0.25, 0.0);  // decay 0.1
+  const Eigen::VectorXd q0 = p.market();
+  const Eigen::VectorXd x0 = cold(p, q0, Eigen::VectorXd::Constant(6, 0.03), nullptr);
+  cal::StreamingCalibrator<cal::BundleProblem> sc(p, x0, q0, {});
+  int rescales = 0, refreshes = 0, failed = 0, worst_steps = 0;
+  double worst_wd = 0.0;
+  Eigen::VectorXd q = q0;
+  for (int k = 0; k < 200; ++k) {
+    q = q0;
+    q[3] = p.instruments[3].band_upper + (k % 2 ? +0.05e-4 : -0.05e-4) * (1.0 + 0.5 * std::sin(0.3 * k));
+    q[2] = q0[2] + 0.5e-4 * std::sin(0.1 * k);
+    const cal::StreamTick t = sc.update(q);
+    rescales += t.rescales; refreshes += t.refreshes; failed += !t.converged; worst_steps = std::max(worst_steps, t.newton_steps);
+    if (k % 40 == 39) worst_wd = std::min(worst_wd, worst_descent(p, q, sc.current()));
+  }
+  std::cout << "  [band] 200 edge-oscillation ticks: rescales " << rescales << " refreshes " << refreshes << " failed " << failed
+            << " worst steps " << worst_steps << " worst_descent " << worst_wd << "\n";
+  EXPECT_EQ(failed, 0);
+  EXPECT_EQ(refreshes, 0);
+  EXPECT_LE(rescales, 240);   // measured 151 (was 673 with 16 failures)
+  EXPECT_LE(worst_steps, 12);  // measured 9 (was 56)
+  EXPECT_GT(worst_wd, -1e-7);
+}

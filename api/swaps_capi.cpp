@@ -75,6 +75,8 @@ extern "C" const char* swaps_session_calibrate(void* session) {
     if (!s->needs_recalibrate()) s->start_streaming();  // anchor the frozen-Newton warm path when eligible
     json::object o;
     o["rms_residual"] = r.rms_residual;
+    o["converged"] = r.converged;
+    o["status"] = r.status;
     o["rank_deficiency"] = r.rank_deficiency;
     o["iterations"] = r.iterations;
     o["quote_diagnostics"] = json::parse(s->quote_diagnostics_json());  // per-quote in-band fit

@@ -44,6 +44,20 @@ void refresh_tick(benchmark::State& state, const Shape& s) {  // a 25 bp move ea
     benchmark::DoNotOptimize(x.data());
   }
 }
+// The active-set stress (C2, 2026-09-10): the banded rows' market oscillates 0.05 bp either side of their
+// upper edge, so every tick the optimum sits ON a kink -- pins, multiplier checks and re-scales each tick.
+void edge_osc_tick(benchmark::State& state, const Shape& s) {
+  api::BundleSession sess(s.prob);
+  sess.calibrate(s.x0);
+  sess.start_streaming();
+  bool flip = false;
+  for (int i = 0; i < 4; ++i) { flip = !flip; sess.stream_update(flip ? s.q_edge_hi : s.q_edge_lo); }
+  for (auto _ : state) {
+    flip = !flip;
+    const Eigen::VectorXd& x = sess.stream_update(flip ? s.q_edge_hi : s.q_edge_lo);
+    benchmark::DoNotOptimize(x.data());
+  }
+}
 void jacobian(benchmark::State& state, const Shape& s) {
   const cal::HybridBundleResidual h(s.prob);
   for (auto _ : state) {
@@ -58,6 +72,8 @@ int main(int argc, char** argv) {
     benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_StreamTick").c_str(), [&s](benchmark::State& st) { stream_tick(st, s); });
     benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_RefreshTick25bp").c_str(), [&s](benchmark::State& st) { refresh_tick(st, s); });
     benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_Jacobian").c_str(), [&s](benchmark::State& st) { jacobian(st, s); });
+    if (s.has_bands)
+      benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_EdgeOscTick").c_str(), [&s](benchmark::State& st) { edge_osc_tick(st, s); });
   }
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();

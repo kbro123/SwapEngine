@@ -234,6 +234,18 @@
       "target_ns": 786900,
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 605.3 us x1.3; ratchets DOWN only"
     },
+    "shape_banded_edge_osc_tick": {
+      "target_ns": 59300,
+      "note": "set 2026-09-10 with the C1/C2 active-set fix: 45.6 us x1.3 (kink every tick: pins + re-scales; each re-scale a full factor(), C7); ratchets DOWN only"
+    },
+    "shape_turns_edge_osc_tick": {
+      "target_ns": 2200,
+      "note": "set 2026-09-10: 1.6 us x1.3; ratchets DOWN only"
+    },
+    "shape_desk_edge_osc_tick": {
+      "target_ns": 1892300,
+      "note": "set 2026-09-10: 1.46 ms x1.3 -- the C7 cost made visible (4 full COD factors of the desk per kink tick vs 57 us for a plain tick); drops with C7; ratchets DOWN only"
+    },
     "shape_averaged_leg_moment_stream_tick": {
       "target_ns": 70900,
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 54.5 us x1.3; ratchets DOWN only"

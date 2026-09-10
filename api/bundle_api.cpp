@@ -663,6 +663,8 @@ const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& 
                                                          const RegSpec& reg) {
   if (new_market.size() != prob_.n_residuals())
     throw std::runtime_error("recalibrate: market length does not match the instrument count");
+  if (!new_market.allFinite())
+    throw std::runtime_error("recalibrate: market contains a non-finite quote");
   for (int i = 0; i < prob_.n_residuals(); ++i) prob_.instruments[i].market = new_market[i];
   if (engine_) engine_->set_quotes(prob_);  // quote RHS only: the cached engine stays compiled
   return calibrate(x_, reg);  // warm from the current solution
@@ -676,6 +678,11 @@ const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p,
   // to the old 5y row). The fingerprint is the contract the header promises; enforce it.
   if (!same_structure(p))
     throw std::runtime_error("rebind: structure fingerprint differs — the structure changed (recompile instead)");
+  for (int i = 0; i < prob_.n_residuals(); ++i) {
+    const cal::Instrument& src = p.instruments[i];
+    if (!std::isfinite(src.market) || !std::isfinite(src.band_lower) || !std::isfinite(src.band_upper) || !std::isfinite(src.band_decay))
+      throw std::runtime_error("rebind: instrument " + std::to_string(i) + " carries a non-finite quote or band");
+  }
   for (int i = 0; i < prob_.n_residuals(); ++i) {  // the FULL quote RHS: target AND soft-quote band
     cal::Instrument& dst = prob_.instruments[i];
     const cal::Instrument& src = p.instruments[i];
@@ -1034,6 +1041,8 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
   last_drift_ = tick.drift;
   last_converged_ = tick.converged;
   last_rescales_ = tick.rescales;
+  last_status_ = static_cast<int>(tick.status);
+  last_reason_ = tick.reason();
   // A non-converged tick (refresh cap) is not committed by the streamer either: current() is still the
   // last converged solution, so x_ never carries a half-solved curve. The caller sees last_converged().
   x_ = stream_->current();
@@ -1161,6 +1170,8 @@ std::string run_json(const std::string& request) {
       c["rms_residual"] = res.rms_residual;
       c["stationarity"] = res.stationarity;
       c["info"] = res.info;
+      c["converged"] = res.converged;  // LM ended at a stationary point with a finite result
+      c["status"] = res.status;        // the LM stopping reason, in words
       c["rank_deficiency"] = res.rank_deficiency;  // >0: the instrument set under-determines the curve
       out["calibration"] = c;
     }

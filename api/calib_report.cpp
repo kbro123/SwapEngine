@@ -144,6 +144,8 @@ std::string calib_report_json(const std::string& request) {
 
   json::object out;
   out["rms_residual"] = res.rms_residual;
+  out["converged"] = res.converged;
+  out["status"] = res.status;
   out["rank_deficiency"] = res.rank_deficiency;
   out["condition_number"] = cond;
   out["singular_values"] = vecf(sv);

@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include "swaps/calibration/background_jacobian.hpp"
@@ -54,7 +55,32 @@
 
 namespace swaps::calibration {
 
+// Why a tick ended. Anything but Converged is a FAILED tick: reported, never committed (current() keeps
+// the last converged solution) and the anchor is restored to that solution, so the next tick starts from a
+// valid state and cannot report a stale curve as converged (probe C-divergent-repeat, 2026-09-09).
+enum class StreamStatus {
+  Converged,   // ||dx||_inf < step_tol
+  StepCap,     // Options::max_steps corrector steps without convergence
+  RefreshCap,  // Options::max_refresh Jacobian refreshes without convergence (stalled)
+  RescaleCap,  // the per-tick band re-scale budget was exhausted (active-set cycling)
+  NonFinite,   // a residual, state or Jacobian entry became NaN/inf during the tick
+  Diverged,    // the residual grew by 1e3x over the tick's first evaluation, or |x| left [-10, 10]
+};
+inline const char* to_string(StreamStatus s) {
+  switch (s) {
+    case StreamStatus::Converged: return "converged";
+    case StreamStatus::StepCap: return "step cap hit";
+    case StreamStatus::RefreshCap: return "refresh cap hit";
+    case StreamStatus::RescaleCap: return "band re-scale budget exhausted";
+    case StreamStatus::NonFinite: return "non-finite residual, state or Jacobian";
+    case StreamStatus::Diverged: return "diverged";
+  }
+  return "?";
+}
+
 struct StreamTick {
+  StreamStatus status = StreamStatus::StepCap;
+  const char* reason() const { return to_string(status); }
   bool refreshed = false;  // this tick recomputed the analytic Jacobian (>=1 refresh)
   int newton_steps = 0;    // total frozen Gauss-Newton steps taken this tick
   int refreshes = 0;       // analytic Jacobian recomputations this tick (0 on the pure fast path)
@@ -98,6 +124,8 @@ class StreamingCalibrator {
   StreamingCalibrator(const Problem& prob, const Eigen::VectorXd& x0,
                       const Eigen::VectorXd& q0, const Options& opt)
       : n_res_(prob.n_residuals()), engine_(prob), opt_(opt) {
+    if (!x0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor state x0 contains a non-finite value");
+    if (!q0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor market q0 contains a non-finite quote");
     if (opt_.prefetch && opt_.exact) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (opt_.regularizer.size()) RtR_.noalias() = opt_.regularizer.transpose() * opt_.regularizer;
     // The banded rows (FX forwards are never banded): what the per-tick side tracking watches.
@@ -112,17 +140,16 @@ class StreamingCalibrator {
     slope_cur_.assign(bands_.size(), 1.0);
     flips_.assign(bands_.size(), 0);
     state_.assign(bands_.size(), 0);
-    s_pin_.assign(bands_.size(), 1.0);
-    s_prev_.assign(bands_.size(), 1.0);
-    gap_prev_.assign(bands_.size(), 0.0);
-    s_iters_.assign(bands_.size(), 0);
+    s_pin_.assign(bands_.size(), 0.0);
     last_side_.assign(bands_.size(), +1);
-    released_.assign(bands_.size(), 0);
+    releases_.assign(bands_.size(), 0);
     onedge_.assign(bands_.size(), 0);
     // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0.
     drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || RtR_.size() > 0;
-    set_anchor(x0, q0);
+    if (!set_anchor(x0, q0))
+      throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
     x_cur_ = x0;
+    q_cur_ = q0;
   }
 
   const Eigen::VectorXd& current() const { return x_cur_; }
@@ -133,6 +160,8 @@ class StreamingCalibrator {
   int rescale_count() const { return rescale_count_; }  // band-edge re-scales (cheap M refactors) so far
 
   StreamTick update(const Eigen::VectorXd& q_new) {
+    if (q_new.size() != n_res_) throw std::invalid_argument("StreamingCalibrator::update: market length does not match the instrument count");
+    if (!q_new.allFinite()) throw std::invalid_argument("StreamingCalibrator::update: market contains a non-finite quote");
     return opt_.exact ? update_exact(q_new) : update_linear(q_new);
   }
 
@@ -149,18 +178,30 @@ class StreamingCalibrator {
     x_ = x_cur_;              // warm start from the last exact solution (tick-to-tick move is tiny)
     Eigen::VectorXd& x = x_;  // reused scratch: the frozen-Newton loop below allocates nothing
     if (drift_refresh_ && t.drift > opt_.refresh_drift) {  // accuracy refresh (see Options::refresh_drift)
-      refresh(x, q_new, t);
+      if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);
       t.drift = 0.0;
     }
     int frozen = 0;
     const bool drift_refreshed = t.refreshes > 0;
     bool final_refresh_done = false;
-    for (std::size_t k = 0; k < flips_.size(); ++k) flips_[k] = 0;
+    for (std::size_t k = 0; k < flips_.size(); ++k) {
+      flips_[k] = 0;
+      releases_[k] = 0;  // the per-tick release budget (verify_pins) starts fresh every tick
+    }
+    double r0_inf = -1.0;  // the tick's first residual size: the divergence yardstick
     for (;;) {
       // The residual is engine-defined against the live market q_new: model_rates - q_new for hard
       // instruments, the Huber band residual for soft (banded) ones. Driving THIS (not the raw reprice)
       // is what makes frozen-Newton solve the soft least-squares -- dx = J⁺·r -> 0 at the soft minimum.
       r_ = engine_.residuals_vs(x, q_new);
+      if (!r_.allFinite()) return fail(t, StreamStatus::NonFinite);
+      const double r_inf = r_.cwiseAbs().maxCoeff();
+      if (r0_inf < 0.0) r0_inf = r_inf;
+      if (r_inf > 1e3 * std::max(r0_inf, 1e-2) || x.cwiseAbs().maxCoeff() > 10.0) return fail(t, StreamStatus::Diverged);
+      // The band re-scale budget bounds active-set cycling within one tick. Exhausting it is a FAILED
+      // tick: the old code kept stepping with the breakpoint search switched off, which cycled, then
+      // refreshed into 1/decay-amplified overshoots (probe C-band-crossing, 0.6 bp at decay 0.1).
+      if (t.rescales >= max_rescales()) return fail(t, StreamStatus::RescaleCap);
       if (!bands_.empty()) {
         // ACTIVE-SET band tracking (the objective is a convex piecewise-quadratic: each banded row has
         // slope decay inside its band and 1 outside, problem.hpp band_residual). Three states per row:
@@ -178,11 +219,13 @@ class StreamingCalibrator {
         //             is pinned: its residual becomes the linear extension through the edge at the
         //             MULTIPLIER slope s ∈ [decay, 1], and at convergence s is re-solved from the other
         //             rows' gradient (KKT); the row lands exactly on the edge for the right s, and is
-        //             released to a side only if s leaves [decay, 1].
+        //             released to a side only if s leaves [decay, 1] -- at most once per tick per row
+        //             (a row that walks back onto its edge after a release is a kink optimum the
+        //             linearised multiplier misjudged by a hair: it is re-pinned for good, s clamped).
         apply_pins(q_new);
-        if (t.rescales < max_rescales() && track_bands(q_new)) {
+        if (track_bands(q_new)) {
           if (need_full_) {
-            set_anchor(x, q_new);
+            if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
             t.refreshed = true;
             ++t.refreshes;
           } else {
@@ -198,10 +241,10 @@ class StreamingCalibrator {
       double alpha = 1.0;
       std::size_t hit = 0;
       int hit_side = 0;
-      if (!bands_.empty() && have_J_ && t.rescales < max_rescales())
-        alpha = breakpoint(q_new, &hit, &hit_side);
+      if (!bands_.empty() && have_J_) alpha = breakpoint(q_new, &hit, &hit_side);
       x.noalias() -= alpha * dx_;
       ++t.newton_steps;
+      if (!x.allFinite()) return fail(t, StreamStatus::NonFinite);
       SWAPS_TRACE("  step %d |dx|=%.2e alpha=%.3f pinned=%d rescales=%d refreshes=%d\n", t.newton_steps, dx_.cwiseAbs().maxCoeff(), alpha, n_pinned_, t.rescales, t.refreshes);
       if (alpha < 1.0) {  // stopped on a band edge: switch that row there and carry on
         switch_row(hit, hit_side);
@@ -212,8 +255,8 @@ class StreamingCalibrator {
         continue;
       }
       if (dx_.cwiseAbs().maxCoeff() < opt_.step_tol) {  // converged for the CURRENT active set
-        if (!bands_.empty() && n_pinned_ > 0 && t.rescales < max_rescales() && verify_pins(x, q_new)) {
-          factor(J_cur_);  // a pin was released onto its true side: keep iterating from here
+        if (!bands_.empty() && n_pinned_ > 0 && verify_pins(x, q_new)) {
+          factor(J_cur_);  // a pin was released onto its true side, or its multiplier moved: iterate on
           ++t.rescales;
           ++rescale_count_;
           frozen = 0;
@@ -226,26 +269,41 @@ class StreamingCalibrator {
         // Jacobian would be exactly the spike the worker exists to hide.
         if (drift_refreshed && !final_refresh_done && !bg_ && t.refreshes < opt_.max_refresh) {
           final_refresh_done = true;
-          set_anchor(x, q_new);
+          if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
           ++t.refreshes;
           frozen = 0;
           continue;
         }
         t.converged = true;
+        t.status = StreamStatus::Converged;
         break;
       }
-      if (t.newton_steps >= opt_.max_steps) break;           // hard cap: report NOT converged
-      if (++frozen >= opt_.max_frozen) {                     // M stale as a preconditioner -> refresh
-        if (t.refreshes >= opt_.max_refresh) break;          // safety cap: report NOT converged
-        refresh(x, q_new, t);
+      if (t.newton_steps >= opt_.max_steps) return fail(t, StreamStatus::StepCap);
+      if (++frozen >= opt_.max_frozen) {  // M stale as a preconditioner -> refresh
+        if (t.refreshes >= opt_.max_refresh) return fail(t, StreamStatus::RefreshCap);
+        if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);
         frozen = 0;
       }
     }
-    if (t.converged) x_cur_ = x;  // a non-converged tick is reported, never committed
+    x_cur_ = x;  // committed: the exact solution at q_new
+    q_cur_ = q_new;
     // Speculatively pre-compute the NEXT M once the market has drifted enough that a refresh is plausibly
     // near -- so the worker is done (on a spare core) before the envelope is hit. Coalesces: a request
     // while one is in flight just updates the target x.
     if (bg_ && !bg_->computing() && t.drift > opt_.prefetch_drift) bg_->request(x_cur_);
+    return t;
+  }
+
+  // A FAILED tick: reported (status), never committed. If the tick moved the anchor (a Jacobian refresh at
+  // a divergent iterate, a band re-scale or a pin), the anchor is rebuilt at the last committed solution
+  // against the market it solved -- otherwise the next tick would run frozen-Newton off a Jacobian taken
+  // at the divergent point (rank-collapsed to M == 0 in the probe), see |dx| == 0 and report a 1289 bp
+  // stale curve as converged. Costs one Jacobian, only on the failed tick.
+  StreamTick fail(StreamTick& t, StreamStatus why) {
+    t.converged = false;
+    t.status = why;
+    SWAPS_TRACE("  tick FAILED: %s (steps %d refreshes %d rescales %d)\n", to_string(why), t.newton_steps, t.refreshes, t.rescales);
+    if (t.refreshes > 0 || t.rescales > 0) (void)set_anchor(x_cur_, q_cur_);
     return t;
   }
 
@@ -257,6 +315,7 @@ class StreamingCalibrator {
     if (t.drift < opt_.envelope) {
       x_cur_.noalias() = x_anchor_ + M_ * d;  // one matvec, O(drift^2) error
       t.converged = true;
+      t.status = StreamStatus::Converged;
       return t;
     }
     t.refreshed = true;
@@ -269,16 +328,17 @@ class StreamingCalibrator {
       ++t.newton_steps;
       if (dx.cwiseAbs().maxCoeff() < opt_.step_tol) {
         t.converged = true;
+        t.status = StreamStatus::Converged;
         break;
       }
       if (++frozen >= opt_.max_frozen) {
         if (t.refreshes >= opt_.max_refresh) break;
-        set_anchor(x, q_new);
+        (void)set_anchor(x, q_new);
         ++t.refreshes;
         frozen = 0;
       }
     }
-    set_anchor(x, q_new);  // legacy always refreshes at the converged solution
+    (void)set_anchor(x, q_new);  // legacy always refreshes at the converged solution
     x_cur_ = x;
     t.refreshes += 1;
     return t;
@@ -306,10 +366,15 @@ class StreamingCalibrator {
     return 0;
   }
 
-  // Pinned rows: the residual is the LINEAR extension of the Huber residual through the edge at the
-  // multiplier slope s ∈ [decay, 1]:  r = r_edge + s·(q_model − edge),  r_edge = decay·(edge − m). For the
-  // right s the least-squares solution puts q_model exactly ON the edge (that is how s is defined, see
-  // verify_pins); the row's J is s·(quote row), installed when s is set.
+  // Pinned rows are EQUALITY CONSTRAINTS q_model = edge, imposed as a stiff penalty row
+  //     r = w·(q_model − edge),  J row = w·(quote row),  w = kPinWeight,
+  // so the frozen-Newton solve is the constrained Gauss-Newton step to O(1/w²) and the Lagrange
+  // multiplier is read off the converged gap for free: λ = w²·gap (stationarity of the penalised least
+  // squares: g_rest + Σ w²·gap_i·∇q_i = 0). The kink test is then s = λ / r_edge ∈ [decay, 1] with
+  // r_edge = decay·(edge − m) the Huber residual AT the edge (verify_pins). This replaced (2026-09-10) a
+  // fixed-point/secant iteration in the multiplier slope s that wandered without closing the gap and
+  // left the tick 14 % above the optimum (probe C-band-crossing, 0.6 bp at decay 0.1).
+  static constexpr double kPinWeight = 1e3;  // gap ≈ λ/w² ~ 1e-11 (1e-7 bp); λ resolved to ~1e-8 relative
   void apply_pins(const Eigen::VectorXd& q) {
     if (n_pinned_ == 0) return;
     for (std::size_t k = 0; k < bands_.size(); ++k) {
@@ -318,7 +383,7 @@ class StreamingCalibrator {
       double qm = 0.0;
       side_of(k, q, &qm);
       const double edge = state_[k] > 0 ? b.upper : b.lower;
-      r_[b.row] = b.decay * (edge - q[b.row]) + s_pin_[k] * (qm - edge);
+      r_[b.row] = kPinWeight * (qm - edge);
     }
   }
 
@@ -360,7 +425,7 @@ class StreamingCalibrator {
     const BandRow& b = bands_[k];
     ++flips_[k];
     onedge_[k] = true;
-    const bool pin = flips_[k] >= 2 && !released_[k];
+    const bool pin = flips_[k] >= 2;  // twice onto the same edge in one tick: a kink optimum
     SWAPS_TRACE("  row %d walked onto edge, entering side %d, flips=%d pin=%d\n", b.row, side, flips_[k], (int)pin);
     if (pin) {
       // The edge it is on: the one it is crossing now (entering outside => that side's edge; entering
@@ -368,10 +433,9 @@ class StreamingCalibrator {
       const int edge_side = (side != 0) ? side : last_side_[k];
       state_[k] = edge_side > 0 ? +1 : -1;
       ++n_pinned_;
-      s_pin_[k] = 0.5 * (b.decay + 1.0);
-      s_iters_[k] = 0;
-      J_cur_.row(b.row) = J_ref_.row(b.row) * (s_pin_[k] / slope_ref_[k]);
-      slope_cur_[k] = s_pin_[k];
+      s_pin_[k] = 0.0;  // the multiplier slope is known only at convergence (verify_pins)
+      J_cur_.row(b.row) = J_ref_.row(b.row) * (kPinWeight / slope_ref_[k]);
+      slope_cur_[k] = kPinWeight;
       return;
     }
     const double slope = side == 0 ? b.decay : 1.0;
@@ -416,86 +480,62 @@ class StreamingCalibrator {
     return changed;
   }
 
-  // KKT check of every pinned row at a converged point. Stationarity of the full objective with row i
-  // restored at slope s_i reads  g_rest + Σ_i s_i · r_i(edge) · Jq_iᵀ = 0, where g_rest = Jᵀr over the
-  // other rows (+ RᵀR x), r_i(edge) = decay·(edge − m) is the Huber residual AT the edge (continuous) and
-  // Jq_i the unit-slope quote row. Solve the small least squares for the s_i; a pin is valid iff its
-  // s_i ∈ [decay, 1] (the subgradient range at the kink). Otherwise the true optimum lies on the side the
-  // multiplier points to: release the row there (slope decay if s < decay, 1 if s > 1) and iterate on.
+  // KKT check of every pinned row at a converged point. The penalised least squares is stationary:
+  //     g_rest + Σ_i λ_i ∇q_i = 0,   λ_i = w²·gap_i,   gap_i = q_model_i − edge_i,
+  // the constrained problem's multipliers. Along the constrained-optimal path a move δ of q_i changes the
+  // rest of the objective by −λ_i·δ and the row's own Huber term by r_edge·slope·δ (slope = decay on the
+  // inside of the edge, 1 outside), so the edge is a kink optimum iff s_i = λ_i / r_edge_i ∈ [decay, 1]
+  // (both edges, either sign of r_edge). Otherwise the true optimum lies on the side the multiplier
+  // points to: release the row there (slope decay if s < decay, 1 if s > 1) and iterate on -- once per
+  // row per tick; a row that walks back onto its edge after a release is re-pinned for good.
   // Returns true if any row was released (M must be rebuilt).
   bool verify_pins(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
+    (void)x;
     r_ = engine_.residuals_vs(x, q);  // the engine's (Huber) residuals: pinned rows' q_model read off these
-    // g_rest: the gradient of every row EXCEPT the pins (their own linearised residual is part of the
-    // converged balance and must not be counted as the force they have to resist).
-    std::vector<std::size_t> idx;
-    idx.reserve(n_pinned_);
-    std::vector<double> q_edge_gap;  // q_model − edge at this point, per pin
+    bool changed = false;
     for (std::size_t k = 0; k < bands_.size(); ++k) {
       if (state_[k] == 0) continue;
-      double qm = 0.0;
-      side_of(k, q, &qm);  // BEFORE any overwrite of r_[row]
-      q_edge_gap.push_back(qm - (state_[k] > 0 ? bands_[k].upper : bands_[k].lower));
-      r_[bands_[k].row] = 0.0;
-      idx.push_back(k);
-    }
-    Eigen::VectorXd g = J_cur_.transpose() * r_;
-    if (RtR_.size()) g.noalias() += RtR_ * x;
-    // Multipliers: g_rest + Σ_i s_i · r_edge_i · Jq_iᵀ = 0, least squares in the s_i.
-    Eigen::MatrixXd A(J_cur_.cols(), static_cast<int>(idx.size()));
-    for (std::size_t j = 0; j < idx.size(); ++j) {
-      const BandRow& b = bands_[idx[j]];
-      const double edge = state_[idx[j]] > 0 ? b.upper : b.lower;
-      const double r_edge = b.decay * (edge - q[b.row]);
-      A.col(static_cast<int>(j)) = (r_edge / slope_ref_[idx[j]]) * J_ref_.row(b.row).transpose();  // quote row
-    }
-    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-    cod.setThreshold(kRankThreshold);
-    cod.compute(A);
-    const Eigen::VectorXd s = cod.solve(-g);
-    bool changed = false;
-    for (std::size_t j = 0; j < idx.size(); ++j) {
-      const std::size_t k = idx[j];
       const BandRow& b = bands_[k];
-      const double sj = s[static_cast<int>(j)];
-      SWAPS_TRACE("  verify row %d state %d s=%.4f (was %.4f, decay %.2f) gap=%.2e\n", b.row, state_[k], sj, s_pin_[k], b.decay, q_edge_gap[j]);
-      const double tol = 1e-6;
-      if (sj < b.decay - tol || sj > 1.0 + tol) {
-        // Not a kink optimum: the true solution is on the side the multiplier points to. Release there.
+      double qm = 0.0;
+      side_of(k, q, &qm);
+      const double edge = state_[k] > 0 ? b.upper : b.lower;
+      const double gap = qm - edge;
+      const double lambda = kPinWeight * kPinWeight * gap;
+      const double r_edge = b.decay * (edge - q[b.row]);
+      double sj;
+      if (std::abs(r_edge) > 1e-14) {
+        sj = lambda / r_edge;
+      } else {
+        // Market ON the edge: no kink (the Huber term is C1 there). Release toward the side the rest of
+        // the objective pulls to: λ > 0 means it wants q_i higher (the + side of the edge).
+        sj = (state_[k] * lambda > 0.0) ? 2.0 : 0.0;
+      }
+      s_pin_[k] = sj;
+      SWAPS_TRACE("  verify row %d state %d s=%.4f (decay %.2f) gap=%.2e lambda=%.3e\n", b.row, state_[k], sj, b.decay, gap, lambda);
+      // Hysteresis: the multiplier is read off a frozen-J solve, so a hair outside [decay, 1] is noise,
+      // not a side (the old 1e-6 released at s = decay − 9e-4 and cycled).
+      const double tol = 1e-3;
+      if ((sj < b.decay - tol || sj > 1.0 + tol) && releases_[k] == 0) {
         const double slope = (sj < b.decay) ? b.decay : 1.0;
         state_[k] = 0;
         --n_pinned_;
-        released_[k] = true;  // never re-pinned this tick (termination)
+        ++releases_[k];  // one release per row per tick; a re-pin after it is final (termination)
         J_cur_.row(b.row) = J_ref_.row(b.row) * (slope / slope_ref_[k]);
         slope_cur_[k] = slope;
         changed = true;
-        continue;
       }
-      // A genuine kink optimum. Converged when the row sits on its edge; otherwise update the multiplier:
-      // the KKT projection is a fixed-point map with linear convergence, so after the first update use a
-      // SECANT step on gap(s) = q_model(x*(s)) − edge, the quantity that must vanish -- superlinear.
-      const double gap = q_edge_gap[j];
-      if (std::abs(gap) < 1e-9 || s_iters_[k] >= 8) continue;
-      double s_next = sj;
-      if (s_iters_[k] > 0 && gap != gap_prev_[k] && s_pin_[k] != s_prev_[k])
-        s_next = s_pin_[k] - gap * (s_pin_[k] - s_prev_[k]) / (gap - gap_prev_[k]);
-      s_prev_[k] = s_pin_[k];
-      gap_prev_[k] = gap;
-      ++s_iters_[k];
-      s_pin_[k] = std::min(1.0, std::max(b.decay, s_next));
-      J_cur_.row(b.row) = J_ref_.row(b.row) * (s_pin_[k] / slope_ref_[k]);
-      slope_cur_[k] = s_pin_[k];
-      changed = true;
     }
     return changed;
   }
 
-  int max_rescales() const { return 6 + 3 * static_cast<int>(bands_.size()); }
+  // Per-tick band re-scale budget (each is a factor()); exhausting it fails the tick (RescaleCap).
+  int max_rescales() const { return 8 + 4 * static_cast<int>(bands_.size()); }
 
   void clear_pins() {
     for (std::size_t k = 0; k < bands_.size(); ++k) {
       state_[k] = 0;
       flips_[k] = 0;
-      released_[k] = false;
+      releases_[k] = 0;
       onedge_[k] = false;
     }
     n_pinned_ = 0;
@@ -506,7 +546,7 @@ class StreamingCalibrator {
   // a slightly-stale background M is exact for a square problem -- it just sets the frozen-Newton rate --
   // so no freshness check is needed (a too-stale M merely triggers another refresh, bounded by
   // max_refresh). The worker hands over M only, so band rows cannot be re-scaled off it (have_J_).
-  void refresh(const Eigen::VectorXd& x, const Eigen::VectorXd& q, StreamTick& t) {
+  bool refresh(const Eigen::VectorXd& x, const Eigen::VectorXd& q, StreamTick& t) {
     if (bg_ && bg_->try_take(bg_x_, bg_M_)) {
       M_ = std::move(bg_M_);
       x_anchor_ = std::move(bg_x_);
@@ -516,19 +556,25 @@ class StreamingCalibrator {
       ++t.prefetched;
       ++prefetch_hits_;
     } else {
-      set_anchor(x, q);  // inline compute (the spike the prefetch exists to hide)
+      if (!set_anchor(x, q)) return false;  // inline compute (the spike the prefetch exists to hide)
     }
     t.refreshed = true;
     ++t.refreshes;
+    return true;
   }
 
   // Full refresh: the engine's Jacobian at (x, q) -- band rows carry their slope AT x -- plus the anchor
   // slopes, then the operator.
-  void set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
+  // Returns false (anchor UNCHANGED) if the Jacobian at (x, q) is not finite.
+  bool set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     SWAPS_TRACE("  set_anchor\n");
+    J_ref_ = engine_.jacobian_vs(x, q);  // band term consistent with residuals_vs(·,q)
+    if (!J_ref_.allFinite()) {
+      if (have_J_) J_ref_ = J_cur_;  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
+      return false;
+    }
     x_anchor_ = x;
     q_anchor_ = q;
-    J_ref_ = engine_.jacobian_vs(x, q);  // band term consistent with residuals_vs(·,q)
     if (!bands_.empty()) {
       const Eigen::VectorXd& mr = engine_.model_rates(x);
       for (std::size_t k = 0; k < bands_.size(); ++k) {
@@ -543,6 +589,7 @@ class StreamingCalibrator {
     have_J_ = true;
     factor(J_cur_);
     ++refresh_count_;
+    return true;
   }
 
   // M = (JᵀJ)⁻¹Jᵀ (= J⁻¹ when square). With a smoothness regulariser R, M = (JᵀJ + RᵀR)⁻¹Jᵀ and
@@ -573,6 +620,7 @@ class StreamingCalibrator {
   residual_engine_t<Problem> engine_;
   Options opt_;
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
+  Eigen::VectorXd q_cur_;  // the market x_cur_ solves (a failed tick restores the anchor here)
   Eigen::MatrixXd M_;
   Eigen::MatrixXd RtR_, B_;  // smoothness regulariser: RᵀR and the per-step curvature pull B=(JᵀJ+RᵀR)⁻¹RᵀR
   int refresh_count_ = 0;
@@ -584,11 +632,9 @@ class StreamingCalibrator {
   std::vector<double> slope_ref_, slope_cur_;
   std::vector<int> flips_;      // per banded row: side flips within the current tick
   std::vector<int> state_;      // 0 free, +1 pinned on upper, -1 pinned on lower
-  std::vector<double> s_pin_;   // pinned rows: the multiplier slope s ∈ [decay, 1] currently installed
-  std::vector<double> s_prev_, gap_prev_;  // previous (s, gap) for the secant multiplier update
-  std::vector<int> s_iters_;    // pinned rows: multiplier updates this tick (bounded)
+  std::vector<double> s_pin_;   // pinned rows: the multiplier slope s = λ/r_edge read at the last KKT check
   std::vector<int> last_side_;  // last OUTSIDE side seen (+1 above / -1 below): which edge a flip crosses
-  std::vector<char> released_;  // pin released by the KKT check this tick (never re-pinned this tick)
+  std::vector<int> releases_;   // pin releases by the KKT check this tick (budget 1: a re-pin is final)
   std::vector<char> onedge_;    // row was walked onto its edge by the breakpoint step (side = installed slope)
   int n_pinned_ = 0;
   Eigen::MatrixXd J_ref_, J_cur_;

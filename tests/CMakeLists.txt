@@ -56,6 +56,8 @@ add_executable(swaps_tests
   credit_test.cpp
   bug_hunt_2026_09_test.cpp
   streaming_band_test.cpp
+  streaming_contract_test.cpp
+  calibration_status_test.cpp
   bus252_daycount_test.cpp
   zero_coupon_swap_test.cpp
   conventions_property_test.cpp

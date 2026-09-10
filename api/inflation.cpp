@@ -149,6 +149,8 @@ std::string inflation_json(const std::string& request) {
   out["breakevens"] = vecf(fitted);
   out["stationarity"] = res.stationarity;
   out["rms_residual"] = res.rms_residual;
+  out["converged"] = res.converged;
+  out["status"] = res.status;
   out["rank_deficiency"] = res.rank_deficiency;
   out["iterations"] = res.iterations;
   out["n"] = static_cast<int>(prob.instruments.size());

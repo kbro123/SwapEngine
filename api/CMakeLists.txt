@@ -26,6 +26,7 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
   add_executable(swaps_api_tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_fixings_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/api_status_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_reprice_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/vol_cube_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_parity_test.cpp

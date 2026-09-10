@@ -381,6 +381,12 @@ class BundleSession {
   // band-edge crossings handled by the cheap frozen-row re-scale (no Jacobian recompute) this tick.
   bool last_converged() const { return last_converged_; }
   int last_rescales() const { return last_rescales_; }
+  // WHY the last tick ended: calibration::StreamStatus as an int (0 converged, 1 step cap, 2 refresh cap,
+  // 3 band re-scale budget, 4 non-finite, 5 diverged) and its text. A failed tick is never committed and
+  // the streamer's anchor is restored to the last committed curve, so the NEXT tick cannot report a
+  // stale curve as converged (the 2026-09-09 C1 finding).
+  int last_status() const { return last_status_; }
+  const char* last_reason() const { return last_reason_; }
 
   // ---- fixings as pricing context (E2) -----------------------------------------------------------
   // Any observation carrying a fixing_schedule is RESOLVED from this session's fixing table against the
@@ -466,6 +472,8 @@ class BundleSession {
   double last_drift_ = 0;
   bool last_converged_ = true;
   int last_rescales_ = 0;
+  int last_status_ = 0;
+  const char* last_reason_ = "converged";
 
   // ---- vol-cube reprice caches (populated by the const price_vol_cube_json; mutable so it stays const) ----
   // The swaption schedules are CURVE-INDEPENDENT, so they are built once per cell and reused across reprices
