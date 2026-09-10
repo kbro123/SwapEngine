@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -256,6 +257,51 @@ inline double zero_coupon_tau(const Instrument& ins) {
 // Model quote of an instrument, per the design §3 table. `C(role)` maps a curve role index to the
 // curve object (anything with `Scalar discount(double)`); a single-curve problem passes a lambda that
 // returns its one curve for every role.
+// INPUT VALIDATION of one instrument's shape (E3-B12, 2026-09-10): an instrument with an empty leg priced to
+// NaN on both the templated and the compiled route with no exception (annuity() returns 0 for an empty leg
+// and the par rate divides by it). Called once at engine construction (HybridBundleResidual) and at the
+// session seam; `where` names the caller in the message. Only SHAPE is checked here -- curve-index ranges
+// need the bundle and are checked by validate_problem (bundle_problem.hpp).
+inline void validate_instrument(const Instrument& ins, const std::string& where) {
+  const auto fail = [&](const std::string& what) { throw std::invalid_argument(where + ": " + what); };
+  const auto leg = [&](const FloatLeg& l, const char* name) {
+    if (l.coupons.empty()) fail(std::string("the ") + name + " leg has no coupons");
+    for (const auto& c : l.coupons)
+      if (!(c.obs.tau_index > 0.0)) fail(std::string("a ") + name + " coupon has tau_index <= 0");
+  };
+  switch (ins.quote) {
+    case QuoteKind::Rate:
+      if (!(ins.obs.tau_index > 0.0)) fail("a Rate observation has tau_index <= 0");
+      break;
+    case QuoteKind::ParRate:
+    case QuoteKind::ZeroCouponRate:
+      leg(ins.fwd, "float");
+      if (ins.fixed.coupons.empty()) fail("the fixed leg has no coupons");
+      break;
+    case QuoteKind::ParSpread:
+      leg(ins.fwd, "float");
+      leg(ins.bench, "benchmark");
+      if (ins.fixed.coupons.empty()) fail("the fixed (annuity) leg has no coupons");
+      break;
+    case QuoteKind::XccyMtmBasis:
+      leg(ins.fwd, "float");
+      leg(ins.bench, "benchmark");
+      if (ins.fixed.coupons.empty()) fail("the fixed (annuity) leg has no coupons");
+      break;
+    case QuoteKind::FxForward:
+      if (!(ins.fx_time > 0.0)) fail("an FX forward needs fx_time > 0");
+      if (!(ins.fx_spot > 0.0)) fail("an FX forward needs fx_spot > 0");
+      break;
+    case QuoteKind::TurnJump:
+      if (ins.turn_curve < 0 || ins.turn_index < 0) fail("a TurnJump needs turn_curve and turn_index >= 0");
+      break;
+    case QuoteKind::Portfolio:
+      if (ins.combination.empty()) fail("a Portfolio quote has no components");
+      for (const auto& c : ins.combination) validate_instrument(c.instrument, where + " (portfolio component)");
+      break;
+  }
+}
+
 template <class Scalar, class CurveOf>
 Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
   switch (ins.quote) {

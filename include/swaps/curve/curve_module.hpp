@@ -219,6 +219,20 @@ class ModularCurve {
 // in a spline region produces NaN rather than an error, so this is checked up front -- it applies to
 // user-composed region lists from the web composer exactly as it does to the shipped layouts.
 inline void check_region_joins(const std::vector<CurveModule>& modules) {
+  // E3-E1/E2 (2026-09-10): a curve with NO knots used to build an empty ModularCurve (n = 0) and crash
+  // downstream (run_json `"regions": []` segfaulted); a knot at t <= 0 built silently and corrupted the
+  // integral / W (a negative weight, ~49 bp of log-DF) while calibration "succeeded". Both are refused here,
+  // the one factory every path (templated, AAD block, compiled W) builds curves through.
+  std::size_t n_knots = 0;
+  for (const auto& m : modules) n_knots += m.knots.size();
+  if (n_knots == 0) throw std::invalid_argument("make_modular_curve: a curve needs at least one region with knots (regions: [] is not a curve)");
+  for (std::size_t i = 0; i < modules.size(); ++i) {
+    if (modules[i].knots.empty()) continue;
+    const double t0 = modules[i].knots.front();
+    if (!(t0 > 0.0))
+      throw std::invalid_argument("make_modular_curve: region " + std::to_string(i) + " has a knot at t = " + std::to_string(t0) +
+                                  "; every knot time must be > 0 (times are year fractions from the evaluation date)");
+  }
   for (std::size_t i = 1; i < modules.size(); ++i) {
     const auto& prev = modules[i - 1].knots;
     const auto& cur = modules[i].knots;

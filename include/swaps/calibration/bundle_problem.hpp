@@ -21,6 +21,8 @@
 #include <cmath>
 #include <memory>
 #include <stdexcept>
+#include <functional>
+#include <string>
 #include <vector>
 
 #include "swaps/ad/dual.hpp"               // ad::Dual, for the MtM funding-term numerical guard
@@ -240,5 +242,51 @@ class BundleProblem {
     return r;
   }
 };
+
+// BUNDLE VALIDATION at the engine / session seam (E3-E1/E2/B12, 2026-09-10). Refuses, with a message naming
+// the curve or row: a curve with no knots, a knot at t <= 0, a base index out of range or self-referential,
+// an instrument with an empty leg (validate_instrument), and a curve role index outside the bundle -- each of
+// which used to crash, price NaN or silently corrupt W. O(n), no allocation beyond the message on failure.
+inline void validate_problem(const BundleProblem& p, const std::string& where = "bundle") {
+  const int nc = static_cast<int>(p.curves.size());
+  const auto fail = [&](const std::string& what) { throw std::invalid_argument(where + ": " + what); };
+  if (nc == 0) fail("the bundle has no curves");
+  for (int c = 0; c < nc; ++c) {
+    const auto& cs = p.curves[c];
+    if (cs.n_interp_knots() == 0) fail("curve " + std::to_string(c) + " has no regions/knots (regions: [] is not a curve)");
+    for (const auto& r : cs.regions)
+      if (!r.knots.empty() && !(r.knots.front() > 0.0))
+        fail("curve " + std::to_string(c) + " has a knot at t = " + std::to_string(r.knots.front()) + " (every knot time must be > 0)");
+    if (cs.base >= nc || cs.base == c) fail("curve " + std::to_string(c) + " has an invalid base curve index " + std::to_string(cs.base));
+  }
+  const auto idx = [&](int i, const char* role, int row) {
+    if (i < 0 || i >= nc)
+      fail("instrument " + std::to_string(row) + " references " + role + " curve " + std::to_string(i) + " outside the bundle's " + std::to_string(nc) + " curves");
+  };
+  std::function<void(const Instrument&, int)> check = [&](const Instrument& ins, int row) {
+    validate_instrument(ins, where + " instrument " + std::to_string(row));
+    switch (ins.quote) {
+      case QuoteKind::Rate: idx(ins.forecast, "forecast", row); break;
+      case QuoteKind::FxForward: idx(ins.fx_num, "fx_num", row); idx(ins.fx_den, "fx_den", row); break;
+      case QuoteKind::TurnJump:
+        idx(ins.turn_curve, "turn", row);
+        if (ins.turn_index >= static_cast<int>(p.curves[ins.turn_curve].turns.size()))
+          fail("instrument " + std::to_string(row) + " pins turn " + std::to_string(ins.turn_index) + " but curve " + std::to_string(ins.turn_curve) + " has " + std::to_string(p.curves[ins.turn_curve].turns.size()) + " turns");
+        break;
+      case QuoteKind::Portfolio:
+        for (const auto& c : ins.combination) check(c.instrument, row);
+        break;
+      case QuoteKind::ParSpread:
+      case QuoteKind::XccyMtmBasis:
+        idx(ins.bench.forecast, "benchmark forecast", row); idx(ins.bench.discount, "benchmark discount", row);
+        [[fallthrough]];
+      case QuoteKind::ParRate:
+      case QuoteKind::ZeroCouponRate:
+        idx(ins.fwd.forecast, "forecast", row); idx(ins.fwd.discount, "discount", row); idx(ins.fixed.discount, "fixed discount", row);
+        break;
+    }
+  };
+  for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) check(p.instruments[i], i);
+}
 
 }  // namespace swaps::calibration

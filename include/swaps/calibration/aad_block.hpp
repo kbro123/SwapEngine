@@ -59,6 +59,9 @@ struct CachedDisc : CurveHandle<double> {
   // The FX/MtM kernel prices purely off discount(); integral/forward just delegate for safety.
   double integral(double t) const override { return real->integral(t); }
   double forward(double t) const override { return real->forward(t); }
+  // A TurnJump row reads the turn's δ off the curve (E3-B11: without this forward the base handle threw
+  // "this curve has no turns" whenever a MonotoneCubic region sent a turned bundle to the block).
+  double turn_jump(int j) const override { return real->turn_jump(j); }
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}  // real curve owns knots
 };
 
@@ -70,6 +73,7 @@ struct RecordingCurve : CurveHandle<double> {
   double discount(double t) const override { log->push_back(t); return real->discount(t); }
   double integral(double t) const override { return real->integral(t); }
   double forward(double t) const override { return real->forward(t); }
+  double turn_jump(int j) const override { return real->turn_jump(j); }
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}
 };
 
@@ -263,6 +267,7 @@ class AadBlock {
     };
     switch (ins.quote) {
       case QuoteKind::Rate: s.insert(ins.forecast); break;
+      case QuoteKind::TurnJump: s.insert(ins.turn_curve); break;  // the δ state lives on the turn's curve (B11)
       case QuoteKind::FxForward:
         if (ins.fx_num >= 0) s.insert(ins.fx_num);
         if (ins.fx_den >= 0) s.insert(ins.fx_den);

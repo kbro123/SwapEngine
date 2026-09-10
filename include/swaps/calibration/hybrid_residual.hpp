@@ -77,6 +77,7 @@ inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<
 class HybridBundleResidual {
  public:
   explicit HybridBundleResidual(const BundleProblem& p) : n_res_(static_cast<int>(p.instruments.size())) {
+    validate_problem(p, "HybridBundleResidual");  // E1/E2/B12: refuse a malformed bundle before compiling it
     // ONE partition pass. Each instrument's cacheability is decided once (the MtM guard inside
     // instrument_is_noncacheable prices real cashflows, so it is not free -- do not re-ask per consumer).
     // A value-dependent interpolation scheme anywhere means NO curve has a constant W: every row goes to

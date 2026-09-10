@@ -81,3 +81,22 @@ TEST(ApiStatus, AFailedStreamTickIsVisibleAndNotCommitted) {
   EXPECT_TRUE(s.last_converged()) << s.last_reason();
   EXPECT_LT((s.x() - x).cwiseAbs().maxCoeff(), 1e-12);
 }
+
+// E1 at the JSON seam: `"regions": []` used to segfault inside run_json (probe E-08); a knot at t <= 0 used to
+// return a "successful" calibration off a corrupted W. Both are now an error document.
+TEST(ApiStatus, MalformedCurvesAreAnErrorDocumentNotACrash) {
+  const char* zero_regions = R"({"bundle":{"curves":[{"base":-1,"currency":0,"regions":[]}],
+    "instruments":[{"quote":"Rate","forecast":0,"market":0.043,"obs":{"sub_start":[0.0055],"sub_end":[0.0247],"tau_index":0.0194}}]},
+    "sample_times":[0.5,1.0]})";
+  const char* zero_knot = R"({"bundle":{"curves":[{"base":-1,"currency":0,"regions":[{"scheme":"Hermite","knots":[0.0,1.0,2.0]}]}],
+    "instruments":[{"quote":"Rate","forecast":0,"market":0.043,"obs":{"sub_start":[0.0055],"sub_end":[0.0247],"tau_index":0.0194}},
+                   {"quote":"Rate","forecast":0,"market":0.042,"obs":{"sub_start":[0.9],"sub_end":[1.15],"tau_index":0.25}},
+                   {"quote":"Rate","forecast":0,"market":0.041,"obs":{"sub_start":[1.9],"sub_end":[2.15],"tau_index":0.25}}]},
+    "sample_times":[0.5,1.0]})";
+  for (const char* req : {zero_regions, zero_knot}) {
+    std::string out;
+    EXPECT_NO_THROW(out = api::run_json(req));
+    EXPECT_NE(out.find("\"error\""), std::string::npos) << out;
+    EXPECT_EQ(out.find("\"x\""), std::string::npos) << out;
+  }
+}

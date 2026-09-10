@@ -599,7 +599,8 @@ int BundleSession::resolve_fixings() {
 }
 
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
-  fingerprint_ = cal::structure_fingerprint(prob_);  // the topology this session's W-cache is compiled for
+  cal::validate_problem(prob_, "BundleSession");  // E1/E2/B12: a malformed bundle is an error, not a crash/NaN
+  fingerprint_ = cal::structure_fingerprint(prob_);  // an identity stamp of the compiled document (not a gate)
   for (const auto& ins : prob_.instruments) {
     if (has_noncacheable_leaf(ins)) has_fx_ = true;  // FX/MtM (incl. inside a Portfolio) -> AAD engine
     if (ins.band_upper > ins.band_lower)
