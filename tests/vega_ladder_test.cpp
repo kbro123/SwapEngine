@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for the VEGA LADDER (vol/vega_ladder.hpp): a swaption book's aggregate sensitivity to the vol surface's
 // PARAMETERS, the vol analogue of the rates delta ladder. QuantLib-free: hand-build a flat-forward curve's
 // discount factors, form each cell's forward/annuity via vol/swaption.hpp, then check

@@ -36,6 +36,13 @@ for k,m in d["metrics"].items():
 EOF
     echo '```'
   fi
+  # ---- T6 mutation gate (E5.4): re-introduce the curated bugs, the tests that claim them must fail ------------
+  echo; echo "## Mutation gate (tools/mutate.py — curated bugs vs the tests that claim to pin them; kill rate >= 90 %)"
+  echo; echo '```'
+  python3 tools/mutate.py --jobs 4 2>&1 | tail -30
+  MRC=${PIPESTATUS[0]}
+  echo '```'
+  echo; echo "- mutate.py exit: ${MRC}  ($( [ "${MRC}" = 0 ] && echo GREEN || echo RED ))"
   echo; echo "- finished: $(date -u +%FT%TZ)"
 } > "${SUM}" 2>&1
 cp "${SUM}" "${ROOT}/baselines/NIGHTLY.md"

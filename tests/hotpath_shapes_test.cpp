@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T4 hot-path invariant (allocation / determinism / structure)
 // @regression-test — the SHAPE LADDER (bench/fixtures/shape_ladder.hpp): for EVERY instrument shape the compiled /
 // hybrid hot path accepts, (T3) the hybrid engine's residual and analytic Jacobian match the templated kernel and
 // the AAD Jacobian, and (T4) the streaming tick is allocation-free after warm-up on every W-cacheable shape, with

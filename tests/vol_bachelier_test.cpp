@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Phase-1 gate for the options/vol layer: the Bachelier (normal) analytics. Pure closed-form identities —
 // no curve, no QuantLib — so it runs in the QuantLib-free swaps_tests binary. These are the invariants the
 // build plan names as the acceptance gate: put-call parity, the zero-vol intrinsic limit, an exact ATM

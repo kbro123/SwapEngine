@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Exposure-profile aggregation (swaps/xva/exposure.hpp): EPE/ENE/PFE from a book-value grid. Tests the pure
 // aggregation math on synthetic per-swap NPV grids (no model needed) — the invariants a desk relies on.
 #include <gtest/gtest.h>

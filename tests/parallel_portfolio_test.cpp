@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Coherent parallel portfolio reprice (Q2, the data-parallel pricing side). A large book split across
 // threads, ALL pricing one pinned curve, must be BIT-IDENTICAL to a serial full-book CompiledPortfolio
 // (a position's NPV is independent of the rest of the book) -- so the parallel cut is deterministic and

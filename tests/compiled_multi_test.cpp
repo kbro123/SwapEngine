@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Gate for the COMPILED multi-curve book reprice kernel (portfolio::CompiledMultiCurveBook, audit U2).
 // QuantLib-FREE: a small 3-curve bundle is hand-built (mirroring portfolio_reprice_test.cpp) -- an
 // outright domestic discount curve, a SPREAD forecast curve on it (exercising W_all's spread-base

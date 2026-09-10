@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T6 regression (fails on the reverted bug)
 // GRID gate (T5 identities + finite differences + regression freezes, NOT an oracle -- renamed from
 // *_oracle_test on 2026-09-10; the only independent literals here are the Hull conversion factor, the z=0
 // 6 %-yield hand sum and covered interest parity) spanning the three "rates/FX" derivative kernels:

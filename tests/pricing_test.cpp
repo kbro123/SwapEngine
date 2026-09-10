@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // Validates the templated pricing kernel (swaps/pricing/cashflows.hpp) fed by the QuantLib
 // extractor (swaps/ql/extract.hpp) against QuantLib's OWN pricing off the same curve.
 //

@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // Tension-spline curve, end-to-end oracle (research note §3,§6). A fixed-tension spline is a linear map
 // of the knot forwards, so it must be a usable discount curve: expose it to QuantLib via
 // CurveTermStructure, price OIS swaps off it, and confirm QuantLib's fairRate equals our kernel priced

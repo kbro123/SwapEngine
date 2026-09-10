@@ -1,3 +1,4 @@
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery) | T3 cross-path parity (two engine paths, same inputs)
 // Streaming through BAND-EDGE crossings: the frozen-Newton streamer must track the cold least-squares
 // optimum on a banded, over-determined bundle -- the case where the old Gaussian band ramp produced (a) two
 // stationary fits 110 bp apart in a knot (seed-dependent) and (b) streamed curves up to 147 bp from the cold

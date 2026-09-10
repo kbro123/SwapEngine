@@ -1,3 +1,4 @@
+// E5 taxonomy: T4 hot-path invariant (allocation / determinism / structure) | T3 cross-path parity (two engine paths, same inputs)
 // E4.D A4/D7 + D6 (2026-09-10): the ONE-SHOT price_portfolio's PV01 is the all-ones directional derivative of a
 // width-1 dual (ad::seed_directional) -- equal to the full-width gradient's sum to rounding -- so the one-shot no
 // longer pays a heap-vector dual per knot to compute one sum (71k allocations on chain8x26/book200 in the E3

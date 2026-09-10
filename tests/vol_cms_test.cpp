@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Phase-3b gate for the CMS convexity layer (vol/cms.hpp), linear-TSR normal model. Robust limits only —
 // the ones that hold regardless of the exact TSR slope: no convexity at theta=0 or vol=0, positive and
 // monotone convexity for theta>0, and the caplet reducing to a plain Bachelier / intrinsic in the limits.

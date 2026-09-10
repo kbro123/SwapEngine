@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Gate for the stateless "calib_report" run_json verb (api/calib_report.cpp, audit quick-win #10). NO
 // QuantLib: a small single-curve OIS bundle is hand-built as generic Instruments, made self-consistent
 // from a known x_true, and driven THROUGH the JSON contract (run_json / calib_report_json). Uses

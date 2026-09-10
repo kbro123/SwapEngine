@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Market-domain object model: the first-class Currency (market/currency.hpp) is a typed reference object over
 // the conventions DB. Its currency set + each currency's discount index and settlement calendar are DERIVED
 // from the DB's overnight indices, so these assertions also pin that the derivation stays wired to the DB.

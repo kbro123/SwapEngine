@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Validation for the clamped cubic B-spline region (docs/bezier-and-moments.md, Part A).
 // Engine-only (no QuantLib): checks the region contract and the B-spline's defining properties --
 // C0 clamp to the boundary, partition-of-unity (constant control points -> flat forward), the

@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // T5 (E5.3 2026-09-10): the CDS protection leg against the CONTINUOUS closed form. On a flat hazard h and a flat
 // rate r the exact protection PV is P = (1−R)·h/(r+h)·(1 − e^{−(r+h)T}) and the risky annuity of the engine's
 // synthetic quarterly schedule is A = Σᵢ τᵢ e^{−(r+h) tᵢ} (tᵢ = i/4 exactly, τᵢ = 0.25·365/360): the engine's par

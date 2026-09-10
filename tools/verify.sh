@@ -35,6 +35,7 @@ done
 
 pass_oracle="SKIP"
 pass_schema="SKIP"
+pass_taxonomy="SKIP"
 pass_lit="SKIP"
 pass_correctness="SKIP"
 pass_perf="SKIP"
@@ -61,6 +62,15 @@ if bash "${ROOT}/tools/check_oracle_tests.sh" --build "${BUILD_DIR}"; then
   pass_oracle="PASS"
 else
   pass_oracle="FAIL"; rc=1
+fi
+
+# ---- Test-taxonomy guard (E5) -----------------------------------------------
+# Every tests/*.cpp says what its assertions compare an engine number TO (tests/TAXONOMY.md). Cheap.
+echo ">> test-taxonomy guard (every test file labelled T1-T6)"
+if bash "${ROOT}/tools/check_test_taxonomy.sh"; then
+  pass_taxonomy="PASS"
+else
+  pass_taxonomy="FAIL"; rc=1
 fi
 
 # ---- Conventions-DB sync guard ----------------------------------------------
@@ -141,6 +151,7 @@ fi
 echo ""
 echo "========== VERIFY SUMMARY =========="
 printf "  %-20s %s\n" "oracle-test guard:" "${pass_oracle}"
+printf "  %-20s %s\n" "test-taxonomy guard:" "${pass_taxonomy}"
 printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
 printf "  %-20s %s\n" "conventions schema:" "${pass_schema}"
 printf "  %-20s %s\n" "no-literal guard:" "${pass_lit}"

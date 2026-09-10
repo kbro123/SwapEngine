@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // QuantLib oracle for the MonotoneCubic region: it is transcribed to match QuantLib's
 // MonotonicCubicNaturalSpline (CubicInterpolation with da=Spline, monotonic=true, SecondDerivative=0 at
 // both ends) EXACTLY. We build QuantLib's interpolation on the same nodes and require our region's

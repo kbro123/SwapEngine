@@ -1,3 +1,4 @@
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for SABR strip calibration (vol/sabr_calibration.hpp): recover known params from a clean strip (proving
 // the analytic ad::Dual Jacobian + LM work), fit a non-SABR strip within tolerance, and the arbitrage gate.
 #include <gtest/gtest.h>

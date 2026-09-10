@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // trade::Book (portfolio tree) and trade::NettingSet (exposure unit under a CSA) — the objects that compose
 // Trades. Proves the tree flattens + materializes into the fast MultiCurveBook, and the netting set carries
 // its discounting via the CSA (an object, not the hard-coded "whole book = one netting set").

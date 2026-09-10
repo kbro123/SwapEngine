@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 //
 // Pins the par-par asset-swap spread (swaps/build/par_asset_swap.hpp) against QuantLib::AssetSwap::fairSpread on
 // the SAME discount curve and bond, across a range of market prices. The float leg is a 0-fixing-day index

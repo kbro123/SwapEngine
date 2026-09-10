@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Netting-set gate for the "exposure" run_json verb (api/exposure.cpp). NO QuantLib: a small single-curve
 // bundle is hand-built as generic Instruments (api_test.cpp style), made self-consistent from a known
 // x_true, and driven through the JSON contract. Proves the aggregation boundary moved to trade::NettingSet:

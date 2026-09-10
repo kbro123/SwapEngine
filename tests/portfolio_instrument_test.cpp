@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Portfolio (linear-combination) instruments + bid/offer band residuals.
 //
 // Engine-only (no QuantLib): a Portfolio's components are ordinary instruments whose pricing is already

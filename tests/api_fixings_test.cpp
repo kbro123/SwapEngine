@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // E2: fixings wired into the BundleSession pricing context (the binding/web will drive this exact flow).
 // A Rate observation carries a fixing SCHEDULE (index + per-day dates/accruals); the session resolves it
 // against its evaluation date + fixing table — past days -> realized, future days -> forecast subs — and

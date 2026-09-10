@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // @regression-test — QuoteKind::ZeroCouponRate: the BRL DI×Pre swap as a ZERO-COUPON, annually-compounded
 // (exponential, BUS/252) quote — a nonlinear transform of the ParRate quotient of the same two legs. Until
 // 2026-09-09 the DB row was a "schedule placeholder" (annual coupons, ParRate), i.e. the wrong instrument.

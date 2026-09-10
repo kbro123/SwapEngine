@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Curve-space GAMMA gate (reverse-mode AAD tape, ad/reverse.hpp + calibration/gamma.hpp).
 //
 // QuantLib-FREE: the book and the calibration curve are hand-built from plain FloatCoupon/FixedCoupon data

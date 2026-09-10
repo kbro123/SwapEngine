@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Gate for the SCENARIO-GRID verb (api/scenario_grid.cpp): a P&L SURFACE for a book under an outer product
 // of shock axes, forking the once-calibrated anchor per cell and repricing through the compiled reprice
 // twin. NO QuantLib — a small single-curve OIS bundle + a payer-swap book are hand-built (mirroring

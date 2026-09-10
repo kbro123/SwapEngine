@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // QuantLib 1.35 oracle for RFR conventions on compounded overnight coupons: lookback days, lockout
 // days, and observation shift (added to OvernightIndexedCoupon in 1.35). These break the telescoping
 // that collapses a plain compounded coupon to a single DF ratio, so the engine prices them in its new

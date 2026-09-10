@@ -1,3 +1,4 @@
+// E5 taxonomy: T6 regression (fails on the reverted bug)
 // BundleSession seams for C1/C3 (2026-09-10): non-finite quotes are refused at recalibrate/rebind/
 // stream_update; a failed stream tick is visible (last_converged/last_status/last_reason) and never commits.
 #include <gtest/gtest.h>

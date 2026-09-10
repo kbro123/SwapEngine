@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // QuantLib ORACLE for the full Hagan static-replication CMS (vol/cms_replication.hpp): the standard-model G
 // function matches QuantLib GFunctionStandard EXACTLY (weight function, the tight/substantive part), and the
 // replicated CMS convexity-adjusted rate matches QuantLib's NumericHaganPricer (flat normal vol) to within

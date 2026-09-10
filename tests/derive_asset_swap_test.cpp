@@ -1,3 +1,4 @@
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery)
 // derive/asset_swap.hpp — the market->calibration bridge for asset swaps, and its RV tie-in. QuantLib-free.
 //
 // Two workflows over ONE govvie-curve substrate:

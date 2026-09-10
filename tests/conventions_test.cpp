@@ -1,5 +1,6 @@
 // @oracle-test — validates the conventions DB against QuantLib's own index conventions. DO NOT DELETE OR
 // WEAKEN without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 //
 // Conformance gate for the market-conventions DB (conventions/conventions.json -> conventions_data.hpp).
 //

@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Gate for the SESSION-cached compiled portfolio reprice (BundleSession::bind_portfolio /
 // reprice_bound, audit U2 — the amortized streaming path). Where compiled_multi_test.cpp gates the
 // kernel (CompiledMultiCurveBook::npv vs the templated MultiCurveBook at a raw state x), THIS gates the

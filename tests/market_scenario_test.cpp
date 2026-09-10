@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // market::Scenario — the declarative "fork over the market" primitive at the BUILD-INPUT level. Because
 // Market and ModularCurve are move-only and a built curve does not expose its (modules, x) inputs, a Scenario
 // shocks the INPUTS — the curve forward vectors (x) and the FxMatrix — and the caller rebuilds a shocked

@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T6 regression (fails on the reverted bug)
 // The moment path's quadrature is KNOT-ALIGNED (E3 register R4 / G2, fixed 2026-09-10). Until then a fixed
 // 32-panel x 2-pt rule integrated f^2 across the curve's breakpoints; on the shipped Flat-front Fed-funds shape
 // (25 bp policy steps inside a 1Y window) it lost 3.3e-3 of the integral -- 1.7e-7 of the averaged rate --

@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Golden-value gate for the build/ observation + coupon builders (observations.hpp, instruments.hpp,
 // conventions.hpp). Expected values are the output of the Python compiler (server/conventions.py observation()
 // + compile.py _fixed_coupons/_float_leg), pinning C++/Python parity for the subtle averaging/compounding

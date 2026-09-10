@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for the SCENARIO / STRESS verb (api/scenario.cpp): market::Scenario wired into production. NO
 // QuantLib — a small single-curve outright bundle + a payer-swap book are hand-built as generic
 // Instruments / MultiCurveBook positions (mirroring tests/api_test.cpp), made self-consistent from a

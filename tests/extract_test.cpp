@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // Design §5 gate: the GENERIC extractors (swaps/ql/extract.hpp) vs QuantLib's own pricing.
 //
 // The extractor is the ONLY QuantLib-touching layer, and it dispatches on QuantLib COUPON TYPE

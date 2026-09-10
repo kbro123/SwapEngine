@@ -1,4 +1,5 @@
 // @oracle-test — QuantLib prices swaps/futures off OUR Hermite curve through the YieldTermStructure adapter
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // (engine number vs QuantLib number, curve_rel). DO NOT DELETE OR WEAKEN without reproducing the comparison.
 // (Orphaned from every CMake target 2026-09-04 .. 2026-09-08; re-registered in swaps_oracle_tests.)
 // Two guarantees for the curve-composition layer:

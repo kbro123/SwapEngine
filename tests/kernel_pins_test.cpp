@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T3 cross-path parity (two engine paths, same inputs) | T4 hot-path invariant (allocation / determinism / structure)
 // E5.2 KERNEL PINS (2026-09-10) -- the value pins and cross-path checks the 2026-09-08 kernel-test audit found
 // missing (review-2026-09-08/kernel-tests.md, mutations M5 / M8 / fixes 3, 10, 11 and axis-3 M3):
 //   T5  the Hermite (Bessel tangents), NaturalCubic and Linear interpolants pinned to HAND-COMPUTED values
@@ -70,6 +71,23 @@ TEST(SchemeValues, LinearMatchesTheHandComputation) {
   EXPECT_NEAR(c.forward(1.5), 0.0325, tol::literal);
   EXPECT_NEAR(c.forward(3.0), 0.0335, tol::literal);
   EXPECT_NEAR(c.integral(4.0), 0.1295, tol::literal);
+}
+
+// MonotoneCubic = the NATURAL-SPLINE tangents (the C2 tridiagonal in first-derivative form) passed through
+// QuantLib's Hyman filter. Knots {1, 2, 4}, values {0.030, 0.0301, 0.010}: secants S = {0.0001, −0.01005};
+// the tridiagonal  2m0 + m1 = 3S0,  h1 m0 + 2(h0+h1) m1 + h0 m2 = 3(h1 S0 + h0 S1),  m1 + 2m2 = 3S1  gives
+// m = {0.00179167, −0.00328333, −0.01343333}. Hyman: m0 has S0's sign but exceeds 3|S0| = 0.0003 -> CLAMPED to
+// 0.0003 (the end-clamp branch); m1 (interior, N = 3: M = 3·min(|S0|, |S1|, |pm|) = 0.0003, pm·m1 > 0) -> −0.0003;
+// m2 within 3|S1| -> untouched. Segment 0 (h = 1): c = 3S0 − 2m0 − m1 = 0, d = m0 + m1 − 2S0 = −0.0002 =>
+// f(1.5) = 0.030 + 0.00015 − 0.000025 = 0.030125 (the UNCLAMPED m0 would give 0.03031146); segment 1 (h = 2):
+// c = 3S1/2 − (2m1 + m2)/2 = −0.00805833, d = (m1 + m2)/4 − 2S1/4 = 0.00159167 => f(3) = 0.0301 − 0.0003 −
+// 0.00805833 + 0.00159167 = 0.02333333. Exact rational arithmetic, 2026-09-10. E5.4: the mutation harness
+// showed the END clamp was pinned by nothing outside the QuantLib binary.
+TEST(SchemeValues, MonotoneCubicHymanEndClampMatchesTheHandComputation) {
+  auto c = cv::make_modular_curve<double>({cv::CurveModule{{1.0, 2.0, 4.0}, cv::Scheme::MonotoneCubic}});
+  c.set_forwards((Eigen::VectorXd(3) << 0.030, 0.0301, 0.010).finished());
+  EXPECT_NEAR(c.forward(1.5), 0.030125, tol::literal);
+  EXPECT_NEAR(c.forward(3.0), 0.023333333333333334, tol::literal);
 }
 
 // ---- T5: the tension series helpers ------------------------------------------------------------------------

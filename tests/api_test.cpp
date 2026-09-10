@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T2 calibration (optimum / stationarity / recovery) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Self-contained gate for the public API (include/swaps/api/bundle_api.hpp). NO QuantLib: a small
 // 2-curve bundle (outright base + a spread curve) is hand-built as generic Instruments, made
 // self-consistent from a known x_true, and driven THROUGH the JSON contract + BundleSession.

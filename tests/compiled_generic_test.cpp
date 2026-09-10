@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Design §4 gate: the compiled W-cache engine on the GENERIC coupon.
 //
 // The pre-existing compiled tests (Compiled.AnalyticJacobianMatchesAad,

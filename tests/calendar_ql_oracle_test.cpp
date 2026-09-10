@@ -1,4 +1,5 @@
 // @oracle-test — EVERY conventions-DB calendar vs QuantLib's calendar of the same market, DAY BY DAY
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // (engine is_business_day vs QuantLib::Calendar::isBusinessDay), 2024-01-01 .. the oracle coverage year.
 // DO NOT DELETE OR WEAKEN without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 //

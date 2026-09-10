@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // swaps::trade::Trade — the BOOKED DEAL object. A trade is the distinct thing a desk books (an id, a
 // direction, a CONTRACT rate struck at execution) as opposed to a market quote (calibration::Instrument,
 // which has no contract rate). This test books a vanilla swap and checks it materializes into the fast

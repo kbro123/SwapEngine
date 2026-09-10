@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for BUS/252 (Brazilian business/252) day count — the calendar-aware year_frac added so BRL-CDI
 // swaps calibrate. Covers: (a) business_days_between on the BRL (B3/ANBIMA) calendar for a known span,
 // (b) BUS/252 year_frac over a full calendar year == the exact business-day count / 252 (== 1.0 for 2025),

@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T2 calibration (optimum / stationarity / recovery) | T6 regression (fails on the reverted bug)
 // Phase-2 gate for the FULL-beta SABR smile (vol/sabr.hpp). Verifies that generalising the backbone to a free
 // β ∈ [0,1] leaves β=0 BYTE-IDENTICAL to the legacy normal-SABR code (bit-for-bit), that β=1 matches the
 // Hagan lognormal (Black) benchmark, that the ATM K→F limit is continuous and singularity-free for several

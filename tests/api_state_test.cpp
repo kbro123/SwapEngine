@@ -1,3 +1,4 @@
+// E5 taxonomy: T4 hot-path invariant (allocation / determinism / structure) | T3 cross-path parity (two engine paths, same inputs)
 // The object model at the session seam (E4.A step A, 2026-09-10): ONE compiled engine per session, quotes and
 // bands as scalar row updates that reach EVERY consumer, a warm re-solve that is a streamed tick, fixings and
 // bound books that are never stale, and structure checked by an O(n) equality rather than a hash.

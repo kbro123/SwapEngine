@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for the NDF/NDS linear FX-forward layer (pricing/ndf.hpp). Pure closed-form forward/discount
 // identities — no curve, no vol, no QuantLib — so this runs in the QuantLib-free swaps_tests binary.
 // Invariants: (1) an NDF struck at the fair forward has PV ≈ 0; (2) covered-interest-parity outright;

@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for the batched PORTFOLIO REPRICE kernel (api::BundleSession::price_portfolio) and its
 // multi-curve + xccy book model (portfolio::MultiCurveBook). QuantLib-FREE: a small 3-curve bundle is
 // hand-built as generic Instruments, made self-consistent from a known x_true and calibrated through a

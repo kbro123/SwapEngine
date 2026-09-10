@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Priority-3 gate: the OPTIONAL booked structure added to portfolio::MultiCurveBook::Position -- a per-coupon
 // STEPPED fixed rate (fixed_rates) and PRINCIPAL-EXCHANGE cashflows (principal_flows) -- plus the guarantee
 // that these ride the templated fallback so the compiled hot path (nf_ = notional⊙fixed_rate scalar) is

@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""tools/mutate.py — T6 MUTATION GATE for the engine's header-only kernels (E5.4, 2026-09-10).
+
+Each curated mutation is a single exact-string edit of one header (a real bug class: a swapped weight, a
+dropped chain-rule term, a stale memo, a wrong quantile, a structural field ignored ...). For every mutation
+the harness copies the header into a scratch include root, applies the edit, compiles the test TUs that
+CLAIM to pin that behaviour against the mutated root (searched before include/), runs them, and records
+"caught" when the binary fails or crashes. The kill rate (caught / total) is the gate: below --min-kill the
+tool exits 1 and names the survivors -- each survivor is a test that does not pin what it claims.
+
+  python3 tools/mutate.py [--jobs 4] [--only NAME[,NAME]] [--min-kill 0.9] [--keep]
+
+Only swaps_tests TUs (header-only, gtest) are used: compiling them standalone takes ~30-90 s each, so the
+whole set is a few minutes with --jobs 4. Add a mutation when you fix a bug that a test should have caught:
+the harness is the executable form of "each test shown to fail on the reverted bug".
+"""
+import argparse, concurrent.futures, os, shutil, subprocess, sys, tempfile, time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GTEST_INC = "third_party/gtest/src/googletest/include"
+GTEST_LIBS = ["third_party/gtest/build/lib/libgtest.a", "third_party/gtest/install/lib/libgtest_main.a"]
+CXX = ["xcrun", "-sdk", "macosx", "clang++"] if sys.platform == "darwin" else ["c++"]
+FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
+
+# (name, header (relative to include/), old, new, [test TU, ...], gtest filter, what a survivor would mean)
+MUTATIONS = [
+    ("hermite_bessel_weights_swapped", "swaps/curve/regions.hpp",
+     "m[j] = (h[j] * sec[j - 1] + h[j - 1] * sec[j]) / (h[j - 1] + h[j]);",
+     "m[j] = (h[j - 1] * sec[j - 1] + h[j] * sec[j]) / (h[j - 1] + h[j]);",
+     ["kernel_pins_test.cpp"], "SchemeValues.*", "the Hermite interpolant has no value pin (audit M5)"),
+    ("band_chain_rule_dropped", "swaps/calibration/compiled_bundle.hpp",
+     "const double sc = band_residual_d(qb_[i], q[b.row], b.lower, b.upper, b.decay).second;",
+     "const double sc = 1.0;",
+     ["portfolio_instrument_test.cpp"], "BandResidual.*", "the band chain rule is tested only outside the band (audit M4)"),
+    ("quotient_rule_annuity_term_dropped", "swaps/calibration/compiled_bundle.hpp",
+     "q_rows_[j].weight * (dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]));",
+     "q_rows_[j].weight * (dnum.row(j) / ann[j]);",
+     ["generic_instrument_test.cpp"], "*", "the analytic Jacobian is not compared to AAD (audit M4b)"),
+    ("df_memo_never_invalidates", "swaps/calibration/compiled_bundle.hpp",
+     "if (x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {",
+     "if (x.size() != df_x_.size()) {",
+     ["generic_instrument_test.cpp", "portfolio_instrument_test.cpp"], "*", "a stale DF memo is invisible (audit M9)"),
+    ("pfe_is_the_median", "swaps/xva/exposure.hpp",
+     "std::floor(pfe_q * (n_paths - 1))", "std::floor(0.5 * (n_paths - 1))",
+     ["xva_exposure_test.cpp"], "*", "PFE is not pinned to its quantile (audit finding 9)"),
+    ("sinhm1_x7_coefficient", "swaps/curve/regions.hpp",
+     "s = s * x2 + 1.0 / 5040.0;", "s = s * x2 + 1.0 / 5000.0;",
+     ["kernel_pins_test.cpp", "tension_test.cpp"], "*", "the tension series helpers have no accuracy test (audit M5c)"),
+    ("coshm2_x10_term_dropped", "swaps/curve/regions.hpp",
+     "s = s * x2 + 1.0 / 3628800.0;    // x¹⁰/10!\n", "",
+     ["bug_hunt_2026_09_test.cpp"], "BugHunt.TensionCoshm2*", "bug-hunt #8 is not regression-pinned (audit B2)"),
+    ("tangent_product_rule_dropped", "swaps/ad/reverse.hpp",
+     "return {a.v * b.v, a.v * b.d + a.d * b.v}; }", "return {a.v * b.v, a.v * b.d}; }",
+     ["gamma_test.cpp"], "*", "second-order AAD is not FD-checked (audit M7b)"),
+    ("rev_division_derivative_wrong", "swaps/ad/reverse.hpp",
+     "rev_record<T>(a.idx, inv, b.idx, -(val)*inv));", "rev_record<T>(a.idx, inv, b.idx, -(val)));",
+     ["gamma_test.cpp"], "*", "the reverse tape's division rule is not checked against forward AAD (audit M7a)"),
+    ("structure_equal_ignores_leg_fx_spot", "swaps/calibration/structure_fingerprint.hpp",
+     "if (a.fx_spot != b.fx_spot || a.coupons.size() != b.coupons.size()) return false;",
+     "if (a.coupons.size() != b.coupons.size()) return false;",
+     ["kernel_pins_test.cpp"], "StructureEqual.*", "a structural field can be dropped from the warm-vs-recompile gate unnoticed (audit M8)"),
+    ("rescale_anchor_normalisation_dropped", "swaps/calibration/streaming.hpp",
+     "J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);",
+     "J_cur_.row(row) = J_ref_.row(row) * new_slope;",
+     ["streaming_band_test.cpp"], "StreamingBand.*", "a wrong band re-scale is rescued by a refresh (audit M2)"),
+    ("streaming_ldlt_instead_of_cod", "swaps/calibration/streaming.hpp",
+     "M_ = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));",
+     "M_ = (J.transpose() * J).ldlt().solve(J.transpose());",
+     ["rank_safety_test.cpp", "streaming_contract_test.cpp"], "*", "the rank-safe streaming operator has no non-oracle test (audit M3b)"),
+    ("lm_rank_deficiency_never_reported", "swaps/calibration/lm.hpp",
+     "res.rank_deficiency = n_knots - static_cast<int>(cod.rank());",
+     "res.rank_deficiency = 0;",
+     ["calibration_status_test.cpp", "rank_safety_test.cpp"], "*", "the LM min-norm completion has no non-oracle test (audit M3)"),
+    ("hyman_clamp_disabled", "swaps/curve/regions.hpp",
+     "correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[0]));",
+     "correction = m[i];",
+     ["kernel_pins_test.cpp", "monotone_cubic_test.cpp"], "SchemeValues.*:MonotoneCubic.*", "the Hyman end-clamp branch is pinned only by the oracle binary"),
+]
+
+
+def compile_and_run(name, header, old, new, tus, flt, keep_dir, jobs_note=""):
+    """Returns (name, caught: bool|None, detail)."""
+    work = os.path.join(keep_dir, name)
+    inc = os.path.join(work, "inc")
+    os.makedirs(os.path.dirname(os.path.join(inc, header)), exist_ok=True)
+    src = open(os.path.join(ROOT, "include", header)).read()
+    n = src.count(old)
+    if n == 0:
+        return name, None, f"anchor not found in {header} (the code moved; update the mutation)"
+    open(os.path.join(inc, header), "w").write(src.replace(old, new))
+    for tu in tus:
+        exe = os.path.join(work, tu.replace(".cpp", ""))
+        cmd = CXX + FLAGS + ["-I", inc, "-I", os.path.join(ROOT, "include"), "-I", os.path.join(ROOT, "third_party/eigen"),
+                             "-I", os.path.join(ROOT, "third_party/boost"), "-I", os.path.join(ROOT, "build/generated"),
+                             "-I", os.path.join(ROOT, "tests"), "-I", os.path.join(ROOT, GTEST_INC),
+                             os.path.join(ROOT, "tests", tu)] + [os.path.join(ROOT, l) for l in GTEST_LIBS] + ["-o", exe]
+        cc = subprocess.run(cmd, capture_output=True, text=True)
+        if cc.returncode != 0:
+            # a mutation that no longer compiles is a "caught at compile time" only if it is deliberate; report it
+            return name, None, f"{tu} did not compile against the mutant:\n" + cc.stderr[-800:]
+        run = subprocess.run([exe, f"--gtest_filter={flt}"], capture_output=True, text=True)
+        if run.returncode != 0:
+            failed = [l.strip() for l in run.stdout.splitlines() if l.startswith("[  FAILED  ]")]
+            return name, True, f"{tu}: " + (failed[0] if failed else f"exit {run.returncode}")
+    return name, False, "every claimed test PASSED against the mutant"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--only", default="")
+    ap.add_argument("--min-kill", type=float, default=0.9)
+    ap.add_argument("--keep", action="store_true", help="keep the scratch dir (printed)")
+    a = ap.parse_args()
+    sel = [m for m in MUTATIONS if not a.only or m[0] in a.only.split(",")]
+    for l in GTEST_LIBS:
+        if not os.path.exists(os.path.join(ROOT, l)):
+            print(f"mutate: missing {l} (bootstrap gtest first)", file=sys.stderr); return 2
+    keep_dir = tempfile.mkdtemp(prefix="swaps-mutate-")
+    t0 = time.time()
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as ex:
+        futs = {ex.submit(compile_and_run, m[0], m[1], m[2], m[3], m[4], m[5], keep_dir): m for m in sel}
+        for f in concurrent.futures.as_completed(futs):
+            name, caught, detail = f.result()
+            results[name] = (caught, detail)
+    caught = sum(1 for c, _ in results.values() if c is True)
+    broken = [n for n, (c, _) in results.items() if c is None]
+    total = len(results) - len(broken)
+    print(f"mutate: {len(sel)} mutations in {time.time() - t0:.0f}s (scratch {keep_dir if a.keep else 'removed'})")
+    print(f"  {'mutation':44s} {'result':10s} detail")
+    for m in sel:
+        c, d = results[m[0]]
+        tag = "CAUGHT" if c is True else ("SURVIVED" if c is False else "BROKEN")
+        print(f"  {m[0]:44s} {tag:10s} {d.splitlines()[0] if d else ''}")
+        if c is False:
+            print(f"  {'':44s} {'':10s} => {m[6]}")
+    rate = caught / total if total else 0.0
+    print(f"mutate: kill rate {caught}/{total} = {rate:.0%} (gate {a.min_kill:.0%})" + (f"; {len(broken)} broken anchor(s)" if broken else ""))
+    if not a.keep:
+        shutil.rmtree(keep_dir, ignore_errors=True)
+    return 0 if rate >= a.min_kill and not broken else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

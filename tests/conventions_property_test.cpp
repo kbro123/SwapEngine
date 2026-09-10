@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // PROPERTY / FUZZ tests over the WHOLE conventions DB surface (conventions/conventions.json ->
 // conventions_data.hpp). Complements the per-feature gates:
 //   - conventions_test.cpp pins a HAND-PICKED set of indices/products against QuantLib;

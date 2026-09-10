@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Multi-region composition: a curve stitched from an arbitrary sequence of region policies must
 // reproduce the shipped flat_hermite layout to machine precision -- same interpolation, same knots,
 // same forwards -- and report linearity correctly. Every curve in the engine is built this way, so

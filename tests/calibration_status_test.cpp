@@ -1,3 +1,4 @@
+// E5 taxonomy: T6 regression (fails on the reverted bug)
 // CalibrationResult.converged / status and the non-finite input guard (E3 finding C3, fixed 2026-09-10).
 // Before: a NaN quote returned the SEED curve with info=4 ("cosine too small" -- LM's own convergence
 // code) and rms=NaN, no throw; a rank-deficient solve reported info=0 ("improper input", the status of the

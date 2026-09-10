@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T6 regression (fails on the reverted bug)
 // Priority-1 schedule-roller gate: the OPTIONAL ISDA richness (EOM snap, stub location, roll-day anchor)
 // added to build::swap_periods_to. The load-bearing guarantee is (a) — a DEFAULT ScheduleRule reproduces
 // the legacy short-back-stub forward roll BYTE-FOR-BYTE — cross-checked here against an inline transcription

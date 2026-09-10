@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // QuantLib-FREE gate for the bond-future / cheapest-to-deliver kernel (pricing/bond_future.hpp). These
 // properties are pinned against references OTHER than QuantLib (which has no first-class Treasury-future
 // conversion-factor object), in the spirit of tests/bond_reference_test.cpp:

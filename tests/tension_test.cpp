@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Validation for the spline-under-tension region (research note §1,§3,§6). Engine-only (no QuantLib):
 // checks the region contract and the tension spline's defining properties -- C0 clamp to the boundary,
 // the σ→0 limit reproducing NaturalCubic, integral() vs a high-order quadrature, C¹/C² continuity at

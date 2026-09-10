@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // FxMatrix: the shared, triangulating FX-spot store (market/fx.hpp). Convention under test:
 //   (base, quote, rate) means 1 base = rate * quote, so rate(from,to) = units of `to` per 1 unit of `from`.
 #include <gtest/gtest.h>

@@ -1,3 +1,4 @@
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // INDEPENDENT reference cross-checks for the bond kernels — validating penny-perfection against
 // references OTHER than QuantLib, and QuantLib-FREE (so this runs in the engine's own gate binary):
 //

@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // The first-class market Quote value object (market/quote.hpp) resolves a real two-sided market to the
 // engine's calibration target + soft-quote band. These asserts pin the mid/spread arithmetic, the
 // two-sided -> soft-band and mid-only -> hard-pin bridges, and source/timestamp round-tripping.

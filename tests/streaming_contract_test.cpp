@@ -1,3 +1,4 @@
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery) | T6 regression (fails on the reverted bug)
 // The FAILED-TICK CONTRACT of the frozen-Newton streamer (E3 finding C1, fixed 2026-09-10).
 // A tick that does not converge is (a) reported with a reason, (b) never committed, and (c) leaves the
 // streamer in a VALID state: the next tick cannot report a stale curve as converged. Before the fix a

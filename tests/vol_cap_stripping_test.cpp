@@ -1,3 +1,4 @@
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery)
 // Gate for cap/floor pricing + caplet-vol stripping (vol/cap_stripping.hpp).
 #include <gtest/gtest.h>
 

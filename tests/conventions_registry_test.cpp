@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // @regression-test — the runtime conventions registry (PRINCIPLES.md P2): the baked JSON is the DEFAULT set,
 // any API can ADD entries through the `conventions` verb, a lookup miss THROWS (no silent USD/ACT/360/SIFMA
 // fallbacks), and an added product is used by the very next build. Class T6 (proven to fail without the

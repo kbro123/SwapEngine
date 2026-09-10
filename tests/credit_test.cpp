@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T2 calibration (optimum / stationarity / recovery)
 // Credit gate: the hazard-rate (survival) curve + par-CDS instruments (credit layer).
 //
 // Covered, each a place a wiring bug would hide:

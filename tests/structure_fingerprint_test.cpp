@@ -1,3 +1,4 @@
+// E5 taxonomy: T4 hot-path invariant (allocation / determinism / structure)
 // Property test for structure_fingerprint (the warm-vs-recompile switch behind the calibrated Model's
 // cached statics). The whole warm path's correctness rests on ONE invariant: the fingerprint must change
 // on ANY structural edit (else a stale W-cache silently prices the wrong curve) and must NOT change on a

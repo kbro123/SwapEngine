@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // AadBlock pooled-Dual retype (R11, the width-reduced hybrid path): the block's forward-AAD sweep runs on
 // ad::DualPooled<ad::kPooledMaxW> (gradient in-object, allocation-free) whenever the touched width fits,
 // and falls back to the heap ad::Dual unchanged beyond that. These tests pin:

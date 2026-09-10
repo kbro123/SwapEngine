@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Golden-value gate for the QuantLib-free construction date engine (include/swaps/build/{date,calendar,
 // day_count,schedule}.hpp). Every expected value below is the OUTPUT of the Python compiler it transcribes
 // (server/calendars.py + dates.py) — so this pins C++/Python parity for holidays, IMM, schedule rolling,

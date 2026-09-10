@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Phase 0 smoke test: proves the engine headers, Eigen, and GTest wiring all build & run.
 // Real correctness tests (curve vs QuantLib oracle) arrive in Phase 1+.
 #include <gtest/gtest.h>

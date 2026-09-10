@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // market::Market's NAMED VOL-SURFACE store — the vol analogue of the named-curve store, added so vega/scenario
 // can share ONE vol source that lives inside the Market snapshot instead of re-specifying cells inline. A
 // stored VolSurface is a curve-INDEPENDENT grid of cells (normal vol or a vol::SabrParams smile). This gate

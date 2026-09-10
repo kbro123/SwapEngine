@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // @regression-test — the compiled (W-cache) MtM cross-currency leg (2026-09-09). Until now an XccyMtmBasis row
 // rode the W-cache only when its FX-reset funding term was numerically negligible (and was then DROPPED); a
 // payment lag, CSA discounting, a funding spread or averaging sent it to the AAD engine — on the ladder's desk

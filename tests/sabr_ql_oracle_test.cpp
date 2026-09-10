@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib::sabrVolatility (Hagan 2002 B.65a, general β) point-for-point.
 // DO NOT DELETE OR WEAKEN without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // E5.3 (2026-09-10): the 2026-09-08 audit found NO off-ATM SABR value pinned to anything outside sabr.hpp
 // (the two "references" in swaps_tests are transcriptions of the implementation). This pins the general-β
 // BLACK (lognormal) expansion sabr_black_vol against QuantLib across β ∈ {0, ¼, ½, ¾, 1}, four expiries and a

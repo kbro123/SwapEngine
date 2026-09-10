@@ -1,3 +1,4 @@
+// E5 taxonomy: T4 hot-path invariant (allocation / determinism / structure)
 // Lock-free publish of the live curve (the async pricer/calibrator split). Engine-only: hammers the
 // LiveCurveFeed from one writer + several reader threads and proves a reader NEVER observes a torn
 // (half-updated) curve, and always sees a monotone-nondecreasing version. The writer publishes distinct

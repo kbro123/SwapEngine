@@ -1,3 +1,4 @@
+// E5 taxonomy: T6 regression (fails on the reverted bug)
 // Gate for the DATA-driven holiday calendars (conventions/conventions.json `calendars[].holidays`,
 // codegen'd to kCalendars/kHolidayRules, interpreted by swaps/build/calendar.hpp). Every golden value below
 // was captured from the PRE-MIGRATION hard-coded calendar.hpp (itself the parity-pinned transcription of

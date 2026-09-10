@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Tenor is a typed wrapper over a tenor token: it parses "3M"/"1Y"/"2W"/... ONCE into (count, unit), and
 // its resolve() delegates to the parity-tested schedule::resolve — so introducing the type changes no
 // behaviour. These tests pin the parse, the approximate size, and (crucially) resolve() equality with the

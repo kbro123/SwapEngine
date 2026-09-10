@@ -1,4 +1,5 @@
 // @consistency-test — QuantLib-LINKED SELF-CONSISTENCY test (QuantLib builds the reference market; the
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // engine is compared to ITSELF / hand formulas, not to a QuantLib number). DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Phase 3 gate: the analytic AAD Jacobian.

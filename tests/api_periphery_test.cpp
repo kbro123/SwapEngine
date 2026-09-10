@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T6 regression (fails on the reverted bug)
 // Periphery seams fixed 2026-09-10 (E4.E): F1 SABR beta carried by every vol verb; F4 the inflation seasonal
 // anchored to the base reference month (value date minus the index's observation lag); D4 the C-ABI session
 // and the run_json compile+sample rewrite calibrate under the spec's smoothing (the web's table, now engine data).

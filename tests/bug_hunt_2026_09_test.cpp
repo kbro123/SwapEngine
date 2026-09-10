@@ -1,3 +1,4 @@
+// E5 taxonomy: T6 regression (fails on the reverted bug)
 // Regression gate for the 2026-09 engine bug hunt: every test here is a bug that was REPRODUCED with a
 // standalone probe (crash, UB, or a wrong number on an ordinary input) and then fixed. Each test is the
 // probe, distilled -- if a fix regresses, the same input fails here.

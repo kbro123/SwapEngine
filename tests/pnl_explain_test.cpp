@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for the P&L EXPLAIN decomposition (calibration::pnl_explain) and its "pnl" verb contract.
 // QuantLib-FREE: a small single-curve self-discounting bundle is hand-built self-consistent at a known
 // x_true (so calibration recovers it), a book of vanilla swaps is repriced, and the NPV change between

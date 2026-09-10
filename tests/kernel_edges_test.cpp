@@ -1,3 +1,4 @@
+// E5 taxonomy: T6 regression (fails on the reverted bug)
 // KERNEL EDGES (E4.C, 2026-09-10): malformed inputs are refused with a message instead of crashing, pricing
 // NaN or silently corrupting the compiled tables; and two rows that could not ride the hybrid engine now do.
 //   E1  "regions": [] built an empty curve and segfaulted inside run_json;

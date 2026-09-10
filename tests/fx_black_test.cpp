@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T6 regression (fails on the reverted bug)
 // Gate for the FX lognormal layer: Garman-Kohlhagen closed-form analytics (vol/fx_black.hpp) + the
 // delta-quoted FX smile (vol/fx_vol_surface.hpp). Pure closed-form identities — no curve, no QuantLib — so
 // this runs in the QuantLib-free swaps_tests binary. Invariants: put-call parity, the zero-vol intrinsic

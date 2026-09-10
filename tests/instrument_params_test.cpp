@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Commercial instrument-parameter gate (QuantLib-free). Proves the ADDITIVE builder parameters added to
 // build/instruments.hpp -- a floating-leg spread, an amortizing/step-up notional schedule, and a fixed-leg
 // frequency override -- (i) reproduce the pre-existing builders BYTE-FOR-BYTE at their defaults, (ii) have

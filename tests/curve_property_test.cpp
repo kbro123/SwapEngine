@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T2 calibration (optimum / stationarity / recovery)
 // PROPERTY / FUZZ tests over the NEW curve families — the breakeven-inflation index curve and the
 // hazard/survival credit curve — plus their ZCIS/YoY and par-CDS calibration instruments.
 //

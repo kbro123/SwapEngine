@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Priority-2 gate: the OPTIONAL RFR observation-timing conventions (observation-shift / lookback / lockout)
 // added to build::rfr_observation and threaded through ois_coupon / float_leg. The load-bearing guarantee is
 // that an INACTIVE lag (the default) is byte-identical to the plain single telescoped bracket the OIS builders

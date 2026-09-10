@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // FixingSeries: the per-index realized-fixing time series with an as-of (on-or-before) query — the
 // semantic the flat pricing/fixings.hpp FixingTable lacks. These tests pin exact lookup, the as-of query
 // across a deliberate gap in the series, the before-first boundary, and latest()/count().

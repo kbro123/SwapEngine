@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib's interpolations VALUE-for-value. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // The Linear, NaturalCubic and Hermite (Bessel/parabolic tangents) interpolants vs QuantLib's
 // LinearInterpolation, CubicNaturalSpline and CubicInterpolation(Parabolic): the same knots and values,
 // ~200 evaluation points each, the VALUE and the PRIMITIVE (our integral() minus the flat pre-segment a

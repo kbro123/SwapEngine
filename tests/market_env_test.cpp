@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // market::Market — the composed market environment. Proves the snapshot owns a NAMED curve that is the
 // real realized curve, plus FX (triangulated), currencies, quotes and "today" in one object — the market
 // as of date D you build once and price against. Value-type composition; QuantLib-free.

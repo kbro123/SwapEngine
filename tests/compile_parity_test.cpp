@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // C++/Python compiler-parity gate. For each golden spec (tools/compile_parity.py in the web repo), compile
 // it with the C++ api::compile_spec (the QuantLib-free build/ construction object model) and assert the
 // resolved bundle — every curve knot/region/turn and every instrument coupon pay/tau/observation bracket —

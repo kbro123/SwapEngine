@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T3 cross-path parity (two engine paths, same inputs)
 // QuantLib-FREE self-consistency gate for the bond kernels (pricing/bond.hpp, portfolio/bond_universe.hpp,
 // build/bond.hpp). These properties hold by construction and need no oracle: price<->yield round-trips,
 // analytic duration/convexity match finite differences, the batched universe sweep equals the per-bond

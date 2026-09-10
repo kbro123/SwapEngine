@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T2 calibration (optimum / stationarity / recovery)
 // Design §3 gate: the generic instrument / leg / role / quote model on the calibration problems.
 //
 // §2 gave the generic coupon and §4 the compiled batch; this file pins the PROBLEM-level wiring —

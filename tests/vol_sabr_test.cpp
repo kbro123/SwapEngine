@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Phase-2 gate for the SABR normal-vol smile (beta=0). Pure closed-form limits — QuantLib-free, in
 // swaps_tests. Checks the flat-smile limit (nu->0), the exact ATM closed form, smoothness/continuity through
 // the ATM removable singularity, and that a positive vol-of-vol produces a genuine (non-flat) smile whose

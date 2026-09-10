@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T2 calibration (optimum / stationarity / recovery)
 // Validation for the Hyman-filtered MonotoneCubic region -- the first NON-LINEAR (is_linear_map=false)
 // region policy, the concrete curve that exercises the AAD fallback tier (CLAUDE.md §2). Engine-only
 // (no QuantLib): the region contract (C0 clamp, no-overshoot monotonicity), the is_linear_map guard, the

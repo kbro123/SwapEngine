@@ -1,4 +1,5 @@
 // @consistency-test — exercises the tension regularizer on the self-consistent EUR reference (NOT an
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery)
 // oracle: the market is the engine's own model quote at a formula-generated x_true; no QuantLib number is compared)
 // bundle (reference_multicurrency.hpp; x_true and the market come from QuantLib). DO NOT DELETE OR WEAKEN.
 //

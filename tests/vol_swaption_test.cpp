@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Phase-3 gate for swaption pricing off discount factors (vol/swaption.hpp). QuantLib-free: build the
 // underlying's DFs from a flat forward, check the forward swap rate + annuity against an independent hand
 // computation, then the swaption identities (ATM closed form, put-call parity, SABR nu=0 == flat vol).

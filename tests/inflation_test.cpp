@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T2 calibration (optimum / stationarity / recovery)
 // Inflation gate: the CPI index curve + ZCIS/YoY inflation-swap instruments (audit breadth item #3).
 //
 // Covered, each a place a wiring bug would hide:

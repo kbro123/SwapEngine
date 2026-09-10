@@ -1,4 +1,5 @@
 // @consistency-test — QuantLib-LINKED SELF-CONSISTENCY test (QuantLib builds the reference market; the
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // engine is compared to ITSELF / hand formulas, not to a QuantLib number). DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
 // Design §2 gate: the GENERIC cashflow model's degrees of freedom.

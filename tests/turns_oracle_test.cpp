@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // Turns as a calibration instrument, end-to-end oracle (docs/turns-calibration.md). A curve carrying a
 // turn OVERLAY must be a usable, arbitrage-clean discount curve: wrap the TurnedCurve handle in
 // CurveTermStructure, price OIS swaps off it with QuantLib, and confirm QuantLib's fairRate equals our

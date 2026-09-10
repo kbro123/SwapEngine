@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for the batched swaption VOL CUBE (api::BundleSession::price_vol_cube_json). Loads a realistic SOFR
 // bundle fixture, calibrates a session, and asserts the curve-AGNOSTIC identities that must hold whatever the
 // exact forward is — the same robustness anchors as vol_swaption_test, but through the cube's JSON seam +

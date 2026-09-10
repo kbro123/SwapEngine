@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for no-arbitrage vol-cube interpolation (vol/vol_cube_interp.hpp): the calendar (total-variance)
 // condition + the arb-preserving interpolator.
 #include <gtest/gtest.h>

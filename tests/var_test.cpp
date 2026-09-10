@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gate for the VaR / Expected-Shortfall verb (api/var.cpp). Two paths:
 //   * SUPPLIED  — a known P&L distribution matches the ANALYTIC quantile: for the uniform integer sample
 //                 {0..N-1}, the type-7 VaR at q is the interpolated order statistic (1−q)·(N−1) and the ES

@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Gates for the TENSION-ENERGY regularizer (swaps::calibration::tension_energy_operator, research note
 // §5). These are the QuantLib-FREE gates -- pure operator math on hand-built curves:
 //   (A1) EXACTNESS: an AFFINE forward has zero bending energy and INT(f')^2 = slope^2 * T -- the operator

@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // GRID gate (T5 identities + finite differences, NOT an oracle -- renamed from *_oracle_test on 2026-09-10:
 // there is no external reference value in this file; the repo's oracle criteria are tests/ORACLE_TESTS.md)
 // for the FX lognormal (Garman-Kohlhagen) layer (vol/fx_black.hpp) and the delta-quoted smile

@@ -1,3 +1,4 @@
+// E5 taxonomy: T4 hot-path invariant (allocation / determinism / structure)
 // Proves the real-time reprice/residual hot path is ALLOCATION-FREE: after a warmup call has sized
 // every scratch buffer, no further Eigen heap allocation occurs per tick. Uses Eigen's own real-time
 // facility -- EIGEN_RUNTIME_NO_MALLOC + set_is_malloc_allowed(false) makes Eigen assert on ANY malloc

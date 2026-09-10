@@ -1,4 +1,5 @@
 // @oracle-test (support fixture) — clears QuantLib's process-global IndexManager fixing histories
+// E5 taxonomy: T4 hot-path invariant (allocation / determinism / structure)
 // between oracle tests so the single-process swaps_oracle_tests binary is order-independent. DO NOT DELETE.
 // Per-test isolation of QuantLib's PROCESS-GLOBAL state for the single-process oracle binary.
 //

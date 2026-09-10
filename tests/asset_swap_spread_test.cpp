@@ -1,3 +1,4 @@
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // The asset-swap / swap-spread BASIS instrument (build/swap_spread.hpp). QuantLib-free: a small 2-curve
 // bundle (SOFR swap curve + a govvie yield factor) is hand-built self-consistent from a known x_true and
 // calibrated, with one swap pillar (5y) pinned by a HEADLINE SWAP SPREAD instead of an outright.

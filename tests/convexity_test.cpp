@@ -1,5 +1,6 @@
 // @oracle-test — validates against QuantLib cashflow-for-cashflow. DO NOT DELETE OR WEAKEN
 // without reproducing the QuantLib comparison. See tests/ORACLE_TESTS.md.
+// E5 taxonomy: T1 oracle (engine number vs an independent number)
 // Verifies our transcribed Hull-White convexity matches QuantLib's HullWhite::convexityBias
 // exactly, so the engine/tests can compute convexity without linking QuantLib.
 //

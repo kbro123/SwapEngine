@@ -1,3 +1,4 @@
+// E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Fixing tables as part of the pricing context (design: attach-and-observe). Proves the E1 engine core:
 //   * resolve() splits an observation at the eval date, sums PAST fixings from the table into `realized`
 //     (compounded -> `realized_factor`) and leaves FUTURE days as forecast sub-periods — bit-identical to

@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (two engine paths, same inputs) | T2 calibration (optimum / stationarity / recovery)
 // Turns as a calibration instrument (docs/turns-calibration.md, Mode 2). QuantLib-free unit tests for
 // the turn OVERLAY math and the banded state-pin turn instrument:
 //   * the compiled W-cache turned discount equals the templated TurnedCurve discount to machine epsilon;

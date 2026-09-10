@@ -1,3 +1,4 @@
+// E5 taxonomy: T2 calibration (optimum / stationarity / recovery) | T5 properties + value pins (hand / closed-form literals, identities, FD)
 // Order-agnostic region composition — the combinatorial proof that EVERY interpolation scheme can be a
 // leading, a middle, and a trailing region, in ANY combination. There is no "front"/"back" concept: a
 // ModularCurve is an ordered list of region modules stitched left-to-right by a C0 boundary handoff
