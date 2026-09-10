@@ -50,7 +50,8 @@ double reference_smooth_tension_energy(const cal::BundleProblem& p, const Eigen:
   const auto mods = p.curves[0].modules();
   auto crv = curve::make_modular_curve<double>(mods);
   crv.set_forwards(x);
-  const std::vector<double> bp = cal::detail::forward_pieces(mods);
+  std::vector<double> bp = crv.pieces();  // the regions' true analytic breakpoints (forward_pieces retired 2026-09-10)
+  bp.insert(bp.begin(), 0.0);
   const double s[4] = {0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0};
   Eigen::Matrix4d V;
   for (int m = 0; m < 4; ++m)
@@ -329,4 +330,107 @@ TEST(RegionSmoothing, TensionEnergyIsPerRegionSigma) {
   EXPECT_GT((R_hi * x).squaredNorm(), e_inh * (1.0 + 1e-6));
   // Per-region weight ρ=2 scales this region's energy by ρ²=4 (front carries none).
   EXPECT_NEAR((R_w2 * x).squaredNorm(), 4.0 * e_inh, 1e-9 * e_inh);
+}
+
+// EVERY scheme, two-step oracle (2026-09-10). Until then the operator fitted a cubic per piece on WRONG B-spline
+// breakpoints (25 % error) and could not represent Tension pieces at all (18-100 % error, growing with σ) —
+// probe G-2 of the assumptions audit.
+//   (1) the regions' analytic forward derivatives vs central finite differences of forward() at interior points
+//       (an oracle that is not the derivative code);
+//   (2) the operator's quadratic form vs a fine composite Gauss integration of those derivatives (2000 panels x
+//       3 interior nodes per piece — exact for polynomial pieces, ~1e-8 for the σ=25 boundary layers).
+namespace {
+struct SchemeCase { const char* name; swaps::curve::Scheme scheme; double sigma; double tol_energy; };
+const std::vector<SchemeCase>& scheme_cases() {
+  using swaps::curve::Scheme;
+  static const std::vector<SchemeCase> c = {{"Linear", Scheme::Linear, 0.0, 1e-10}, {"NaturalCubic", Scheme::NaturalCubic, 0.0, 1e-10},
+      {"Hermite", Scheme::Hermite, 0.0, 1e-10}, {"BSpline", Scheme::BSpline, 0.0, 1e-10},
+      {"Tension sigma=0.1", Scheme::Tension, 0.1, 1e-9}, {"Tension sigma=1", Scheme::Tension, 1.0, 1e-9},
+      {"Tension sigma=5", Scheme::Tension, 5.0, 1e-8}, {"Tension sigma=25", Scheme::Tension, 25.0, 1e-7}};
+  return c;
+}
+std::vector<swaps::curve::CurveModule> mods_for(const SchemeCase& c) {
+  std::vector<swaps::curve::CurveModule> mods{{{0.25, 0.5}, swaps::curve::Scheme::Flat}, {{1, 2, 3, 5, 7, 10, 15, 20, 30}, c.scheme}};
+  mods[1].sigma = c.sigma;
+  return mods;
+}
+Eigen::VectorXd wiggly(int n) { Eigen::VectorXd x(n); for (int i = 0; i < n; ++i) x[i] = 0.03 + 0.004 * std::sin(1.3 * i) + 0.0005 * i; return x; }
+}  // namespace
+
+TEST(TensionRegularizer, AnalyticForwardDerivativesMatchFiniteDifferencesOnEveryScheme) {
+  for (const auto& c : scheme_cases()) {
+    auto crv = swaps::curve::make_modular_curve<double>(mods_for(c));
+    crv.set_forwards(wiggly(11));
+    double worst1 = 0.0, worst2 = 0.0, scale1 = 0.0, scale2 = 0.0;
+    const double eps = 1e-5;
+    for (int k = 0; k < 400; ++k) {
+      const double t = 0.55 + 29.4 * (k + 0.5) / 400.0;  // interior of the back region, away from the nodes
+      bool near_node = false;
+      for (double kn : {1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0}) if (std::abs(t - kn) < 3 * eps) near_node = true;
+      if (near_node) continue;
+      const double f0 = crv.forward(t), fp = crv.forward(t + eps), fm = crv.forward(t - eps), fpp = crv.forward(t + 2 * eps), fmm = crv.forward(t - 2 * eps);
+      const double d1 = (-fpp + 8 * fp - 8 * fm + fmm) / (12 * eps), d2 = (-fpp + 16 * fp - 30 * f0 + 16 * fm - fmm) / (12 * eps * eps);
+      worst1 = std::max(worst1, std::abs(crv.forward_d1(t) - d1)); scale1 = std::max(scale1, std::abs(d1));
+      worst2 = std::max(worst2, std::abs(crv.forward_d2(t) - d2)); scale2 = std::max(scale2, std::abs(d2));
+    }
+    std::cout << "  [derivatives] " << c.name << ": |d1-fd|/scale " << worst1 / scale1 << "  |d2-fd|/scale " << worst2 / scale2 << "\n";
+    EXPECT_LT(worst1, 1e-7 * scale1 + 1e-12) << c.name;
+    // second differences carry ~1e-16*|f|/eps^2 ~ 3e-8 absolute roundoff noise (Linear has d2 == 0 exactly)
+    EXPECT_LT(worst2, 5e-4 * scale2 + 1e-6) << c.name;
+  }
+}
+
+TEST(TensionRegularizer, OperatorEnergyMatchesFineQuadratureOfTheBuiltCurveOnEveryScheme) {
+  for (const auto& c : scheme_cases()) {
+    const auto mods = mods_for(c);
+    const int n = 11;
+    const Eigen::VectorXd x = wiggly(n);
+    const double sigma_reg = 0.7;
+    const Eigen::MatrixXd K = cal::detail::curve_tension_stiffness(mods, n, 1.0, sigma_reg);
+    const double e_op = x.dot(K * x);
+    auto crv = swaps::curve::make_modular_curve<double>(mods);
+    crv.set_forwards(x);
+    std::vector<double> bp = crv.pieces(); bp.insert(bp.begin(), 0.0);
+    static const double gx[3] = {-0.7745966692414834, 0.0, 0.7745966692414834}, gw[3] = {5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0};
+    double e_ref = 0.0;
+    for (std::size_t p = 0; p + 1 < bp.size(); ++p) {
+      const int panels = 2000;
+      const double h = (bp[p + 1] - bp[p]) / panels;
+      for (int s = 0; s < panels; ++s) {
+        const double cc = bp[p] + (s + 0.5) * h, r = 0.5 * h;
+        for (int q = 0; q < 3; ++q) {
+          const double t = cc + gx[q] * r, d1 = crv.forward_d1(t), d2 = crv.forward_d2(t);
+          e_ref += gw[q] * r * (d2 * d2 + sigma_reg * sigma_reg * d1 * d1);
+        }
+      }
+    }
+    const double rel = std::abs(e_op - e_ref) / e_ref;
+    std::cout << "  [regulariser] " << c.name << ": operator " << e_op << " fine-quadrature " << e_ref << " rel " << rel << " (pieces " << bp.size() - 1 << ")\n";
+    EXPECT_LT(rel, c.tol_energy) << c.name;
+  }
+}
+
+// pieces() reports the TRUE analytic breakpoints: a B-spline's de Boor-averaged interior knots, not the
+// input knots; cubics and Tension break at their nodes.
+TEST(TensionRegularizer, PiecesAreTheTrueAnalyticBreakpoints) {
+  using swaps::curve::Scheme;
+  const std::vector<double> back{1, 2, 3, 5, 7, 10, 15, 20, 30};
+  auto bs = swaps::curve::make_modular_curve<double>({{back, Scheme::BSpline}});
+  bs.set_forwards(Eigen::VectorXd::Zero(static_cast<int>(back.size())));  // pieces are fixed at build
+  const auto pb = bs.pieces();
+  EXPECT_EQ(static_cast<int>(pb.size()), static_cast<int>(back.size()) - 1);  // n-2 segments => n-1 breakpoints
+  for (std::size_t k = 1; k + 1 < pb.size(); ++k) {  // interior = de Boor average of three consecutive knots
+    const double expect = (back[k - 1 + 0] + back[k] + back[k + 1]) / 3.0;
+    EXPECT_NEAR(pb[k], expect, 1e-12) << k;
+  }
+  auto hm = swaps::curve::make_modular_curve<double>({{back, Scheme::Hermite}});
+  EXPECT_THROW(hm.pieces(), std::logic_error);  // unbuilt: refused, never a partial list
+  hm.set_forwards(Eigen::VectorXd::Zero(static_cast<int>(back.size())));
+  EXPECT_EQ(hm.pieces(), back);
+  swaps::curve::CurveModule tm{back, Scheme::Tension}; tm.sigma = 2.0;
+  auto tn = swaps::curve::make_modular_curve<double>({tm});
+  tn.set_forwards(Eigen::VectorXd::Zero(static_cast<int>(back.size())));
+  EXPECT_EQ(tn.pieces(), back);
+  EXPECT_DOUBLE_EQ(tn.tension_sigma_at(4.0), 2.0);
+  EXPECT_DOUBLE_EQ(hm.tension_sigma_at(4.0), 0.0);
 }

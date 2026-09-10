@@ -81,6 +81,11 @@ class Flat {
   }
 
   Scalar forward(double t) const { return t <= t0_ ? f_.front() : f_[seg(t)]; }
+  // Derivatives of the forward (regulariser / energy; interior points only — the jumps at the breakpoints
+  // are intentional and carry no energy). Width-preserving zeros for the AAD scalar types.
+  Scalar forward_d1(double) const { return f_.front() * 0.0; }
+  Scalar forward_d2(double) const { return f_.front() * 0.0; }
+  std::vector<double> pieces() const { return m_; }  // the polynomial (here: constant) pieces break at the knots
   Scalar integral(double t) const {
     if (t <= t0_) return I0_;
     if (t >= m_.back()) return I0_ + region_int_ + f_.back() * (t - m_.back());
@@ -144,6 +149,13 @@ class Linear {
     const double w = (t - t_[i]) / (t_[i + 1] - t_[i]);
     return y_[i] + (y_[i + 1] - y_[i]) * w;
   }
+  Scalar forward_d1(double t) const {
+    if (t <= t_.front() || t >= t_.back()) return y_.front() * 0.0;
+    const int i = seg(t);
+    return (y_[i + 1] - y_[i]) / (t_[i + 1] - t_[i]);
+  }
+  Scalar forward_d2(double) const { return y_.front() * 0.0; }
+  std::vector<double> pieces() const { return t_; }
   Scalar integral(double t) const {
     if (t <= t_.front()) return I_.front() - y_.front() * (t_.front() - t);  // flat pre-segment at v1
     if (t >= t_.back()) return I_.back() + y_.back() * (t - t_.back());
@@ -244,11 +256,24 @@ class NaturalCubic {
 
   Scalar forward(double t) const {
     if (t <= xs_.front()) return ys_.front();  // flat pre-segment (leading) / clamp start (following)
-    if (t >= xs_.back()) return ys_.back();    // flat extrapolation
+    if (t >= xs_.back()) return ys_.back();
     const int i = seg(t);
     const double u = t - xs_[i];
     return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
   }
+  Scalar forward_d1(double t) const {  // exact derivatives of the piece cubic (flat outside the region)
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return b_[i] + u * (2.0 * c_[i] + 3.0 * u * d_[i]);
+  }
+  Scalar forward_d2(double t) const {
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return 2.0 * c_[i] + 6.0 * u * d_[i];
+  }
+  std::vector<double> pieces() const { return xs_; }  // the polynomial pieces break at the nodes (incl. the join)
   Scalar integral(double t) const {
     if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
@@ -344,6 +369,19 @@ class Hermite {
     const double u = t - xs_[i];
     return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
   }
+  Scalar forward_d1(double t) const {  // exact derivatives of the piece cubic (flat outside the region)
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return b_[i] + u * (2.0 * c_[i] + 3.0 * u * d_[i]);
+  }
+  Scalar forward_d2(double t) const {
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return 2.0 * c_[i] + 6.0 * u * d_[i];
+  }
+  std::vector<double> pieces() const { return xs_; }  // the polynomial pieces break at the nodes (incl. the join)
   Scalar integral(double t) const {
     if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
@@ -460,6 +498,19 @@ class MonotoneCubic {
     const double u = t - xs_[i];
     return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
   }
+  Scalar forward_d1(double t) const {  // exact derivatives of the piece cubic (flat outside the region)
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return b_[i] + u * (2.0 * c_[i] + 3.0 * u * d_[i]);
+  }
+  Scalar forward_d2(double t) const {
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double u = t - xs_[i];
+    return 2.0 * c_[i] + 6.0 * u * d_[i];
+  }
+  std::vector<double> pieces() const { return xs_; }  // the polynomial pieces break at the nodes (incl. the join)
   Scalar integral(double t) const {
     if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
@@ -634,6 +685,17 @@ class BSpline {
     if (t >= te) return deboor(te);    // flat extrapolation beyond the region
     return deboor(t);
   }
+  // Exact derivatives: the derivative of a degree-p B-spline is a degree-(p−1) B-spline on the knot vector with
+  // its first and last knots dropped, with control points p·(c_{i+1} − c_i)/(τ_{i+p+1} − τ_{i+1}).
+  Scalar forward_d1(double t) const {
+    if (t <= t0_ || t >= s_.back()) return cp_.front() * 0.0;
+    return deboor_general(deriv_cp(cp_, 3, 0), tau_.data() + 1, 2, t);
+  }
+  Scalar forward_d2(double t) const {
+    if (t <= t0_ || t >= s_.back()) return cp_.front() * 0.0;
+    return deboor_general(deriv_cp(deriv_cp(cp_, 3, 0), 2, 1), tau_.data() + 2, 1, t);
+  }
+  std::vector<double> pieces() const { return brk_; }  // the TRUE polynomial breakpoints (de Boor-averaged interior knots)
   Scalar integral(double t) const {
     // Flat pre-segment [pre_t_,t0_] at level cp_.front(): zero-length for a following region (pre_t_==t0_),
     // the calibrated flat short end for a leading one (pre_t_=in.time < t0_=t1).
@@ -712,6 +774,38 @@ class BSpline {
     if (b <= a) return Scalar(0.0);
     const double h = 0.5 * (b - a), c = 0.5 * (a + b), g = 0.5773502691896257 * h;  // g = h/sqrt(3)
     return (deboor(c - g) + deboor(c + g)) * h;
+  }
+  // Control points of the derivative spline: c has m points on the degree-p knot vector tau_ + shift (length
+  // m+p+1); returns m−1 points on the degree-(p−1) vector tau_ + shift + 1.
+  std::vector<Scalar> deriv_cp(const std::vector<Scalar>& c, int p, int shift) const {
+    const int m = static_cast<int>(c.size());
+    std::vector<Scalar> q(static_cast<std::size_t>(m - 1));
+    for (int i = 0; i < m - 1; ++i) {
+      const double den = tau_[shift + i + p + 1] - tau_[shift + i + 1];
+      if (den > 0.0) q[i] = (c[i + 1] - c[i]) * (p / den);
+      else q[i] = c[i] * 0.0;
+    }
+    return q;
+  }
+  // de Boor for a degree-p spline with control points c (m points) on the knot vector tau (m+p+1 entries).
+  Scalar deboor_general(const std::vector<Scalar>& c, const double* tau, int p, double t) const {
+    const int m = static_cast<int>(c.size());
+    int k;
+    if (t >= tau[m]) k = m - 1;
+    else {
+      int lo = p, hi = m;
+      while (hi - lo > 1) { const int mid = (lo + hi) / 2; (t < tau[mid] ? hi : lo) = mid; }
+      k = lo;
+    }
+    Scalar d[4];
+    for (int j = 0; j <= p; ++j) d[j] = c[k - p + j];
+    for (int r = 1; r <= p; ++r)
+      for (int j = p; j >= r; --j) {
+        const double den = tau[k + 1 + j - r] - tau[k - p + j];
+        const double a = den > 0.0 ? (t - tau[k - p + j]) / den : 0.0;
+        d[j] = d[j - 1] * (1.0 - a) + d[j] * a;
+      }
+    return d[p];
   }
 
   std::vector<double> s_, tau_, brk_;
@@ -826,6 +920,21 @@ inline double Phi(double sigma, double h, double v) {
 // ∫₀^v Φ(σ,h,w) dw = [(cosh(σv)-1)/(σ sinh(σh)) - v²/(2h)] / σ². Stable minus-quadratic form:
 //   2h(cosh(σv)-1) - v²σ sinh(σh) = 2h·coshm2(σv) - v²·σ·sinhm1(σh)   (leading σ²v²h terms cancel).
 // σ→0: Ψ → (v⁴ - 2v²h²)/(24h), the antiderivative of the natural-cubic curvature shape.
+// d/dv Phi(sigma, h, v) = [sigma·cosh(sigma v)/sinh(sigma h) − 1/h]/sigma²   and   d²/dv² Phi = sinh(sigma v)/sinh(sigma h).
+inline double Phi_d1(double sigma, double h, double v) {
+  const double xh = sigma * h;
+  if (xh > 20.0) {  // cosh(σv)/sinh(σh) = e^{-σ(h-v)}(1+e^{-2σv})/(1-e^{-2σh}) — no overflow
+    const double r = std::exp(-sigma * (h - v)) * (1.0 + std::exp(-2.0 * sigma * v)) / (1.0 - std::exp(-2.0 * xh));
+    return (sigma * r - 1.0 / h) / (sigma * sigma);
+  }
+  return (sigma * std::cosh(sigma * v) / std::sinh(xh) - 1.0 / h) / (sigma * sigma);
+}
+inline double Phi_d2(double sigma, double h, double v) {
+  const double xh = sigma * h;
+  if (xh > 20.0) return std::exp(-sigma * (h - v)) * (1.0 - std::exp(-2.0 * sigma * v)) / (1.0 - std::exp(-2.0 * xh));
+  return std::sinh(sigma * v) / std::sinh(xh);
+}
+
 inline double Psi(double sigma, double h, double v) {
   const double xh = sigma * h;
   if (xh > 20.0) {  // (cosh(σv)-1)/(σ sinh(σh)) via scaled exponentials (all exponents ≤ 0, no overflow):
@@ -935,6 +1044,22 @@ class Tension {
     return ys_[i] * ((h - u) / h) + ys_[i + 1] * (u / h) +
            z_[i] * tension_detail::Phi(sigma_, h, h - u) + z_[i + 1] * tension_detail::Phi(sigma_, h, u);
   }
+  // Exact derivatives of the tension piece: f = ys_i(h−u)/h + ys_{i+1}u/h + z_i Φ(h−u) + z_{i+1} Φ(u).
+  Scalar forward_d1(double t) const {
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double h = h_[i], u = t - xs_[i];
+    return (ys_[i + 1] - ys_[i]) / h - z_[i] * tension_detail::Phi_d1(sigma_, h, h - u) +
+           z_[i + 1] * tension_detail::Phi_d1(sigma_, h, u);
+  }
+  Scalar forward_d2(double t) const {
+    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
+    const int i = seg(t);
+    const double h = h_[i], u = t - xs_[i];
+    return z_[i] * tension_detail::Phi_d2(sigma_, h, h - u) + z_[i + 1] * tension_detail::Phi_d2(sigma_, h, u);
+  }
+  std::vector<double> pieces() const { return xs_; }
+  double sigma() const { return sigma_; }
   Scalar integral(double t) const {
     if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());

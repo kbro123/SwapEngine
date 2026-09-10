@@ -152,11 +152,11 @@ Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, cons
 // per-iteration cost, nothing on the differentiated hot loop. All the sinh-free spline algebra here is
 // ONE-TIME setup (build L once), exactly as the research note requires.
 //
-// Numerics: within each knot interval the forward is a single polynomial of degree <= 3 (Flat const,
-// Linear affine, Hermite/NaturalCubic/BSpline cubic), so f'' is affine and INT(f'')^2 / INT(f')^2 are
-// computed in CLOSED FORM per interval from the interval's cubic coefficients -- EXACT, no quadrature
-// error. The coefficients are recovered by interpolating the (structure-only) forward shape functions at
-// 4 nodes of the interval (a fixed, well-conditioned Vandermonde). The flat meeting-date front has
+// Numerics (rebuilt 2026-09-10): every region exposes its EXACT forward derivatives (forward_d1/forward_d2)
+// and its analytic-piece breakpoints (pieces()); the energy is Gauss quadrature of (f'')² + σ²(f')² per piece
+// with a rule that is exact for the piece's form — 3-point Gauss for polynomial pieces (Flat/Linear/cubics/
+// B-spline on its TRUE de Boor breakpoints), a σ·h-sized composite 6-point rule for Tension pieces (sinh/cosh,
+// which the old per-piece cubic fit could not represent: 18-100 % energy error). The flat meeting-date front has
 // f'' = f' = 0 inside each segment, so it contributes zero energy (the note's "minimise energy only in
 // the residual freedom": meetings stay discontinuous), while its LAST knot still couples into the back
 // region's energy through the C0 join -- captured because the whole ModularCurve is evaluated, not a
@@ -164,31 +164,8 @@ Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, cons
 
 namespace detail {
 
-// Piece breakpoints over which the forward is a SINGLE polynomial (<= cubic), so the per-interval cubic
-// fit below is exact. Nodes are the region knots for every scheme except BSpline, whose polynomial pieces
-// break at the region's UNIFORM interior knots (regions.hpp BSpline), not at the input knots.
-inline std::vector<double> forward_pieces(const std::vector<curve::CurveModule>& mods) {
-  std::vector<double> bp{0.0};
-  double t0 = 0.0;
-  for (const auto& m : mods) {
-    const auto& k = m.knots;
-    if (k.empty()) continue;
-    const double te = k.back();
-    if (m.scheme == curve::Scheme::BSpline) {
-      const int n = static_cast<int>(k.size());  // n free control points -> uniform interior breakpoints
-      for (int j = 1; j <= n - 3; ++j) bp.push_back(t0 + (te - t0) * (static_cast<double>(j) / (n - 2)));
-      bp.push_back(te);
-    } else {
-      for (double kv : k) bp.push_back(kv);
-    }
-    t0 = te;
-  }
-  std::sort(bp.begin(), bp.end());
-  bp.erase(std::unique(bp.begin(), bp.end(),
-                       [](double a, double b) { return std::abs(a - b) <= 1e-13 * (1.0 + std::abs(a)); }),
-           bp.end());
-  return bp;
-}
+// (forward_pieces retired 2026-09-10: the curve's regions own their breakpoints — ModularCurve::pieces(). The old
+// helper assumed UNIFORM B-spline breakpoints, stale since the de Boor-averaged knots: 25 % bending-energy error.)
 
 // K1 (membrane) and K2 (bending) stiffness of ONE curve's own knots, from its region schemes.
 // Returns K = Σ_pieces ρ²·(K2_p + σ_p²·K1_p) (n_local x n_local, symmetric SPSD). Off the hot path (setup).
@@ -201,7 +178,15 @@ inline std::vector<double> forward_pieces(const std::vector<curve::CurveModule>&
 inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveModule>& mods, int n_local,
                                                double default_weight, double default_sigma) {
   auto crv = curve::make_modular_curve<double>(mods);
-  const std::vector<double> bp = detail::forward_pieces(mods);
+  crv.set_forwards(Eigen::VectorXd::Zero(n_local));  // regions know their pieces (joins, de Boor knots) once BUILT
+  // Pieces: 0 (the flat pre-segment start) plus every breakpoint the regions declare — the TRUE analytic
+  // pieces (B-spline: the de Boor-averaged interior knots; Tension: its nodes; cubics: their nodes incl. joins).
+  std::vector<double> bp = crv.pieces();
+  bp.insert(bp.begin(), 0.0);
+  std::sort(bp.begin(), bp.end());
+  bp.erase(std::unique(bp.begin(), bp.end(),
+                       [](double a, double b) { return std::abs(a - b) <= 1e-13 * (1.0 + std::abs(a)); }),
+           bp.end());
   const int P = static_cast<int>(bp.size()) - 1;
 
   // Per-region relative weight ρ (=1 when inheriting; default_weight>0 is guaranteed by the operator guard)
@@ -219,61 +204,61 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
     return static_cast<int>(region_end.size()) - 1;
   };
 
-  // Fixed cubic Vandermonde on the INTERIOR nodes {1/8, 3/8, 5/8, 7/8} (working in s = (t-a)/h keeps the
-  // fit well-conditioned regardless of the interval width h). The forward is a single polynomial (<= cubic)
-  // on the OPEN interval, so any 4 distinct nodes recover it EXACTLY for every smooth scheme -- the energy
-  // is identical to sampling the endpoints. But the nodes MUST stay interior: a Flat region is
-  // DISCONTINUOUS at its knots (the piece endpoints), so sampling an endpoint reads the neighbouring
-  // segment and makes an intended meeting-date STEP look like a steep ramp -- the smoother would then
-  // charge bending energy for it and erase the discontinuity. Interior nodes see only the constant
-  // segment, so a Flat piece contributes ZERO energy and the explicit jumps we put in are never smoothed.
-  const double s[4] = {0.125, 0.375, 0.625, 0.875};
-  Eigen::Matrix4d V;
-  for (int m = 0; m < 4; ++m)
-    for (int c = 0; c < 4; ++c) V(m, c) = std::pow(s[m], c);
-  const Eigen::Matrix4d Vinv = V.inverse();
+  // Quadrature nodes per piece, EXACT for the piece's analytic form:
+  //   polynomial pieces (Flat/Linear/cubics/B-spline): (f')² has degree <= 4 and (f'')² <= 2, so 3-point
+  //     Gauss-Legendre (exact to degree 5) integrates both exactly;
+  //   tension pieces (sinh/cosh with rate σ): composite Gauss with ceil(σ·h) sub-intervals of 6-point
+  //     Gauss each (the exponent per sub-interval is <= 2, integrated to ~1e-14).
+  // Nodes are strictly INTERIOR, so a Flat piece (d1 = d2 = 0 inside, jumps at its ends) contributes EXACTLY
+  // zero — the explicit meeting-date steps are never smoothed — and a Tension/cubic piece never reads its
+  // neighbour.
+  static const double g3x[3] = {-0.7745966692414834, 0.0, 0.7745966692414834};
+  static const double g3w[3] = {5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0};
+  static const double g6x[6] = {-0.9324695142031521, -0.6612093864662645, -0.2386191860831969,
+                                0.2386191860831969, 0.6612093864662645, 0.9324695142031521};
+  static const double g6w[6] = {0.1713244923791704, 0.3607615730481386, 0.4679139345726910,
+                                0.4679139345726910, 0.3607615730481386, 0.1713244923791704};
+  struct Node { double t, w; int piece; };
+  std::vector<Node> nodes;
+  for (int p = 0; p < P; ++p) {
+    const double a = bp[p], b = bp[p + 1], h = b - a;
+    if (h <= 1e-13) continue;
+    const double sg_interp = crv.tension_sigma_at(0.5 * (a + b));
+    if (sg_interp > 0.0) {
+      const int m = std::max(1, static_cast<int>(std::ceil(sg_interp * h)));
+      const double hs = h / m;
+      for (int s = 0; s < m; ++s) {
+        const double c = a + (s + 0.5) * hs, r = 0.5 * hs;
+        for (int q = 0; q < 6; ++q) nodes.push_back({c + g6x[q] * r, g6w[q] * r, p});
+      }
+    } else {
+      const double c = 0.5 * (a + b), r = 0.5 * h;
+      for (int q = 0; q < 3; ++q) nodes.push_back({c + g3x[q] * r, g3w[q] * r, p});
+    }
+  }
+  const int Q = static_cast<int>(nodes.size());
 
-  // Forward shape functions sampled at every piece node: F[p](m, j) = Phi_j(a_p + s_m*h_p), obtained by
-  // evaluating the curve on each unit knot vector e_j (one build per local knot -- cheap, setup only).
-  std::vector<Eigen::MatrixXd> F(P, Eigen::MatrixXd::Zero(4, n_local));
+  // Derivative shape functions: D1(q, j) = ∂f'(t_q)/∂x_j, D2(q, j) = ∂f''(t_q)/∂x_j — evaluate the curve on each
+  // unit knot vector (one build per local knot; setup only). Linear maps => these rows are structure-only.
+  Eigen::MatrixXd D1 = Eigen::MatrixXd::Zero(Q, n_local), D2 = Eigen::MatrixXd::Zero(Q, n_local);
   Eigen::VectorXd e = Eigen::VectorXd::Zero(n_local);
   for (int j = 0; j < n_local; ++j) {
     e.setZero();
     e[j] = 1.0;
     crv.set_forwards(e);
-    for (int p = 0; p < P; ++p) {
-      const double a = bp[p], h = bp[p + 1] - a;
-      for (int m = 0; m < 4; ++m) F[p](m, j) = crv.forward(a + s[m] * h);
+    for (int q = 0; q < Q; ++q) {
+      D1(q, j) = crv.forward_d1(nodes[q].t);
+      D2(q, j) = crv.forward_d2(nodes[q].t);
     }
   }
-
+  // K = Σ_q w_q ρ²_p [ D2_qᵀ D2_q + σ_p² D1_qᵀ D1_q ]  (symmetric SPSD by construction)
   Eigen::MatrixXd K = Eigen::MatrixXd::Zero(n_local, n_local);
-  auto sym = [](const Eigen::RowVectorXd& a, const Eigen::RowVectorXd& b) {
-    return (a.transpose() * b + b.transpose() * a).eval();
-  };
-  for (int p = 0; p < P; ++p) {
-    const double h = bp[p + 1] - bp[p];
-    if (h <= 1e-13) continue;
-    const int rgn = region_of(0.5 * (bp[p] + bp[p + 1]));  // this interval's region (midpoint rule)
-    const double r2 = rho[rgn] * rho[rgn], sg = rsig[rgn];
-    // Cubic coeffs (in the normalised s) as linear functions of x: rows of G = Vinv*F are c0..c3. Subtract
-    // the piece's CONSTANT baseline (row 0) before the solve: the energy uses only c1..c3, which are
-    // invariant to a constant shift, but this keeps the (large) constant out of the fit so it is never
-    // amplified by the 1/h^3 / 1/h factors below. For a Flat piece F is bit-identical across nodes, so
-    // F - row0 == 0 EXACTLY => c1=c2=c3=0 EXACTLY and the energy is zero for ANY interval width (a very
-    // short interval would otherwise blow the Vandermonde-inverse roundoff up by 1/h^3). Smooth pieces are
-    // unchanged (the subtraction only shifts c0).
-    const Eigen::MatrixXd G = Vinv * (F[p].rowwise() - F[p].row(0));
-    const Eigen::RowVectorXd g1 = G.row(1), g2 = G.row(2), g3 = G.row(3);
-    // f(u) = c0 + c1 s + c2 s^2 + c3 s^3, s = u/h.  INT_0^h (f'')^2 du = (1/h^3)[4c2^2+12c2c3+12c3^2];
-    // INT_0^h (f')^2 du = (1/h)[c1^2 + 2c1c2 + (4/3)c2^2 + 2c1c3 + 3c2c3 + (9/5)c3^2].  (see the note's
-    // closed forms; the constant term c0 drops out of both derivatives.)
-    const Eigen::MatrixXd K2p =
-        (1.0 / (h * h * h)) * (4.0 * (g2.transpose() * g2) + 6.0 * sym(g2, g3) + 12.0 * (g3.transpose() * g3));
-    const Eigen::MatrixXd K1p =
-        (1.0 / h) * ((g1.transpose() * g1) + sym(g1, g2) + (4.0 / 3.0) * (g2.transpose() * g2) +
-                     sym(g1, g3) + 1.5 * sym(g2, g3) + (9.0 / 5.0) * (g3.transpose() * g3));
-    K += r2 * (K2p + (sg * sg) * K1p);  // per-region: this interval's relative weight ρ² and membrane σ
+  for (int q = 0; q < Q; ++q) {
+    const int p = nodes[q].piece;
+    const int rgn = region_of(0.5 * (bp[p] + bp[p + 1]));
+    const double r2 = rho[rgn] * rho[rgn], sg = rsig[rgn], w = nodes[q].w;
+    K.noalias() += (w * r2) * (D2.row(q).transpose() * D2.row(q));
+    K.noalias() += (w * r2 * sg * sg) * (D1.row(q).transpose() * D1.row(q));
   }
   return K;
 }

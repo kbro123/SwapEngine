@@ -16,6 +16,7 @@
 // Templated on Scalar so AAD flows through (e.g. to build W or a risk gradient).
 
 #include <cmath>
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -35,6 +36,10 @@ struct RegionIface {
   virtual void build(const S* x, int off, const Boundary<S>& in) = 0;
   virtual S forward(double t) const = 0;
   virtual S integral(double t) const = 0;
+  virtual S forward_d1(double t) const = 0;           // exact df/dt (0 outside / at a Flat step)
+  virtual S forward_d2(double t) const = 0;           // exact d²f/dt²
+  virtual std::vector<double> pieces() const = 0;     // breakpoints between which f is ONE analytic piece
+  virtual double tension_sigma() const = 0;           // Scheme::Tension's σ (0 for every other scheme)
   virtual Boundary<S> out() const = 0;
 };
 
@@ -49,6 +54,10 @@ struct RegionHolder final : RegionIface<S> {
   void build(const S* x, int off, const Boundary<S>& in) override { p.build(x, off, p.n_values(), in); }
   S forward(double t) const override { return p.forward(t); }
   S integral(double t) const override { return p.integral(t); }
+  S forward_d1(double t) const override { return p.forward_d1(t); }
+  S forward_d2(double t) const override { return p.forward_d2(t); }
+  std::vector<double> pieces() const override { return p.pieces(); }
+  double tension_sigma() const override { return 0.0; }
   Boundary<S> out() const override { return p.out(); }
 };
 
@@ -64,6 +73,10 @@ struct TensionHolder final : RegionIface<S> {
   void build(const S* x, int off, const Boundary<S>& in) override { p.build(x, off, p.n_values(), in); }
   S forward(double t) const override { return p.forward(t); }
   S integral(double t) const override { return p.integral(t); }
+  S forward_d1(double t) const override { return p.forward_d1(t); }
+  S forward_d2(double t) const override { return p.forward_d2(t); }
+  std::vector<double> pieces() const override { return p.pieces(); }
+  double tension_sigma() const override { return p.sigma(); }
   Boundary<S> out() const override { return p.out(); }
 };
 
@@ -156,6 +169,28 @@ class ModularCurve {
 
   S forward(double t) const {
     return locate(t, [](const RegionIface<S>& r, double u) { return r.forward(u); });
+  }
+  // Exact derivatives of the forward and the analytic-piece breakpoints of the whole composed curve (the
+  // regulariser integrates (f'')² + σ²(f')² piece by piece; each piece is one polynomial or one tension piece).
+  S forward_d1(double t) const {
+    return locate(t, [](const RegionIface<S>& r, double u) { return r.forward_d1(u); });
+  }
+  S forward_d2(double t) const {
+    return locate(t, [](const RegionIface<S>& r, double u) { return r.forward_d2(u); });
+  }
+  // Requires set_forwards() to have run at least once: a region's pieces include its C0 join with the predecessor
+  // and (B-spline) its de Boor breakpoints, both fixed at build time. An unbuilt curve throws.
+  std::vector<double> pieces() const {
+    if (static_cast<int>(buf_.size()) != n_) throw std::logic_error("ModularCurve::pieces(): call set_forwards() first (pieces are fixed at build)");
+    std::vector<double> bp;
+    for (const auto& r : regions_) { const auto pr = r->pieces(); bp.insert(bp.end(), pr.begin(), pr.end()); }
+    std::sort(bp.begin(), bp.end());
+    bp.erase(std::unique(bp.begin(), bp.end(), [](double a, double b) { return std::abs(a - b) <= 1e-13 * (1.0 + std::abs(a)); }), bp.end());
+    return bp;
+  }
+  // The interpolation tension σ of the region containing t (0 for a non-Tension region): sizes the quadrature.
+  double tension_sigma_at(double t) const {
+    return locate(t, [](const RegionIface<S>& r, double) { return r.tension_sigma(); });
   }
   S integral(double t) const {
     if (t <= 0.0) return S(0.0);
