@@ -1139,9 +1139,25 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
   const auto t0 = std::chrono::steady_clock::now();
   const cal::StreamTick tick = stream_->update(new_market);
   record_tick(tick, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
-  // A non-converged tick is not committed by the streamer either: current() is still the last converged
-  // solution, so x_ never carries a half-solved curve. The caller sees last_converged()/last_reason().
-  x_ = stream_->current();
+  x_ = stream_->current();  // the streamer never commits a half-solved curve; this is the last GOOD x
+  if (!tick.converged) {
+    // THE LM FALLBACK (2026-09-12) — the same one warm_solve has always had, so both entry points now agree
+    // about what a tick that cannot converge means. Without it they disagreed in a way that mattered: a
+    // failed tick left x_ at the PREVIOUS solution and returned it, so a caller that did not check
+    // last_converged() priced the new market off a stale curve, silently — and it was not self-correcting,
+    // since the next tick starts from the same anchor with a larger accumulated move and is MORE likely to
+    // fail again.
+    //
+    // The two signals keep their distinct meanings, as they already do on warm_solve: last_converged() /
+    // last_status() / last_reason() report the streaming TICK's health (did the fast path work), while
+    // result().converged reports the SOLVE (was the market incorporated). A fallback tick is false and true
+    // respectively. A caller watching streaming health still sees every failure; a caller pricing off the
+    // curve gets the new market either way.
+    set_market(new_market);         // commit the quotes the frozen path could not reach
+    calibrate(x_, stream_reg_);     // warm from the last good x, exactly as warm_solve does
+    stream_->resync(prob_, x_, new_market);
+    x_ = result_.x;
+  }
   return x_;
 }
 

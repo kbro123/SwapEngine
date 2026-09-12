@@ -63,7 +63,7 @@ TEST(ApiStatus, NonFiniteQuotesAreRefusedAtEverySeam) {
   EXPECT_THROW(sbad.calibrate(Eigen::VectorXd::Constant(6, 0.03)), std::invalid_argument);
 }
 
-TEST(ApiStatus, AFailedStreamTickIsVisibleAndNotCommitted) {
+TEST(ApiStatus, AFailedStreamTickIsVisibleAndFallsBackLikeRecalibrate) {
   const auto p = square();
   api::BundleSession s(p);
   s.calibrate(Eigen::VectorXd::Constant(6, 0.03));
@@ -72,15 +72,30 @@ TEST(ApiStatus, AFailedStreamTickIsVisibleAndNotCommitted) {
   EXPECT_TRUE(s.last_converged());
   EXPECT_EQ(s.last_status(), 0);
   EXPECT_STREQ(s.last_reason(), "converged");
-  const Eigen::VectorXd q_abs = p.market().array() + 5.0;  // +500 %: the tick cannot converge
+
+  // +500 % on every quote: far outside what the frozen operator can step to, so the TICK fails.
+  const Eigen::VectorXd q_abs = p.market().array() + 5.0;
   s.stream_update(q_abs);
+
+  // The tick's health is still reported, and still says the fast path failed. These three are the STREAMING
+  // signals and they keep their meaning: a caller watching tick health sees every failure.
   EXPECT_FALSE(s.last_converged());
   EXPECT_NE(s.last_status(), 0);
   EXPECT_STRNE(s.last_reason(), "converged");
-  EXPECT_EQ((s.x() - x).cwiseAbs().maxCoeff(), 0.0) << "a failed tick must leave x() at the last converged curve";
-  s.stream_update(p.market());
-  EXPECT_TRUE(s.last_converged()) << s.last_reason();
-  EXPECT_LT((s.x() - x).cwiseAbs().maxCoeff(), 1e-12);
+  EXPECT_TRUE(s.x().allFinite()) << "a failed tick never leaves a non-finite curve";
+
+  // THE CONTRACT (2026-09-12): a tick that cannot converge falls back to a warm LM instead of declining the
+  // update, so stream_update and recalibrate now land in the SAME place. Before this, stream_update returned
+  // the PREVIOUS curve and a caller that did not check last_converged() priced the new market off it,
+  // silently -- and it was not self-correcting, since the next tick starts from the same anchor with a
+  // larger accumulated move. Driving a second session through recalibrate is the reference.
+  api::BundleSession ref(p);
+  ref.calibrate(Eigen::VectorXd::Constant(6, 0.03));
+  ref.start_streaming();
+  ref.recalibrate(q_abs, {});
+  EXPECT_LT((s.x() - ref.x()).cwiseAbs().maxCoeff(), 1e-10)
+      << "stream_update and recalibrate must agree on where a failed tick leaves the curve";
+  EXPECT_EQ(s.result().converged, ref.result().converged) << "and on whether the solve succeeded";
 }
 
 // E1 at the JSON seam: `"regions": []` used to segfault inside run_json (probe E-08); a knot at t <= 0 used to
