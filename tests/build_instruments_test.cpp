@@ -10,6 +10,7 @@
 #include "swaps/build/calendar.hpp"
 #include "swaps/build/instruments.hpp"
 #include "swaps/pricing/cashflows.hpp"
+#include "swaps/pricing/fixings.hpp"
 
 namespace b = swaps::build;
 
@@ -105,6 +106,43 @@ TEST(BuildInstruments, AnAveragedWindowEarnsEveryDayWhateverDayItOpensOn) {
     const double got = swaps::pricing::rate<double>(o, curve);
     const double want = h15_mean(b::Date::from_iso(w.s), b::Date::from_iso(w.e));
     EXPECT_NEAR(got, want, 1e-12) << w.s << " opens on a " << w.opens << ": " << (got - want) * 1e4 << " bp off";
+  }
+}
+
+// ONE DECOMPOSITION, TWO WRAPPERS (2026-09-12). `observation(..., "averaged", ...)` and
+// `scheduled_observation` used to write the same per-day assembly loop twice, differing only in which
+// container they filled — and that is precisely how E3 came to be one bug written four times. Both now go
+// through `build::fixing_rows`, which makes a checkable claim: for a fully-forecast window the scheduled
+// form RESOLVED against an empty fixing table is the baked form, exactly. Anything that makes one builder
+// drift from the other fails here.
+TEST(BuildInstruments, AScheduledObservationResolvesToTheBakedOne) {
+  const b::Date vd = b::Date::from_iso("2026-07-08");
+  struct W { const char* s; const char* e; const char* what; };
+  for (const W& w : {W{"2026-08-01", "2026-09-01", "opens on a Saturday"},
+                     W{"2026-09-01", "2026-10-01", "business-day open and close"},
+                     W{"2026-10-01", "2026-11-01", "closes on a Sunday"},
+                     W{"2026-12-24", "2027-01-05", "spans Christmas and New Year"}}) {
+    const auto s = b::Date::from_iso(w.s), e = b::Date::from_iso(w.e);
+    const auto baked = b::observation(vd, s, e, "averaged", 0.0, "ACT/360", "USD-FED");
+    const auto sched = b::scheduled_observation(vd, s, e, "averaged", "ACT/360", "USD-FED", "USD-FEDFUNDS");
+
+    swaps::pricing::FixingSchedule fs;
+    fs.index = sched.fixing_index;
+    fs.days = sched.fixing_schedule;
+    fs.tau_index = sched.tau_index;
+    fs.compounded = sched.compounded;
+    const swaps::pricing::PricingContext ctx{static_cast<int>(vd.serial()), nullptr};  // nothing has fixed yet
+    const auto resolved = swaps::pricing::resolve(fs, ctx);
+
+    ASSERT_EQ(resolved.sub_start.size(), baked.sub_start.size()) << w.what;
+    for (std::size_t i = 0; i < baked.sub_start.size(); ++i) {
+      EXPECT_EQ(resolved.sub_start[i], baked.sub_start[i]) << w.what << " row " << i;
+      EXPECT_EQ(resolved.sub_end[i], baked.sub_end[i]) << w.what << " row " << i;
+    }
+    EXPECT_EQ(resolved.weight.size(), baked.weight.size()) << w.what << ": the all-ones fast path must agree";
+    for (std::size_t i = 0; i < baked.weight.size(); ++i)
+      EXPECT_EQ(resolved.weight[i], baked.weight[i]) << w.what << " weight " << i;
+    EXPECT_EQ(resolved.tau_index, baked.tau_index) << w.what;
   }
 }
 

@@ -106,6 +106,30 @@ inline double obs_weight(const std::string& dc, const std::string& cal, const Da
   return obs > 0.0 ? year_frac(dc, acc_start, acc_end, cal) / obs : 1.0;
 }
 
+// THE per-day decomposition of an overnight window, in ONE place (2026-09-12). For each fixing covering
+// [start, end): the fixing's own forecast window in curve time, the accrual THIS window earns at that
+// fixing, and the weight converting one into the other. `px::FixingDay` already holds exactly those five
+// fields, so this introduces no second type -- an observation is these rows resolved against a fixing table
+// (pricing/fixings.hpp `resolve`), and a fully-forecast one is the same rows with nothing to resolve.
+//
+// WHY THIS EXISTS. Until 2026-09-10 each builder walked the calendar itself, because the shared primitive
+// returned `pair<Date, Date>` -- a type that cannot say "the fixing's window and the accrual it earns are
+// different intervals". At the one place that mattered, a window opening or closing on a non-business day,
+// every caller therefore worked around it, and each worked around it differently: E3 was one bug written
+// four times (ASSUMPTIONS.md). `FixingPeriod` made the edge case sayable; this makes it said once.
+inline std::vector<px::FixingDay> fixing_rows(const Date& vd, const Date& start, const Date& end,
+                                              const std::string& dc, const std::string& cal) {
+  const auto per = daily_periods(start, end, cal);
+  std::vector<px::FixingDay> rows;
+  rows.reserve(per.size());
+  for (const auto& p : per)
+    rows.push_back(px::FixingDay{static_cast<int>(p.fix_start.serial()),
+                                 year_frac(dc, p.acc_start, p.acc_end, cal),
+                                 curve_time(vd, p.fix_start), curve_time(vd, p.fix_end),
+                                 obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end)});
+  return rows;
+}
+
 inline px::RateObservation observation(const Date& vd, const Date& start, const Date& end,
                                        const std::string& accrual, double realized_pct,
                                        const std::string& dc, const std::string& cal) {  // both REQUIRED (P2)
@@ -115,16 +139,18 @@ inline px::RateObservation observation(const Date& vd, const Date& start, const 
   const double r = realized_pct / 100.0;
   px::RateObservation o;
   if (accrual == "averaged") {
+    // The forecast half of `resolve` (pricing/fixings.hpp), over the SAME rows: from `fwd_from`, so a
+    // started window contributes only its future days and the past arrives through `realized_pct` below.
     bool all_one = true;
-    for (const auto& p : daily_periods(fwd_from, end, cal)) {
-      const double ts = curve_time(vd, p.fix_start), te = curve_time(vd, p.fix_end);
-      // The fixing's rate, earning the accrual THIS window takes from it: 1 for every interior day, and a
-      // fraction only where the window opens or closes mid-fixing (a non-business start -- see FixingPeriod).
-      const double w = obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end);
-      o.sub_start.push_back(ts);
-      o.sub_end.push_back(te);
-      o.weight.push_back(w);
-      if (std::abs(w - 1.0) > 1e-12) all_one = false;
+    const auto rows = fixing_rows(vd, fwd_from, end, dc, cal);
+    o.sub_start.reserve(rows.size());
+    o.sub_end.reserve(rows.size());
+    o.weight.reserve(rows.size());
+    for (const auto& d : rows) {
+      o.sub_start.push_back(d.t_start);
+      o.sub_end.push_back(d.t_end);
+      o.weight.push_back(d.weight);
+      if (std::abs(d.weight - 1.0) > 1e-12) all_one = false;
     }
     o.realized = r * tau_past;
     o.tau_index = tau;
@@ -280,12 +306,7 @@ inline px::RateObservation scheduled_observation(const Date& vd, const Date& sta
   // only where the window opens or closes mid-fixing -- a non-business start (FixingPeriod) -- and the
   // weight is that fraction for a COMPOUNDED product too: the factor is (1 + weight*growth), so hard-wiring
   // 1.0 there would have earned a partial leading day in full.
-  for (const auto& p : daily_periods(start, end, cal)) {
-    const double acc = year_frac(dc, p.acc_start, p.acc_end, cal);
-    const double ts = curve_time(vd, p.fix_start), te = curve_time(vd, p.fix_end);
-    const double w = obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end);
-    o.fixing_schedule.push_back(px::FixingDay{int(p.fix_start.serial()), acc, ts, te, w});
-  }
+  o.fixing_schedule = fixing_rows(vd, start, end, dc, cal);  // the rows, left for the fixing table to resolve
   return o;
 }
 

@@ -71,9 +71,14 @@ MUTATIONS = [
      "res.rank_deficiency = n_knots - static_cast<int>(cod.rank());",
      "res.rank_deficiency = 0;",
      ["calibration_status_test.cpp", "rank_safety_test.cpp"], "*", "the LM min-norm completion has no non-oracle test (audit M3)"),
+    # Re-anchored 2026-09-12: the weight now lives in the ONE decomposition (build::fixing_rows), so this
+    # single mutation reaches every builder that consumes it -- which is the point of the collapse.
     ("averaged_daily_weight_by_curve_time", "include/swaps/build/observations.hpp",
-     "      const double w = obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end);",
-     "      const double w = (te > ts) ? year_frac(dc, p.acc_start, p.acc_end, cal) / (te - ts) : 1.0;",
+     "                                 obs_weight(dc, cal, p.acc_start, p.acc_end, p.fix_start, p.fix_end)});",
+     "                                 (curve_time(vd, p.fix_end) > curve_time(vd, p.fix_start))\n"
+     "                                     ? year_frac(dc, p.acc_start, p.acc_end, cal) /\n"
+     "                                           (curve_time(vd, p.fix_end) - curve_time(vd, p.fix_start))\n"
+     "                                     : 1.0});",
      ["build_instruments_test.cpp"], "*", "the DAILY averaged observation's day-count weight is unpinned (item 17)"),
     # E3: drop the fixing that applies on a non-business START (roll forward instead of back), which is what
     # the builder did until 2026-09-10 -- 29/31 of the correct rate for a Saturday-start contract month.
