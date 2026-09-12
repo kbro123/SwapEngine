@@ -42,15 +42,6 @@ struct Shape {
   Eigen::VectorXd q_edge_hi, q_edge_lo;
   bool has_bands = false;
   bool expect_compiled = true;  // every row is W-cacheable => the tick must be allocation-free (T4)
-  // Can this bundle ride the frozen-Newton STREAMER (BundleSession::start_streaming)? False only for
-  // mixed_scheme, and NOT because the maths forbids it: BundleSession::needs_recalibrate() is still the
-  // whole-bundle veto `has_nonlinear_` -- the same over-approximation the ROUTER carried until 2026-09-10,
-  // one layer up. The hybrid engine underneath already partitions a mixed bundle (front rows on the W-cache,
-  // long rows on the AAD block, refreshed on staleness) exactly as it does for FX/MtM, which streams. This
-  // rung is what makes that gap visible; closing it is a router-style change to the session, with its own
-  // parity tests, not something to slip in with a fixture. Until then the streaming tests and the tick
-  // metrics skip this rung and its Jacobian/parity coverage still runs.
-  bool streams = true;
 };
 
 namespace detail {
@@ -207,9 +198,8 @@ inline cal::Instrument butterfly(const cal::BundleProblem& p, int lo, int belly,
   return f;
 }
 inline Shape make(std::string name, std::string note, cal::BundleProblem prob, bool compiled = true,
-                  void (*after_markets)(Shape&) = nullptr, bool streams = true) {
+                  void (*after_markets)(Shape&) = nullptr) {
   Shape s; s.name = std::move(name); s.note = std::move(note); s.prob = std::move(prob); s.expect_compiled = compiled;
-  s.streams = streams;
   fill_x(s); set_markets(s);
   if (after_markets) after_markets(s);
   finish(s);
@@ -319,7 +309,7 @@ inline Shape mixed_scheme() {
   return detail::make("mixed_scheme",
                       "averaged + the SOFR long end on MonotoneCubic: the router's per-row partition "
                       "(front rows W-cached, long rows on the AAD block)",
-                      std::move(p), false, nullptr, /*streams=*/false);
+                      std::move(p), false);
 }
 inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row; q_cross crosses the upper edge on odd rows
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
@@ -412,8 +402,7 @@ inline Shape desk_impl(bool mixed) {
                         auto& ins = s.prob.instruments;
                         for (int i = 0; i < 12; ++i) { ins[i].band_lower = ins[i].market - 1e-4; ins[i].band_upper = ins[i].market + 1e-4; ins[i].band_decay = 0.5; }
                         auto& t = ins[ins.size() - 3]; t.band_lower = t.market - 5e-4; t.band_upper = t.market + 5e-4; t.band_decay = 0.3;
-                      },
-                      /*streams=*/!mixed);
+                      });
   (void)n_sofr;
 }
 inline Shape desk() { return desk_impl(false); }

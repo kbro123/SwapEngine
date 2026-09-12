@@ -240,12 +240,21 @@ class BundleSession {
   // BANDED residual (residuals_vs), so it solves the soft least-squares, not an exact reprice. So a band
   // does NOT force recalibrate(). This flag is informational (e.g. to label a soft-calibrated bundle).
   bool has_band() const { return has_band_; }
-  // True when the bundle cannot use the frozen-Newton streaming path (start_streaming/update) at all and
-  // must recalibrate() each tick. Only a NON-LINEAR region scheme (MonotoneCubic) qualifies now: it has no
-  // constant W for ANY curve, so there is no compiled engine to freeze. FX/MtM no longer forces this — the
-  // HYBRID engine streams the cacheable rows on the W-cache and the FX/MtM rows on a width-reduced AAD
-  // block, refreshing the AAD Jacobian only on staleness. A band is a soft target and never forced it.
-  bool needs_recalibrate() const { return has_nonlinear_; }
+  // RETIRED 2026-09-12 — always false, kept so the exposed Session property does not change under callers.
+  //
+  // This was the last of the three whole-bundle vetoes. It claimed a non-linear region scheme leaves "no
+  // constant W for ANY curve, so there is no compiled engine to freeze" — true when it was written, false
+  // since the router began partitioning per row (1956b24): a mixed bundle now has a real compiled engine
+  // for every row inside its curve's linear horizon, and the AAD block carries the rest, refreshing on
+  // staleness exactly as it does for FX/MtM, which has always streamed.
+  //
+  // Measured before removing it, not assumed. Driving the streamer directly over the ladder's own gate ticks
+  // (25 bp moves, 0.1 bp ticks and band-edge crossings, 18 ticks each): mixed_scheme reprices to 6.1e-13 and
+  // desk_mixed sits within 5.4e-18 of a cold LM's objective, zero failed ticks, no Hyman branch-switch
+  // pathology. Even the degenerate case — a curve MonotoneCubic from its first knot, so NO row compiles and
+  // n_times() == 0 — streams every tick to 1.8e-11. See ShapeLadder.EveryRungConvergesOnTheGateTicks and
+  // StreamingMixed.* ; has_nonlinear() still reports the scheme honestly, which is what callers should read.
+  bool needs_recalibrate() const { return false; }
 
   // Query the built curves at the current x on a shared time grid.
   std::vector<CurveSample> sample(const std::vector<double>& times) const;

@@ -69,6 +69,15 @@ METRICS = {
     "shape_all_schemes_refresh_25bp": ("shape_ladder_bench", "BM_Shape_all_schemes_RefreshTick25bp", None),
     "shape_all_schemes_jacobian": ("shape_ladder_bench", "BM_Shape_all_schemes_Jacobian", None),
     "shape_mixed_scheme_jacobian": ("shape_ladder_bench", "BM_Shape_mixed_scheme_Jacobian", None),
+    # The two mixed rungs STREAM since 2026-09-12 (BundleSession's last whole-bundle veto removed), so they
+    # get tick metrics for the first time. Both are far slower than their all-linear twins -- the AAD block
+    # re-evaluates a value-dependent Hyman region every tick -- but a tick replaces a COLD LM that measured
+    # 3.3 ms / 214.7 ms, so these numbers are 38x and 43x better than the behaviour they replace.
+    "shape_mixed_scheme_stream_tick": ("shape_ladder_bench", "BM_Shape_mixed_scheme_StreamTick", None),
+    "shape_mixed_scheme_refresh_25bp": ("shape_ladder_bench", "BM_Shape_mixed_scheme_RefreshTick25bp", None),
+    "shape_desk_mixed_stream_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_StreamTick", None),
+    "shape_desk_mixed_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_mixed_RefreshTick25bp", None),
+    "shape_desk_mixed_edge_osc_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_EdgeOscTick", None),
     # desk_mixed: the FULL-COVERAGE rung (desk's 5 curves, bands, turn, butterflies, FX/xccy) with the SOFR
     # long end on MonotoneCubic -- identical to `desk` in every other respect, so the pair isolates what a
     # value-dependent region costs on the shape a desk actually runs. No tick metrics (it cannot stream yet).

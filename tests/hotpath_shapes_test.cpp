@@ -89,7 +89,6 @@ TEST(ShapeLadder, HybridResidualAndJacobianMatchTemplatedAndAadOnEveryShape) {
 TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
   if (!swaps::testing::alloc_counting_available()) GTEST_SKIP() << "allocation counting needs libmalloc's logger (macOS)";
   for (const Shape& s : swaps::shapes::ladder()) {
-    if (!s.streams) continue;  // see Shape::streams -- the session's whole-bundle streaming veto, not the maths
     api::BundleSession sess(s.prob);
     sess.calibrate(s.x0);
     ASSERT_LT(sess.result().rms_residual, 1e-8) << s.name << ": cold calibrate must converge";
@@ -115,7 +114,15 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   averaged_leg (compiled, 18/tick = 6 per residual x 3 Newton steps): E3-A3, Eigen IndexedView copies on
     //   pv()'s general branch — the one compiled shape that is NOT allocation-free today.
     //   fx_xccy / desk small ticks: 0 since the MtM leg compiles (2026-09-09); desk crossings are the C7 rescale cost.
-    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 150}, {"fx_xccy", 0, 0}, {"desk", 0, 100}};
+    //   mixed_scheme / desk_mixed (2026-09-12): these stream for the first time — BundleSession's last
+    //   whole-bundle veto is gone, and a tick that used to be a 215 ms COLD LM on desk_mixed is now 5.0 ms,
+    //   43x faster. They are not allocation-free, and these pins say by how much: the AAD block re-evaluates
+    //   a Hyman-filtered region per tick (the filter is value-dependent, so nothing about it can be cached
+    //   the way a constant W is). ~26 allocations/tick on mixed_scheme's 12 AAD rows, ~19,000 on
+    //   desk_mixed's 18. That is the next thing to attack here, in the same family as C7/C6 — and like every
+    //   pin in this list it may only DECREASE.
+    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 150}, {"fx_xccy", 0, 0}, {"desk", 0, 100},
+                               {"mixed_scheme", 560, 560}, {"desk_mixed", 390000, 390000}};
     //   banded 1900 -> 150, desk 3000 -> 100 on 2026-09-10 (C7 fixed: a band re-scale is a rank-one operator update,
     //   not a factor()); measured 123 / 54 -- the rest is the pin/release bookkeeping, next.
     //   (banded / desk crossing pins carry a few % of slack: the count of refreshes 20 crossing ticks trigger moves with
@@ -136,6 +143,37 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
 // The moment path vs the exact daily path on the SAME FF OIS legs: the documented ~5e-9 relative approximation
 // (docs/bezier-and-moments.md Part B) must hold on real 1Y windows — the model par rates of the two rungs at the
 // shared x_true agree to 2e-8 (0.0002 bp) while the moment rung ticks ~100x faster (shape_ladder_bench).
+// THE VETO'S REPLACEMENT, PINNED (2026-09-12). Until today BundleSession refused to stream any bundle with a
+// value-dependent region -- the last of the three whole-bundle vetoes, after the router's (1956b24) and the
+// batch's. The claim that replaced it is that frozen-Newton is sound on a PARTITIONED bundle: the rows inside
+// each curve's linear horizon ride the W-cache, the rest ride the AAD block and refresh on staleness, exactly
+// as FX/MtM has always done. This asserts it where it is hardest -- a MonotoneCubic region, whose Hyman filter
+// is only piecewise smooth, so a frozen Jacobian can in principle be carried across a branch switch.
+TEST(ShapeLadder, AMixedBundleStreamsToTheSameAnswerAsAColdSolve) {
+  for (const Shape& s : swaps::shapes::ladder()) {
+    if (!cal::curves_are_noncacheable(s.prob.curves)) continue;  // only the rungs the veto used to refuse
+    api::BundleSession sess(s.prob);
+    sess.calibrate(s.x0);
+    EXPECT_FALSE(sess.needs_recalibrate()) << s.name << ": nothing forces a cold solve any more";
+    ASSERT_NO_THROW(sess.start_streaming()) << s.name;
+    const cal::HybridBundleResidual eng(s.prob);
+    for (int rep = 0; rep < 3; ++rep)
+      for (const Eigen::VectorXd* q : {&s.q_big, &s.q0, &s.q_small, &s.q0, &s.q_cross, &s.q0}) {
+        const Eigen::VectorXd& x = sess.stream_update(*q);
+        ASSERT_TRUE(sess.last_converged()) << s.name << ": " << sess.last_reason();
+        ASSERT_TRUE(x.allFinite()) << s.name;
+        // The streamed state must be no worse than a cold LM on the same market -- the fixed point of the
+        // frozen iteration is the least-squares optimum, whatever the filter did on the way there.
+        cal::BundleProblem pq = s.prob;
+        for (int i = 0; i < pq.n_residuals(); ++i) pq.instruments[static_cast<std::size_t>(i)].market = (*q)[i];
+        const Eigen::VectorXd xc = cal::calibrate(pq, s.x0).x;
+        const double f_s = eng.residuals_vs(x, *q).squaredNorm(), f_c = eng.residuals_vs(xc, *q).squaredNorm();
+        EXPECT_LE(f_s, f_c * (1.0 + 1e-6) + 1e-20)
+            << s.name << ": streamed objective " << f_s << " vs cold " << f_c;
+      }
+  }
+}
+
 TEST(ShapeLadder, MomentPathAgreesWithTheExactDailyAverageOnFedFundsOis) {
   const Shape daily = swaps::shapes::averaged_leg(), moment = swaps::shapes::averaged_leg_moment();
   ASSERT_EQ(daily.prob.n_residuals(), moment.prob.n_residuals());
@@ -155,24 +193,6 @@ TEST(ShapeLadder, MomentPathAgreesWithTheExactDailyAverageOnFedFundsOis) {
 // pins the fixture's ticks themselves.
 TEST(ShapeLadder, EveryRungConvergesOnTheGateTicks) {
   for (const Shape& s : swaps::shapes::ladder()) {
-    if (!s.streams) {  // it cannot stream (Shape::streams), but it MUST still cold-calibrate every tick
-      api::BundleSession sess(s.prob);
-      sess.calibrate(s.x0);
-      EXPECT_TRUE(sess.needs_recalibrate()) << s.name << ": the session should say why it cannot stream";
-      for (const Eigen::VectorXd* q : {&s.q_big, &s.q_small, &s.q0}) {
-        cal::BundleProblem p = s.prob;
-        for (int i = 0; i < p.n_residuals(); ++i) p.instruments[static_cast<std::size_t>(i)].market = (*q)[i];
-        api::BundleSession re(p);
-        re.calibrate(s.x0);
-        EXPECT_TRUE(re.result().converged) << s.name << ": " << re.result().status;
-        EXPECT_TRUE(re.x().allFinite()) << s.name;
-        // A HARD square rung must reprice; a banded / over-determined one is a soft least-squares fit whose
-        // residual legitimately does not go to zero (same distinction the streaming branch below makes).
-        if (s.prob.n_residuals() == s.prob.n_knots() && !s.has_bands)
-          EXPECT_LT(re.result().rms_residual, 1e-8) << s.name << ": recalibrate must reprice every gate tick";
-      }
-      continue;
-    }
     api::BundleSession sess(s.prob);
     sess.calibrate(s.x0);
     sess.start_streaming();

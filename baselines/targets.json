@@ -285,6 +285,26 @@
     "multicurve4_tick_0p3bp": {
       "target_ns": 5600,
       "note": "initial = 2026-09-10 baseline x1.3 (4.3 us vs a QuantLib re-bootstrap at 2.87 ms, 663x); ratchets DOWN only"
+    },
+    "shape_mixed_scheme_stream_tick": {
+      "target_ns": 102000,
+      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only -- this rung STREAMS for the first time (BundleSession's last whole-bundle veto removed); the tick it replaces was a COLD LM at 3.3 ms, so this is 38x better. The AAD block re-evaluates a Hyman-filtered region every tick and allocates doing it (pinned in hotpath_shapes_test); ratchet this down when that is fixed."
+    },
+    "shape_mixed_scheme_refresh_25bp": {
+      "target_ns": 578000,
+      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only"
+    },
+    "shape_desk_mixed_stream_tick": {
+      "target_ns": 5842000,
+      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only -- this rung STREAMS for the first time (BundleSession's last whole-bundle veto removed); the tick it replaces was a COLD LM at 214.7 ms, so this is 43x better. The AAD block re-evaluates a Hyman-filtered region every tick and allocates doing it (pinned in hotpath_shapes_test); ratchet this down when that is fixed."
+    },
+    "shape_desk_mixed_refresh_25bp": {
+      "target_ns": 23317000,
+      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only"
+    },
+    "shape_desk_mixed_edge_osc_tick": {
+      "target_ns": 528000,
+      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only -- band-edge crossings on the mixed desk bundle"
     }
   }
 }

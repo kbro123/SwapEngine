@@ -750,10 +750,9 @@ bool same_reg(const RegSpec& a, const RegSpec& b) {
 // is not streaming yet starts (one Jacobian at x against the live market); a band edit re-anchors the
 // streamer's active set; a regulariser change restarts the streamer under the new one. The tick either
 // converges (committed; result_ reports "streamed") or -- an intrinsically large move -- falls back to an LM
-// warm solve from x, after which the streamer is re-anchored at the LM solution. A bundle with no constant W
-// (MonotoneCubic) has no streamer and takes the LM path directly.
+// warm solve from x, after which the streamer is re-anchored at the LM solution. EVERY bundle takes this
+// path since 2026-09-12: a value-dependent region no longer diverts to a cold solve (see needs_recalibrate).
 const cal::CalibrationResult& BundleSession::warm_solve(const RegSpec& reg) {
-  if (needs_recalibrate()) return calibrate(x_, reg);
   q_scratch_.resize(prob_.n_residuals());
   for (int i = 0; i < prob_.n_residuals(); ++i) q_scratch_[i] = prob_.instruments[i].market;
   const auto t0 = std::chrono::steady_clock::now();
@@ -1097,11 +1096,6 @@ Eigen::MatrixXd BundleSession::transform_matrix_json(const std::string& source_b
 }
 
 void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
-  if (needs_recalibrate())
-    throw std::runtime_error(
-        "frozen-Newton streaming needs a bundle with a constant W (a MonotoneCubic region scheme has "
-        "none); use recalibrate() per tick for those. FX/MtM, bands and portfolios all stream -- FX/MtM "
-        "on the hybrid engine (their AAD Jacobian refreshes only on staleness).");
   // The StreamingCalibrator builds its own hybrid engine from prob_; no compiled engine is constructed
   // here (that would throw on an FX/MtM leaf, which the hybrid handles on its AAD block).
   //

@@ -71,7 +71,7 @@ extern "C" const char* swaps_session_calibrate(void* session) {
     auto* cs = static_cast<CapiSession*>(session);
     BundleSession* s = &cs->sess;
     const auto& r = s->calibrate(swaps::api::flat_x0(s->problem()), cs->reg);
-    if (!s->needs_recalibrate()) s->start_streaming(cs->reg);  // anchor the frozen-Newton warm path when eligible
+    s->start_streaming(cs->reg);  // anchor the frozen-Newton warm path -- every bundle is eligible
     json::object o;
     o["regularize_applied"] = cs->reg.on();
     o["regularize_lambda"] = cs->reg.lambda;
@@ -95,10 +95,7 @@ extern "C" const char* swaps_session_update(void* session, const char* market_js
     BundleSession* s = &cs->sess;
     const std::vector<double> v = swaps::api::to_vec(json::parse(market_json));
     const Eigen::VectorXd m = Eigen::Map<const Eigen::VectorXd>(v.data(), static_cast<Eigen::Index>(v.size()));
-    if (s->needs_recalibrate())
-      s->recalibrate(m, cs->reg);  // non-linear region: general warm re-solve
-    else
-      s->stream_update(m);        // frozen-Newton µs tick over the cached statics
+    s->stream_update(m);  // frozen-Newton µs tick over the cached statics (falls back to an LM solve itself)
     return dup_str("{\"ok\":true}");
   } catch (const std::exception& e) {
     return err_json(e.what());

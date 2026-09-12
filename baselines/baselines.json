@@ -228,8 +228,8 @@
         "arch_flag": "-march=x86-64-v3",
         "quantlib_toolchain": "1.35|Apple clang version 21.0.0 (clang-2100.1.1.101)|-O3 -DNDEBUG -fno-math-errno -march=x86-64-v3"
       },
-      "captured_utc": "2026-09-10T22:38:31Z",
-      "load_avg_at_capture": 3.9,
+      "captured_utc": "2026-09-12T18:45:39Z",
+      "load_avg_at_capture": 3.64,
       "reps": 5,
       "min_time_s": 0.5,
       "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate).",
@@ -380,6 +380,36 @@
         },
         "shape_mixed_scheme_jacobian": {
           "ours_ns": 101488,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_mixed_scheme_stream_tick": {
+          "ours_ns": 78653,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_mixed_scheme_refresh_25bp": {
+          "ours_ns": 442671,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_mixed_stream_tick": {
+          "ours_ns": 4581809,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_mixed_refresh_25bp": {
+          "ours_ns": 17846659,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_mixed_edge_osc_tick": {
+          "ours_ns": 411329,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -655,7 +685,7 @@
           "speedup": null
         }
       },
-      "cpu_busy_pct_at_capture": 3.4
+      "cpu_busy_pct_at_capture": 7.6
     }
   }
 }
