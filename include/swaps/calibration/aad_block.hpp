@@ -121,6 +121,8 @@ class AadBlock {
   // True when the AAD sweep runs on the pooled (allocation-free) dual; false = the heap-Dual fallback
   // (touched width > ad::kPooledMaxW, or forced for testing).
   bool pooled() const { return pooled_; }
+  // The width-reduced knot count this block differentiates w.r.t. -- the number that decides `pooled_`.
+  int touched_width() const { return static_cast<int>(touched_.size()); }
 
   // Build from the bundle's curves, the non-cacheable instruments, their GLOBAL residual rows, and the
   // global knot count. Determines the touched knots and pre-sizes the reusable width-reduced seed.

@@ -228,8 +228,8 @@
         "arch_flag": "-march=x86-64-v3",
         "quantlib_toolchain": "1.35|Apple clang version 21.0.0 (clang-2100.1.1.101)|-O3 -DNDEBUG -fno-math-errno -march=x86-64-v3"
       },
-      "captured_utc": "2026-09-12T18:45:39Z",
-      "load_avg_at_capture": 3.64,
+      "captured_utc": "2026-09-12T19:40:20Z",
+      "load_avg_at_capture": 3.72,
       "reps": 5,
       "min_time_s": 0.5,
       "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate).",
@@ -397,13 +397,13 @@
           "speedup": null
         },
         "shape_desk_mixed_stream_tick": {
-          "ours_ns": 4581809,
+          "ours_ns": 1977141,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_mixed_refresh_25bp": {
-          "ours_ns": 17846659,
+          "ours_ns": 8158864,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -415,7 +415,7 @@
           "speedup": null
         },
         "shape_desk_mixed_jacobian": {
-          "ours_ns": 3165161,
+          "ours_ns": 712976,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -685,7 +685,7 @@
           "speedup": null
         }
       },
-      "cpu_busy_pct_at_capture": 7.6
+      "cpu_busy_pct_at_capture": 9.4
     }
   }
 }

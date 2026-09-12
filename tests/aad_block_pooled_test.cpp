@@ -133,7 +133,7 @@ struct Fixture {
 
 }  // namespace
 
-// Narrow bundle (touched width 24 <= kPooledMaxW = 48): the block selects the POOLED sweep, and its
+// Narrow bundle (touched width 24 <= kPooledMaxW): the block selects the POOLED sweep, and its
 // Jacobian equals the force-heap block's ENTRY FOR ENTRY, bit-for-bit -- on both the stored-mid and the
 // live-market (streaming `_vs`) forms. Both also match the full-width AAD oracle on the block's rows.
 TEST(AadBlockPooled, NarrowBlockPooledMatchesHeapBitForBit) {
@@ -145,7 +145,7 @@ TEST(AadBlockPooled, NarrowBlockPooledMatchesHeapBitForBit) {
   cal::AadBlock pooled, heap;
   pooled.init(f.prob.curves, f.nc, f.nc_rows, f.prob.n_knots());
   heap.init(f.prob.curves, f.nc, f.nc_rows, f.prob.n_knots(), /*force_heap=*/true);
-  EXPECT_TRUE(pooled.pooled()) << "width 24 <= kPooledMaxW must select the pooled dual";
+  EXPECT_TRUE(pooled.pooled()) << "width 24 <= kPooledMaxW (" << ad::kPooledMaxW << ") must select the pooled dual";
   EXPECT_FALSE(heap.pooled());
 
   const int n = f.prob.n_residuals(), m = f.prob.n_knots();
@@ -172,18 +172,24 @@ TEST(AadBlockPooled, NarrowBlockPooledMatchesHeapBitForBit) {
   EXPECT_LT(worst, 1e-9) << "width-reduced pooled Jacobian matches the full-width AAD oracle";
 }
 
-// Wide bundle (touched width 63 > kPooledMaxW): the block must FALL BACK to the heap-Dual path unchanged
+// Wide bundle (touched width > kPooledMaxW): the block must FALL BACK to the heap-Dual path unchanged
 // -- and still match the full-width AAD oracle, including through the hybrid engine end to end.
+//
+// The width is DERIVED from kPooledMaxW rather than written down (2026-09-12): this fixture used a
+// hard-coded 63, which was wide against a limit of 48 and silently narrow when the limit became 64 -- the
+// test kept passing while testing the pooled path twice and the fallback not at all.
 TEST(AadBlockPooled, WideBundleFallsBackToHeapAndMatches) {
-  std::vector<double> back;  // 20 back knots/curve -> 21 knots/curve -> touched width 63 > 48
-  for (int i = 1; i <= 20; ++i) back.push_back(0.5 * i);
+  // 3 curves x (1 front + n back) knots; pick n so the touched width clears the limit with room to spare.
+  const int per_curve = ad::kPooledMaxW / 3 + 4;
+  std::vector<double> back;
+  for (int i = 1; i <= per_curve; ++i) back.push_back(0.5 * i);
   const Fixture f(back);
-  ASSERT_EQ(f.prob.n_knots(), 63);
-  ASSERT_GT(f.prob.n_knots(), ad::kPooledMaxW);
+  ASSERT_GT(f.prob.n_knots(), ad::kPooledMaxW) << "the fixture must be wider than the pooled limit";
 
   cal::AadBlock blk;
   blk.init(f.prob.curves, f.nc, f.nc_rows, f.prob.n_knots());
-  EXPECT_FALSE(blk.pooled()) << "touched width 63 > kPooledMaxW must engage the heap fallback";
+  EXPECT_FALSE(blk.pooled()) << "touched width " << blk.touched_width() << " > kPooledMaxW ("
+                             << ad::kPooledMaxW << ") must engage the heap fallback";
 
   const int n = f.prob.n_residuals(), m = f.prob.n_knots();
   Eigen::MatrixXd Jb = Eigen::MatrixXd::Zero(n, m);

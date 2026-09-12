@@ -275,8 +275,8 @@
       "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only -- MonotoneCubic back end; the router's per-row partition (17 of 29 rows compiled)"
     },
     "shape_desk_mixed_jacobian": {
-      "target_ns": 4017915,
-      "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only -- desk with a MonotoneCubic long end (52 of 70 rows compiled); the all-AAD route it replaced measured 4.73 ms"
+      "target_ns": 927000,
+      "note": "ratcheted DOWN 2026-09-12 after ad::kPooledMaxW 48 -> 64: desk_mixed's AAD block touches 55 knots and was falling off the pooled dual onto the heap, allocating per operation. 3.17 ms -> 0.71 ms, a 4.3x gain; ratchets DOWN only"
     },
     "multicurve4_cold_calibrate": {
       "target_ns": 960000,
@@ -295,12 +295,12 @@
       "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only"
     },
     "shape_desk_mixed_stream_tick": {
-      "target_ns": 5842000,
-      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only -- this rung STREAMS for the first time (BundleSession's last whole-bundle veto removed); the tick it replaces was a COLD LM at 214.7 ms, so this is 43x better. The AAD block re-evaluates a Hyman-filtered region every tick and allocates doing it (pinned in hotpath_shapes_test); ratchet this down when that is fixed."
+      "target_ns": 2570000,
+      "note": "ratcheted DOWN 2026-09-12 after ad::kPooledMaxW 48 -> 64: desk_mixed's AAD block touches 55 knots and was falling off the pooled dual onto the heap, allocating per operation. 4.49 ms -> 1.98 ms; ratchets DOWN only"
     },
     "shape_desk_mixed_refresh_25bp": {
-      "target_ns": 23317000,
-      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only"
+      "target_ns": 10607000,
+      "note": "ratcheted DOWN 2026-09-12 after ad::kPooledMaxW 48 -> 64: desk_mixed's AAD block touches 55 knots and was falling off the pooled dual onto the heap, allocating per operation. 17.9 ms -> 8.16 ms; ratchets DOWN only"
     },
     "shape_desk_mixed_edge_osc_tick": {
       "target_ns": 528000,

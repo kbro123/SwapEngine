@@ -16,6 +16,7 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/hybrid_residual.hpp"
+#include "swaps/ad/dual.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/jacobian.hpp"
 
@@ -107,6 +108,14 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
       cross = a.allocs();
     }
     std::cout << "  [ladder] " << s.name << ": allocs over 20 small ticks = " << small << ", over 20 band-crossing ticks = " << cross << "\n";
+    // THE CLIFF, made loud (2026-09-12). A block whose touched width exceeds ad::kPooledMaxW silently drops
+    // to heap duals and every operation allocates: desk_mixed at width 55 against a limit of 48 cost 19,182
+    // allocations per tick where the same work at width 29 cost 26. Nothing reported that but the pin, and a
+    // pin only catches it once someone has already paid for it.
+    const cal::HybridBundleResidual probe(s.prob);
+    EXPECT_TRUE(probe.aad_pooled())
+        << s.name << ": the AAD block fell off the pooled dual at width " << probe.aad_width()
+        << " (limit " << swaps::ad::kPooledMaxW << ") -- every dual op now allocates";
     // PINS measured 2026-09-09 on engine 540abaf (20 ticks each). A compiled shape's small tick is 0 — that is the
     // invariant. The rest are the CURRENT costs of known E3 findings (B3 hybrid Hermite::build locals; C7 a band
     // re-scale is a full factor()); they may only DECREASE — lower a pin when you fix the cause, never raise one.
@@ -122,7 +131,10 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   desk_mixed's 18. That is the next thing to attack here, in the same family as C7/C6 — and like every
     //   pin in this list it may only DECREASE.
     static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 150}, {"fx_xccy", 0, 0}, {"desk", 0, 100},
-                               {"mixed_scheme", 560, 560}, {"desk_mixed", 390000, 390000}};
+                               {"mixed_scheme", 560, 560}, {"desk_mixed", 3700, 4900}};
+    //   desk_mixed's SMALL count is exact and stable (3600 over 20 ticks, three runs identical); its
+    //   CROSSING count varies 4523..4753 because a band-edge crossing triggers a variable number of
+    //   active-set re-scales -- the same slack the banded / desk crossing pins carry, for the same reason.
     //   banded 1900 -> 150, desk 3000 -> 100 on 2026-09-10 (C7 fixed: a band re-scale is a rank-one operator update,
     //   not a factor()); measured 123 / 54 -- the rest is the pin/release bookkeeping, next.
     //   (banded / desk crossing pins carry a few % of slack: the count of refreshes 20 crossing ticks trigger moves with

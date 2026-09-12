@@ -160,6 +160,11 @@ class HybridBundleResidual {
   // everything to the slow path would otherwise pass every parity test it has.
   int compiled_row(int row) const { return cache_pos_[row]; }
   int n_compiled_rows() const { return static_cast<int>(cache_rows_.size()); }
+  // Is the AAD half on the heap-free pooled dual? False means its touched width exceeded ad::kPooledMaxW and
+  // every dual operation now allocates -- a ~100x per-tick cost cliff that nothing else reports. Exposed so
+  // the hot-path tests can fail on it rather than merely measure it (2026-09-12).
+  bool aad_pooled() const { return nc_.empty() || nc_.pooled(); }
+  int aad_width() const { return nc_.touched_width(); }
 
   // Overwrite the quote RHS (targets + bands) on BOTH halves without touching either's compiled/discovered
   // structure -- the engine-side of a warm rebind. `p` must have this engine's row count and topology

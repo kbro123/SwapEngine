@@ -36,7 +36,17 @@ using DualPooled = Eigen::AutoDiffScalar<Eigen::Matrix<double, Eigen::Dynamic, 1
 // The pooled-dual width used by the AAD Jacobian fast path: covers a single classic curve and the
 // typical width-reduced hybrid touch set; wider bundles fall back to the heap `Dual`. Sized to keep
 // the in-object gradient buffer modest (MaxW doubles per scalar).
-inline constexpr int kPooledMaxW = 48;
+// 64 since 2026-09-12, measured not guessed. A block WIDER than this falls back to the heap dual, where
+// every arithmetic operation allocates its gradient vector -- a cliff, not a gradient: the desk_mixed ladder
+// rung touches 55 knots and at 48 it cost 19,182 allocations and 4.49 ms per tick, while mixed_scheme at
+// width 29 cost 26 allocations for the same kind of work. Raising this to 64 took desk_mixed to 180
+// allocations and 2.16 ms -- 106x fewer, 2.1x faster -- and moved no other rung.
+//
+// THIS MOVES THE CLIFF, IT DOES NOT REMOVE IT. A bundle wider than 64 touched knots falls off again just as
+// sharply. Removing it properly means dispatching on width to one of several MaxW instantiations, or a
+// small-buffer-optimised gradient; until then ShapeLadder.StreamingTickIsAllocationFreeOnEveryCompiledShape
+// asserts every rung stays pooled, so falling off is a test failure and not a silent 100x.
+inline constexpr int kPooledMaxW = 64;
 
 // DIRECTIONAL seed (E3-A4/D7, 2026-09-10): every knot carries the SAME single derivative slot with value 1, so
 // one heap-free pass of a Scalar = DualPooled<1> function f yields f.derivatives()[0] = Σⱼ ∂f/∂xⱼ -- the
