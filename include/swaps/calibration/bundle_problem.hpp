@@ -16,6 +16,7 @@
 // n_knots(), n_residuals() -- so calibrate / aad_jacobian / streaming / risk drive it UNCHANGED, and
 // the block-structured Jacobian falls straight out of AAD over the stacked residual.
 
+#include <algorithm>
 #include <Eigen/Core>
 
 #include <cmath>
@@ -154,6 +155,37 @@ inline void validate_problem(const BundleProblem& p, const std::string& where = 
     }
   };
   for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) check(p.instruments[i], i);
+}
+
+// A flat starting guess sized to the problem: outright curves at `level`, spread curves at 0.
+// level <= 0 (the default) derives the flat level from the market itself: the mean outright
+// (ParRate/Rate/ZeroCouponRate) quote, clamped to [0.1%, 20%], falling back to 2% for a bundle with no outright
+// rows. Spread curves and turn deltas always seed at 0. (Moved from api/bundle_api.cpp, E7 3.6: it is a function
+// of the problem alone, and calibration-layer code seeds from it.)
+inline Eigen::VectorXd flat_x0(const BundleProblem& prob, double level = 0.0) {
+  if (level <= 0.0) {
+    // Derive the flat seed level FROM THE MARKET: the mean outright quote (ParRate / Rate rows). This is
+    // what makes the seed a defensible ANCHOR for rank-deficient completion (calibrate_with): an
+    // unconstrained state then reports "the average market level", not an arbitrary constant. Spread
+    // curves still seed at zero; clamped to a sane band; falls back to 2% when no outright rows exist.
+    double sum = 0.0;
+    int n = 0;
+    for (const auto& ins : prob.instruments)
+      if (ins.quote == QuoteKind::ParRate || ins.quote == QuoteKind::Rate || ins.quote == QuoteKind::ZeroCouponRate) {
+        sum += ins.market;
+        ++n;
+      }
+    level = n ? std::min(0.20, std::max(1e-3, sum / n)) : 0.02;
+  }
+  Eigen::VectorXd x(prob.n_knots());
+  int o = 0;
+  for (const auto& c : prob.curves) {
+    const double v = (c.base < 0) ? level : 0.0;  // outright at the level, spread at zero
+    const int ni = c.n_interp_knots();            // interp knots first, then one δ per turn
+    // Interp knots seed at the level/zero; turn δ's are an overlay -> seed at 0 (no jump), NOT the level.
+    for (int i = 0; i < c.n_knots(); ++i) x[o++] = (i < ni) ? v : 0.0;
+  }
+  return x;
 }
 
 }  // namespace swaps::calibration

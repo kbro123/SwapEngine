@@ -14,8 +14,9 @@
 //     the pillar it collides with, so both drop). trace(H) = rank(J) = effective number of constrained knots.
 //   * the existing per-quote in-band diagnostics (target/model/residual/weight/in_band), so this one verb is
 //     the "one-stop calibration health" report.
-// Additive and QuantLib-free; it reuses only BundleSession's public jacobian()/risk_operator()/
-// quote_diagnostics_json(), never the internal calibration types. Units are model decimals (0.025 = 2.5%).
+// The computation is cal::calibration_report<BundleSession> (calibration/diagnostics.hpp, E7 3.6). QuantLib-free.
+// Units are model decimals (0.025 = 2.5%). KNOWN BUG, fixed separately (TASKS-ENGINE E7 "RISK SCALE BUGS" (2)): M is
+// risk_operator = J⁺·D, so a banded or FX quote reports diag(P·D) -- a banded row its decay -- not the projector.
 #include <string>
 
 namespace swaps::api {

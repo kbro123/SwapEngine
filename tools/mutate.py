@@ -24,6 +24,19 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 3.6: calibration/diagnostics.hpp and flat_x0, the library behind calib_report.
+    ("condition_number_inverted", "include/swaps/calibration/diagnostics.hpp",
+     "double cond = smin > 0.0 ? smax / smin : std::numeric_limits<double>::max();",
+     "double cond = smin > 0.0 ? smin / smax : std::numeric_limits<double>::max();",
+     ["calibration_diagnostics_test.cpp"], "*", "the condition number's orientation is unpinned (E7 3.6)"),
+    ("hat_diagonal_unclamped", "include/swaps/calibration/diagnostics.hpp",
+     "h[i] = std::clamp(J.row(i).dot(M.col(i)), 0.0, 1.0);",
+     "h[i] = J.row(i).dot(M.col(i));",
+     ["calibration_diagnostics_test.cpp"], "*", "the identifiability clamp is unpinned (E7 3.6)"),
+    ("flat_x0_turns_seed_at_the_level", "include/swaps/calibration/bundle_problem.hpp",
+     "x[o++] = (i < ni) ? v : 0.0;",
+     "x[o++] = v;",
+     ["calibration_diagnostics_test.cpp"], "*", "flat_x0's zero turn seed is unpinned (E7 3.6)"),
     # E7 stage 3.5: the asset-swap float leg rolls backward from the maturity (short front stub).
     ("asset_swap_leg_rolls_from_settlement", "include/swaps/build/par_asset_swap.hpp",
      "  rule.side = StubSide::Front;",

@@ -16,6 +16,7 @@
 #include "swaps/api/bundle_api.hpp"  // RegSpec, CurveSample
 #include "swaps/api/json_util.hpp"   // vecf
 #include "swaps/build/date.hpp"
+#include "swaps/calibration/diagnostics.hpp"  // QuoteDiagnostic, CalibrationReport
 #include "swaps/derive/bond_rv.hpp"  // BondUniverseRequest, GovvieFitRequest, SwapSpreadRequest
 #include "swaps/trade/csa.hpp"    // discount_index_for
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
@@ -60,6 +61,12 @@ void into(const json::object& o, const char* k, std::vector<int>& out) {
   if (!present(o, k)) return;
   out.clear();
   for (const auto& e : o.at(k).as_array()) out.push_back(static_cast<int>(e.to_number<long long>()));
+}
+void into(const json::object& o, const char* k, Eigen::VectorXd& out) {
+  if (!present(o, k)) return;
+  std::vector<double> v;
+  into(o, k, v);
+  out = Eigen::Map<const Eigen::VectorXd>(v.data(), static_cast<Eigen::Index>(v.size()));
 }
 template <class T>
 void into(const json::object& o, const char* k, std::optional<T>& out) {
@@ -795,6 +802,60 @@ json::object asset_swap_to_json(const std::vector<swaps::build::AssetSwapAnalyti
   out["annuity"] = vecf(annuity);
   out["accrued"] = vecf(accrued);
   out["n"] = static_cast<int>(rows.size());
+  return out;
+}
+
+cal::CalibrationReportRequest calib_report_request_from_json(const json::object& o) {
+  cal::CalibrationReportRequest r;
+  r.bundle = bundle_from_json(need(o, "bundle", "calib_report: missing 'bundle' object"));
+  into(o, "x0", r.x0);
+  r.reg = reg_from_json(o);
+  return r;
+}
+
+json::object calibration_report_to_json(const cal::CalibrationReport& r) {
+  json::array quotes;
+  quotes.reserve(r.quotes.size());
+  for (const cal::QuoteReport& q : r.quotes) {
+    json::object o;
+    o["model"] = q.fit.model;
+    o["target"] = q.fit.target;
+    o["residual"] = q.fit.residual;
+    o["weight"] = q.fit.weight;
+    o["in_band"] = q.fit.in_band;
+    o["soft"] = q.fit.soft;
+    o["identifiability"] = q.identifiability;
+    quotes.push_back(std::move(o));
+  }
+  json::object out;
+  out["rms_residual"] = r.calibration.rms_residual;
+  out["converged"] = r.calibration.converged;
+  out["status"] = r.calibration.status;
+  out["rank_deficiency"] = r.calibration.rank_deficiency;
+  out["condition_number"] = r.conditioning.condition_number;
+  out["singular_values"] = vecf(r.conditioning.singular_values);
+  out["quotes"] = std::move(quotes);
+  out["n"] = static_cast<int>(r.quotes.size());
+  return out;
+}
+
+json::array quote_diagnostics_to_json(const std::vector<cal::QuoteDiagnostic>& diagnostics) {
+  json::array out;
+  for (const cal::QuoteDiagnostic& q : diagnostics) {
+    json::object d;
+    d["model"] = q.model;
+    d["target"] = q.target;
+    d["residual"] = q.residual;
+    d["soft"] = q.soft;
+    if (q.soft) {
+      d["lower"] = q.lower;
+      d["upper"] = q.upper;
+      d["decay"] = q.decay;
+    }
+    d["in_band"] = q.in_band;
+    d["weight"] = q.weight;
+    out.push_back(std::move(d));
+  }
   return out;
 }
 

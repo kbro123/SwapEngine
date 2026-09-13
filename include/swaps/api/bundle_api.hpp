@@ -149,12 +149,8 @@ struct SwaptionSchedule {
 
 // The JSON <-> engine object-graph codecs are declared in swaps/api/codec.hpp (included above).
 
-// A flat starting guess sized to the problem: outright curves at `level`, spread curves at 0.
-// level <= 0 (the default) derives the flat level from the market itself: the mean outright
-// (ParRate/Rate) quote, clamped to [0.1%, 20%], falling back to 2% for a bundle with no outright
-// rows. Spread curves and turn deltas always seed at 0. Passing an explicit positive level keeps
-// the old fixed-level behaviour.
-Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level = 0.0);
+// The market-implied flat seed (calibration/bundle_problem.hpp), re-exported for api callers.
+using swaps::calibration::flat_x0;
 
 // ---- the session facade --------------------------------------------------------------------------
 class BundleSession {

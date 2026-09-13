@@ -42,6 +42,12 @@ struct SwapSpreadRequest;
 struct SwapSpreadResult;
 }  // namespace swaps::derive
 
+namespace swaps::calibration {
+struct QuoteDiagnostic;           // calibration/diagnostics.hpp
+struct CalibrationReportRequest;  // calibration/diagnostics.hpp
+struct CalibrationReport;         // calibration/diagnostics.hpp
+}  // namespace swaps::calibration
+
 namespace swaps::api {
 
 namespace cal = swaps::calibration;
@@ -114,6 +120,15 @@ struct AssetSwapRequest {
 AssetSwapRequest asset_swap_request_from_json(const boost::json::object& payload);
 // -> SoA {asw_spread, clean_curve, dirty_curve, annuity, accrued, n}
 boost::json::object asset_swap_to_json(const std::vector<swaps::build::AssetSwapAnalytics>& rows);
+
+// ---- calibration diagnostics (the `calib_report` verb, and the session's quote_diagnostics document) ------------
+// {bundle, x0?, regularize?}
+cal::CalibrationReportRequest calib_report_request_from_json(const boost::json::object& payload);
+// -> {rms_residual, converged, status, rank_deficiency, condition_number, singular_values,
+//     quotes:[{model, target, residual, weight, in_band, soft, identifiability}], n}
+boost::json::object calibration_report_to_json(const cal::CalibrationReport& r);
+// -> [{model, target, residual, soft, [lower, upper, decay], in_band, weight}] (band keys on soft quotes only)
+boost::json::array quote_diagnostics_to_json(const std::vector<cal::QuoteDiagnostic>& diagnostics);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

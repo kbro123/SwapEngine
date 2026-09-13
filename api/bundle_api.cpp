@@ -5,6 +5,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/json_util.hpp"  // darr / vecf
+#include "swaps/calibration/diagnostics.hpp"  // quote_diagnostics
 
 #include "swaps/trade/csa.hpp"    // CSA -> discount index (the typed-trade book entry)
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
@@ -63,31 +64,7 @@ std::string err(const std::string& msg) {
 
 namespace pf = swaps::portfolio;
 
-Eigen::VectorXd flat_x0(const cal::BundleProblem& prob, double level) {
-  if (level <= 0.0) {
-    // Derive the flat seed level FROM THE MARKET: the mean outright quote (ParRate / Rate rows). This is
-    // what makes the seed a defensible ANCHOR for rank-deficient completion (calibrate_with): an
-    // unconstrained state then reports "the average market level", not an arbitrary constant. Spread
-    // curves still seed at zero; clamped to a sane band; falls back to 2% when no outright rows exist.
-    double sum = 0.0;
-    int n = 0;
-    for (const auto& ins : prob.instruments)
-      if (ins.quote == cal::QuoteKind::ParRate || ins.quote == cal::QuoteKind::Rate || ins.quote == cal::QuoteKind::ZeroCouponRate) {
-        sum += ins.market;
-        ++n;
-      }
-    level = n ? std::min(0.20, std::max(1e-3, sum / n)) : 0.02;
-  }
-  Eigen::VectorXd x(prob.n_knots());
-  int o = 0;
-  for (const auto& c : prob.curves) {
-    const double v = (c.base < 0) ? level : 0.0;  // outright at the level, spread at zero
-    const int ni = c.n_interp_knots();            // interp knots first, then one δ per turn
-    // Interp knots seed at the level/zero; turn δ's are an overlay -> seed at 0 (no jump), NOT the level.
-    for (int i = 0; i < c.n_knots(); ++i) x[o++] = (i < ni) ? v : 0.0;
-  }
-  return x;
-}
+// flat_x0 lives in calibration/bundle_problem.hpp (E7 3.6); bundle_api.hpp re-exports it.
 
 // =================================================================================================
 // BundleSession
@@ -354,31 +331,7 @@ double BundleSession::residual(const cal::Instrument& ins) const {
 }
 
 json::array BundleSession::quote_diagnostics() const {
-  const auto C = cal::build_bundle_curves<double>(
-      prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });
-  const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
-  json::array out;
-  for (const auto& ins : prob_.instruments) {
-    const double m = cal::instrument_model_quote<double>(ins, curve_of);
-    const bool soft = ins.band_upper > ins.band_lower;
-    json::object d;
-    d["model"] = m;
-    d["target"] = ins.market;
-    d["residual"] = m - ins.market;
-    d["soft"] = soft;
-    if (soft) {
-      d["lower"] = ins.band_lower;
-      d["upper"] = ins.band_upper;
-      d["decay"] = ins.band_decay;
-      d["in_band"] = (ins.band_lower <= m && m <= ins.band_upper);
-      d["weight"] = cal::band_slope(m, ins.band_lower, ins.band_upper, ins.band_decay);  // decay in, 1 out
-    } else {
-      d["in_band"] = false;
-      d["weight"] = 1.0;  // hard pin — full-weight residual, no band
-    }
-    out.push_back(d);
-  }
-  return out;
+  return quote_diagnostics_to_json(cal::quote_diagnostics(prob_, x_));  // the struct is calibration/diagnostics.hpp's
 }
 std::string BundleSession::quote_diagnostics_json() const { return json::serialize(quote_diagnostics()); }
 
