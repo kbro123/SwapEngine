@@ -799,24 +799,15 @@ std::string compile_json(const std::string& spec_json, const std::string& today_
 }
 
 RegSpec compile_reg_spec(const CompileResult& r) {
-  const bool second_diff = r.has_reg_op && r.reg_op == "second_difference";
-  const auto table = [&](const std::string& s) -> double {
-    if (second_diff) return s == "off" ? 0.0 : s == "strong" ? 5.0 : 0.5;
-    return s == "off" ? 0.0 : s == "strong" ? 0.2 : 0.02;
-  };
-  double lam = table(r.smoothness);
-  if ((r.under_determined || r.has_bands) && lam <= 0.0) lam = table("light");
-  RegSpec reg;
-  if (lam <= 0.0) return reg;
-  reg.lambda = lam;
-  for (int c = 0; c < static_cast<int>(r.curve_names.size()); ++c) reg.curves.push_back(c);
-  if (reg.curves.empty())
-    for (int c = 0; c < static_cast<int>(r.bundle.curves.size()); ++c) reg.curves.push_back(c);
-  if (!second_diff) {
-    reg.tension = true;
-    reg.sigma = r.tension_sigma;
-  }
-  return reg;
+  // The spec names a strength; the ONE table (calibration/regularize.hpp smoothing_preset) owns its value.
+  const bool tension = !(r.has_reg_op && r.reg_op == "second_difference");
+  cal::Smoothing level = r.smoothness == "off" ? cal::Smoothing::Off
+                         : r.smoothness == "strong" ? cal::Smoothing::Strong
+                                                    : cal::Smoothing::Light;
+  if (level == cal::Smoothing::Off && (r.under_determined || r.has_bands)) level = cal::Smoothing::Light;
+  const int n_curves = r.curve_names.empty() ? static_cast<int>(r.bundle.curves.size())
+                                             : static_cast<int>(r.curve_names.size());
+  return cal::smoothing_preset(level, n_curves, tension, r.tension_sigma);
 }
 
 }  // namespace swaps::api

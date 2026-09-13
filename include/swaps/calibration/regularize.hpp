@@ -241,4 +241,48 @@ Eigen::MatrixXd tension_energy_operator(const Problem& p, double weight, double 
   return R;
 }
 
+// Optional Tikhonov smoothness regulariser (THIS header; moved from api/bundle_api.hpp on 2026-09-13, which aliases it): penalise the
+// curvature of the listed curves' knot forwards. lambda <= 0 or empty `curves` => off. Needed for
+// basis-only forecast curves whose forward shape is a rank-deficient null (CLAUDE.md §7b, EUR trio).
+// The `tension` flag switches the operator from the discrete second-difference penalty to the continuous
+// TENSION ENERGY mu*x^T(K2+sigma^2 K1)x (regularize.hpp, research note §5): `lambda` is then the row
+// weight (mu = lambda^2) and `sigma` the tension parameter -- sigma = 0 is pure bending energy INT(f'')^2,
+// sigma > 0 adds the membrane term INT(f')^2 (taut, overshoot-damped). sigma is ignored when tension=false.
+struct RegSpec {
+  double lambda = 0.0;
+  std::vector<int> curves;
+  bool tension = false;  // false: second-difference curvature; true: continuous tension energy
+  double sigma = 0.0;    // tension parameter (tension=true only); 0 => pure curvature penalty
+  bool on() const { return lambda > 0.0 && !curves.empty(); }
+};
+
+// The composer's named smoothing strengths -- ONE table for every entry point (E7 stage 3). compile_reg_spec maps
+// a spec's "off"/"light"/"strong" onto it; a verb that needs a well-posed default calibration asks for Light
+// instead of writing lambda out (until 2026-09-13 the light value was spelled out in five verbs, the table in a
+// sixth place). tests/smoothing_preset_test.cpp pins the values.
+enum class Smoothing { Off, Light, Strong };
+
+// lambda for a named strength under the continuous tension-energy operator (tension) or the discrete
+// second-difference operator (!tension).
+inline double smoothing_lambda(Smoothing s, bool tension) {
+  switch (s) {
+    case Smoothing::Off: return 0.0;
+    case Smoothing::Light: return tension ? 0.02 : 0.5;
+    case Smoothing::Strong: return tension ? 0.2 : 5.0;
+  }
+  return 0.0;
+}
+
+// A RegSpec at strength `s` over curves 0..n_curves-1. Off => RegSpec{} (no penalty). `sigma` is the tension
+// operator's parameter and is dropped for the second-difference operator.
+inline RegSpec smoothing_preset(Smoothing s, int n_curves, bool tension = true, double sigma = 0.0) {
+  RegSpec reg;
+  if (s == Smoothing::Off) return reg;
+  reg.lambda = smoothing_lambda(s, tension);
+  reg.tension = tension;
+  reg.sigma = tension ? sigma : 0.0;
+  for (int c = 0; c < n_curves; ++c) reg.curves.push_back(c);
+  return reg;
+}
+
 }  // namespace swaps::calibration

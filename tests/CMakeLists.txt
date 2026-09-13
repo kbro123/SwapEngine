@@ -14,6 +14,7 @@ add_executable(swaps_tests
   portfolio_instrument_test.cpp
   fixings_test.cpp
   tension_regularizer_test.cpp
+  smoothing_preset_test.cpp
   tension_test.cpp
   turns_test.cpp
   build_calendar_test.cpp

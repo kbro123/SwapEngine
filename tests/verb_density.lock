@@ -1,24 +1,24 @@
 # tools/verb_density.py lock (E7 stage 1, PRINCIPLES.md P14). One line per api file: the most
 # behaviour it may carry. Counts may only go DOWN; a file absent from this list locks at zero.
 # Codec files do not lock loops/branches (decode walks arrays and checks shape).
-api/bond.cpp lookups=2 defaults=32 loops=8 compute=6 branches=14   # core
+api/bond.cpp lookups=2 defaults=32 loops=7 compute=6 branches=14   # core
 api/bond_future.cpp lookups=1 defaults=27 loops=3 compute=2 branches=11   # core
 api/bundle_api.cpp lookups=0 defaults=13 loops=28 compute=27 branches=62   # parked
 api/calib_report.cpp lookups=0 defaults=8 loops=2 compute=8 branches=9   # core
-api/compile.cpp lookups=13 defaults=120 loops=50 compute=35 branches=112   # parked
+api/compile.cpp lookups=13 defaults=119 loops=48 compute=35 branches=108   # parked
 api/conventions.cpp lookups=1 defaults=97 loops=9 compute=2 branches=30   # core
 api/credit.cpp lookups=2 defaults=12 loops=9 compute=32 branches=17   # deferred
-api/exposure.cpp lookups=0 defaults=22 loops=11 compute=17 branches=21   # deferred
+api/exposure.cpp lookups=0 defaults=22 loops=10 compute=17 branches=21   # deferred
 api/fx_option.cpp lookups=0 defaults=21 loops=5 compute=5 branches=18   # deferred
-api/generate_risk.cpp lookups=0 defaults=1 loops=8 compute=9 branches=8   # core
+api/generate_risk.cpp lookups=0 defaults=1 loops=7 compute=9 branches=8   # core
 api/inflation.cpp lookups=1 defaults=15 loops=6 compute=8 branches=16   # deferred
 api/ndf.cpp lookups=0 defaults=13 loops=3 compute=1 branches=7   # deferred
-api/options.cpp lookups=7 defaults=45 loops=37 compute=15 branches=39   # deferred
+api/options.cpp lookups=7 defaults=45 loops=36 compute=15 branches=39   # deferred
 api/pnl.cpp lookups=0 defaults=4 loops=0 compute=1 branches=8   # core
 api/rv.cpp lookups=5 defaults=39 loops=4 compute=1 branches=17   # core
 api/scenario.cpp lookups=0 defaults=7 loops=11 compute=5 branches=22   # core
 api/scenario_grid.cpp lookups=0 defaults=11 loops=10 compute=12 branches=24   # core
 api/var.cpp lookups=0 defaults=3 loops=12 compute=33 branches=24   # deferred
-api/vega.cpp lookups=3 defaults=19 loops=10 compute=5 branches=15   # deferred
+api/vega.cpp lookups=3 defaults=19 loops=9 compute=5 branches=15   # deferred
 include/swaps/api/bundle_api.hpp lookups=0 defaults=1 loops=0 compute=1 branches=1   # parked
 include/swaps/api/json_util.hpp lookups=0 defaults=4 compute=0   # codec

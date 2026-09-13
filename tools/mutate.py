@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 3: the one smoothing table. A drifted light value would re-smooth every verb's default calibration.
+    ("smoothing_light_value_drifts", "include/swaps/calibration/regularize.hpp",
+     "case Smoothing::Light: return tension ? 0.02 : 0.5;",
+     "case Smoothing::Light: return tension ? 0.2 : 0.5;",
+     ["smoothing_preset_test.cpp"], "*", "the composer's smoothing table is unpinned (E7 stage 3)"),
     ("hermite_bessel_weights_swapped", "include/swaps/curve/regions.hpp",
      "m[j] = (h[j] * sec[j - 1] + h[j - 1] * sec[j]) / (h[j - 1] + h[j]);",
      "m[j] = (h[j - 1] * sec[j - 1] + h[j] * sec[j]) / (h[j - 1] + h[j]);",

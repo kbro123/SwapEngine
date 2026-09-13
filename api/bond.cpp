@@ -163,10 +163,7 @@ std::string asset_swap_json(const json::object& request) {
   // Calibrate the bundle -> the discount curve we asset-swap against (same recipe as swaption_json).
   cal::BundleProblem prob = bundle_from_json(o.at("bundle"));
   BundleSession sess(std::move(prob));
-  RegSpec reg;
-  reg.tension = true;
-  reg.lambda = 0.02;
-  for (int c = 0; c < static_cast<int>(sess.problem().curves.size()); ++c) reg.curves.push_back(c);
+  const RegSpec reg = cal::smoothing_preset(cal::Smoothing::Light, static_cast<int>(sess.problem().curves.size()));
   sess.calibrate(flat_x0(sess.problem()), reg);
 
   std::vector<double> asw, clean_c, dirty_c, annuity_v, accrued_v;

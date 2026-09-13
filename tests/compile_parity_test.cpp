@@ -162,3 +162,48 @@ TEST(CompileParity, AllGoldenSpecsMatchPython) {
   ASSERT_FALSE(idx.as_array().empty()) << "no golden specs — run tools/compile_parity.py";
   for (const auto& n : idx.as_array()) run_case(std::string(n.as_string().c_str()));
 }
+
+// compile_reg_spec reads the ONE smoothing table (calibration/regularize.hpp smoothing_preset, E7 stage 3). The
+// expectations restate, by hand, the table compile_reg_spec carried inline until 2026-09-13: tension light 0.02 /
+// strong 0.2, second-difference light 0.5 / strong 5.0, "off" promoted to light when the bundle is under-determined
+// or banded, the penalty spanning the named curves (else every bundle curve), sigma only for the tension operator.
+TEST(CompileRegSpec, ReadsTheOneSmoothingTable) {
+  swaps::api::CompileResult r;
+  r.smoothness = "light";
+  r.curve_names = {"A", "B"};
+  r.tension_sigma = 0.3;
+  swaps::api::RegSpec g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 0.02);
+  EXPECT_TRUE(g.tension);
+  EXPECT_EQ(g.sigma, 0.3);
+  EXPECT_EQ(g.curves, (std::vector<int>{0, 1}));
+
+  r.smoothness = "strong";
+  g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 0.2);
+
+  r.has_reg_op = true;
+  r.reg_op = "second_difference";
+  g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 5.0);
+  EXPECT_FALSE(g.tension);
+  EXPECT_EQ(g.sigma, 0.0);
+
+  r.smoothness = "off";
+  g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 0.0);
+  EXPECT_FALSE(g.on());
+
+  r.under_determined = true;
+  g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 0.5) << "off is promoted to light (second-difference) when under-determined";
+
+  r.under_determined = false;
+  r.has_bands = true;
+  r.has_reg_op = false;
+  r.curve_names.clear();
+  r.bundle.curves.resize(3);
+  g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 0.02) << "off is promoted to light when banded";
+  EXPECT_EQ(g.curves, (std::vector<int>{0, 1, 2})) << "no named curves => every bundle curve";
+}

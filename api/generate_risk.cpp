@@ -68,13 +68,7 @@ namespace {
 // NOT smoothed — it is rank-completed). Matches the web's "light" tension preset.
 RegSpec calibration_reg(const RegSpec& reg, const cal::BundleProblem& b) {
   if (reg.on()) return reg;
-  RegSpec c;
-  c.tension = true;
-  c.lambda = 0.02;
-  c.sigma = 0.0;
-  c.curves.resize(b.curves.size());
-  for (std::size_t i = 0; i < b.curves.size(); ++i) c.curves[i] = static_cast<int>(i);
-  return c;
+  return cal::smoothing_preset(cal::Smoothing::Light, static_cast<int>(b.curves.size()));
 }
 
 json::array vec_to_json(const Eigen::VectorXd& v) {

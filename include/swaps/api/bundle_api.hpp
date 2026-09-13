@@ -30,6 +30,7 @@
 
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/regularize.hpp"  // RegSpec, smoothing_preset
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/portfolio/portfolio.hpp"  // MultiCurveBook — the batched reprice kernel
 #include "swaps/portfolio/compiled_multi.hpp"  // CompiledMultiCurveBook — the cached streaming reprice twin
@@ -51,20 +52,8 @@ struct CurveSample {
   std::vector<double> forward;  // instantaneous forward
 };
 
-// Optional Tikhonov smoothness regulariser (include/swaps/calibration/regularize.hpp): penalise the
-// curvature of the listed curves' knot forwards. lambda <= 0 or empty `curves` => off. Needed for
-// basis-only forecast curves whose forward shape is a rank-deficient null (CLAUDE.md §7b, EUR trio).
-// The `tension` flag switches the operator from the discrete second-difference penalty to the continuous
-// TENSION ENERGY mu*x^T(K2+sigma^2 K1)x (regularize.hpp, research note §5): `lambda` is then the row
-// weight (mu = lambda^2) and `sigma` the tension parameter -- sigma = 0 is pure bending energy INT(f'')^2,
-// sigma > 0 adds the membrane term INT(f')^2 (taut, overshoot-damped). sigma is ignored when tension=false.
-struct RegSpec {
-  double lambda = 0.0;
-  std::vector<int> curves;
-  bool tension = false;  // false: second-difference curvature; true: continuous tension energy
-  double sigma = 0.0;    // tension parameter (tension=true only); 0 => pure curvature penalty
-  bool on() const { return lambda > 0.0 && !curves.empty(); }
-};
+// RegSpec (the smoothness regulariser) lives with its operators in calibration/regularize.hpp.
+using RegSpec = cal::RegSpec;
 
 // Result of a batched portfolio reprice (BundleSession::price_portfolio). `price_us` is the ENGINE-
 // measured wall time of the pure pricing pass ONLY (a steady_clock pair around the double NPV valuation

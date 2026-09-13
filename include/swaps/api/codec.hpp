@@ -16,21 +16,22 @@
 // Decoders carry no conventions lookups, no arithmetic and no invented defaults -- tools/verb_density.py locks
 // that for api/codec.cpp. They may loop over arrays and branch on presence.
 //
-// Declared against forward-declared RegSpec / CurveSample (defined in bundle_api.hpp, which includes this
-// header), so including either header gives the whole API.
+// Declared against a forward-declared CurveSample (defined in bundle_api.hpp, which includes this header), so
+// including either header gives the whole API.
 
 #include <vector>
 
 #include <boost/json/fwd.hpp>
 
 #include "swaps/calibration/bundle_problem.hpp"
+#include "swaps/calibration/regularize.hpp"  // RegSpec
 #include "swaps/portfolio/portfolio.hpp"
 
 namespace swaps::api {
 
 namespace cal = swaps::calibration;
 
-struct RegSpec;      // bundle_api.hpp
+using RegSpec = cal::RegSpec;  // calibration/regularize.hpp
 struct CurveSample;  // bundle_api.hpp
 
 // ---- the calibration problem -----------------------------------------------------------------------
