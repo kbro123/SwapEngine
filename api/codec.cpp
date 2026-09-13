@@ -16,6 +16,7 @@
 #include "swaps/api/bundle_api.hpp"  // RegSpec, CurveSample
 #include "swaps/api/json_util.hpp"   // vecf
 #include "swaps/build/date.hpp"
+#include "swaps/calibration/consistent_risk.hpp"  // ConsistentRiskRequest, ConsistentRisk
 #include "swaps/calibration/diagnostics.hpp"  // QuoteDiagnostic, CalibrationReport
 #include "swaps/derive/bond_rv.hpp"  // BondUniverseRequest, GovvieFitRequest, SwapSpreadRequest
 #include "swaps/trade/csa.hpp"    // discount_index_for
@@ -856,6 +857,39 @@ json::array quote_diagnostics_to_json(const std::vector<cal::QuoteDiagnostic>& d
     d["weight"] = q.weight;
     out.push_back(std::move(d));
   }
+  return out;
+}
+
+cal::ConsistentRiskRequest consistent_risk_request_from_json(const json::object& o) {
+  cal::ConsistentRiskRequest r;
+  r.book = book_from_json(need(o, "book", "generate_risk: missing 'book'"));
+  for (const auto& b : need(o, "bundles", "generate_risk: 'bundles' must be a non-empty array").as_array())
+    r.bundles.push_back(bundle_from_json(b));
+  r.reg = reg_from_json(o);
+  return r;
+}
+
+json::object consistent_risk_to_json(const cal::ConsistentRisk& r) {
+  json::array bundles;
+  for (const cal::ConsistentBundleRisk& b : r.bundles) {
+    json::object bo;
+    bo["ladder"] = vecf(b.ladder);
+    bo["synthetic"] = vecf(b.synthetic);
+    json::array knots;
+    for (int k : b.synthetic_knot) knots.push_back(k);
+    bo["synthetic_knot"] = std::move(knots);
+    bo["npv"] = b.npv;
+    bo["pv01"] = b.pv01;
+    bo["ladder_dv01"] = b.ladder_dv01;
+    bo["n_residuals"] = b.n_residuals;
+    bo["n_synthetic"] = b.n_synthetic;
+    bundles.push_back(std::move(bo));
+  }
+  json::object out;
+  out["npv"] = r.npv;
+  out["pv01"] = r.pv01;
+  out["n"] = r.n;
+  out["bundles"] = std::move(bundles);
   return out;
 }
 

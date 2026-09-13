@@ -7,7 +7,6 @@ api/conventions.cpp lookups=1 defaults=97 loops=9 compute=2 branches=30   # core
 api/credit.cpp lookups=2 defaults=12 loops=9 compute=31 branches=17   # deferred
 api/exposure.cpp lookups=0 defaults=22 loops=10 compute=17 branches=21   # deferred
 api/fx_option.cpp lookups=0 defaults=21 loops=5 compute=5 branches=18   # deferred
-api/generate_risk.cpp lookups=0 defaults=1 loops=7 compute=9 branches=8   # core
 api/inflation.cpp lookups=1 defaults=15 loops=6 compute=8 branches=16   # deferred
 api/ndf.cpp lookups=0 defaults=13 loops=3 compute=1 branches=7   # deferred
 api/options.cpp lookups=7 defaults=45 loops=36 compute=14 branches=39   # deferred

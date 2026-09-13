@@ -65,4 +65,53 @@ Eigen::VectorXd bucketed_delta(const CalibrationProblem& prob, const Eigen::Vect
   return ift_operator(prob, x).transpose() * dnpv_dx;  // length n_resid = d(NPV)/dq per quote
 }
 
+// ---- rank-completed risk (the generate_risk ladder; moved from api/generate_risk.cpp, E7 stage 3.7) ------------------
+// Left-multiply a curve gradient g = dP/dx by the RANK-COMPLETED risk operator. J is the calibration Jacobian dr/dx
+// (n_res x n_knots). Any null direction of J -- a knot the quotes cannot resolve -- is SELF-QUOTED: appended to J as a
+// unit-pinned row, so J_full has full column rank and M_full = pinv(J_full) is well-posed with NO curvature penalty.
+// A direction is "unseen" when its SINGULAR VALUE is null at the engine's ONE rank threshold (kRankThreshold,
+// relative to sigma_max) -- the same test calibrate()'s rank_deficiency and the streamer's operator use (E3-G5).
+//
+// KNOWN BUG, carried unchanged by the move and fixed separately (TASKS-ENGINE E7 "RISK SCALE BUGS" (1)): the real
+// rows are pinv(J_full)ᵀ g WITHOUT the residual market scale D that risk_operator applies, so a banded row is
+// overstated by 1/decay and an FX row by q·T.
+struct NullCompletedLadder {
+  Eigen::VectorXd full;             // n_residuals real quotes first, then one entry per synthetic pillar
+  int n_residuals = 0;
+  std::vector<int> synthetic_knot;  // each synthetic pillar's dominant knot index (for labelling)
+};
+
+inline NullCompletedLadder null_completed_ladder(const Eigen::MatrixXd& J, const Eigen::VectorXd& g) {
+  const int n_res = static_cast<int>(J.rows());
+  const int nk = static_cast<int>(J.cols());
+  NullCompletedLadder out;
+  out.n_residuals = n_res;
+  int rank = 0;
+  Eigen::MatrixXd V = Eigen::MatrixXd::Identity(nk, nk);
+  if (n_res > 0) {
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(J, Eigen::ComputeFullV);
+    svd.setThreshold(kRankThreshold);
+    rank = static_cast<int>(svd.rank());
+    V = svd.matrixV();  // columns rank.. are the null directions (singular values descending)
+  }
+  const int n_null = nk - rank;
+  Eigen::MatrixXd Jf(n_res + n_null, nk);
+  if (n_res) Jf.topRows(n_res) = J;
+  for (int j = 0; j < n_null; ++j) {
+    const Eigen::VectorXd v = V.col(rank + j);  // a unit null direction in knot space
+    Jf.row(n_res + j) = v.transpose();          // self-quote it (a direct pin on that direction)
+    int idx = 0;
+    v.cwiseAbs().maxCoeff(&idx);                // the knot it loads on most -> its label
+    out.synthetic_knot.push_back(idx);
+  }
+  // Jf has full column rank by construction; the pseudo-inverse (rank-safe at the same threshold) is
+  // (JfᵀJf)⁻¹Jfᵀ without forming the normal matrix.
+  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
+  cod.setThreshold(kRankThreshold);
+  cod.compute(Jf);
+  const Eigen::MatrixXd Mf = cod.pseudoInverse();  // n_knots x (n_res + n_null)
+  out.full = Mf.transpose() * g;                   // length n_res + n_null
+  return out;
+}
+
 }  // namespace swaps::calibration

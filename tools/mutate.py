@@ -24,6 +24,19 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 3.7: calibration/consistent_risk.hpp and null_completed_ladder, the library behind generate_risk.
+    ("consistent_risk_relevel_skipped", "include/swaps/calibration/consistent_risk.hpp",
+     "      for (auto& ins : bk.instruments) ins.market = anchor.model_quote(ins);",
+     "",
+     ["consistent_risk_library_test.cpp"], "*", "re-leveling a bundle onto the anchor is unpinned (E7 3.7)"),
+    ("consistent_risk_bp_scale_drifts", "include/swaps/calibration/consistent_risk.hpp",
+     "inline constexpr double kBasisPoint = 1e-4;",
+     "inline constexpr double kBasisPoint = 1e-2;",
+     ["consistent_risk_library_test.cpp"], "*", "the ladder DV01's basis-point scale is unpinned (E7 3.7)"),
+    ("null_completion_threshold_dropped", "include/swaps/calibration/risk.hpp",
+     "    svd.setThreshold(kRankThreshold);",
+     "",
+     ["consistent_risk_library_test.cpp"], "*", "the null completion's shared rank threshold is unpinned (E7 3.7)"),
     # E7 stage 3.6: calibration/diagnostics.hpp and flat_x0, the library behind calib_report.
     ("condition_number_inverted", "include/swaps/calibration/diagnostics.hpp",
      "double cond = smin > 0.0 ? smax / smin : std::numeric_limits<double>::max();",

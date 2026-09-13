@@ -14,7 +14,7 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/capi.h"
 #include "swaps/api/compile.hpp"
-#include "swaps/api/generate_risk.hpp"
+#include "swaps/calibration/risk.hpp"  // null_completed_ladder (moved from api, E7 3.7)
 
 namespace api = swaps::api;
 namespace json = boost::json;
@@ -201,14 +201,18 @@ TEST(ApiPeriphery, GenerateRiskNullCompletionUsesTheSharedRankThreshold) {
   Eigen::MatrixXd J(2, 2);
   J << 1.0, 0.0, 0.0, 1e-6;  // a stiff (sigma ratio 1e-6) but CONSTRAINED direction: not null
   Eigen::VectorXd g(2); g << 1.0, 2.0;
-  const Eigen::VectorXd lad = api::null_completed_ladder(J, g, syn);
+  const swaps::calibration::NullCompletedLadder L = swaps::calibration::null_completed_ladder(J, g);
+  syn = L.synthetic_knot;
+  const Eigen::VectorXd lad = L.full;
   EXPECT_EQ(syn.size(), 0u) << "sigma 1e-6 is constrained at kRankThreshold 1e-10 (the old 3e-5 cut self-quoted it)";
   ASSERT_EQ(lad.size(), 2);
   EXPECT_NEAR(lad[0], 1.0, 1e-12);
   EXPECT_NEAR(lad[1], 2.0 / 1e-6, 1e-3);
   Eigen::MatrixXd J1(1, 2);
   J1 << 1.0, 0.0;  // knot 1 genuinely unseen
-  const Eigen::VectorXd lad1 = api::null_completed_ladder(J1, g, syn);
+  const swaps::calibration::NullCompletedLadder L1 = swaps::calibration::null_completed_ladder(J1, g);
+  syn = L1.synthetic_knot;
+  const Eigen::VectorXd lad1 = L1.full;
   ASSERT_EQ(syn.size(), 1u);
   EXPECT_EQ(syn[0], 1);
   ASSERT_EQ(lad1.size(), 2);

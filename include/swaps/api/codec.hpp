@@ -46,6 +46,8 @@ namespace swaps::calibration {
 struct QuoteDiagnostic;           // calibration/diagnostics.hpp
 struct CalibrationReportRequest;  // calibration/diagnostics.hpp
 struct CalibrationReport;         // calibration/diagnostics.hpp
+struct ConsistentRiskRequest;     // calibration/consistent_risk.hpp
+struct ConsistentRisk;            // calibration/consistent_risk.hpp
 }  // namespace swaps::calibration
 
 namespace swaps::api {
@@ -129,6 +131,12 @@ cal::CalibrationReportRequest calib_report_request_from_json(const boost::json::
 boost::json::object calibration_report_to_json(const cal::CalibrationReport& r);
 // -> [{model, target, residual, soft, [lower, upper, decay], in_band, weight}] (band keys on soft quotes only)
 boost::json::array quote_diagnostics_to_json(const std::vector<cal::QuoteDiagnostic>& diagnostics);
+
+// ---- consistent risk (the `generate_risk` verb) ------------------------------------------------------------------
+// {book, bundles:[{curves, instruments}, ...], regularize?}
+cal::ConsistentRiskRequest consistent_risk_request_from_json(const boost::json::object& payload);
+// -> {npv, pv01, n, bundles:[{ladder, synthetic, synthetic_knot, npv, pv01, ladder_dv01, n_residuals, n_synthetic}]}
+boost::json::object consistent_risk_to_json(const cal::ConsistentRisk& r);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);
