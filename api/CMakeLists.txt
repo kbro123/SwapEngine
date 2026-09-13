@@ -44,7 +44,8 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compiled_mtm_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/conventions_registry_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/codec_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/bond_future_reference_test.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/bond_future_reference_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/consistent_risk_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost ${CMAKE_SOURCE_DIR}/bench/fixtures)
   # Golden compiler-parity data (server/compile.py output), committed under tests/golden/compile/; and the
