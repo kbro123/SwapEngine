@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 3.5: the asset-swap float leg rolls backward from the maturity (short front stub).
+    ("asset_swap_leg_rolls_from_settlement", "include/swaps/build/par_asset_swap.hpp",
+     "  rule.side = StubSide::Front;",
+     "  rule.side = StubSide::Back;",
+     ["asset_swap_leg_test.cpp"], "*", "the asset-swap float leg's roll anchor is unpinned (E7 3.5)"),
     # E7 stage 3.4: the RV library behind bond_universe / govvie_fit / swap_spread.
     ("rv_settlement_lag_override_ignored", "include/swaps/derive/asset_swap.hpp",
      "  conv.settle_lag = o.lag ? *o.lag : bc.settle_lag;",

@@ -26,6 +26,7 @@
 
 #include "swaps/build/bond.hpp"         // StreetBondRequest
 #include "swaps/build/bond_future.hpp"  // DeliveryBasketRequest
+#include "swaps/build/par_asset_swap.hpp"  // AssetSwapBond
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/regularize.hpp"  // RegSpec
 #include "swaps/portfolio/portfolio.hpp"
@@ -101,6 +102,18 @@ boost::json::object govvie_fit_to_json(const swaps::derive::GovvieFitResult& r);
 //               spread_type? (headline | matched_maturity), settle_calendar?, settle_lag?}
 swaps::derive::SwapSpreadRequest swap_spread_request_from_json(const boost::json::object& payload);
 boost::json::object swap_spread_to_json(const swaps::derive::SwapSpreadResult& r);
+
+// ---- asset swap (the `asset_swap` verb) ----------------------------------------------------------------------
+// {value_date, bundle, curve?, bonds:[{convention, issue, settle, maturity, coupon, freq?, index?, clean? | dirty?}]}
+struct AssetSwapRequest {
+  swaps::build::Date value_date;
+  cal::BundleProblem bundle;  // calibrated by the verb, then the bonds are asset-swapped against `curve`
+  int curve = 0;              // the bundle curve to asset-swap against
+  std::vector<swaps::build::AssetSwapBond> bonds;
+};
+AssetSwapRequest asset_swap_request_from_json(const boost::json::object& payload);
+// -> SoA {asw_spread, clean_curve, dirty_curve, annuity, accrued, n}
+boost::json::object asset_swap_to_json(const std::vector<swaps::build::AssetSwapAnalytics>& rows);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

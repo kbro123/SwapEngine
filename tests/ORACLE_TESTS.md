@@ -29,7 +29,8 @@ that only ~46 of the 135 tests in the oracle binary compared to a QuantLib numbe
 | `modular_curve_test.cpp` | QuantLib prices swaps + futures off our **Hermite** `ModularCurve` through the adapter; runtime builder == compile-time layout | `curve_rel` |
 | `extract_test.cpp` | Every coupon shape (compounded/averaged OIS, IBOR, futures) NPV / fair rate / forecast fixing vs QuantLib, with negative controls | `curve_rel` |
 | `bond_oracle_test.cpp` | Price / yield / accrued / duration / convexity vs `BondFunctions`; curve dirty/clean vs `DiscountingBondEngine`; z-spread vs `ZeroSpreadedTermStructure`; universe sweep | 1e-10 prices; 1e-6 dur/cvx |
-| `bond_asset_swap_oracle.cpp` | Par-par asset-swap spread vs `AssetSwap::fairSpread` | **5e-5 abs (≈0.5 bp — loose; E5 tightens or documents)** |
+| `bond_asset_swap_oracle.cpp` | Par-par asset-swap spread vs `AssetSwap::fairSpread` | **5e-5 abs (≈0.5 bp — loose; E5 tightens or documents). Likely cause (hypothesis, 2026-09-13, not measured): settle == the evaluation date, so `DiscountingSwapEngine` drops the par upfront on that date (predicted gaps 3.3–3.8e-5); `asset_swap_oracle_test.cpp` settles T+1 and agrees at 1e-10** |
+| `asset_swap_oracle_test.cpp` | The `asset_swap` VERB end to end (run_json -> calibrated bundle -> float leg -> spread) vs `AssetSwap(parSwap=true)` on identical DFs and QuantLib's own schedules: spread in all three price modes, annuity, curve dirty/clean, accrued, the proceeds identity (par / dirty), a leap-day maturity's float roll | 1e-10 (`tol::curve_rel`) |
 | `bundle_test.cpp` | `MultiCurveBasisMatchesQuantLib` (1 of 11 tests is vs QuantLib; the other 10 are self-consistency and move to `swaps_consistency_tests` in E5) | `curve_rel` |
 | `bspline_oracle_test.cpp` | B-spline curve DFs/forwards vs QuantLib term structure; moment average vs exact daily sum | 1e-10; 1e-8 |
 | `monotone_cubic_oracle_test.cpp` | Hyman monotone cubic vs `MonotonicCubicNaturalSpline` (forward + primitive) | 1e-11 |
@@ -104,7 +105,7 @@ oracle merely might.
 | `curve` | 2/5 | `hazard.hpp`, `inflation.hpp`, `parametric.hpp`: **credit and inflation curves have no oracle at all**, though QuantLib ships engines for both |
 | `vol` | 3/8 | oracled: Bachelier, general-β SABR vol, `normal`. Not: `swaption.hpp`, `fx_black.hpp`, `fx_vol_surface.hpp`, `sabr_calibration.hpp`, `vega_ladder.hpp` |
 | `portfolio` | 1/4 | book aggregation is cross-path parity only (compiled vs templated) — a shared error cancels |
-| `api` | 0/20 | see below — measured by verb, not by include |
+| `api` | 3/21 | `bond.hpp`, `codec.hpp`, `bundle_api.hpp` reached since 2026-09-13 (`asset_swap_oracle_test.cpp` drives the verb); the rest see below — measured by verb, not by include |
 | `market`, `trade`, `csa`, `xva`, `derive` | 0 | mostly containers and role plumbing (`quote.hpp`, `currency.hpp`, `trade.hpp`, `csa.hpp`) where there is no independent number to compare; `derive/asset_swap.hpp` and `xva/exposure.hpp` DO produce numbers and do not have one |
 
 **Calibration, not just pricing.** Every oracle above except `calibration_oracle_test.cpp` compares a QUOTE at a

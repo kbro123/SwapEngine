@@ -11,7 +11,8 @@ swaps_consistency_tests|risk_test.cpp|2|4
 swaps_consistency_tests|spread_test.cpp|3|6
 swaps_consistency_tests|streaming_test.cpp|3|7
 swaps_consistency_tests|tension_regularizer_oracle_test.cpp|2|8
-swaps_oracle_tests|__listed__|105|0
+swaps_oracle_tests|__listed__|107|0
+swaps_oracle_tests|asset_swap_oracle_test.cpp|2|22
 swaps_oracle_tests|bond_asset_swap_oracle.cpp|1|2
 swaps_oracle_tests|bond_oracle_test.cpp|6|29
 swaps_oracle_tests|bspline_oracle_test.cpp|2|3

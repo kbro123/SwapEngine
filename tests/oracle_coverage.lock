@@ -2,7 +2,11 @@
 # Losing an entry means a QuantLib check stopped reaching shipped code -- usually a silent
 # side effect of a refactor, which is exactly how coverage erodes. Gaining one is free.
 swaps/ad/dual.hpp
+swaps/api/bond.hpp
+swaps/api/bundle_api.hpp
+swaps/api/codec.hpp
 swaps/build/bond.hpp
+swaps/build/bond_future.hpp
 swaps/build/calendar.hpp
 swaps/build/conventions.hpp
 swaps/build/date.hpp
@@ -30,12 +34,16 @@ swaps/conventions_db.hpp
 swaps/curve/curve_module.hpp
 swaps/curve/regions.hpp
 swaps/portfolio/bond_universe.hpp
+swaps/portfolio/compiled_multi.hpp
+swaps/portfolio/portfolio.hpp
 swaps/pricing/bond.hpp
+swaps/pricing/bond_future.hpp
 swaps/pricing/cashflows.hpp
 swaps/pricing/compiled.hpp
 swaps/pricing/compiled_book.hpp
 swaps/pricing/curve_handle.hpp
 swaps/pricing/curve_spec.hpp
+swaps/pricing/fixings.hpp
 swaps/ql/extract.hpp
 swaps/ql/ql_term_structure.hpp
 swaps/vol/bachelier.hpp

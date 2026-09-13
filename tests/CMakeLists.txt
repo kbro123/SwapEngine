@@ -18,6 +18,7 @@ add_executable(swaps_tests
   bond_terms_test.cpp
   delivery_basket_test.cpp
   derive_rv_test.cpp
+  asset_swap_leg_test.cpp
   tension_test.cpp
   turns_test.cpp
   build_calendar_test.cpp
@@ -110,6 +111,7 @@ if(TARGET quantlib_oracle)
     modular_curve_test.cpp
     bond_oracle_test.cpp
     bond_asset_swap_oracle.cpp
+    asset_swap_oracle_test.cpp
     extract_test.cpp
     bundle_test.cpp
     bspline_oracle_test.cpp
@@ -125,7 +127,8 @@ if(TARGET quantlib_oracle)
     sabr_ql_oracle_test.cpp
     calendar_ql_oracle_test.cpp
   )
-  target_link_libraries(swaps_oracle_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
+  # swaps_api: asset_swap_oracle_test drives the real run_json verb (E7 3.5).
+  target_link_libraries(swaps_oracle_tests PRIVATE swaps swaps_api quantlib_oracle GTest::gtest_main)
   target_include_directories(swaps_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   gtest_discover_tests(swaps_oracle_tests)
 

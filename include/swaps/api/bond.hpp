@@ -34,10 +34,14 @@ namespace swaps::api {
 std::string bonds_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string bonds_json(const std::string& request);
 
-// Stateless asset-swap verb (curve-space): par asset-swap spread(s) for bonds off a CALIBRATED bundle.
-// request = {"asset_swap": {value_date, bundle, currency?, index?, curve?, bonds:[{issue, settle, maturity,
-// coupon, freq?, clean?|dirty?}]}} -> SoA {asw_spread(decimal), clean_curve, dirty_curve, annuity, accrued,
-// n}. Par-par when no price is given; proceeds spread when clean/dirty is supplied.
+// Stateless asset-swap verb (curve-space): PAR asset-swap spread(s) for bonds off a CALIBRATED bundle.
+// request = {"asset_swap": {value_date, bundle, curve?=0, bonds:[{convention, issue, settle, maturity, coupon,
+// freq?, index?, clean? | dirty?}]}} -> SoA {asw_spread(decimal), clean_curve, dirty_curve, annuity, accrued, n}.
+// `convention` is a bonds[] row id (its currency picks the default swap product for the float leg); `index` per bond
+// names another float product. AT MOST ONE of clean / dirty (both is an error); neither means a purchase at par.
+// asw_spread is QuantLib AssetSwap(parSwap=true) at that purchase price -- NOT the proceeds (market-value) spread,
+// which is asw_spread / dirty_purchase. (Corrected 2026-09-13: this comment used to list top-level currency? / index?
+// that were never read, and called the price-given number "proceeds".) build::asset_swaps is the computation.
 std::string asset_swap_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string asset_swap_json(const std::string& request);
 

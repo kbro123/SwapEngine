@@ -751,6 +751,53 @@ json::object swap_spread_to_json(const der::SwapSpreadResult& r) {
   return out;
 }
 
+AssetSwapRequest asset_swap_request_from_json(const json::object& o) {
+  AssetSwapRequest r;
+  const auto field = [&](const char* k) -> const json::value& {
+    return need(o, k, std::string("asset_swap: missing '") + k + "'");
+  };
+  r.value_date = swaps::build::Date::from_iso(str(field("value_date")));
+  r.bundle = bundle_from_json(field("bundle"));
+  into(o, "curve", r.curve);
+  for (const auto& e : field("bonds").as_array()) {
+    const auto& bo = e.as_object();
+    const auto term = [&](const char* k) -> const json::value& {
+      return need(bo, k, std::string("asset_swap: each bond needs '") + k + "'");
+    };
+    swaps::build::AssetSwapBond b;
+    b.convention = str(term("convention"));
+    b.issue = swaps::build::Date::from_iso(str(term("issue")));
+    b.settle = swaps::build::Date::from_iso(str(term("settle")));
+    b.maturity = swaps::build::Date::from_iso(str(term("maturity")));
+    b.coupon = term("coupon").to_number<double>();
+    into(bo, "freq", b.freq);
+    into(bo, "index", b.index);
+    into(bo, "clean", b.clean);
+    into(bo, "dirty", b.dirty);
+    r.bonds.push_back(std::move(b));
+  }
+  return r;
+}
+
+json::object asset_swap_to_json(const std::vector<swaps::build::AssetSwapAnalytics>& rows) {
+  std::vector<double> asw, clean, dirty, annuity, accrued;
+  for (const swaps::build::AssetSwapAnalytics& a : rows) {
+    asw.push_back(a.asw_spread);
+    clean.push_back(a.clean_curve);
+    dirty.push_back(a.dirty_curve);
+    annuity.push_back(a.annuity);
+    accrued.push_back(a.accrued);
+  }
+  json::object out;
+  out["asw_spread"] = vecf(asw);
+  out["clean_curve"] = vecf(clean);
+  out["dirty_curve"] = vecf(dirty);
+  out["annuity"] = vecf(annuity);
+  out["accrued"] = vecf(accrued);
+  out["n"] = static_cast<int>(rows.size());
+  return out;
+}
+
 json::array sample_to_json(const std::vector<CurveSample>& samples) {
   json::array carr;
   for (const auto& s : samples) {
