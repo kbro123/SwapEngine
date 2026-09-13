@@ -46,13 +46,15 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/codec_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/bond_future_reference_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/consistent_risk_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/risk_scale_repro_test.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/risk_scale_repro_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/conventions_baked_roundtrip_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost ${CMAKE_SOURCE_DIR}/bench/fixtures)
   # Golden compiler-parity data (server/compile.py output), committed under tests/golden/compile/; and the
   # SOFR bundle fixture the vol-cube test calibrates against (also used by bench/vol_cube_bench).
   target_compile_definitions(swaps_api_tests PRIVATE
     SWAPS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/golden"
-    SOFR_BUNDLE_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../bench/fixtures/sofr_bundle.json")
+    SOFR_BUNDLE_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../bench/fixtures/sofr_bundle.json"
+    SWAPS_CONVENTIONS_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../conventions/conventions.json")
   gtest_discover_tests(swaps_api_tests)
 endif()
