@@ -2,7 +2,7 @@
 // E7 stage 5.0 PINS, written BEFORE the scenario / scenario_grid lift (P11): each verb's WHOLE response on a rich
 // request -- a 3-curve bundle (domestic discount, domestic forecast, foreign) with a turn, a book of two swaps and an
 // xccy position, parallel / per-curve / override / FX / no-op scenarios, a parallel x fx grid and a shift_curve +
-// parallel grid -- compared BYTE FOR BYTE with tests/golden/scenario/*.json, recorded from the verbs before the lift.
+// parallel grid, and `var`'s full-revaluation P&L over the same kinds of move -- compared BYTE FOR BYTE with tests/golden/scenario/*.json, recorded from the verbs before the lift.
 // The lift must keep every number bitwise. An owner-gated behaviour change (SC1 override-vs-add, SC2 multi-pair FX)
 // re-records deliberately and says so in its commit:
 //   SWAPS_WRITE_GOLDEN=1 ./build/api/swaps_api_tests --gtest_filter='ScenarioGolden.*'
@@ -26,6 +26,7 @@
 #include "swaps/api/codec.hpp"
 #include "swaps/api/scenario.hpp"
 #include "swaps/api/scenario_grid.hpp"
+#include "swaps/api/var.hpp"
 
 namespace api = swaps::api;
 namespace cal = swaps::calibration;
@@ -143,17 +144,18 @@ json::object base_request() {
       {"sample_times", json::array{0.05, 0.15, 0.5, 2.0, 9.0}}};
 }
 
-// Cut `"grid_us":<number>` and one adjoining comma out of a serialized response.
+// Cut each wall-clock field (`"grid_us":<number>`, `"reval_us":<number>`) and one adjoining comma out of a response.
 std::string without_timing(std::string s) {
-  const std::string key = "\"grid_us\":";
-  const std::size_t at = s.find(key);
-  if (at == std::string::npos) return s;
-  const std::size_t end = s.find_first_of(",}", at);
-  if (s[end] == ',')
-    s.erase(at, end + 1 - at);
-  else {
-    s.erase(at, end - at);
-    if (s[at - 1] == ',') s.erase(at - 1, 1);
+  for (const std::string key : {"\"grid_us\":", "\"reval_us\":"}) {
+    const std::size_t at = s.find(key);
+    if (at == std::string::npos) continue;
+    const std::size_t end = s.find_first_of(",}", at);
+    if (s[end] == ',')
+      s.erase(at, end + 1 - at);
+    else {
+      s.erase(at, end - at);
+      if (s[at - 1] == ',') s.erase(at - 1, 1);
+    }
   }
   return s;
 }
@@ -241,4 +243,32 @@ TEST(ScenarioGolden, GridResponsesAreBitwise) {
   EXPECT_EQ(pnl(1, 1), 0.0) << "the zero cell is the base";
   EXPECT_NE(pnl(1, 0), pnl(1, 2)) << "the fx axis reaches the xccy position";
   EXPECT_NE(pnl(0, 1), pnl(2, 1));
+}
+
+// var (deferred, but it shares the fork and the compiled-book cache the stage-5 lift moves): the reval P&L
+// distribution over moves of every kind, including a parallel with an explicit curve key (var ADDS them: SC1).
+TEST(ScenarioGolden, VarRevaluationResponseIsBitwise) {
+  json::object req = base_request();
+  req.erase("sample_times");
+  req["quantiles"] = json::array{0.9, 0.975};
+  req["scenarios"] = json::array{
+      json::object{{"parallel_bp", 37.5}},
+      json::object{{"parallel_bp", -36.0}},
+      json::object{{"parallel_bp", 34.0}, {"shift_curve", json::object{{"0", 14.5}}}},
+      json::object{{"shift_curve", json::object{{"2", -33.25}}}},
+      json::object{{"bump_fx", json::array{json::object{{"base", "EUR"}, {"quote", "USD"}, {"rel", 0.02}},
+                                           json::object{{"base", "GBP"}, {"quote", "USD"}, {"rel", -0.01}}}}},
+      json::object{{"parallel_bp", -31.75}, {"bump_fx", json::array{json::object{{"base", "EUR"}, {"quote", "USD"}, {"rel", -0.05}}}}},
+      json::object{{"parallel_bp", 34.5}},
+      json::object{}};
+  const std::string response = api::var_json(json::object{{"var", req}});
+  expect_golden("var_reval", response);
+
+  const json::object out = json::parse(response).as_object().at("var").as_object();
+  EXPECT_EQ(out.at("mode").as_string(), "reval");
+  EXPECT_EQ(out.at("n").as_int64(), 8);
+  const json::array& sorted = out.at("pnl_sorted").as_array();
+  int zeros = 0;
+  for (const auto& v : sorted) zeros += v.to_number<double>() == 0.0;
+  EXPECT_EQ(zeros, 1) << "exactly the no-op move reprices to the base";
 }
