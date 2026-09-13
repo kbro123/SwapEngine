@@ -16,6 +16,7 @@
 #include "swaps/api/bundle_api.hpp"  // RegSpec, CurveSample
 #include "swaps/api/json_util.hpp"   // vecf
 #include "swaps/build/date.hpp"
+#include "swaps/derive/bond_rv.hpp"  // BondUniverseRequest, GovvieFitRequest, SwapSpreadRequest
 #include "swaps/trade/csa.hpp"    // discount_index_for
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
 
@@ -25,6 +26,7 @@ namespace json = boost::json;
 namespace px = swaps::pricing;
 namespace curve = swaps::curve;
 namespace pf = swaps::portfolio;
+namespace der = swaps::derive;
 
 namespace {
 
@@ -128,6 +130,26 @@ swaps::trade::Pay pay_from_str(const std::string& s) {
   if (s == "fixed") return swaps::trade::Pay::Fixed;
   if (s == "float") return swaps::trade::Pay::Float;
   throw std::invalid_argument("book: a trade's 'pay' must be \"fixed\" or \"float\", got '" + s + "'");
+}
+
+der::GovvieModel govvie_model_from_str(const std::string& s) {
+  if (s == "spline") return der::GovvieModel::Spline;
+  if (s == "nelson_siegel") return der::GovvieModel::NelsonSiegel;
+  if (s == "svensson") return der::GovvieModel::Svensson;
+  throw std::invalid_argument("govvie_fit: unknown model '" + s + "' (spline | nelson_siegel | svensson)");
+}
+const char* govvie_model_to_str(der::GovvieModel m) {
+  switch (m) {
+    case der::GovvieModel::Spline: return "spline";
+    case der::GovvieModel::NelsonSiegel: return "nelson_siegel";
+    case der::GovvieModel::Svensson: return "svensson";
+  }
+  return "spline";
+}
+der::SwapSpreadType spread_type_from_str(const std::string& s) {
+  if (s == "headline") return der::SwapSpreadType::HeadlineYield;
+  if (s == "matched_maturity") return der::SwapSpreadType::MatchedMaturity;
+  throw std::invalid_argument("swap_spread: unknown spread_type '" + s + "' (headline | matched_maturity)");
 }
 
 // ---- per-object parse -------------------------------------------------------------------------
@@ -235,6 +257,31 @@ cal::BundleCurveSpec spec_from(const json::object& o) {
   if (s.regions.empty() && !(legacy_meeting.empty() && legacy_back.empty()))
     s.regions = curve::flat_hermite(legacy_meeting, legacy_back);
   return s;
+}
+
+// One bond row of an RV request, stamped with the request's shared yield convention.
+swaps::build::BondId bond_id_from(const json::object& o, const std::string& convention, const char* verb) {
+  const auto term = [&](const char* k) -> const json::value& {
+    return need(o, k, std::string(verb) + ": each bond needs '" + k + "'");
+  };
+  swaps::build::BondId b;
+  b.id = str(term("id"));
+  b.yield_conv = convention;
+  b.issue = swaps::build::Date::from_iso(str(term("issue")));
+  b.maturity = swaps::build::Date::from_iso(str(term("maturity")));
+  b.coupon = term("coupon").to_number<double>();
+  into(o, "first_coupon", b.first_coupon);  // when-issued / odd first period
+  return b;
+}
+std::vector<swaps::build::BondId> bonds_from(const json::object& o, const std::string& convention, const char* verb) {
+  std::vector<swaps::build::BondId> u;
+  for (const auto& e : need(o, "bonds", std::string(verb) + ": missing 'bonds' array").as_array())
+    u.push_back(bond_id_from(e.as_object(), convention, verb));
+  return u;
+}
+void settlement_into(const json::object& o, der::SettlementOverride& s) {
+  into(o, "settle_calendar", s.calendar);
+  into(o, "settle_lag", s.lag);
 }
 
 // ---- per-object serialize ----------------------------------------------------------------------
@@ -620,6 +667,87 @@ json::object delivery_basket_to_json(const swaps::build::DeliveryBasketResult& r
     out["ctd_index"] = static_cast<int>(*r.ctd);
     out["ctd_id"] = r.rows[*r.ctd].id;
   }
+  return out;
+}
+
+der::BondUniverseRequest bond_universe_request_from_json(const json::object& o) {
+  der::BondUniverseRequest r;
+  r.value_date = swaps::build::Date::from_iso(str(need(o, "value_date", "bond_universe: missing 'value_date'")));
+  r.convention = str(need(o, "convention", "bond_universe: missing 'convention' (a bonds[] row id, e.g. US-TREASURY)"));
+  into(o, "settle", r.settle);
+  r.bonds = bonds_from(o, r.convention, "bond_universe");
+  into(o, "clean", r.clean);
+  into(o, "yield", r.yield);
+  return r;
+}
+json::object bond_universe_to_json(const der::BondUniverseResult& r) {
+  json::object out;
+  out["clean"] = vecf(r.clean);
+  out["yield"] = vecf(r.yield);
+  out["modified_duration"] = vecf(r.modified_duration);
+  out["convexity"] = vecf(r.convexity);
+  out["accrued"] = vecf(r.accrued);
+  out["n"] = static_cast<int>(r.yield.size());
+  return out;
+}
+
+der::GovvieFitRequest govvie_fit_request_from_json(const json::object& o) {
+  der::GovvieFitRequest r;
+  r.value_date = swaps::build::Date::from_iso(str(need(o, "value_date", "govvie_fit: missing 'value_date'")));
+  r.convention = str(need(o, "convention", "govvie_fit: missing 'convention' (a bonds[] row id)"));
+  settlement_into(o, r.settlement);
+  r.bonds = bonds_from(o, r.convention, "govvie_fit");
+  into(o, "clean", r.clean);
+  need(o, "clean", "govvie_fit: missing 'clean' prices");
+  into(o, "weight", r.weight);
+  if (present(o, "model")) r.model = govvie_model_from_str(str(o.at("model")));
+  into(o, "meeting", r.meeting);
+  into(o, "back", r.back);
+  into(o, "tau1", r.tau1);
+  into(o, "tau2", r.tau2);
+  into(o, "x0", r.x0);
+  return r;
+}
+json::object govvie_fit_to_json(const der::GovvieFitResult& r) {
+  json::object out;
+  out["x"] = vecf(r.fit.x);
+  out["rms_residual"] = r.fit.rms_residual;
+  out["iterations"] = r.fit.iterations;
+  out["residuals"] = vecf(r.residuals);
+  if (r.z_spread) out["z_spread"] = vecf(*r.z_spread);
+  out["model"] = govvie_model_to_str(r.model);
+  out["n"] = static_cast<int>(r.residuals.size());
+  return out;
+}
+
+der::SwapSpreadRequest swap_spread_request_from_json(const json::object& o) {
+  der::SwapSpreadRequest r;
+  const auto field = [&](const char* k) -> const json::value& {
+    return need(o, k, std::string("swap_spread: missing '") + k + "'");
+  };
+  r.value_date = swaps::build::Date::from_iso(str(field("value_date")));
+  const std::string convention = str(field("convention"));
+  r.bond = bond_id_from(field("bond").as_object(), convention, "swap_spread");
+  settlement_into(o, r.settlement);
+  if (present(o, "spread_type")) r.type = spread_type_from_str(str(o.at("spread_type")));
+  r.clean = field("clean").to_number<double>();
+  r.spread = field("spread").to_number<double>();
+  into(o, "index", r.index);
+  into(o, "tenor", r.tenor);
+  into(o, "swap_curve", r.swap_curve);
+  into(o, "factor_curve", r.factor_curve);
+  into(o, "anchor", r.anchor);
+  return r;
+}
+json::object swap_spread_to_json(const der::SwapSpreadResult& r) {
+  json::object out;
+  out["bond_yield"] = r.derived.bond_yield;
+  out["spread"] = r.derived.spread;
+  out["anchor"] = r.anchor;
+  json::object rows;
+  rows["pin"] = instrument_to_json(r.derived.rows.pin);  // QuoteKind::Rate on the govvie factor (bond bucket)
+  rows["asw"] = instrument_to_json(r.derived.rows.asw);  // Portfolio{+swap, -Rate(factor)} (the ASW basis row)
+  out["rows"] = std::move(rows);
   return out;
 }
 

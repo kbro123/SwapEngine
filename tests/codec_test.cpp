@@ -12,6 +12,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/codec.hpp"
+#include "swaps/derive/bond_rv.hpp"
 #include "swaps/trade/csa.hpp"
 
 namespace api = swaps::api;
@@ -405,4 +406,100 @@ TEST(Codec, ADeliveryBasketRequiresItsMarketInputsAndDefersContractFieldsToTheLi
     o.erase(k);
     EXPECT_THROW(api::delivery_basket_request_from_json(o), std::invalid_argument) << k;
   }
+}
+
+namespace {
+const char* kGovvie = R"({"value_date": "2026-09-04", "convention": "US-TREASURY", "clean": [1.0],
+    "bonds": [{"id": "B1", "issue": "2026-08-15", "maturity": "2028-09-15", "coupon": 0.035}]})";
+const char* kSwapSpread = R"({"value_date": "2026-09-04", "convention": "US-TREASURY",
+    "bond": {"id": "UST-5Y", "issue": "2026-08-15", "maturity": "2031-08-15", "coupon": 0.04},
+    "clean": 0.991, "spread": -0.0032, "index": "USD-SOFR", "tenor": "5Y", "swap_curve": 0, "factor_curve": 1})";
+}  // namespace
+
+TEST(Codec, AnAbsentRvFieldTakesTheLibraryStructsOwnDefault) {
+  const swaps::derive::GovvieFitRequest g = api::govvie_fit_request_from_json(json::parse(kGovvie).as_object());
+  const swaps::derive::GovvieFitRequest dg;
+  EXPECT_EQ(g.model, dg.model);
+  EXPECT_EQ(g.x0, dg.x0);
+  EXPECT_FALSE(g.tau1.has_value());
+  EXPECT_FALSE(g.tau2.has_value());
+  EXPECT_FALSE(g.settlement.calendar.has_value());
+  EXPECT_FALSE(g.settlement.lag.has_value());
+  EXPECT_TRUE(g.weight.empty());
+  ASSERT_EQ(g.bonds.size(), 1u);
+  EXPECT_EQ(g.bonds[0].yield_conv, "US-TREASURY") << "the request's convention is stamped on every row";
+  EXPECT_FALSE(g.bonds[0].first_coupon.has_value());
+
+  const swaps::derive::SwapSpreadRequest ss = api::swap_spread_request_from_json(json::parse(kSwapSpread).as_object());
+  EXPECT_EQ(ss.type, swaps::derive::SwapSpreadRequest{}.type);
+  EXPECT_FALSE(ss.anchor.has_value());
+
+  const swaps::derive::BondUniverseRequest u = api::bond_universe_request_from_json(
+      json::parse(R"({"value_date": "2026-09-04", "convention": "US-TREASURY", "yield": [0.04],
+          "bonds": [{"id": "A", "issue": "2026-08-15", "maturity": "2031-08-15", "coupon": 0.04}]})").as_object());
+  EXPECT_FALSE(u.settle.has_value());
+  EXPECT_FALSE(u.clean.has_value());
+  ASSERT_TRUE(u.yield.has_value());
+}
+
+TEST(Codec, APresentRvFieldIsCarriedExactly) {
+  json::object o = json::parse(kGovvie).as_object();
+  o["model"] = "svensson";
+  o["tau1"] = 1.5;
+  o["tau2"] = 7.0;
+  o["x0"] = 0.041;
+  o["settle_lag"] = 3;
+  o["settle_calendar"] = "NONE";
+  o["weight"] = json::array{2.0};
+  o["meeting"] = json::array{0.5};
+  o["back"] = json::array{2.0, 5.0};
+  o["bonds"].as_array()[0].as_object()["first_coupon"] = "2027-03-15";
+  const swaps::derive::GovvieFitRequest g = api::govvie_fit_request_from_json(o);
+  EXPECT_EQ(g.model, swaps::derive::GovvieModel::Svensson);
+  EXPECT_EQ(g.tau1, std::optional<double>(1.5));
+  EXPECT_EQ(g.tau2, std::optional<double>(7.0));
+  EXPECT_EQ(g.x0, 0.041);
+  EXPECT_EQ(g.settlement.lag, std::optional<int>(3));
+  EXPECT_EQ(g.settlement.calendar, std::optional<std::string>("NONE"));
+  EXPECT_EQ(g.weight, (std::vector<double>{2.0}));
+  EXPECT_EQ(g.meeting, (std::vector<double>{0.5}));
+  EXPECT_EQ(g.back, (std::vector<double>{2.0, 5.0}));
+  EXPECT_TRUE(g.bonds[0].first_coupon.has_value());
+
+  json::object s = json::parse(kSwapSpread).as_object();
+  s["spread_type"] = "matched_maturity";
+  s["anchor"] = 4.2;
+  const swaps::derive::SwapSpreadRequest ss = api::swap_spread_request_from_json(s);
+  EXPECT_EQ(ss.type, swaps::derive::SwapSpreadType::MatchedMaturity);
+  EXPECT_EQ(ss.anchor, std::optional<double>(4.2));
+  EXPECT_EQ(ss.swap_curve, 0);
+  EXPECT_EQ(ss.factor_curve, 1);
+  EXPECT_EQ(ss.bond.yield_conv, "US-TREASURY");
+}
+
+TEST(Codec, AnRvFieldTheLibraryCannotDefaultIsRequiredAndAnUnknownNameThrows) {
+  for (const char* k : {"value_date", "convention", "bonds", "clean"}) {
+    json::object o = json::parse(kGovvie).as_object();
+    o.erase(k);
+    EXPECT_THROW(api::govvie_fit_request_from_json(o), std::invalid_argument) << k;
+  }
+  for (const char* k : {"id", "issue", "maturity", "coupon"}) {
+    json::object o = json::parse(kGovvie).as_object();
+    o["bonds"].as_array()[0].as_object().erase(k);
+    EXPECT_THROW(api::govvie_fit_request_from_json(o), std::invalid_argument) << k;
+  }
+  for (const char* k : {"value_date", "convention", "bond", "clean", "spread"}) {
+    json::object o = json::parse(kSwapSpread).as_object();
+    o.erase(k);
+    EXPECT_THROW(api::swap_spread_request_from_json(o), std::invalid_argument) << k;
+  }
+  json::object m = json::parse(kGovvie).as_object();
+  m["model"] = "cubic";
+  EXPECT_THROW(api::govvie_fit_request_from_json(m), std::invalid_argument);
+  json::object st = json::parse(kSwapSpread).as_object();
+  st["spread_type"] = "par";  // was silently the headline spread
+  EXPECT_THROW(api::swap_spread_request_from_json(st), std::invalid_argument);
+  json::object lag = json::parse(kGovvie).as_object();
+  lag["settle_lag"] = 1.5;  // was truncated to 1
+  EXPECT_ANY_THROW(api::govvie_fit_request_from_json(lag));
 }

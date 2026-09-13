@@ -48,6 +48,8 @@ void price_residuals(const std::vector<pricing::Bond>& bonds, const Eigen::Vecto
   const int n = static_cast<int>(bonds.size());
   if (market_clean.size() != n)
     throw std::invalid_argument("bond fit: market_clean size must match the bond count");
+  if (weight.size() != 0 && weight.size() != n)  // was an out-of-bounds read (E7 3.4 finding)
+    throw std::invalid_argument("bond fit: weight size must match the bond count (or be empty)");
   r.resize(n);
   for (int b = 0; b < n; ++b) {
     const double w = weight.size() ? weight[b] : 1.0;

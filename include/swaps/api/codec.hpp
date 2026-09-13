@@ -30,6 +30,17 @@
 #include "swaps/calibration/regularize.hpp"  // RegSpec
 #include "swaps/portfolio/portfolio.hpp"
 
+// The RV request/result types (derive/bond_rv.hpp, derive/asset_swap.hpp) are forward-declared: including those
+// headers here would pull portfolio/ and the LM into every bundle_api.hpp translation unit.
+namespace swaps::derive {
+struct BondUniverseRequest;
+struct BondUniverseResult;
+struct GovvieFitRequest;
+struct GovvieFitResult;
+struct SwapSpreadRequest;
+struct SwapSpreadResult;
+}  // namespace swaps::derive
+
 namespace swaps::api {
 
 namespace cal = swaps::calibration;
@@ -75,6 +86,21 @@ boost::json::object street_analytics_to_json(const std::vector<swaps::pricing::S
 swaps::build::DeliveryBasketRequest delivery_basket_request_from_json(const boost::json::object& payload);
 // -> SoA {conversion_factor, gross_basis, net_basis, implied_repo, invoice_price, n, ctd_index, ctd_id}
 boost::json::object delivery_basket_to_json(const swaps::build::DeliveryBasketResult& r);
+
+// ---- bond relative value (the bond_universe / govvie_fit / swap_spread verbs) -----------------------------
+// Bond rows are {id, issue, maturity, coupon, first_coupon?}, all required but first_coupon, stamped with the
+// request's `convention`. Settlement overrides settle_calendar? / settle_lag? are the bond row's when absent.
+// bond_universe: {value_date, convention, settle?, bonds, clean? | yield?}
+swaps::derive::BondUniverseRequest bond_universe_request_from_json(const boost::json::object& payload);
+boost::json::object bond_universe_to_json(const swaps::derive::BondUniverseResult& r);
+// govvie_fit: {value_date, convention, bonds, clean, weight?, model? (spline | nelson_siegel | svensson),
+//              meeting?, back?, tau1?, tau2?, x0?, settle_calendar?, settle_lag?}
+swaps::derive::GovvieFitRequest govvie_fit_request_from_json(const boost::json::object& payload);
+boost::json::object govvie_fit_to_json(const swaps::derive::GovvieFitResult& r);
+// swap_spread: {value_date, convention, bond, clean, spread, index, tenor, swap_curve, factor_curve, anchor?,
+//               spread_type? (headline | matched_maturity), settle_calendar?, settle_lag?}
+swaps::derive::SwapSpreadRequest swap_spread_request_from_json(const boost::json::object& payload);
+boost::json::object swap_spread_to_json(const swaps::derive::SwapSpreadResult& r);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

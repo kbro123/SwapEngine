@@ -201,8 +201,10 @@ def classify(n, V):
     if k == "CXXOperatorCallExpr":
         name, _ = callee(n)
         op = (name or "")[len("operator"):] if (name or "").startswith("operator") else None
+        operands = [typ(x) for x in (n.get("inner") or [])[1:]]
+        if op == "*" and len(operands) == 1:
+            return None  # a DEREFERENCE (std::optional, an iterator), never a multiplication
         if op in ARITH_OPS:
-            operands = [typ(x) for x in (n.get("inner") or [])[1:]]
             if FLOAT.match(typ(n)) or any("Eigen::" in t for t in [typ(n)] + operands):
                 return "compute"
         return None
@@ -505,11 +507,13 @@ def write_lock(counts):
 
 SELFTEST_SNIPPET = """
 #include <cmath>
+#include <optional>
 #include "swaps/conventions_data.hpp"
 namespace swaps::api {
 namespace {
 [[maybe_unused]] double verb_density_selftest(const boost::json::object& o) {
-  double s = 1.0;
+  const std::optional<double> deref(1.0);
+  double s = *deref;  // a DEREFERENCE of a double: must count nothing (it once counted as a multiplication)
   for (int i = 0; i < 2; ++i) s = s * 2.0;
   if (o.contains("k")) s = jd(o, "k", 3.0);
   const double t = o.contains("t") ? std::sqrt(s) : s;

@@ -18,8 +18,10 @@
 // The bond street-yield / price↔yield inversion is a PRECOMPUTE off the Market, never on the calibration hot
 // path (the compiled solve for the swap curve never sees a bond).
 
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <Eigen/Core>
@@ -27,6 +29,9 @@
 #include "swaps/build/bond.hpp"
 #include "swaps/build/calendar.hpp"
 #include "swaps/build/date.hpp"
+#include "swaps/build/instruments.hpp"  // par_swap
+#include "swaps/build/ref_data.hpp"     // Index
+#include "swaps/build/schedule.hpp"     // resolve, curve_time
 #include "swaps/build/swap_spread.hpp"
 #include "swaps/calibration/bond_fit.hpp"
 #include "swaps/calibration/problem.hpp"
@@ -69,11 +74,37 @@ struct AssetSwapConvention {
   int settle_lag = -1;                                   // business days to settlement (REQUIRED; bonds[].settle_lag)
 };
 
+// Settlement terms a request may override; an absent field is the bond convention row's (bonds[].calendar /
+// bonds[].settle_lag).
+struct SettlementOverride {
+  std::optional<std::string> calendar;
+  std::optional<int> lag;
+};
+
+// The asset-swap convention a BOND convention implies: its currency, and its settlement calendar / lag unless
+// overridden. The ONE place a bonds[] row becomes settlement terms (E7 stage 3.4 -- the RV verbs each re-read the
+// row and re-applied the overrides by hand).
+inline AssetSwapConvention asset_swap_convention(std::string_view bond_convention, const SettlementOverride& o = {}) {
+  if (bond_convention.empty())
+    throw std::invalid_argument("bond convention: needs 'convention' (a bonds[] row id, e.g. US-TREASURY)");
+  const conventions::BondConv bc = conventions::require_bond(bond_convention);
+  AssetSwapConvention conv;
+  conv.currency = std::string(bc.currency);
+  conv.settle_calendar = o.calendar ? *o.calendar : std::string(bc.calendar);
+  conv.settle_lag = o.lag ? *o.lag : bc.settle_lag;
+  return conv;
+}
+
+// Settlement for a trade done `today` under `conv` -- the ONE business-day roll (it was written out four times).
+inline build::Date settlement_date(const AssetSwapConvention& conv, const build::Date& today) {
+  return build::advance_bd(conv.settle_calendar, today, conv.settle_lag);
+}
+
 // The benchmark's STREET yield, precomputed from the Market: build the bond on its convention, read its
 // market CLEAN price (Market.quote(id).mid()), and invert to yield via the engine's Newton (pricing/bond).
 inline double benchmark_yield(const AssetSwapConvention& conv, const build::BondId& bond,
                               const market::Market& mkt) {
-  const build::Date settle = build::advance_bd(conv.settle_calendar, mkt.today(), conv.settle_lag);
+  const build::Date settle = settlement_date(conv, mkt.today());
   const build::BuiltBond bb = build::build_bond(bond, mkt.today(), settle);  // WI-aware via the identity
   const double clean = mkt.quote(bond.id).mid();  // bond quotes are CLEAN prices, per unit notional
   return pricing::bond_yield_from_clean(bb.yield, clean);
@@ -125,7 +156,7 @@ inline DerivedAssetSwap derive_asset_swap(const AssetSwapConvention& conv, const
 // (settle, delivery] are enumerated off the coupon grid and reinvested at repo.
 inline double ctd_forward_yield(const AssetSwapConvention& conv, const build::BondId& ctd,
                                 const build::Date& delivery, double repo, const market::Market& mkt) {
-  const build::Date settle = build::advance_bd(conv.settle_calendar, mkt.today(), conv.settle_lag);
+  const build::Date settle = settlement_date(conv, mkt.today());
   const build::BuiltBond bb_now = build::build_bond(ctd, mkt.today(), settle);
   const double clean_now = mkt.quote(ctd.id).mid();        // CTD live CLEAN price, per unit notional
   const double dirty_now = clean_now + bb_now.accrued;
@@ -172,7 +203,7 @@ inline void load_universe(const AssetSwapConvention& conv, const std::vector<bui
   bonds.clear();
   bonds.reserve(universe.size());
   mc.resize(static_cast<int>(universe.size()));
-  const build::Date settle = build::advance_bd(conv.settle_calendar, mkt.today(), conv.settle_lag);
+  const build::Date settle = settlement_date(conv, mkt.today());
   for (std::size_t b = 0; b < universe.size(); ++b) {
     const build::BondId& br = universe[b];
     bonds.push_back(build::build_bond(br, mkt.today(), settle).curve);  // WI-aware via the identity
@@ -213,6 +244,56 @@ inline cal::ParametricBondFit<Model> make_parametric_fit(const AssetSwapConventi
   load_universe(conv, universe, mkt, fit.bonds, fit.market_clean);
   if (!weight.empty()) fit.weight = Eigen::Map<const Eigen::VectorXd>(weight.data(), weight.size());
   return fit;
+}
+
+// =================================================================================================
+// swap_spread — the `swap_spread` verb's whole computation (E7 stage 3.4).
+// =================================================================================================
+// The benchmark bond + its clean price and the quoted spread; the matched spot-start par swap built from the
+// index's conventions DB row to `tenor` from SPOT on the index calendar; the govvie factor anchor (default: that
+// swap's maturity in curve time). KNOWN GAP, kept bit-for-bit pending an owner decision: MatchedMaturity also
+// matches the TENOR swap (TASKS-ENGINE E7 3.4 finding (1)) -- it returns headline numbers under its own label.
+inline constexpr const char* kSwapSpreadQuoteId = "spread";  // the Market key the quoted spread is stored under
+
+struct SwapSpreadRequest {
+  build::Date value_date;
+  build::BondId bond;  // the benchmark; bond.yield_conv is also the settlement convention
+  SettlementOverride settlement;
+  SwapSpreadType type = SwapSpreadType::HeadlineYield;
+  double clean = 0.0;   // benchmark clean price -- REQUIRED, > 0
+  double spread = 0.0;  // the quoted swap spread
+  std::string index;    // the matched swap's index -- REQUIRED, e.g. USD-SOFR
+  std::string tenor;    // REQUIRED, e.g. 5Y
+  int swap_curve = -1, factor_curve = -1;  // bundle roles -- REQUIRED
+  std::optional<double> anchor;             // absent => curve_time(value_date, swap maturity)
+};
+struct SwapSpreadResult {
+  DerivedAssetSwap derived;
+  double anchor = 0.0;
+};
+
+inline SwapSpreadResult swap_spread(const SwapSpreadRequest& r) {
+  if (!(r.clean > 0.0)) throw std::invalid_argument("swap_spread: needs a positive benchmark 'clean' price");
+  if (r.index.empty()) throw std::invalid_argument("swap_spread: missing swap 'index'");
+  if (r.tenor.empty()) throw std::invalid_argument("swap_spread: missing swap 'tenor' (e.g. 5Y)");
+  if (r.swap_curve < 0 || r.factor_curve < 0)
+    throw std::invalid_argument("swap_spread: needs 'swap_curve' and 'factor_curve' (bundle curve roles)");
+  if (r.bond.id == kSwapSpreadQuoteId)
+    throw std::invalid_argument("swap_spread: a bond id may not be the reserved quote name 'spread'");
+  AssetSwapConvention conv = asset_swap_convention(r.bond.yield_conv, r.settlement);
+  conv.type = r.type;
+  conv.swap_index = r.index;
+  const build::SwapConv sconv = build::Index(r.index).par_convention().resolve();
+  const build::Date mat = build::resolve(r.tenor, r.value_date, sconv.calendar, sconv.bdc, sconv.spot_lag);
+  const cal::Instrument spot_swap = build::par_swap(r.value_date, sconv, mat, r.swap_curve, r.swap_curve, 0.0);
+  SwapSpreadResult out;
+  out.anchor = r.anchor.value_or(build::curve_time(r.value_date, mat));
+  market::Market m;
+  m.as_of(r.value_date);
+  m.add_quote(r.bond.id, market::Quote::mid(r.clean));
+  m.add_quote(kSwapSpreadQuoteId, market::Quote::mid(r.spread));
+  out.derived = derive_asset_swap(conv, r.bond, spot_swap, r.factor_curve, out.anchor, m, kSwapSpreadQuoteId);
+  return out;
 }
 
 }  // namespace swaps::derive

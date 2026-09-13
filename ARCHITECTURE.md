@@ -67,6 +67,7 @@ graph TD
     calibration --> portfolio
     derive --> curve
     derive --> pricing
+    derive --> portfolio
     api --> curve
     api --> pricing
 ```

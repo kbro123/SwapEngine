@@ -16,6 +16,12 @@
 //                   swap_curve, factor_curve, anchor?, spread_type?, settle_calendar?, settle_lag?}}
 //                  -> the headline derivation: benchmark street yield (WI-aware) + the {pin, asw}
 //                     calibration rows of the asset-swap BASIS, as instrument JSON for a bundle spec.
+//
+// REQUIRED (since E7 stage 3.4, 2026-09-13): each bond row's id / issue / maturity / coupon; swap_spread's clean,
+// spread, index, tenor, swap_curve and factor_curve (they used to default to 0 / "" / 0 / 1). An unknown `model` or
+// `spread_type` throws (spread_type used to fall back to headline silently); govvie_fit rejects duplicate bond ids
+// and a `weight` of the wrong length. Absent settle_calendar / settle_lag are the bond convention row's. KNOWN GAP:
+// spread_type "matched_maturity" still matches the TENOR swap (TASKS-ENGINE E7 3.4), pending an owner decision.
 
 #include <string>
 

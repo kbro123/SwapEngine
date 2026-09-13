@@ -24,6 +24,23 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 3.4: the RV library behind bond_universe / govvie_fit / swap_spread.
+    ("rv_settlement_lag_override_ignored", "include/swaps/derive/asset_swap.hpp",
+     "  conv.settle_lag = o.lag ? *o.lag : bc.settle_lag;",
+     "  conv.settle_lag = bc.settle_lag;",
+     ["derive_rv_test.cpp"], "*", "the settlement-lag override is unpinned (E7 3.4)"),
+    ("rv_zspread_target_is_clean_not_dirty", "include/swaps/derive/bond_rv.hpp",
+     "target_dirty[b] = fit.market_clean[b] + fit.bonds[static_cast<std::size_t>(b)].accrued;",
+     "target_dirty[b] = fit.market_clean[b];",
+     ["derive_rv_test.cpp"], "*", "the z-spread dirty target is unpinned (E7 3.4)"),
+    ("rv_anchor_default_is_bond_maturity", "include/swaps/derive/asset_swap.hpp",
+     "  out.anchor = r.anchor.value_or(build::curve_time(r.value_date, mat));",
+     "  out.anchor = r.anchor.value_or(build::curve_time(r.value_date, r.bond.maturity));",
+     ["derive_rv_test.cpp"], "*", "the swap-spread anchor default is unpinned (E7 3.4)"),
+    ("rv_parametric_tau2_request_dropped", "include/swaps/derive/bond_rv.hpp",
+     "r.tau2.value_or(defaults.tau2)",
+     "defaults.tau2",
+     ["derive_rv_test.cpp"], "*", "a requested parametric decay tau2 is unpinned (E7 3.4)"),
     # E7 stage 3.3: the exchange invoices on the ROUNDED conversion factor (CME IR232).
     ("bond_future_cf_left_unrounded", "include/swaps/build/bond_future.hpp",
      "  return std::round(cf * scale) / scale;",
