@@ -15,6 +15,7 @@
 
 #include <Eigen/Dense>
 
+#include <stdexcept>
 #include <vector>
 
 #include "swaps/ad/dual.hpp"
@@ -72,18 +73,22 @@ Eigen::VectorXd bucketed_delta(const CalibrationProblem& prob, const Eigen::Vect
 // A direction is "unseen" when its SINGULAR VALUE is null at the engine's ONE rank threshold (kRankThreshold,
 // relative to sigma_max) -- the same test calibrate()'s rank_deficiency and the streamer's operator use (E3-G5).
 //
-// KNOWN BUG, carried unchanged by the move and fixed separately (TASKS-ENGINE E7 "RISK SCALE BUGS" (1)): the real
-// rows are pinv(J_full)ᵀ g WITHOUT the residual market scale D that risk_operator applies, so a banded row is
-// overstated by 1/decay and an FX row by q·T.
+// J is the RESIDUAL Jacobian, so pinv(J_full)ᵀ g is dP/dr; the quote ladder is dP/dq = D ⊙ dP/dr with D = diag(−dr/dq)
+// = residual_market_scale -- exactly the scale risk_operator puts on M. `market_scale` is REQUIRED (no default: its
+// omission is the bug). FIXED 2026-09-13: D was omitted, so a banded row was overstated by 1/decay and an FX forward
+// by q·T (tests/risk_scale_repro_test.cpp).
 struct NullCompletedLadder {
   Eigen::VectorXd full;             // n_residuals real quotes first, then one entry per synthetic pillar
   int n_residuals = 0;
   std::vector<int> synthetic_knot;  // each synthetic pillar's dominant knot index (for labelling)
 };
 
-inline NullCompletedLadder null_completed_ladder(const Eigen::MatrixXd& J, const Eigen::VectorXd& g) {
+inline NullCompletedLadder null_completed_ladder(const Eigen::MatrixXd& J, const Eigen::VectorXd& g,
+                                                 const Eigen::VectorXd& market_scale) {
   const int n_res = static_cast<int>(J.rows());
   const int nk = static_cast<int>(J.cols());
+  if (market_scale.size() != n_res)
+    throw std::invalid_argument("null_completed_ladder: the market scale needs one entry per residual");
   NullCompletedLadder out;
   out.n_residuals = n_res;
   int rank = 0;
@@ -110,7 +115,8 @@ inline NullCompletedLadder null_completed_ladder(const Eigen::MatrixXd& J, const
   cod.setThreshold(kRankThreshold);
   cod.compute(Jf);
   const Eigen::MatrixXd Mf = cod.pseudoInverse();  // n_knots x (n_res + n_null)
-  out.full = Mf.transpose() * g;                   // length n_res + n_null
+  out.full = Mf.transpose() * g;                   // length n_res + n_null: dP/dr, then the synthetic pillars
+  out.full.head(n_res).array() *= market_scale.array();  // dP/dq on the real quotes
   return out;
 }
 

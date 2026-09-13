@@ -201,7 +201,7 @@ TEST(ApiPeriphery, GenerateRiskNullCompletionUsesTheSharedRankThreshold) {
   Eigen::MatrixXd J(2, 2);
   J << 1.0, 0.0, 0.0, 1e-6;  // a stiff (sigma ratio 1e-6) but CONSTRAINED direction: not null
   Eigen::VectorXd g(2); g << 1.0, 2.0;
-  const swaps::calibration::NullCompletedLadder L = swaps::calibration::null_completed_ladder(J, g);
+  const swaps::calibration::NullCompletedLadder L = swaps::calibration::null_completed_ladder(J, g, Eigen::VectorXd::Ones(J.rows()));
   syn = L.synthetic_knot;
   const Eigen::VectorXd lad = L.full;
   EXPECT_EQ(syn.size(), 0u) << "sigma 1e-6 is constrained at kRankThreshold 1e-10 (the old 3e-5 cut self-quoted it)";
@@ -210,7 +210,7 @@ TEST(ApiPeriphery, GenerateRiskNullCompletionUsesTheSharedRankThreshold) {
   EXPECT_NEAR(lad[1], 2.0 / 1e-6, 1e-3);
   Eigen::MatrixXd J1(1, 2);
   J1 << 1.0, 0.0;  // knot 1 genuinely unseen
-  const swaps::calibration::NullCompletedLadder L1 = swaps::calibration::null_completed_ladder(J1, g);
+  const swaps::calibration::NullCompletedLadder L1 = swaps::calibration::null_completed_ladder(J1, g, Eigen::VectorXd::Ones(J1.rows()));
   syn = L1.synthetic_knot;
   const Eigen::VectorXd lad1 = L1.full;
   ASSERT_EQ(syn.size(), 1u);

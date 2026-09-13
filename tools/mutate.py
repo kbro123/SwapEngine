@@ -24,6 +24,15 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-13 risk-scale fixes: the quote ladder and identifiability carry the residual market scale D.
+    ("ladder_market_scale_dropped", "include/swaps/calibration/risk.hpp",
+     "  out.full.head(n_res).array() *= market_scale.array();  // dP/dq on the real quotes",
+     "",
+     ["consistent_risk_library_test.cpp"], "*", "the generate_risk ladder's market scale is unpinned"),
+    ("identifiability_market_scale_not_divided", "include/swaps/calibration/diagnostics.hpp",
+     "      P.col(i) /= market_scale[i];",
+     "      P.col(i) /= 1.0;",
+     ["calibration_diagnostics_test.cpp"], "*", "identifiability's market-scale division is unpinned"),
     # E7 stage 3.7: calibration/consistent_risk.hpp and null_completed_ladder, the library behind generate_risk.
     ("consistent_risk_relevel_skipped", "include/swaps/calibration/consistent_risk.hpp",
      "      for (auto& ins : bk.instruments) ins.market = anchor.model_quote(ins);",

@@ -6,8 +6,8 @@
 // calibrated curve, every other bundle is RE-LEVELED onto that curve, and the book's risk is re-expressed in each
 // bundle's instrument basis, with any null direction of a bundle's Jacobian self-quoted as a synthetic pillar.
 //
-// KNOWN BUG, fixed separately (TASKS-ENGINE E7 "RISK SCALE BUGS" (1)): the ladder omits the residual market scale D,
-// so a banded row is overstated by 1/decay and an FX row by q·T.
+// The ladder is dP/dq in quote units, the residual market scale D applied (FIXED 2026-09-13: banded rows were overstated
+// by 1/decay and FX forwards by q·T).
 #include <string>
 
 #include <boost/json/fwd.hpp>

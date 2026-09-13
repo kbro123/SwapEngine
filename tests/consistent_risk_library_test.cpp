@@ -96,7 +96,7 @@ TEST(NullCompletedLadder, OneQuoteOnTwoKnotsSelfQuotesTheUnseenDirection) {
   J << 1.0, 1.0;
   Eigen::VectorXd g(2);
   g << 1.0, 3.0;
-  const cal::NullCompletedLadder lad = cal::null_completed_ladder(J, g);
+  const cal::NullCompletedLadder lad = cal::null_completed_ladder(J, g, Eigen::VectorXd::Ones(J.rows()));
   // Jf = [1 1; v] with v = ±(1,-1)/sqrt2. Jfᵀ y = g gives y1 = 2 and |y2| = sqrt2 whatever the sign of v.
   EXPECT_EQ(lad.n_residuals, 1);
   ASSERT_EQ(lad.full.size(), 2);
@@ -110,11 +110,11 @@ TEST(NullCompletedLadder, ASingularValueBelowTheSharedRankThresholdIsUnseen) {
   g << 1.0, 2.0;
   Eigen::MatrixXd J = Eigen::MatrixXd::Identity(2, 2);
   J(1, 1) = 1e-12;  // sigma ratio 1e-12 < kRankThreshold 1e-10: Eigen's default threshold would call it constrained
-  const cal::NullCompletedLadder lad = cal::null_completed_ladder(J, g);
+  const cal::NullCompletedLadder lad = cal::null_completed_ladder(J, g, Eigen::VectorXd::Ones(J.rows()));
   ASSERT_EQ(lad.synthetic_knot.size(), 1u);
   EXPECT_EQ(lad.synthetic_knot[0], 1);
   J(1, 1) = 1e-6;  // stiff but constrained
-  EXPECT_TRUE(cal::null_completed_ladder(J, g).synthetic_knot.empty());
+  EXPECT_TRUE(cal::null_completed_ladder(J, g, Eigen::VectorXd::Ones(J.rows())).synthetic_knot.empty());
 }
 
 TEST(ConsistentRiskLibrary, ReLevelsEveryBundleOntoTheAnchor) {
@@ -182,4 +182,25 @@ TEST(ConsistentRiskLibrary, TheReLevelingCalibrationIsTheCallersRegulariserElseL
   mine.curves = {1};
   EXPECT_EQ(cal::relevel_calibration_reg(mine, p).lambda, 0.5);
   EXPECT_EQ(cal::relevel_calibration_reg(mine, p).curves, (std::vector<int>{1}));
+}
+
+// dP/dq = D ⊙ dP/dr: the library applies the residual market scale of each quote to its real ladder row (1 for a hard
+// pin, the decay for a band). The fake's J ignores the band on purpose -- this pins the library's rule, not band physics;
+// the physics is pinned end to end by tests/risk_scale_repro_test.cpp against a re-calibrated finite difference.
+TEST(ConsistentRiskLibrary, TheLadderIsInQuoteUnitsForABandedRow) {
+  Eigen::VectorXd x_true(2);
+  x_true << 0.03, 0.01;
+  cal::BundleProblem p = linear_bundle({{1.0, 0.0}, {1.0, 1.0}}, x_true, 0.0);
+  p.instruments[1].band_lower = p.instruments[1].market - 1e-3;
+  p.instruments[1].band_upper = p.instruments[1].market + 1e-3;
+  p.instruments[1].band_decay = 0.25;
+  FakeBook book{{0}, Eigen::Vector2d(2.0, -1.0)};
+  const cal::ConsistentRisk r = cal::consistent_risk<FakeSession, FakeBook>(book, {p}, cal::RegSpec{});
+  const Eigen::Vector2d dPdr = pinv(Eigen::Matrix2d{{1.0, 0.0}, {1.0, 1.0}}).transpose() * book.g;
+  EXPECT_NEAR(r.bundles[0].ladder[0], dPdr[0], 1e-14);
+  EXPECT_NEAR(r.bundles[0].ladder[1], 0.25 * dPdr[1], 1e-14);
+  EXPECT_EQ(r.bundles[0].ladder_dv01, 1e-4 * (r.bundles[0].ladder[0] + r.bundles[0].ladder[1]));
+  EXPECT_THROW((void)cal::null_completed_ladder(Eigen::MatrixXd::Identity(2, 2), Eigen::VectorXd::Ones(2),
+                                                Eigen::VectorXd::Ones(3)),
+               std::invalid_argument);
 }

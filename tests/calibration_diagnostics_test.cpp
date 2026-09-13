@@ -144,3 +144,17 @@ TEST(SeedOrFlat, IsTheCallersSeedLengthCheckedElseTheFlatSeed) {
   EXPECT_EQ(cal::seed_or_flat(p, mine, "r"), mine);
   EXPECT_THROW(cal::seed_or_flat(p, Eigen::VectorXd::Constant(2, 0.04), "r"), std::invalid_argument);
 }
+
+TEST(Identifiability, DividesTheMarketScaleBackOutOfTheRiskOperator) {
+  const Eigen::MatrixXd J = Eigen::MatrixXd::Identity(2, 2);
+  Eigen::VectorXd D(2);
+  D << 1.0, 0.25;  // a hard pin and a band with decay 0.25
+  const Eigen::MatrixXd M = pinv(J) * D.asDiagonal();  // BundleSession::risk_operator's contract, M = J⁺·D
+  const Eigen::VectorXd h = cal::identifiability(J, M, D);
+  EXPECT_NEAR(h[0], 1.0, 1e-15);
+  EXPECT_NEAR(h[1], 1.0, 1e-15) << "a band scales the residual, not what the quote pins";
+  EXPECT_NEAR(cal::hat_diagonal(J, M)[1], 0.25, 1e-15) << "without the division it is the decay (the pre-2026-09-13 bug)";
+  D[1] = 0.0;
+  EXPECT_EQ(cal::identifiability(J, pinv(J) * D.asDiagonal(), D)[1], 0.0) << "a zero scale carries no information";
+  EXPECT_THROW((void)cal::identifiability(J, M, Eigen::VectorXd::Ones(3)), std::invalid_argument);
+}

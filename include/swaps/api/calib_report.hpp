@@ -15,8 +15,8 @@
 //   * the existing per-quote in-band diagnostics (target/model/residual/weight/in_band), so this one verb is
 //     the "one-stop calibration health" report.
 // The computation is cal::calibration_report<BundleSession> (calibration/diagnostics.hpp, E7 3.6). QuantLib-free.
-// Units are model decimals (0.025 = 2.5%). KNOWN BUG, fixed separately (TASKS-ENGINE E7 "RISK SCALE BUGS" (2)): M is
-// risk_operator = J⁺·D, so a banded or FX quote reports diag(P·D) -- a banded row its decay -- not the projector.
+// Units are model decimals (0.025 = 2.5%). identifiability is the projector diag(J(JᵀJ+RᵀR)⁻¹Jᵀ): the market scale D is
+// divided back out of risk_operator (FIXED 2026-09-13; a banded quote used to report its decay, an FX forward P_ii/(q·T)).
 #include <string>
 
 namespace swaps::api {

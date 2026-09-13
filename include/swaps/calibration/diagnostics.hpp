@@ -11,9 +11,9 @@
 //   * calibration_report    — calibrate, then all of the above, over any session type meeting CalibrationSession
 //                             (the verb instantiates it with api::BundleSession; this header never includes api).
 //
-// KNOWN BUG, carried unchanged by this lift and fixed separately (TASKS-ENGINE E7 "RISK SCALE BUGS" (2)): the
-// report passes M = risk_operator = J⁺·D, so a banded or FX quote's identifiability is diag(P·D), not the
-// projector diag(P) -- a banded row reports its decay instead of 1.
+// identifiability divides the residual market scale D back out of M = risk_operator = J⁺·D, so it is the documented
+// projector diag(J(JᵀJ+RᵀR)⁻¹Jᵀ): what a quote pins, not how its residual is scaled. FIXED 2026-09-13 -- a banded quote
+// reported its decay and an FX forward P_ii/(q·T) (tests/risk_scale_repro_test.cpp).
 
 #include <algorithm>
 #include <cmath>
@@ -99,6 +99,21 @@ inline Eigen::VectorXd hat_diagonal(const Eigen::MatrixXd& J, const Eigen::Matri
   return h;
 }
 
+// Per quote, how well it pins its pillar: the hat diagonal of J against M with the residual market scale D divided back
+// out (M = J⁺·D is BundleSession::risk_operator's contract). A zero scale -- a band with decay 0 -- carries no information.
+inline Eigen::VectorXd identifiability(const Eigen::MatrixXd& J, const Eigen::MatrixXd& M, const Eigen::VectorXd& market_scale) {
+  if (market_scale.size() != M.cols())
+    throw std::invalid_argument("identifiability: the market scale needs one entry per residual");
+  Eigen::MatrixXd P = M;
+  for (Eigen::Index i = 0; i < P.cols(); ++i) {
+    if (market_scale[i] != 0.0)
+      P.col(i) /= market_scale[i];
+    else
+      P.col(i).setZero();
+  }
+  return hat_diagonal(J, P);
+}
+
 // The seed a report calibrates from: the caller's, length-checked, else the market-implied flat seed.
 inline Eigen::VectorXd seed_or_flat(const BundleProblem& p, const std::optional<Eigen::VectorXd>& x0,
                                     const std::string& where) {
@@ -144,7 +159,7 @@ CalibrationReport calibration_report(CalibrationReportRequest req) {
   const Eigen::MatrixXd M = sess.risk_operator(req.reg);  // n_knots x n_res
   out.conditioning = jacobian_conditioning(J);
   const std::vector<QuoteDiagnostic> fits = quote_diagnostics(sess.problem(), sess.x());
-  const Eigen::VectorXd ident = hat_diagonal(J, M);
+  const Eigen::VectorXd ident = identifiability(J, M, residual_market_scale(sess.problem().instruments));
   out.quotes.reserve(fits.size());
   for (std::size_t i = 0; i < fits.size(); ++i) out.quotes.push_back({fits[i], ident[static_cast<Eigen::Index>(i)]});
   return out;

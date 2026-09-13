@@ -10,8 +10,8 @@
 // quotes is rank-completed by self-quoting its null directions as SYNTHETIC pillars (null_completed_ladder,
 // calibration/risk.hpp) rather than smoothed, so the real pillars are not biased by a curvature penalty.
 //
-// KNOWN BUG, carried unchanged by the lift and fixed separately: the ladder omits the residual market scale D
-// (TASKS-ENGINE E7 "RISK SCALE BUGS" (1)).
+// The ladder is in QUOTE units: every real row carries the residual market scale D (FIXED 2026-09-13; banded rows
+// were overstated by 1/decay and FX forwards by q·T -- calibration/risk.hpp).
 
 #include <concepts>
 #include <cstddef>
@@ -100,7 +100,8 @@ ConsistentRisk consistent_risk(const Book& book, const std::vector<BundleProblem
     const auto pr = sk.price_portfolio(book);
     const Eigen::MatrixXd J = sk.jacobian(RegSpec{});
 
-    const NullCompletedLadder lad = null_completed_ladder(J, pk.curve_grad);
+    const NullCompletedLadder lad =
+        null_completed_ladder(J, pk.curve_grad, residual_market_scale(sk.problem().instruments));
     ConsistentBundleRisk item;
     item.n_residuals = lad.n_residuals;
     item.n_synthetic = static_cast<int>(lad.synthetic_knot.size());
