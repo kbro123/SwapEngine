@@ -80,6 +80,7 @@ def main():
         "struct BondFutureConv {",
         "  std::string_view id, currency, exchange_calendar, deliverable_convention, repo_day_count, delivery;",
         "  double notional_coupon, basket_min_years, basket_max_years; int maturity_rounding_months;",
+        "  int conversion_factor_decimals;  // the exchange rounds the conversion factor to this many decimals",
         "};",
         "// An FX pair (fx_pairs[]): quoting/settlement/option conventions. id == base+quote.",
         "struct FxPairConv {",
@@ -186,7 +187,7 @@ def main():
             sv(fid), sv(f.get("currency")), sv(f.get("exchange_calendar")), sv(f.get("deliverable_convention")),
             sv(f.get("repo_day_count")), sv(f.get("delivery")), repr(float(f.get("notional_coupon", -1))),
             repr(float(f.get("basket_min_years", 0))), repr(float(f.get("basket_max_years", 0))),
-            str(f.get("maturity_rounding_months", -1)),
+            str(f.get("maturity_rounding_months", -1)), str(f["conversion_factor_decimals"]),
         ]) + "},")
     lines += ["}};", ""]
     pairs = db.get("fx_pairs", {})

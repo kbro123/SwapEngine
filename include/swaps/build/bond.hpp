@@ -368,13 +368,18 @@ struct BondTerms {
   std::optional<int> freq;                  // overrides the convention's coupon frequency
 };
 
+// The coupon frequency the terms imply: the override when given, else the named convention's.
+inline int bond_frequency(const BondTerms& t) {
+  return t.freq ? *t.freq : int(yield_convention(t.convention).freq + 0.5);
+}
+
 inline BuiltBond bond_from_terms(const BondTerms& t, const Date& value_date) {
   if (t.convention.empty())
     throw std::invalid_argument("bond: needs 'convention' (a bonds[] row id, e.g. US-TREASURY)");
   if (t.dated.has_value() != t.first_coupon.has_value())
     throw std::invalid_argument("bond: a when-issued bond needs BOTH 'dated' and 'first_coupon'");
   const px::YieldConvention yc = yield_convention(t.convention);
-  const int freq = t.freq ? *t.freq : int(yc.freq + 0.5);
+  const int freq = bond_frequency(t);
   if (t.dated)
     return when_issued_bond(value_date, *t.dated, *t.first_coupon, t.maturity, t.coupon, freq, t.settle, yc.stub,
                             yc.final_period_simple);

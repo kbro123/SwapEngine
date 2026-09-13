@@ -839,6 +839,7 @@
           "deliverable_convention",
           "notional_coupon",
           "maturity_rounding_months",
+          "conversion_factor_decimals",
           "repo_day_count"
         ],
         "properties": {
@@ -860,6 +861,10 @@
           "maturity_rounding_months": {
             "type": "integer",
             "minimum": 1
+          },
+          "conversion_factor_decimals": {
+            "type": "integer",
+            "minimum": 0
           },
           "basket_min_years": {
             "type": "number"

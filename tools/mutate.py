@@ -24,11 +24,22 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 3.3: the exchange invoices on the ROUNDED conversion factor (CME IR232).
+    ("bond_future_cf_left_unrounded", "include/swaps/build/bond_future.hpp",
+     "  return std::round(cf * scale) / scale;",
+     "  return cf;",
+     ["delivery_basket_test.cpp"], "*", "the exchange's CF rounding is unpinned (E7 3.3)"),
+    # ... and counts the remaining term from the 1st of the delivery month, not from the date passed.
+    ("bond_future_term_counts_from_the_delivery_day", "include/swaps/build/bond_future.hpp",
+     "  return {total / 12, (total % 12 / round_months) * round_months};",
+     "  const int t2 = total - (int(maturity.day()) < int(first_delivery.day()) ? 1 : 0);\n"
+     "  return {t2 / 12, (t2 % 12 / round_months) * round_months};",
+     ["delivery_basket_test.cpp"], "*", "the CF term's first-of-month rule is unpinned (E7 3.3)"),
     # E7 stage 3.2: the one terms->bond builder. Ignoring a request's frequency override would silently price a
     # non-catalogued bond on the convention's schedule.
     ("bond_terms_freq_override_ignored", "include/swaps/build/bond.hpp",
-     "const int freq = t.freq ? *t.freq : int(yc.freq + 0.5);",
-     "const int freq = int(yc.freq + 0.5);",
+     "return t.freq ? *t.freq : int(yield_convention(t.convention).freq + 0.5);",
+     "return int(yield_convention(t.convention).freq + 0.5);",
      ["bond_terms_test.cpp"], "*", "the bond terms builder's frequency override is unpinned (E7 3.2)"),
     # ... and the street analytics' clean price must net out accrued.
     ("street_analytics_clean_keeps_accrued", "include/swaps/pricing/bond.hpp",

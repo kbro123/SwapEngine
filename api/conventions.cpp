@@ -123,6 +123,7 @@ void add_bond_future(cvd::Registry& R, std::string_view id, const json::object& 
   x.basket_min_years = f.contains("basket_min_years") ? f.at("basket_min_years").to_number<double>() : 0.0;
   x.basket_max_years = f.contains("basket_max_years") ? f.at("basket_max_years").to_number<double>() : 0.0;
   x.maturity_rounding_months = ji(f, "maturity_rounding_months", -1);
+  x.conversion_factor_decimals = static_cast<int>(f.at("conversion_factor_decimals").to_number<long long>());  // required: the exchange rounds the CF
   if (x.deliverable_convention.empty() || x.notional_coupon < 0 || x.maturity_rounding_months < 1 || x.repo_day_count.empty())
     throw std::invalid_argument("conventions: bond future '" + std::string(id) + "' needs deliverable_convention/notional_coupon/maturity_rounding_months/repo_day_count");
   R.add_bond_future(x);

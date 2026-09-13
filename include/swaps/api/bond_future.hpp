@@ -10,24 +10,27 @@
 namespace swaps::api {
 
 // request = {"bond_future": {
+//     contract,                            // REQUIRED bond_futures[] row id (e.g. CME-TY): CF notional coupon,
+//                                          //   maturity rounding, repo day count, deliverable convention, and the
+//                                          //   decimals the exchange rounds the conversion factor to
 //     value_date,                          // curve reference / "today"
-//     first_delivery,                      // first delivery day of the contract month (drives CF rounding)
+//     first_delivery,                      // any day in the delivery month; the CF term counts from its 1st
 //     delivery?,                           // delivery/settlement date for basis (default = first_delivery)
-//     futures_price,                       // the futures quote, per unit face (0.98 = 98-00)
-//     repo,                                // funding rate for net basis, ACT/360 (0.053 = 5.3%)
-//     notional_coupon?=0.06,               // CME/Eurex 6% notional
-//     round_months?=3,                     // maturity rounding: 3 = bond/10y quarters, 1 = 2/3/5y note
+//     futures_price,                       // REQUIRED futures quote, per unit face (0.98 = 98-00)
+//     repo,                                // REQUIRED funding rate for net basis, on the contract's repo day count
+//     notional_coupon?, round_months?,     // override the contract row
 //     basket:[{
 //        id?,                              // echoed back; used to name the CTD
-//        convention?="US-TREASURY",        // conventions.json bond id (freq + stub-discount rule)
+//        convention?,                      // conventions.json bond id; default = the contract's deliverable one
 //        settle?,                          // cash settlement (default = value_date)
 //        issue,                            // SEASONED: dated date;  OR  dated,first_coupon for when-issued
 //        maturity, coupon,                 // absolute coupon rate (0.045 = 4.5%)
 //        freq?,                            // overrides the convention frequency
 //        clean }]}}                        // observed clean price, per unit face
 // -> flat SoA {conversion_factor, gross_basis, net_basis, implied_repo, invoice_price, n,
-//             ctd_index, ctd_id}. Basis fields are in price points (per unit face); implied_repo/net_basis
-//             use ACT/360 to the delivery date. The CTD is the max-implied-repo deliverable.
+//             ctd_index, ctd_id}. conversion_factor is the EXCHANGE factor (rounded to the contract's decimals);
+//             invoice and basis use it. Basis fields are in price points (per unit face). The CTD is the
+//             max-implied-repo deliverable. The computation is build::analyze_delivery_basket.
 std::string bond_future_json(const boost::json::object& request);  // parse-once entry (E6.3)
 std::string bond_future_json(const std::string& request);
 

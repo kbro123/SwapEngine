@@ -24,7 +24,8 @@
 
 #include <boost/json/fwd.hpp>
 
-#include "swaps/build/bond.hpp"  // StreetBondRequest
+#include "swaps/build/bond.hpp"         // StreetBondRequest
+#include "swaps/build/bond_future.hpp"  // DeliveryBasketRequest
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/regularize.hpp"  // RegSpec
 #include "swaps/portfolio/portfolio.hpp"
@@ -67,6 +68,13 @@ swaps::portfolio::MultiCurveBook book_from_json(const boost::json::value& v);
 swaps::build::StreetBondRequest street_bond_request_from_json(const boost::json::object& payload);
 // -> SoA {clean, dirty, accrued, ytm, modified_duration, macaulay_duration, convexity, n}
 boost::json::object street_analytics_to_json(const std::vector<swaps::pricing::StreetAnalytics>& rows);
+
+// ---- bond-future delivery basket (the `bond_future` verb) ------------------------------------------------
+// {contract, value_date, first_delivery, delivery?, futures_price, repo, notional_coupon?, round_months?,
+//  basket:[{id?, convention?, settle?, issue | dated + first_coupon, maturity, coupon, freq?, clean}]}
+swaps::build::DeliveryBasketRequest delivery_basket_request_from_json(const boost::json::object& payload);
+// -> SoA {conversion_factor, gross_basis, net_basis, implied_repo, invoice_price, n, ctd_index, ctd_id}
+boost::json::object delivery_basket_to_json(const swaps::build::DeliveryBasketResult& r);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

@@ -387,3 +387,22 @@ TEST(Codec, AStreetBondRequestDecodesTermsAndTreatsNullAsAbsent) {
     EXPECT_THROW(api::street_bond_request_from_json(req), std::invalid_argument) << k;
   }
 }
+
+TEST(Codec, ADeliveryBasketRequiresItsMarketInputsAndDefersContractFieldsToTheLibrary) {
+  const char* doc = R"({"contract": "CME-TY", "value_date": "2008-11-20", "first_delivery": "2008-12-01",
+      "futures_price": 1.24, "repo": 0.005,
+      "basket": [{"issue": "2008-11-15", "maturity": "2018-11-15", "coupon": 0.0375, "clean": 1.03}]})";
+  const auto r = api::delivery_basket_request_from_json(json::parse(doc).as_object());
+  EXPECT_FALSE(r.delivery.has_value());
+  EXPECT_FALSE(r.notional_coupon.has_value()) << "the contract row supplies it, in the library";
+  EXPECT_FALSE(r.round_months.has_value());
+  ASSERT_EQ(r.basket.size(), 1u);
+  EXPECT_TRUE(r.basket[0].convention.empty()) << "empty = the contract's deliverable convention";
+  EXPECT_FALSE(r.basket[0].settle.has_value());
+  // Until 2026-09-13 a missing futures_price or repo silently priced at 0.
+  for (const char* k : {"contract", "value_date", "first_delivery", "futures_price", "repo", "basket"}) {
+    json::object o = json::parse(doc).as_object();
+    o.erase(k);
+    EXPECT_THROW(api::delivery_basket_request_from_json(o), std::invalid_argument) << k;
+  }
+}

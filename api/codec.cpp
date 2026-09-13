@@ -564,6 +564,65 @@ json::object street_analytics_to_json(const std::vector<px::StreetAnalytics>& ro
   return out;
 }
 
+swaps::build::DeliveryBasketRequest delivery_basket_request_from_json(const json::object& o) {
+  swaps::build::DeliveryBasketRequest r;
+  const auto field = [&](const char* k) -> const json::value& {
+    return need(o, k, std::string("bond_future: missing '") + k + "'");
+  };
+  r.contract = str(field("contract"));
+  r.value_date = swaps::build::Date::from_iso(str(field("value_date")));
+  r.first_delivery = swaps::build::Date::from_iso(str(field("first_delivery")));
+  r.futures_price = field("futures_price").to_number<double>();
+  r.repo = field("repo").to_number<double>();
+  into(o, "delivery", r.delivery);
+  into(o, "notional_coupon", r.notional_coupon);
+  into(o, "round_months", r.round_months);
+  for (const auto& e : field("basket").as_array()) {
+    const auto& bo = e.as_object();
+    const auto term = [&](const char* k) -> const json::value& {
+      return need(bo, k, std::string("bond_future: each basket bond needs '") + k + "'");
+    };
+    swaps::build::Deliverable x;
+    x.maturity = swaps::build::Date::from_iso(str(term("maturity")));
+    x.coupon = term("coupon").to_number<double>();
+    x.clean = term("clean").to_number<double>();
+    into(bo, "id", x.id);
+    into(bo, "convention", x.convention);
+    into(bo, "settle", x.settle);
+    into(bo, "issue", x.issue);
+    into(bo, "dated", x.dated);
+    into(bo, "first_coupon", x.first_coupon);
+    into(bo, "freq", x.freq);
+    r.basket.push_back(std::move(x));
+  }
+  return r;
+}
+
+json::object delivery_basket_to_json(const swaps::build::DeliveryBasketResult& r) {
+  std::vector<double> cf, gross, net, irr, invoice;
+  for (const swaps::build::DeliverableAnalysis& row : r.rows) {
+    cf.push_back(row.result.conversion_factor);
+    gross.push_back(row.result.gross_basis);
+    net.push_back(row.result.net_basis);
+    irr.push_back(row.result.implied_repo);
+    invoice.push_back(row.result.invoice_price);
+  }
+  json::object out;
+  out["conversion_factor"] = vecf(cf);
+  out["gross_basis"] = vecf(gross);
+  out["net_basis"] = vecf(net);
+  out["implied_repo"] = vecf(irr);
+  out["invoice_price"] = vecf(invoice);
+  out["n"] = static_cast<int>(r.rows.size());
+  out["ctd_index"] = 0;
+  out["ctd_id"] = std::string();
+  if (r.ctd) {
+    out["ctd_index"] = static_cast<int>(*r.ctd);
+    out["ctd_id"] = r.rows[*r.ctd].id;
+  }
+  return out;
+}
+
 json::array sample_to_json(const std::vector<CurveSample>& samples) {
   json::array carr;
   for (const auto& s : samples) {

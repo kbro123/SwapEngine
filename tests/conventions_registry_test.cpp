@@ -165,10 +165,12 @@ TEST_F(RegistryFixture, NewFamiliesAreDataAndRuntimeExtensible) {
   // Runtime overlay through the verb: a new contract, and a REPLACEMENT meeting schedule for GBP.
   api::conventions_json(R"({"conventions": {
     "bond_futures": {"TEST-XX": {"currency": "USD", "exchange_calendar": "USD", "deliverable_convention": "US-TREASURY",
-                                 "notional_coupon": 0.04, "maturity_rounding_months": 1, "repo_day_count": "ACT/365F"}},
+                                 "notional_coupon": 0.04, "maturity_rounding_months": 1, "conversion_factor_decimals": 6,
+                                 "repo_day_count": "ACT/365F"}},
     "cb_schedules": {"GBP": {"bank": "BoE", "source": "test", "as_of": "2026-09-09",
                              "meetings": ["2027-02-04", "2027-03-18"]}}}})");
   EXPECT_DOUBLE_EQ(cvd::require_bond_future("TEST-XX").notional_coupon, 0.04);
+  EXPECT_EQ(cvd::require_bond_future("TEST-XX").conversion_factor_decimals, 6);  // an exchange that rounds to 6 dp
   EXPECT_DOUBLE_EQ(b::day_count_basis(std::string(cvd::require_bond_future("TEST-XX").repo_day_count)), 365.0);
   const std::vector<long> boe = cvd::require_cb_meetings("GBP");
   ASSERT_EQ(boe.size(), 2u);

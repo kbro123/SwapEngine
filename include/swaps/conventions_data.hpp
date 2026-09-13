@@ -38,6 +38,7 @@ struct CreditConv {
 struct BondFutureConv {
   std::string_view id, currency, exchange_calendar, deliverable_convention, repo_day_count, delivery;
   double notional_coupon, basket_min_years, basket_max_years; int maturity_rounding_months;
+  int conversion_factor_decimals;  // the exchange rounds the conversion factor to this many decimals
 };
 // An FX pair (fx_pairs[]): quoting/settlement/option conventions. id == base+quote.
 struct FxPairConv {
@@ -185,10 +186,10 @@ inline constexpr std::array<CreditConv, 2> kCredit = {{
 }};
 
 inline constexpr std::array<BondFutureConv, 4> kBondFutures = {{
-  {"CME-FV", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 4.1667, 5.25, 1},
-  {"CME-TU", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 1.75, 2.0, 1},
-  {"CME-TY", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 6.5, 10.0, 3},
-  {"CME-US", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 15.0, 25.0, 3},
+  {"CME-FV", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 4.1667, 5.25, 1, 4},
+  {"CME-TU", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 1.75, 2.0, 1, 4},
+  {"CME-TY", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 6.5, 10.0, 3, 4},
+  {"CME-US", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 15.0, 25.0, 3, 4},
 }};
 
 inline constexpr std::array<FxPairConv, 1> kFxPairs = {{

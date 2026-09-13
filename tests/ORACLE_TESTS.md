@@ -98,7 +98,7 @@ oracle merely might.
 | Layer | Reached | The gap, and whether it matters |
 |---|---|---|
 | `ad`, `ql` | 1/1, 2/2 | complete |
-| `pricing` | 6/9 | `bond_future.hpp`, `ndf.hpp`, `fixings.hpp` — CTD/conversion-factor and NDF numbers, and the past/future fixing split, have no QuantLib comparison |
+| `pricing` | 6/9 | `bond_future.hpp`, `ndf.hpp`, `fixings.hpp` — NDF numbers and the past/future fixing split have no QuantLib comparison. Bond-future conversion factors have NO QuantLib oracle either, but ARE pinned to CME's published factors (T1: `tests/delivery_basket_test.cpp`, end to end `tests/bond_future_reference_test.cpp`, 2026-09-13) |
 | `build` | 10/13 | `credit_instruments.hpp`, `inflation_instruments.hpp`, `swap_spread.hpp`. (`instruments.hpp` + `conventions.hpp` + `ref_data.hpp` were the S1 gap below and are now oracled by `Pricing.ParSwapFromTheShippedBuilderMatchesQuantLib`.) |
 | `calibration` | 13/21 | `risk.hpp` — the IFT delta ladder clients hedge on — is checked only against the engine's own bump-and-recalibrate; also `bond_fit`, `pnl_explain`, `structure_fingerprint`, credit/inflation problems |
 | `curve` | 2/5 | `hazard.hpp`, `inflation.hpp`, `parametric.hpp`: **credit and inflation curves have no oracle at all**, though QuantLib ships engines for both |
