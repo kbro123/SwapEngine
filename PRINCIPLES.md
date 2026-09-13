@@ -90,6 +90,13 @@ Reviews are done from a fresh context, not by in-context self-ranking.
 **P13. The map stays current.** `ARCHITECTURE.md`, the test registries and this file's cross-references
 update in the same commit as the change they describe. A stale map is worse than none.
 
+**P14. The verb layer is a codec.** A `run_json` verb body is parse -> ONE call into `include/swaps/**` -> emit.
+No convention lookups, no defaults for absent fields, no result-building loops, no arithmetic, no branching
+beyond decoding. Behaviour lives in the library, where the unit tests and the oracles already reach it; a verb
+that needs something the library cannot do gets a library function first. A default is declared ONCE, on the
+library struct, never re-stated in a decoder. `tools/verb_density.py` (verify.sh) counts what each api file still
+carries from clang's typed AST and locks it in `tests/verb_density.lock`: a count may only go down (E7).
+
 ## What "done" means
 
 A capability is done when: it is on the hot path it claims (P3/P5), benchmarked (P6), oracle-pinned or

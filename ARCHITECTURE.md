@@ -252,6 +252,10 @@ calibrate jointly via `SpreadHandle`), and the `reference_*.hpp` QuantLib market
 |---|---|---|
 | build | cmake/ninja | QuantLib absent (fatal unless `-DSWAPS_ALLOW_NO_ORACLE=ON`, which marks the build non-gated) |
 | oracle/consistency registry | `tools/check_oracle_tests.sh --build` | a registered file missing / wrong banner / oracle without QuantLib / fewer `TEST`s or `EXPECT`s than `tests/oracle_assertions.lock` / a QuantLib-linked binary missing or listing fewer tests than locked. `tools/selftest_guards.sh` proves it trips. |
+| test taxonomy | `tools/check_test_taxonomy.sh` | a `tests/*.cpp` without its T1–T6 label (what its assertions compare an engine number TO — `tests/TAXONOMY.md`) |
+| include graph | `tools/check_include_graph.py` | a cross-layer `#include` that is not an arrow in the layer DAG above, or a cycle |
+| oracle reach | `tools/oracle_coverage.py --check` | a header in `tests/oracle_coverage.lock` is no longer in the include closure of any registered QuantLib oracle (reach may only grow) |
+| verb density | `tools/verb_density.py --check` + `--selftest` | an `api/` file carries more behaviour than `tests/verb_density.lock` allows — conventions lookups, invented defaults, loops, floating-point compute or branches, counted from clang's typed AST and cross-checked against the file's tokens (PRINCIPLES.md P14, E7). Counts may only go down. |
 | conventions schema | `tools/check_schema.py` | `conventions.json` fails `conventions.schema.json` (swap products must carry calendar/bdc/lags/leg day counts+frequencies; currencies/calendars/bonds declared) or references an id that does not exist |
 | conventions sync | `tools/gen_conventions_hpp.py --stdout` diff | `conventions.json` edited without regenerating `conventions_data.hpp` |
 | no-literal conventions | `tools/check_no_literals.py` | any NEW currency/index/calendar/day-count/frequency/lag/recovery literal or silent fallback in `include/` or `api/` (existing ones are a ratchet in `tools/check_no_literals.allow`, burned down in E2) |

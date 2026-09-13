@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify.sh — runs the two gates (correctness + performance) and prints a pass/fail table.
+# verify.sh — runs the guards + the two gates (correctness + performance) and prints a pass/fail table.
 # Exit code 0 iff every enabled gate passes. This is the gate for every checkpoint.
 set -uo pipefail
 
@@ -38,6 +38,8 @@ pass_schema="SKIP"
 pass_taxonomy="SKIP"
 pass_graph="SKIP"
 pass_lit="SKIP"
+pass_reach="SKIP"
+pass_density="SKIP"
 pass_correctness="SKIP"
 pass_perf="SKIP"
 rc=0
@@ -145,6 +147,19 @@ else
 fi
 rm -f "${_disp_tmp}" "${_disp_tmp2}"
 
+# ---- Verb-density guard (E7 stage 1, PRINCIPLES.md P14) ---------------------
+# A run_json verb is parse -> one library call -> emit. This counts the behaviour each api/ file still carries
+# (conventions lookups, invented defaults, loops, floating-point compute, branches) from clang's typed AST,
+# cross-checked against the file's own tokens, and FAILs if any count rose above tests/verb_density.lock.
+# The selftest proves it can fail (injected constructs are counted exactly; an #if 0 loop is refused). ~40 s.
+echo ">> verb-density guard (behaviour in the verb layer may only shrink)"
+if python3 "${ROOT}/tools/verb_density.py" --check --build "${BUILD_DIR}" \
+   && python3 "${ROOT}/tools/verb_density.py" --selftest --build "${BUILD_DIR}"; then
+  pass_density="PASS"
+else
+  pass_density="FAIL"; rc=1
+fi
+
 # ---- Correctness gate -------------------------------------------------------
 if [ "${BENCH_ONLY}" -eq 0 ]; then
   echo ">> correctness gate (ctest)"
@@ -184,6 +199,7 @@ printf "  %-20s %s\n" "conventions sync:" "${pass_conv}"
 printf "  %-20s %s\n" "conventions schema:" "${pass_schema}"
 printf "  %-20s %s\n" "no-literal guard:" "${pass_lit}"
 printf "  %-20s %s\n" "api-dispatch sync:" "${pass_disp}"
+printf "  %-20s %s\n" "verb-density guard:" "${pass_density}"
 printf "  %-20s %s\n" "correctness gate:" "${pass_correctness}"
 printf "  %-20s %s\n" "performance gate:" "${pass_perf}"
 echo "===================================="
