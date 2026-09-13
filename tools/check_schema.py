@@ -43,7 +43,8 @@ for pid_, f in db.get("fx_pairs", {}).items():
     if pid_ != f.get("base", "") + f.get("quote", ""): errors.append(f"fx_pairs/{pid_}: id must be base+quote")
 for cc, c in db.get("cb_schedules", {}).items():
     ref("currency", cur, cc, f"cb_schedules/{cc}")
-    if c.get("meetings") != sorted(c.get("meetings", [])): errors.append(f"cb_schedules/{cc}: meetings not sorted")
+    m = c.get("meetings", [])
+    if any(b <= a for a, b in zip(m, m[1:])): errors.append(f"cb_schedules/{cc}: meetings not strictly ascending")
 for cc, c in cur.items():
     if c.get("repo_day_count") not in db["day_counts"]: errors.append(f"currencies/{cc}: unknown repo_day_count")
 for bid, b in db.get("bonds", {}).items():

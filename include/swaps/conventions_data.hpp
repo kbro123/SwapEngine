@@ -12,43 +12,43 @@ namespace swaps::conventions {
 
 struct LegConv {
   std::string_view index, day_count, frequency, compounding;
-  bool carries_spread, notional_resets, flat;  // the fixing lag lives on the INDEX row (one owner)
+  bool carries_spread = false, notional_resets = false, flat = false;  // the fixing lag lives on the INDEX row (one owner)
 };
 // type: ois | irs | basis | xccy_mtm | fx_forward | future | administered-basis. `floating` is the quoted
 // float / spread / usd leg; `other` is the flat / eur leg of a basis or xccy product (empty otherwise).
 // `frequency` is the product-level payment frequency (xccy), `discount_index` the DB discount index (basis).
 struct ProductConv {
   std::string_view id, type, currency, calendar, bdc, frequency, discount_index, pair, base_currency;
-  int spot_lag, payment_lag;
-  bool zero_coupon;  // one period spot->maturity, quoted annually-compounded (QuoteKind::ZeroCouponRate)
+  int spot_lag = -1, payment_lag = -1;  // -1 = unset (the builders require it where it matters)
+  bool zero_coupon = false;  // one period spot->maturity, quoted annually-compounded (QuoteKind::ZeroCouponRate)
   LegConv fixed, floating, other;
 };
 // A CURRENCY row (currencies[] in the JSON): ISO minor units, currency-level settlement calendar, the
 // default discount (RFR) index and the default swap product used when a curve names no index.
 struct CurrencyConv {
   std::string_view code, name, settlement_calendar, discount_index, default_swap_product, repo_day_count;
-  int minor_units;
+  int minor_units = -1;
 };
 // A CDS product (credit.cds_products[]): premium schedule + default recovery + protection integration.
 struct CreditConv {
   std::string_view id, currency, calendar, day_count, frequency, roll;
-  double recovery_default; int settlement_lag, protection_steps;
+  double recovery_default = -1.0; int settlement_lag = -1, protection_steps = -1;
 };
 // A bond-futures CONTRACT (bond_futures[]): deliverable convention, CF notional coupon, rounding, repo basis.
 struct BondFutureConv {
   std::string_view id, currency, exchange_calendar, deliverable_convention, repo_day_count, delivery;
-  double notional_coupon, basket_min_years, basket_max_years; int maturity_rounding_months;
-  int conversion_factor_decimals;  // the exchange rounds the conversion factor to this many decimals
+  double notional_coupon = -1.0, basket_min_years = 0.0, basket_max_years = 0.0; int maturity_rounding_months = -1;
+  int conversion_factor_decimals = -1;  // the exchange rounds the conversion factor to this many decimals
 };
 // An FX pair (fx_pairs[]): quoting/settlement/option conventions. id == base+quote.
 struct FxPairConv {
   std::string_view id, base, quote, calendar, premium_currency, delta_convention, atm_convention, xccy_product, forward_product;
-  int spot_lag; double smile_pillar_lo, smile_pillar_hi;
+  int spot_lag = -1; double smile_pillar_lo = 0.0, smile_pillar_hi = 0.0;
 };
 // A central-bank meeting schedule (cb_schedules[]): a slice of kCbMeetings (Unix-day serials, ascending).
 struct CbScheduleConv {
   std::string_view currency, bank, source, as_of;
-  std::size_t begin, count;
+  std::size_t begin = 0, count = 0;
 };
 // A fixing SOURCE (fixing_sources[]): where an index's realized fixings are fetched from. Fetching is
 // API-side; the engine carries the metadata so no client keeps its own provider table. id == index id.
@@ -58,18 +58,18 @@ struct FixingSourceConv {
 // An INFLATION index (inflation[]): the swap reference index's observation lag and interpolation rule.
 struct InflationIndexConv {
   std::string_view id, label, currency, calendar, interpolation, frequency;
-  int observation_lag_months;
+  int observation_lag_months = -1;
 };
 struct IndexConv {
   std::string_view id, currency, type, day_count, calendar, par_product, tenor;
-  int fixing_lag, publication_lag;
+  int fixing_lag = -1, publication_lag = -1;
 };
 // A BOND convention. `stub_discount` is the one thing the per-flow exponent cannot express (see
 // pricing/bond.hpp YieldConvention): "compound" -> dirty = Q(v)*v^w, "simple" -> Q(v)/(1 + w*y/f).
 // `final_period_simple` forces the simple form once a single cashflow remains (US street, Bund).
 struct BondConv {
   std::string_view id, currency, calendar, day_count, frequency, stub_discount;
-  int settle_lag; bool final_period_simple;
+  int settle_lag = -1; bool final_period_simple = false;
 };
 // A HOLIDAY rule (calendars[].holidays in the JSON) — interpreted by swaps/build/calendar.hpp.
 // kind: "fixed" (month/day, from_year 0 = always), "nth_weekday" (month/weekday/n),
@@ -79,18 +79,18 @@ struct BondConv {
 // observance: "" = inherit the calendar default; else "none" | "sat_to_fri_sun_to_mon" | "sun_to_mon".
 struct HolidayRule {
   std::string_view kind;
-  int month, day, weekday, n, days, from_year, to_year;
+  int month = 0, day = 0, weekday = -1, n = 0, days = 0, from_year = 0, to_year = 0;
   std::string_view observance;
-  bool except_first_friday;  // SIFMA Good Friday: no closure when it is the first Friday of the month
+  bool except_first_friday = false;  // SIFMA Good Friday: no closure when it is the first Friday of the month
 };
 // A CALENDAR: either rule-based (rule_count > 0) or a JOIN of other calendars (closed if any leg is
 // closed). `weekend_mask` bit w (Mon=0..Sun=6) marks a weekend day. Rules/joins are slices of the flat
 // kHolidayRules / kCalendarJoins arrays below.
 struct CalendarConv {
   std::string_view id, name, observance;
-  int weekend_mask;
-  std::size_t rule_begin, rule_count, join_begin, join_count;
-  bool sandwich;  // Japan: a weekday between two holidays is a holiday
+  int weekend_mask = 0;
+  std::size_t rule_begin = 0, rule_count = 0, join_begin = 0, join_count = 0;
+  bool sandwich = false;  // Japan: a weekday between two holidays is a holiday
 };
 
 inline constexpr std::array<ProductConv, 34> kProducts = {{

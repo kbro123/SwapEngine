@@ -166,6 +166,18 @@
               ]
             }
           }
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "holidays"
+            ]
+          },
+          {
+            "required": [
+              "join"
+            ]
+          }
         ]
       }
     },
@@ -328,8 +340,7 @@
               "compounding": {
                 "enum": [
                   "compounded",
-                  "averaged",
-                  "simple"
+                  "averaged"
                 ]
               },
               "carries_spread": {
@@ -362,8 +373,7 @@
               "compounding": {
                 "enum": [
                   "compounded",
-                  "averaged",
-                  "simple"
+                  "averaged"
                 ]
               },
               "carries_spread": {
@@ -396,8 +406,7 @@
               "compounding": {
                 "enum": [
                   "compounded",
-                  "averaged",
-                  "simple"
+                  "averaged"
                 ]
               },
               "carries_spread": {
@@ -430,8 +439,7 @@
               "compounding": {
                 "enum": [
                   "compounded",
-                  "averaged",
-                  "simple"
+                  "averaged"
                 ]
               },
               "carries_spread": {
@@ -464,8 +472,7 @@
               "compounding": {
                 "enum": [
                   "compounded",
-                  "averaged",
-                  "simple"
+                  "averaged"
                 ]
               },
               "carries_spread": {
@@ -498,8 +505,7 @@
               "compounding": {
                 "enum": [
                   "compounded",
-                  "averaged",
-                  "simple"
+                  "averaged"
                 ]
               },
               "carries_spread": {
@@ -1050,39 +1056,6 @@
           "source": {
             "type": "string"
           }
-        }
-      }
-    }
-  },
-  "$defs": {
-    "leg": {
-      "type": "object",
-      "properties": {
-        "index": {
-          "type": "string"
-        },
-        "day_count": {
-          "type": "string"
-        },
-        "frequency": {
-          "type": "string",
-          "pattern": "^[0-9]+[DWMY]$"
-        },
-        "compounding": {
-          "enum": [
-            "compounded",
-            "averaged",
-            "none"
-          ]
-        },
-        "carries_spread": {
-          "type": "boolean"
-        },
-        "flat": {
-          "type": "boolean"
-        },
-        "notional_resets": {
-          "type": "boolean"
         }
       }
     }
