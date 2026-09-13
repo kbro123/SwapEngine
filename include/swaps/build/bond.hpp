@@ -352,6 +352,60 @@ inline BuiltBond build_bond(const BondId& b, const Date& value_date, const Date&
              : bond_from_convention(b.yield_conv, value_date, settle, b.issue, b.maturity, b.coupon);
 }
 
+// =================================================================================================
+// BondTerms — a bond as a REQUEST describes it: a named yield convention plus terms, seasoned (`issue`) or
+// when-issued (`dated` + `first_coupon`), optionally overriding the convention's coupon frequency.
+// =================================================================================================
+// The ONE place such terms become a BuiltBond (E7 stage 3): the bonds and bond_future verbs each carried a
+// private copy of this dispatch. BondId above is the canonical identity (no frequency override); this is the
+// terms path its comment refers to.
+struct BondTerms {
+  std::string convention;                   // conventions.json bonds[] id -- required
+  Date settle, maturity;
+  std::optional<Date> issue;                // seasoned: the dated date
+  std::optional<Date> dated, first_coupon;  // when-issued: both, instead of `issue`
+  double coupon = 0.0;                      // annual coupon rate (0.045 = 4.5%)
+  std::optional<int> freq;                  // overrides the convention's coupon frequency
+};
+
+inline BuiltBond bond_from_terms(const BondTerms& t, const Date& value_date) {
+  if (t.convention.empty())
+    throw std::invalid_argument("bond: needs 'convention' (a bonds[] row id, e.g. US-TREASURY)");
+  if (t.dated.has_value() != t.first_coupon.has_value())
+    throw std::invalid_argument("bond: a when-issued bond needs BOTH 'dated' and 'first_coupon'");
+  const px::YieldConvention yc = yield_convention(t.convention);
+  const int freq = t.freq ? *t.freq : int(yc.freq + 0.5);
+  if (t.dated)
+    return when_issued_bond(value_date, *t.dated, *t.first_coupon, t.maturity, t.coupon, freq, t.settle, yc.stub,
+                            yc.final_period_simple);
+  if (!t.issue)
+    throw std::invalid_argument("bond: a seasoned bond needs 'issue' (its dated date); a when-issued one needs "
+                                "'dated' + 'first_coupon'");
+  return fixed_rate_bond(
+      FixedBondTerms{value_date, t.settle, *t.issue, t.maturity, t.coupon, freq, yc.stub, yc.final_period_simple});
+}
+
+// A street (curve-free) quote on one bond: its terms and EXACTLY ONE of a clean price or a yield.
+struct StreetBondQuote {
+  BondTerms terms;
+  std::optional<double> clean, yield;
+};
+// The `bonds` request: the quotes, and an optional curve reference date (street analytics do not use it; it
+// defaults to each bond's own settlement date).
+struct StreetBondRequest {
+  std::optional<Date> value_date;
+  std::vector<StreetBondQuote> bonds;
+};
+
+inline std::vector<px::StreetAnalytics> street_bonds(const StreetBondRequest& r) {
+  std::vector<px::StreetAnalytics> out;
+  out.reserve(r.bonds.size());
+  for (const StreetBondQuote& q : r.bonds)
+    out.push_back(px::street_analytics(bond_from_terms(q.terms, r.value_date.value_or(q.terms.settle)).yield,
+                                       q.clean, q.yield));
+  return out;
+}
+
 }  // namespace swaps::build
 
 #endif  // SWAPS_BUILD_BOND_HPP

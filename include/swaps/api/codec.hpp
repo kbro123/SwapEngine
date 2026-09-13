@@ -8,7 +8,8 @@
 // The contract (tests/codec_test.cpp pins each clause):
 //   * an ABSENT field   -> the library struct's OWN default. A decoder never states a default value: there is
 //                          exactly one, on the struct (cal::Instrument, px::FloatCoupon, api::RegSpec, ...).
-//   * a PRESENT field   -> carried exactly; the wrong JSON type THROWS (never truncated, never ignored).
+//   * a PRESENT field   -> carried exactly; the wrong JSON type THROWS (never truncated, never ignored). An
+//                          explicit null is the same as absent.
 //   * an unknown name   -> throws std::invalid_argument (quote kind, interpolation scheme, position kind, pay).
 //   * a field the library cannot default is REQUIRED and throws std::invalid_argument when absent: a booked
 //     trade's notional / pay / fixed_rate / index / effective / maturity, and a position's fixed_curve when it
@@ -23,6 +24,7 @@
 
 #include <boost/json/fwd.hpp>
 
+#include "swaps/build/bond.hpp"  // StreetBondRequest
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/regularize.hpp"  // RegSpec
 #include "swaps/portfolio/portfolio.hpp"
@@ -57,6 +59,14 @@ boost::json::value instrument_to_json(const cal::Instrument& ins);
 //                  "effective", "maturity", "csa": {"collateral_currency"} | "discount_index"} ] }
 //   The discount index is trade::discount_index_for(csa, discount_index): the CSA decides when present.
 swaps::portfolio::MultiCurveBook book_from_json(const boost::json::value& v);
+
+// ---- street bond analytics (the `bonds` verb) ---------------------------------------------------------
+// {value_date?, bonds:[{convention, settle, maturity, coupon, issue | dated + first_coupon, freq?, clean? | yield?}]}
+// settle / maturity / coupon are required here; the rest of the rule (convention required, exactly one quote,
+// dated needs first_coupon) is build::bond_from_terms's and pricing::street_analytics's.
+swaps::build::StreetBondRequest street_bond_request_from_json(const boost::json::object& payload);
+// -> SoA {clean, dirty, accrued, ytm, modified_duration, macaulay_duration, convexity, n}
+boost::json::object street_analytics_to_json(const std::vector<swaps::pricing::StreetAnalytics>& rows);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

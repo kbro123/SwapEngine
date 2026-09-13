@@ -27,6 +27,8 @@
 
 #include <cassert>
 #include <cmath>
+#include <optional>
+#include <stdexcept>
 #include <vector>
 
 namespace swaps::pricing {
@@ -247,6 +249,28 @@ inline BondRisk bond_risk(const YieldBond& b, double y) {
   r.macaulay_duration = r.modified_duration * (1.0 + y / b.conv.freq);  // Macaulay = Modified·(1+y/f)
   r.convexity = v.d2 / v.dirty;
   return r;
+}
+
+// Street analytics for ONE yield-space bond quoted by EXACTLY ONE of a clean price or a yield: the yield the quote
+// implies, the prices at that yield, and the risk there. This is the `bonds` verb's whole computation (E7 stage 3);
+// a quote with both or neither is an error, never a guess.
+struct StreetAnalytics {
+  double clean = 0.0, dirty = 0.0, accrued = 0.0, yield = 0.0;
+  double modified_duration = 0.0, macaulay_duration = 0.0, convexity = 0.0;
+};
+inline StreetAnalytics street_analytics(const YieldBond& b, std::optional<double> clean, std::optional<double> yield) {
+  if (clean.has_value() == yield.has_value())
+    throw std::invalid_argument("bond: quote EXACTLY ONE of 'clean' or 'yield'");
+  StreetAnalytics a;
+  a.yield = clean ? bond_yield_from_clean(b, *clean) : *yield;
+  a.dirty = bond_dirty_from_yield(b, a.yield);
+  a.accrued = b.accrued;
+  a.clean = a.dirty - b.accrued;
+  const BondRisk r = bond_risk(b, a.yield);
+  a.modified_duration = r.modified_duration;
+  a.macaulay_duration = r.macaulay_duration;
+  a.convexity = r.convexity;
+  return a;
 }
 
 }  // namespace swaps::pricing

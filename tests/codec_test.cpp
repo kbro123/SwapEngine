@@ -363,3 +363,27 @@ TEST(Codec, TheTradeDiscountIndexRuleIsALibraryFunction) {
   EXPECT_EQ(tr::discount_index_for(std::nullopt, "EUR-ESTR"), "EUR-ESTR");
   EXPECT_THROW(tr::discount_index_for(std::nullopt, ""), std::invalid_argument);
 }
+
+TEST(Codec, AStreetBondRequestDecodesTermsAndTreatsNullAsAbsent) {
+  const auto r = api::street_bond_request_from_json(json::parse(R"({"bonds": [
+      {"convention": "US-TREASURY-TSY", "settle": "2024-06-15", "maturity": "2034-11-15", "coupon": 0.045,
+       "dated": "2024-06-15", "first_coupon": "2024-11-15", "freq": 2, "clean": null, "yield": 0.047}]})").as_object());
+  EXPECT_FALSE(r.value_date.has_value());
+  ASSERT_EQ(r.bonds.size(), 1u);
+  const auto& q = r.bonds[0];
+  EXPECT_EQ(q.terms.convention, "US-TREASURY-TSY");
+  EXPECT_EQ(q.terms.coupon, 0.045);
+  EXPECT_FALSE(q.terms.issue.has_value());
+  ASSERT_TRUE(q.terms.dated.has_value());
+  ASSERT_TRUE(q.terms.first_coupon.has_value());
+  EXPECT_EQ(q.terms.freq, std::optional<int>(2));
+  EXPECT_FALSE(q.clean.has_value()) << "an explicit null is absent";
+  EXPECT_EQ(q.yield, std::optional<double>(0.047));
+  for (const char* k : {"settle", "maturity", "coupon"}) {
+    json::object bond = json::parse(R"({"settle": "2024-01-16", "maturity": "2029-08-15", "coupon": 0.025})").as_object();
+    bond.erase(k);
+    json::object req;
+    req["bonds"] = json::array{bond};
+    EXPECT_THROW(api::street_bond_request_from_json(req), std::invalid_argument) << k;
+  }
+}

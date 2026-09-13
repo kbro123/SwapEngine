@@ -15,6 +15,7 @@ add_executable(swaps_tests
   fixings_test.cpp
   tension_regularizer_test.cpp
   smoothing_preset_test.cpp
+  bond_terms_test.cpp
   tension_test.cpp
   turns_test.cpp
   build_calendar_test.cpp

@@ -28,40 +28,48 @@ namespace pf = swaps::portfolio;
 
 namespace {
 
-// ---- readers: assign ONLY when present; the wrong type throws ---------------------------------------
+// ---- readers: assign ONLY when present (an explicit null is absent); the wrong type throws ---------------
+bool present(const json::object& o, const char* k) { return o.contains(k) && !o.at(k).is_null(); }
+std::string str(const json::value& v) {
+  const auto& s = v.as_string();
+  return std::string(s.begin(), s.end());
+}
 void into(const json::object& o, const char* k, double& out) {
-  if (o.contains(k)) out = o.at(k).to_number<double>();
+  if (present(o, k)) out = o.at(k).to_number<double>();
 }
 void into(const json::object& o, const char* k, int& out) {
-  if (o.contains(k)) out = static_cast<int>(o.at(k).to_number<long long>());
+  if (present(o, k)) out = static_cast<int>(o.at(k).to_number<long long>());
 }
 void into(const json::object& o, const char* k, bool& out) {
-  if (o.contains(k)) out = o.at(k).as_bool();
+  if (present(o, k)) out = o.at(k).as_bool();
 }
 void into(const json::object& o, const char* k, std::string& out) {
-  if (o.contains(k)) {
-    const auto& s = o.at(k).as_string();
-    out.assign(s.begin(), s.end());
-  }
+  if (present(o, k)) out = str(o.at(k));
+}
+void into(const json::object& o, const char* k, swaps::build::Date& out) {
+  if (present(o, k)) out = swaps::build::Date::from_iso(str(o.at(k)));
 }
 void into(const json::object& o, const char* k, std::vector<double>& out) {
-  if (!o.contains(k)) return;
+  if (!present(o, k)) return;
   out.clear();
   for (const auto& e : o.at(k).as_array()) out.push_back(e.to_number<double>());
 }
 void into(const json::object& o, const char* k, std::vector<int>& out) {
-  if (!o.contains(k)) return;
+  if (!present(o, k)) return;
   out.clear();
   for (const auto& e : o.at(k).as_array()) out.push_back(static_cast<int>(e.to_number<long long>()));
 }
+template <class T>
+void into(const json::object& o, const char* k, std::optional<T>& out) {
+  if (!present(o, k)) return;
+  T v{};
+  into(o, k, v);
+  out = v;
+}
 // A field the library has no default for.
 const json::value& need(const json::object& o, const char* k, const std::string& why) {
-  if (!o.contains(k)) throw std::invalid_argument(why);
+  if (!present(o, k)) throw std::invalid_argument(why);
   return o.at(k);
-}
-std::string str(const json::value& v) {
-  const auto& s = v.as_string();
-  return std::string(s.begin(), s.end());
 }
 
 // ---- names <-> enums ------------------------------------------------------------------------------
@@ -507,6 +515,53 @@ pf::MultiCurveBook book_from_json(const json::value& v) {
     book.positions.push_back(std::move(p));
   }
   return book;
+}
+
+swaps::build::StreetBondRequest street_bond_request_from_json(const json::object& o) {
+  swaps::build::StreetBondRequest r;
+  into(o, "value_date", r.value_date);
+  for (const auto& e : need(o, "bonds", "bonds: missing 'bonds' array").as_array()) {
+    const auto& bo = e.as_object();
+    const auto term = [&](const char* k) -> const json::value& {
+      return need(bo, k, std::string("bonds: each bond needs '") + k + "'");
+    };
+    swaps::build::StreetBondQuote q;
+    q.terms.settle = swaps::build::Date::from_iso(str(term("settle")));
+    q.terms.maturity = swaps::build::Date::from_iso(str(term("maturity")));
+    q.terms.coupon = term("coupon").to_number<double>();
+    into(bo, "convention", q.terms.convention);
+    into(bo, "issue", q.terms.issue);
+    into(bo, "dated", q.terms.dated);
+    into(bo, "first_coupon", q.terms.first_coupon);
+    into(bo, "freq", q.terms.freq);
+    into(bo, "clean", q.clean);
+    into(bo, "yield", q.yield);
+    r.bonds.push_back(std::move(q));
+  }
+  return r;
+}
+
+json::object street_analytics_to_json(const std::vector<px::StreetAnalytics>& rows) {
+  std::vector<double> clean, dirty, accrued, ytm, mdur, macdur, convx;
+  for (const px::StreetAnalytics& a : rows) {
+    clean.push_back(a.clean);
+    dirty.push_back(a.dirty);
+    accrued.push_back(a.accrued);
+    ytm.push_back(a.yield);
+    mdur.push_back(a.modified_duration);
+    macdur.push_back(a.macaulay_duration);
+    convx.push_back(a.convexity);
+  }
+  json::object out;
+  out["clean"] = vecf(clean);
+  out["dirty"] = vecf(dirty);
+  out["accrued"] = vecf(accrued);
+  out["ytm"] = vecf(ytm);
+  out["modified_duration"] = vecf(mdur);
+  out["macaulay_duration"] = vecf(macdur);
+  out["convexity"] = vecf(convx);
+  out["n"] = static_cast<int>(rows.size());
+  return out;
 }
 
 json::array sample_to_json(const std::vector<CurveSample>& samples) {

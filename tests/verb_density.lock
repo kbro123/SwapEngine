@@ -1,7 +1,7 @@
 # tools/verb_density.py lock (E7 stage 1, PRINCIPLES.md P14). One line per api file: the most
 # behaviour it may carry. Counts may only go DOWN; a file absent from this list locks at zero.
 # Codec files do not lock loops/branches (decode walks arrays and checks shape).
-api/bond.cpp lookups=2 defaults=32 loops=7 compute=6 branches=14   # core
+api/bond.cpp lookups=2 defaults=15 loops=5 compute=4 branches=7   # core
 api/bond_future.cpp lookups=1 defaults=27 loops=3 compute=2 branches=11   # core
 api/bundle_api.cpp lookups=0 defaults=13 loops=28 compute=27 branches=62   # parked
 api/calib_report.cpp lookups=0 defaults=8 loops=2 compute=8 branches=9   # core

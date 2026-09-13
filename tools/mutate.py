@@ -24,6 +24,17 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 3.2: the one terms->bond builder. Ignoring a request's frequency override would silently price a
+    # non-catalogued bond on the convention's schedule.
+    ("bond_terms_freq_override_ignored", "include/swaps/build/bond.hpp",
+     "const int freq = t.freq ? *t.freq : int(yc.freq + 0.5);",
+     "const int freq = int(yc.freq + 0.5);",
+     ["bond_terms_test.cpp"], "*", "the bond terms builder's frequency override is unpinned (E7 3.2)"),
+    # ... and the street analytics' clean price must net out accrued.
+    ("street_analytics_clean_keeps_accrued", "include/swaps/pricing/bond.hpp",
+     "a.clean = a.dirty - b.accrued;",
+     "a.clean = a.dirty;",
+     ["bond_terms_test.cpp"], "*", "street_analytics' clean/dirty relation is unpinned (E7 3.2)"),
     # E7 stage 3: the one smoothing table. A drifted light value would re-smooth every verb's default calibration.
     ("smoothing_light_value_drifts", "include/swaps/calibration/regularize.hpp",
      "case Smoothing::Light: return tension ? 0.02 : 0.5;",
