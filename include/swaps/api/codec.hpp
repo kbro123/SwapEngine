@@ -28,6 +28,7 @@
 #include "swaps/build/bond_future.hpp"  // DeliveryBasketRequest
 #include "swaps/build/par_asset_swap.hpp"  // AssetSwapBond
 #include "swaps/calibration/bundle_problem.hpp"
+#include "swaps/conventions_data.hpp"  // OverlayBatch, Registry::Listings
 #include "swaps/calibration/regularize.hpp"  // RegSpec
 #include "swaps/portfolio/portfolio.hpp"
 
@@ -137,6 +138,20 @@ boost::json::array quote_diagnostics_to_json(const std::vector<cal::QuoteDiagnos
 cal::ConsistentRiskRequest consistent_risk_request_from_json(const boost::json::object& payload);
 // -> {npv, pv01, n, bundles:[{ladder, synthetic, synthetic_knot, npv, pv01, ladder_dv01, n_residuals, n_synthetic}]}
 boost::json::object consistent_risk_to_json(const cal::ConsistentRisk& r);
+
+// ---- the conventions registry (the `conventions` / `list_conventions` verbs) -------------------------------------
+// {"conventions": {family: {id: row}}} (or the families object itself) -> ONE OverlayBatch, rows in the exact
+// conventions.json shapes; the field mapping is tools/gen_conventions_hpp.py's for the baked arrays. What a row must
+// CONTAIN is Registry::apply's rule (conventions_db.hpp). This checks only what the JSON alone can show: a value of the
+// wrong JSON type, a negative or fractional integer, a date that is not a calendar date, one leg under two names
+// (float_leg | spread_leg | usd_leg, flat_leg | eur_leg), a family the registry does not have, and the JSON-only fields
+// the schema requires (a product's description; a calendar's weekend, observance with holidays, holidays or join).
+// The batch's string_views point into `payload`, which must outlive Registry::apply.
+swaps::conventions::OverlayBatch overlay_batch_from_json(const boost::json::object& payload);
+// {"added": {family: [id, ...]} for each family with rows, "overlay_size": n}
+boost::json::object overlay_added_to_json(const swaps::conventions::OverlayBatch& batch, int overlay_size);
+// {family: {"baked": [...], "overlay": [...]}, ..., "overlay_size": n}
+boost::json::object conventions_listing_to_json(const swaps::conventions::Registry::Listings& listing);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

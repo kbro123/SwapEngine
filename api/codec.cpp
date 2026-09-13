@@ -4,6 +4,8 @@
 // literal restated here -- the struct is the single source of each default.
 #include "swaps/api/codec.hpp"
 
+#include <initializer_list>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -918,6 +920,397 @@ RegSpec reg_from_json(const json::object& request) {
   into(r, "tension", reg.tension);  // continuous tension energy vs discrete second-difference
   into(r, "sigma", reg.sigma);      // tension parameter (tension=true); 0 => pure curvature
   return reg;
+}
+
+
+// ---- the conventions registry ------------------------------------------------------------------------------------
+namespace {
+
+namespace cvd = swaps::conventions;
+
+std::string_view view(const json::string& s) { return {s.data(), s.size()}; }
+
+// One conventions.json object and the row it belongs to (for the messages). Readers assign ONLY when the field is
+// present, so an absent field keeps the struct's own unset value; a present value of the wrong JSON type throws.
+struct ConvFields {
+  const json::object& o;
+  std::string where;  // "index 'USD-SOFR'"
+
+  [[noreturn]] void bad(const char* k, const std::string& what) const {
+    throw std::invalid_argument("conventions: " + where + ": '" + k + "' " + what);
+  }
+  void required(const char* k) const {
+    if (!present(o, k)) bad(k, "is required");
+  }
+  std::string_view text(const char* k) const {
+    if (!present(o, k)) return {};
+    if (!o.at(k).is_string()) bad(k, "must be a string");
+    return view(o.at(k).as_string());
+  }
+  void integer(const char* k, int& out) const {  // never a fraction, a string or out of range
+    if (!present(o, k)) return;
+    const json::value& v = o.at(k);
+    if (!v.is_int64() || v.as_int64() < std::numeric_limits<int>::min() || v.as_int64() > std::numeric_limits<int>::max())
+      bad(k, "must be an integer");
+    out = static_cast<int>(v.as_int64());
+  }
+  void count(const char* k, int& out) const {  // a lag, a month or step count, a number of decimals
+    if (!present(o, k)) return;
+    integer(k, out);
+    if (out < 0) bad(k, "must be >= 0");
+  }
+  void number(const char* k, double& out) const {
+    if (!present(o, k)) return;
+    if (!o.at(k).is_number()) bad(k, "must be a number");
+    out = o.at(k).to_number<double>();
+  }
+  void flag(const char* k, bool& out) const {
+    if (!present(o, k)) return;
+    if (!o.at(k).is_bool()) bad(k, "must be true or false");
+    out = o.at(k).as_bool();
+  }
+  const json::object* object(const char* k) const {
+    if (!present(o, k)) return nullptr;
+    if (!o.at(k).is_object()) bad(k, "must be an object");
+    return &o.at(k).as_object();
+  }
+  const json::array* array(const char* k) const {
+    if (!present(o, k)) return nullptr;
+    if (!o.at(k).is_array()) bad(k, "must be an array");
+    return &o.at(k).as_array();
+  }
+  long serial(const char* k, const json::value& v) const {  // a real calendar date -> its Unix-day serial
+    if (!v.is_string()) bad(k, "must be a YYYY-MM-DD date");
+    try {
+      return swaps::build::Date::from_iso(std::string(view(v.as_string()))).serial();
+    } catch (const std::invalid_argument& e) {
+      bad(k, e.what());
+    }
+  }
+  std::string_view date(const char* k) const {  // kept as text, checked as a date
+    if (present(o, k)) (void)serial(k, o.at(k));
+    return text(k);
+  }
+  // One leg slot, several spellings: at most one of `names` may be given.
+  const json::object* leg(std::initializer_list<const char*> names) const {
+    const json::object* found = nullptr;
+    const char* first = nullptr;
+    for (const char* n : names) {
+      const json::object* l = object(n);
+      if (!l) continue;
+      if (found) bad(n, std::string("names the same leg as '") + first + "'");
+      found = l;
+      first = n;
+    }
+    return found;
+  }
+};
+
+std::string row_name(const char* family, std::string_view id) { return std::string(family) + " '" + std::string(id) + "'"; }
+
+cvd::LegConv leg_from_json(const json::object* leg, const std::string& where) {
+  cvd::LegConv l;
+  if (!leg) return l;
+  const ConvFields f{*leg, where};
+  l.index = f.text("index");
+  l.day_count = f.text("day_count");
+  l.frequency = f.text("frequency");
+  l.compounding = f.text("compounding");
+  f.flag("carries_spread", l.carries_spread);
+  f.flag("notional_resets", l.notional_resets);
+  f.flag("flat", l.flat);
+  return l;
+}
+
+void product_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("product", id)};
+  f.required("description");
+  cvd::ProductConv p;
+  p.id = id;
+  p.type = f.text("type");
+  p.currency = f.text("currency");
+  p.calendar = f.text("calendar");
+  p.bdc = f.text("bdc");
+  p.frequency = f.text("frequency");
+  p.discount_index = f.text("discount_index");
+  p.pair = f.text("pair");
+  p.base_currency = f.text("base_currency");
+  f.count("spot_lag", p.spot_lag);
+  f.count("payment_lag", p.payment_lag);
+  f.flag("zero_coupon", p.zero_coupon);
+  p.fixed = leg_from_json(f.leg({"fixed_leg"}), f.where);
+  p.floating = leg_from_json(f.leg({"float_leg", "spread_leg", "usd_leg"}), f.where);
+  p.other = leg_from_json(f.leg({"flat_leg", "eur_leg"}), f.where);
+  b.products.push_back(p);
+}
+
+void index_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("index", id)};
+  cvd::IndexConv x;
+  x.id = id;
+  x.currency = f.text("currency");
+  x.type = f.text("type");
+  x.day_count = f.text("day_count");
+  x.calendar = f.text("calendar");
+  x.par_product = f.text("par_product");
+  x.tenor = f.text("tenor");
+  f.count("fixing_lag", x.fixing_lag);
+  f.count("publication_lag", x.publication_lag);
+  b.indices.push_back(x);
+}
+
+void bond_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("bond", id)};
+  cvd::BondConv x;
+  x.id = id;
+  x.currency = f.text("currency");
+  x.calendar = f.text("calendar");
+  x.day_count = f.text("day_count");
+  x.frequency = f.text("frequency");
+  x.stub_discount = f.text("stub_discount");
+  f.count("settle_lag", x.settle_lag);
+  f.flag("final_period_simple", x.final_period_simple);
+  b.bonds.push_back(x);
+}
+
+void currency_from_json(cvd::OverlayBatch& b, std::string_view code, const json::object& o) {
+  const ConvFields f{o, row_name("currency", code)};
+  cvd::CurrencyConv x;
+  x.code = code;
+  x.name = f.text("name");
+  x.settlement_calendar = f.text("settlement_calendar");
+  x.discount_index = f.text("discount_index");
+  x.default_swap_product = f.text("default_swap_product");
+  x.repo_day_count = f.text("repo_day_count");
+  f.count("minor_units", x.minor_units);
+  b.currencies.push_back(x);
+}
+
+void calendar_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("calendar", id)};
+  cvd::OverlayBatch::Calendar c;
+  c.row.id = id;
+  c.row.name = f.text("name");
+  c.row.observance = f.text("observance");
+  f.flag("sandwich", c.row.sandwich);
+  const json::array* weekend = f.array("weekend");
+  if (!weekend) f.bad("weekend", "is required (e.g. [5, 6]: Saturday and Sunday)");
+  for (const json::value& d : *weekend) {
+    if (!d.is_int64() || d.as_int64() < 0 || d.as_int64() > 6) f.bad("weekend", "days are integers 0 (Mon) .. 6 (Sun)");
+    c.row.weekend_mask |= 1 << d.as_int64();
+  }
+  const json::array* holidays = f.array("holidays");
+  const json::array* join = f.array("join");
+  if (!holidays && !join) f.bad("holidays", "or 'join' is required ([] for no holidays)");
+  if (holidays) {
+    f.required("observance");
+    for (const json::value& h : *holidays) {
+      if (!h.is_object()) f.bad("holidays", "entries must be objects");
+      const ConvFields r{h.as_object(), f.where + " holiday"};
+      cvd::HolidayRule rule;
+      rule.kind = r.text("rule");
+      r.integer("month", rule.month);
+      r.integer("day", rule.day);
+      r.integer("weekday", rule.weekday);
+      r.integer("n", rule.n);
+      r.integer("days", rule.days);
+      r.integer("from_year", rule.from_year);
+      r.integer("to_year", rule.to_year);
+      rule.observance = r.text("observance");
+      r.flag("except_first_friday", rule.except_first_friday);
+      c.rules.push_back(rule);
+    }
+  }
+  if (join) {
+    for (const json::value& j : *join) {
+      if (!j.is_string()) f.bad("join", "entries must be calendar ids");
+      c.joins.push_back(view(j.as_string()));
+    }
+  }
+  b.calendars.push_back(std::move(c));
+}
+
+void cds_product_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("cds product", id)};
+  cvd::CreditConv x;
+  x.id = id;
+  x.currency = f.text("currency");
+  x.calendar = f.text("calendar");
+  x.day_count = f.text("day_count");
+  x.frequency = f.text("frequency");
+  x.roll = f.text("roll");
+  f.number("recovery_default", x.recovery_default);
+  f.count("settlement_lag", x.settlement_lag);
+  f.count("protection_steps", x.protection_steps);
+  b.credit_products.push_back(x);
+}
+
+void bond_future_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("bond future", id)};
+  cvd::BondFutureConv x;
+  x.id = id;
+  x.currency = f.text("currency");
+  x.exchange_calendar = f.text("exchange_calendar");
+  x.deliverable_convention = f.text("deliverable_convention");
+  x.repo_day_count = f.text("repo_day_count");
+  x.delivery = f.text("delivery");
+  f.number("notional_coupon", x.notional_coupon);
+  f.number("basket_min_years", x.basket_min_years);
+  f.number("basket_max_years", x.basket_max_years);
+  f.count("maturity_rounding_months", x.maturity_rounding_months);
+  f.count("conversion_factor_decimals", x.conversion_factor_decimals);
+  b.bond_futures.push_back(x);
+}
+
+void fx_pair_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("fx pair", id)};
+  cvd::FxPairConv x;
+  x.id = id;
+  x.base = f.text("base");
+  x.quote = f.text("quote");
+  x.calendar = f.text("calendar");
+  x.premium_currency = f.text("premium_currency");
+  x.delta_convention = f.text("delta_convention");
+  x.atm_convention = f.text("atm_convention");
+  x.xccy_product = f.text("xccy_product");
+  x.forward_product = f.text("forward_product");
+  f.count("spot_lag", x.spot_lag);
+  if (const json::array* pillars = f.array("smile_pillars")) {
+    for (const json::value& v : *pillars)
+      if (!v.is_number()) f.bad("smile_pillars", "must be numbers");
+    if (!pillars->empty()) {
+      x.smile_pillar_lo = pillars->front().to_number<double>();
+      x.smile_pillar_hi = pillars->back().to_number<double>();
+    }
+  }
+  b.fx_pairs.push_back(x);
+}
+
+void cb_schedule_from_json(cvd::OverlayBatch& b, std::string_view currency, const json::object& o) {
+  const ConvFields f{o, row_name("cb schedule", currency)};
+  cvd::OverlayBatch::CbSchedule c;
+  c.row.currency = currency;
+  c.row.bank = f.text("bank");
+  c.row.source = f.text("source");
+  c.row.as_of = f.date("as_of");
+  const json::array* meetings = f.array("meetings");
+  if (!meetings) f.bad("meetings", "is required (an array of YYYY-MM-DD dates)");
+  for (const json::value& m : *meetings) c.meetings.push_back(f.serial("meetings", m));
+  b.cb_schedules.push_back(std::move(c));
+}
+
+void fixing_source_from_json(cvd::OverlayBatch& b, std::string_view index_id, const json::object& o) {
+  const ConvFields f{o, row_name("fixing source", index_id)};
+  cvd::FixingSourceConv x;
+  x.id = index_id;
+  x.provider = f.text("provider");
+  x.series = f.text("series");
+  x.start = f.date("start");
+  x.granularity = f.text("granularity");
+  b.fixing_sources.push_back(x);
+}
+
+void inflation_index_from_json(cvd::OverlayBatch& b, std::string_view id, const json::object& o) {
+  const ConvFields f{o, row_name("inflation index", id)};
+  cvd::InflationIndexConv x;
+  x.id = id;
+  x.label = f.text("label");
+  x.currency = f.text("currency");
+  x.calendar = f.text("calendar");
+  x.interpolation = f.text("interpolation");
+  x.frequency = f.text("frequency");
+  f.count("observation_lag_months", x.observation_lag_months);
+  b.inflation_indices.push_back(x);
+}
+
+using RowDecoder = void (*)(cvd::OverlayBatch&, std::string_view, const json::object&);
+
+void rows_from_json(cvd::OverlayBatch& b, const ConvFields& f, const char* family, RowDecoder decode) {
+  const json::object* rows = f.object(family);
+  if (!rows) return;
+  for (const auto& kv : *rows) {
+    const std::string_view id(kv.key().data(), kv.key().size());
+    if (!kv.value().is_object()) throw std::invalid_argument("conventions: " + row_name(family, id) + " must be an object");
+    decode(b, id, kv.value().as_object());
+  }
+}
+
+json::object listing_to_json(const cvd::Registry::Listing& l) {
+  json::array baked, overlay;
+  for (const auto& id : l.baked) baked.emplace_back(id);
+  for (const auto& id : l.overlay) overlay.emplace_back(id);
+  return json::object{{"baked", std::move(baked)}, {"overlay", std::move(overlay)}};
+}
+
+}  // namespace
+
+cvd::OverlayBatch overlay_batch_from_json(const json::object& payload) {
+  const json::object* families = ConvFields{payload, "request"}.object("conventions");
+  if (!families) families = &payload;
+  const ConvFields f{*families, "request"};
+  // Every key is a family the registry has, the overlay switch, or a conventions.json document key it never stores.
+  static constexpr std::string_view kKeys[] = {"currencies",   "calendars",      "indices",   "products",
+                                               "bonds",        "credit",         "bond_futures", "fx_pairs",
+                                               "cb_schedules", "fixing_sources", "inflation", "clear_overlay",
+                                               "$schema",      "meta",           "day_counts"};
+  for (const auto& kv : *families) {
+    const std::string_view key(kv.key().data(), kv.key().size());
+    bool known = false;
+    for (std::string_view k : kKeys) known = known || k == key;
+    if (!known) throw std::invalid_argument("conventions: unknown family '" + std::string(key) + "'");
+  }
+  cvd::OverlayBatch b;
+  f.flag("clear_overlay", b.clear_first);
+  rows_from_json(b, f, "currencies", currency_from_json);
+  rows_from_json(b, f, "calendars", calendar_from_json);
+  rows_from_json(b, f, "indices", index_from_json);
+  rows_from_json(b, f, "products", product_from_json);
+  rows_from_json(b, f, "bonds", bond_from_json);
+  if (const json::object* credit = f.object("credit")) rows_from_json(b, ConvFields{*credit, "credit"}, "cds_products", cds_product_from_json);
+  rows_from_json(b, f, "bond_futures", bond_future_from_json);
+  rows_from_json(b, f, "fx_pairs", fx_pair_from_json);
+  rows_from_json(b, f, "cb_schedules", cb_schedule_from_json);
+  rows_from_json(b, f, "fixing_sources", fixing_source_from_json);
+  rows_from_json(b, f, "inflation", inflation_index_from_json);
+  return b;
+}
+
+json::object overlay_added_to_json(const cvd::OverlayBatch& b, int overlay_size) {
+  json::object added;
+  const auto put = [&added](const char* family, const auto& rows, auto id) {
+    if (rows.empty()) return;
+    json::array ids;
+    for (const auto& r : rows) ids.emplace_back(id(r));
+    added[family] = std::move(ids);
+  };
+  const auto by_id = [](const auto& r) { return r.id; };
+  put("currencies", b.currencies, [](const cvd::CurrencyConv& c) { return c.code; });
+  put("calendars", b.calendars, [](const cvd::OverlayBatch::Calendar& c) { return c.row.id; });
+  put("indices", b.indices, by_id);
+  put("products", b.products, by_id);
+  put("bonds", b.bonds, by_id);
+  put("cds_products", b.credit_products, by_id);
+  put("bond_futures", b.bond_futures, by_id);
+  put("fx_pairs", b.fx_pairs, by_id);
+  put("cb_schedules", b.cb_schedules, [](const cvd::OverlayBatch::CbSchedule& c) { return c.row.currency; });
+  put("fixing_sources", b.fixing_sources, by_id);
+  put("inflation", b.inflation_indices, by_id);
+  return json::object{{"added", std::move(added)}, {"overlay_size", overlay_size}};
+}
+
+json::object conventions_listing_to_json(const cvd::Registry::Listings& l) {
+  return json::object{{"currencies", listing_to_json(l.currencies)},
+                      {"calendars", listing_to_json(l.calendars)},
+                      {"indices", listing_to_json(l.indices)},
+                      {"products", listing_to_json(l.products)},
+                      {"bonds", listing_to_json(l.bonds)},
+                      {"cds_products", listing_to_json(l.credit_products)},
+                      {"bond_futures", listing_to_json(l.bond_futures)},
+                      {"fx_pairs", listing_to_json(l.fx_pairs)},
+                      {"cb_schedules", listing_to_json(l.cb_schedules)},
+                      {"fixing_sources", listing_to_json(l.fixing_sources)},
+                      {"inflation", listing_to_json(l.inflation_indices)},
+                      {"overlay_size", l.overlay_size}};
 }
 
 }  // namespace swaps::api

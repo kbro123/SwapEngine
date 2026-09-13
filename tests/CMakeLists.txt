@@ -66,6 +66,7 @@ add_executable(swaps_tests
   bus252_daycount_test.cpp
   zero_coupon_swap_test.cpp
   conventions_property_test.cpp
+  conventions_rules_test.cpp
   curve_property_test.cpp
   fx_black_grid_test.cpp
   rates_fx_grid_test.cpp

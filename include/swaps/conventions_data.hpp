@@ -1081,6 +1081,21 @@ inline constexpr std::array<CalendarConv, 22> kCalendars = {{
   {"ZAR", "Johannesburg / South Africa settlement", "sun_to_mon", 96, 738, 13, 2, 0, false},
 }};
 
+// conventions.schema.json's enum vocabularies: Registry's row rules (conventions_db.hpp) check against these.
+inline constexpr std::array<std::string_view, 7> kSchemaProductTypes = {{"ois", "irs", "basis", "xccy_mtm", "fx_forward", "future", "administered-basis"}};
+inline constexpr std::array<std::string_view, 4> kSchemaBusinessDayConventions = {{"Following", "ModifiedFollowing", "Preceding", "ModifiedPreceding"}};
+inline constexpr std::array<std::string_view, 2> kSchemaLegCompounding = {{"compounded", "averaged"}};
+inline constexpr std::array<std::string_view, 2> kSchemaIndexTypes = {{"overnight", "ibor"}};
+inline constexpr std::array<std::string_view, 2> kSchemaStubDiscounts = {{"compound", "simple"}};
+inline constexpr std::array<std::string_view, 4> kSchemaDeltaConventions = {{"spot", "forward", "spot_pa", "forward_pa"}};
+inline constexpr std::array<std::string_view, 3> kSchemaAtmConventions = {{"delta_neutral", "forward", "spot"}};
+inline constexpr std::array<std::string_view, 2> kSchemaFixingProviders = {{"nyfed", "ecb"}};
+inline constexpr std::array<std::string_view, 2> kSchemaFixingGranularities = {{"daily", "monthly"}};
+inline constexpr std::array<std::string_view, 2> kSchemaInflationInterpolations = {{"flat", "linear"}};
+inline constexpr std::array<std::string_view, 6> kSchemaCalendarObservances = {{"none", "sat_to_fri_sun_to_mon", "sun_to_mon", "weekend_to_next_weekday", "sun_to_next_weekday", ""}};
+inline constexpr std::array<std::string_view, 8> kSchemaHolidayRules = {{"fixed", "nth_weekday", "last_weekday", "easter_offset", "weekday_before", "vernal_equinox", "autumnal_equinox", "working_day"}};
+inline constexpr std::array<std::string_view, 5> kSchemaHolidayObservances = {{"none", "sat_to_fri_sun_to_mon", "sun_to_mon", "weekend_to_next_weekday", "sun_to_next_weekday"}};
+
 // Approximate year-fraction of a frequency/tenor token ('3M'->0.25, '6M'->0.5, '1Y'->1.0), for the
 // coupon-period length a curve build needs when it only has year fractions (conventions_db.period_years).
 inline double period_years(std::string_view tok) {

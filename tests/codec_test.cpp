@@ -5,7 +5,9 @@
 // never a literal), a present field is carried exactly, the wrong type or an unknown name throws, and a field
 // the library cannot default is required.
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include <boost/json.hpp>
@@ -502,4 +504,53 @@ TEST(Codec, AnRvFieldTheLibraryCannotDefaultIsRequiredAndAnUnknownNameThrows) {
   json::object lag = json::parse(kGovvie).as_object();
   lag["settle_lag"] = 1.5;  // was truncated to 1
   EXPECT_ANY_THROW(api::govvie_fit_request_from_json(lag));
+}
+
+// ---- the conventions registry (E7 stage 4.2) -------------------------------------------------------------------
+namespace cvd = swaps::conventions;
+
+TEST(Codec, ConventionsRowsDecodeIntoOneBatchKeepingTheStructsUnsetValues) {
+  const json::object doc = json::parse(R"({"conventions": {"clear_overlay": true,
+      "indices": {"TEST-IDX": {"currency": "USD", "type": "overnight", "day_count": "ACT/360", "calendar": "USD"}},
+      "credit": {"cds_products": {"TEST-CDS": {"currency": "USD"}}},
+      "cb_schedules": {"USD": {"bank": "Fed", "source": "t", "as_of": "2026-09-01",
+                               "meetings": ["1970-01-02", "2027-01-27"]}}}})").as_object();
+  const cvd::OverlayBatch b = api::overlay_batch_from_json(doc);
+  EXPECT_TRUE(b.clear_first);
+  ASSERT_EQ(b.indices.size(), 1u);
+  EXPECT_EQ(b.indices[0].id, "TEST-IDX");
+  EXPECT_EQ(b.indices[0].calendar, "USD");
+  EXPECT_EQ(b.indices[0].fixing_lag, cvd::IndexConv{}.fixing_lag) << "absent -> the struct's own unset value";
+  ASSERT_EQ(b.credit_products.size(), 1u);
+  EXPECT_EQ(b.credit_products[0].recovery_default, cvd::CreditConv{}.recovery_default);
+  ASSERT_EQ(b.cb_schedules.size(), 1u);
+  EXPECT_EQ(b.cb_schedules[0].row.as_of, "2026-09-01");
+  EXPECT_EQ(b.cb_schedules[0].meetings,
+            (std::vector<long>{1, swaps::build::Date::from_iso("2027-01-27").serial()}));
+  EXPECT_EQ(b.rows(), 3u) << "decoding checks shape only; what a row must contain is Registry::apply's";
+  EXPECT_EQ(api::overlay_batch_from_json(doc.at("conventions").as_object()).rows(), 3u) << "the unwrapped form";
+  EXPECT_THROW(api::overlay_batch_from_json(json::parse(R"({"indices": {"X": {"calendar": 5}}})").as_object()),
+               std::invalid_argument);
+}
+
+TEST(Codec, ConventionsEmittersNameOnlyFamiliesWithRowsAndCarryTheOverlaySize) {
+  cvd::OverlayBatch b;
+  cvd::IndexConv i;
+  i.id = "A";
+  b.indices = {i, i};
+  cvd::CurrencyConv c;
+  c.code = "TST";
+  b.currencies = {c};
+  EXPECT_EQ(json::serialize(api::overlay_added_to_json(b, 7)),
+            R"({"added":{"currencies":["TST"],"indices":["A","A"]},"overlay_size":7})");
+
+  cvd::Registry::Listings l;
+  l.indices.baked = {"B1"};
+  l.indices.overlay = {"O1"};
+  l.overlay_size = 1;
+  const json::object listed = api::conventions_listing_to_json(l);
+  EXPECT_EQ(json::serialize(listed.at("indices")), R"({"baked":["B1"],"overlay":["O1"]})");
+  EXPECT_EQ(json::serialize(listed.at("cds_products")), R"({"baked":[],"overlay":[]})");
+  EXPECT_EQ(listed.at("overlay_size").as_int64(), 1);
+  EXPECT_EQ(listed.size(), 12u) << "eleven families and the overlay size";
 }

@@ -16,6 +16,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JSON = os.path.join(ROOT, "conventions", "conventions.json")
+SCHEMA = os.path.join(ROOT, "conventions", "conventions.schema.json")
 OUT = os.path.join(ROOT, "include", "swaps", "conventions_data.hpp")
 
 
@@ -288,6 +289,41 @@ def main():
     lines += joins + ["}};", ""]
     lines.append(f"inline constexpr std::array<CalendarConv, {len(calendars)}> kCalendars = {{{{")
     lines += cal_rows + ["}};", ""]
+
+    # The schema's enum vocabularies, for the registry's row rules (conventions_db.hpp validate): generated so the
+    # schema stays their ONE source -- engine code may not restate them (tools/check_no_literals.py).
+    schema = json.load(open(SCHEMA))
+
+    def fam(family, *path):
+        node = schema["properties"][family]["additionalProperties"]["properties"]
+        for k in path:
+            node = node[k]
+        return node["enum"]
+
+    compounding = fam("products", "fixed_leg", "properties", "compounding")
+    for lg in ("float_leg", "spread_leg", "flat_leg", "usd_leg", "eur_leg"):
+        if fam("products", lg, "properties", "compounding") != compounding:
+            sys.exit(f"gen_conventions_hpp: schema products.{lg}.compounding enum differs from fixed_leg's")
+    vocab = [
+        ("kSchemaProductTypes", fam("products", "type")),
+        ("kSchemaBusinessDayConventions", fam("products", "bdc")),
+        ("kSchemaLegCompounding", compounding),
+        ("kSchemaIndexTypes", fam("indices", "type")),
+        ("kSchemaStubDiscounts", fam("bonds", "stub_discount")),
+        ("kSchemaDeltaConventions", fam("fx_pairs", "delta_convention")),
+        ("kSchemaAtmConventions", fam("fx_pairs", "atm_convention")),
+        ("kSchemaFixingProviders", fam("fixing_sources", "provider")),
+        ("kSchemaFixingGranularities", fam("fixing_sources", "granularity")),
+        ("kSchemaInflationInterpolations", fam("inflation", "interpolation")),
+        ("kSchemaCalendarObservances", fam("calendars", "observance")),
+        ("kSchemaHolidayRules", fam("calendars", "holidays", "items", "properties", "rule")),
+        ("kSchemaHolidayObservances", fam("calendars", "holidays", "items", "properties", "observance")),
+    ]
+    lines.append("// conventions.schema.json's enum vocabularies: Registry's row rules (conventions_db.hpp) check against these.")
+    for name, values in vocab:
+        body = ", ".join('"' + v + '"' for v in values)
+        lines.append(f"inline constexpr std::array<std::string_view, {len(values)}> {name} = {{{{{body}}}}};")
+    lines.append("")
 
     lines += [
         "// Approximate year-fraction of a frequency/tenor token ('3M'->0.25, '6M'->0.5, '1Y'->1.0), for the",

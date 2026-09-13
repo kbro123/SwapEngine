@@ -3,7 +3,6 @@
 # Codec files do not lock loops/branches (decode walks arrays and checks shape).
 api/bundle_api.cpp lookups=0 defaults=10 loops=24 compute=19 branches=59   # parked
 api/compile.cpp lookups=13 defaults=119 loops=48 compute=31 branches=108   # parked
-api/conventions.cpp lookups=1 defaults=97 loops=9 compute=2 branches=30   # core
 api/credit.cpp lookups=2 defaults=12 loops=9 compute=31 branches=17   # deferred
 api/exposure.cpp lookups=0 defaults=22 loops=10 compute=17 branches=21   # deferred
 api/fx_option.cpp lookups=0 defaults=21 loops=5 compute=5 branches=18   # deferred

@@ -285,6 +285,12 @@ synthetic problems name the DB calendar `"NONE"` explicitly. Any API adds or ove
 the stateless **`conventions`** verb (`{"conventions": {"currencies": {...}, "calendars": {...}, "indices": {...},
 "products": {...}, "bonds": {...}}}`, rows in exactly the JSON file's shapes; `clear_overlay` resets) and reads
 what the engine knows with **`list_conventions`** (`api/conventions.cpp`; `tests/conventions_registry_test.cpp`).
+Every runtime row goes through **`Registry::apply(OverlayBatch)`** (E7 4.2): `validate(row)` per family holds it to the
+schema's per-row rules (types, enums, bounds, per-product-type leg shapes; the enum vocabularies are generated
+from the schema as `kSchema*` in `conventions_data.hpp`; every baked row passes them,
+`tests/conventions_rules_test.cpp`), then the whole batch commits under one lock with one generation bump or not at
+all; `add_*`/`clear_overlay` are one-row batches and `listing()` is one snapshot. The verb only decodes
+(`api/codec.cpp` `overlay_batch_from_json`: JSON types, integers, calendar dates, leg spellings, family names).
 The DB also carries `credit.cds_products` (recovery / premium schedule / accrual day count / protection steps),
 `bond_futures` (deliverable convention, CF notional coupon, maturity rounding, repo day count), `fx_pairs` (spot lag,
 calendar, premium currency, delta/ATM conventions), `cb_schedules` (central-bank meeting dates per currency,

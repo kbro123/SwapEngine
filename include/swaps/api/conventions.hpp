@@ -8,12 +8,16 @@
 //   {"conventions": {"currencies": {...}, "calendars": {...}, "indices": {...}, "products": {...}, "bonds": {...},
 //                    "bond_futures": {...}, "fx_pairs": {...}, "cb_schedules": {...}, "credit": {"cds_products": {...}},
 //                    "fixing_sources": {...}, "inflation": {...}}}
-//       entries use EXACTLY the conventions.json row shapes (the schema in conventions/conventions.schema.json)
-//       -> {"conventions": {"added": {"currencies": [...], "calendars": [...], ...}, "overlay_size": n}}
+//       entries use EXACTLY the conventions.json row shapes (the schema in conventions/conventions.schema.json).
+//       The request is ONE batch (E7 4.2): every row is checked against the schema's rules (Registry::apply in
+//       conventions_db.hpp) and the batch is committed whole or not at all, a clear_overlay in it included. A wrong
+//       JSON type, a fractional or negative integer, a date that is not a calendar date, one leg under two names or an
+//       unknown family throws std::invalid_argument (api/codec.cpp, overlay_batch_from_json).
+//       -> {"conventions": {"added": {family: [ids], ...only the families with rows}, "overlay_size": n}}
 //   {"conventions": {"clear_overlay": true}}   -> drops every runtime entry (tests / session reset)
 //   {"list_conventions": true}
-//       -> {"conventions": {"currencies": {"baked": [...], "overlay": [...]}, "calendars": {...}, "indices": {...},
-//                           "products": {...}, "bonds": {...}}}
+//       -> {"conventions": {"currencies": {"baked": [...], "overlay": [...]}, ...every family..., "overlay_size": n}},
+//          read as one snapshot (Registry::listing)
 #include <string>
 
 namespace swaps::api {

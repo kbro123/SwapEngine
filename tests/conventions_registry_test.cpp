@@ -70,7 +70,8 @@ TEST_F(RegistryFixture, ConventionsVerbAddsACurrencyCalendarIndexAndProductUsedB
   // A brand-new market (fictional "XYZ") added through the JSON seam only — no rebuild, no code.
   const std::string req = R"({"conventions": {
     "currencies": {"XYZ": {"name": "Test dollar", "minor_units": 3, "settlement_calendar": "XYZ",
-                           "discount_index": "XYZ-ONIA", "default_swap_product": "XYZ-ONIA-OIS"}},
+                           "discount_index": "XYZ-ONIA", "default_swap_product": "XYZ-ONIA-OIS",
+                           "repo_day_count": "ACT/360"}},
     "calendars": {"XYZ": {"name": "Test", "weekend": [4, 5], "observance": "none",
                           "holidays": [{"rule": "fixed", "month": 7, "day": 9}]}},
     "indices": {"XYZ-ONIA": {"currency": "XYZ", "type": "overnight", "day_count": "ACT/365F",
@@ -127,12 +128,12 @@ TEST_F(RegistryFixture, MalformedEntriesAreRejectedLoudly) {
                std::invalid_argument);
   EXPECT_THROW(api::conventions_json(R"({"conventions": {"indices": {"I": {"currency": "USD"}}}})"),
                std::invalid_argument);
-  // A product row that lacks a field the builders need is rejected at USE, with the row id in the message.
-  api::conventions_json(R"({"conventions": {"products": {"BAD-OIS": {"description": "x", "type": "ois",
-    "currency": "USD", "calendar": "USD-SOFR", "bdc": "ModifiedFollowing", "spot_lag": 2, "payment_lag": 2,
-    "fixed_leg": {"day_count": "ACT/360"}, "float_leg": {"index": "USD-SOFR", "day_count": "ACT/360", "frequency": "1Y"}}}}})");
+  // A product row that lacks a field the builders need is rejected when it is ADDED, with the row id and the field in
+  // the message (E7 4.2: Registry::apply checks the schema's rules; the row used to get in and fail at first use).
   try {
-    b::conv_from_product(cvd::require_product("BAD-OIS"));
+    api::conventions_json(R"({"conventions": {"products": {"BAD-OIS": {"description": "x", "type": "ois",
+      "currency": "USD", "calendar": "USD-SOFR", "bdc": "ModifiedFollowing", "spot_lag": 2, "payment_lag": 2,
+      "fixed_leg": {"day_count": "ACT/360"}, "float_leg": {"index": "USD-SOFR", "day_count": "ACT/360", "frequency": "1Y"}}}}})");
     FAIL() << "missing fixed_leg frequency must throw";
   } catch (const std::invalid_argument& e) {
     EXPECT_NE(std::string(e.what()).find("BAD-OIS"), std::string::npos);
