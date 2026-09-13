@@ -34,6 +34,7 @@
 #include "swaps/portfolio/portfolio.hpp"  // MultiCurveBook — the batched reprice kernel
 #include "swaps/portfolio/compiled_multi.hpp"  // CompiledMultiCurveBook — the cached streaming reprice twin
 #include "swaps/pricing/fixings.hpp"
+#include "swaps/api/codec.hpp"  // the JSON <-> object-graph codecs (E7)
 
 namespace swaps::api {
 
@@ -157,25 +158,7 @@ struct SwaptionSchedule {
   std::vector<double> tau;
 };
 
-// ---- JSON <-> engine object graph (definitions in bundle_api.cpp) --------------------------------
-// Every field is optional on parse and defaults to the struct default, so a minimal document is valid.
-cal::BundleProblem bundle_from_json(const boost::json::value& v);
-boost::json::value bundle_to_json(const cal::BundleProblem& p);
-cal::Instrument instrument_from_json(const boost::json::value& v);
-boost::json::value instrument_to_json(const cal::Instrument& ins);
-
-// A book of positions to reprice. Reuses the SAME coupon JSON shapes the instrument (de)serializers
-// parse (obs/pay/tau_pay/... for a FloatCoupon, pay/tau/scale for a FixedCoupon) so the web reuses its
-// existing schedule builders. Schema (every field optional, defaults to the struct default):
-//   { "positions": [
-//       { "kind":"swap", "notional":<double>, "fixed_rate":<double>,
-//         "fwd_curve":<int>, "disc_curve":<int>, "float_coupons":[<FloatCoupon>...],
-//         "fixed_curve":<int>, "fixed_coupons":[<FixedCoupon>...] },
-//       { "kind":"xccy", "notional":<double>, "fx_spot":<double>,
-//         "fwd_curve":<int>, "disc_curve":<int>, "float_coupons":[<FloatCoupon>...],   // domestic leg
-//         "mtm_fwd_curve":<int>, "mtm_disc_curve":<int>,
-//         "mtm_reset_num":<int>, "mtm_reset_den":<int>, "mtm_coupons":[<FloatCoupon>...] } ] }
-swaps::portfolio::MultiCurveBook book_from_json(const boost::json::value& v);
+// The JSON <-> engine object-graph codecs are declared in swaps/api/codec.hpp (included above).
 
 // A flat starting guess sized to the problem: outright curves at `level`, spread curves at 0.
 // level <= 0 (the default) derives the flat level from the market itself: the mean outright
@@ -586,8 +569,5 @@ std::string run_json(const std::string& request);
 // The PARSE-ONCE entry (E6.3): a host that already holds a parsed document calls this; the string overload
 // parses and forwards. Every stateless verb has the same pair (api/api_surface.py STATELESS_VERBS).
 std::string run_json(const boost::json::object& request);
-// Shared codecs (E6.3): the ONE sample->JSON and the ONE RegSpec<-JSON, used by run_json and the C ABI.
-boost::json::array sample_to_json(const std::vector<CurveSample>& samples);
-RegSpec reg_from_json(const boost::json::object& request);  // reads request["regularize"] when present
 
 }  // namespace swaps::api

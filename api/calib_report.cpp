@@ -67,14 +67,7 @@ std::string calib_report_json(const json::object& request) {
     x0 = flat_x0(P);
   }
 
-  RegSpec reg;
-  if (o.contains("regularize") && o.at("regularize").is_object()) {
-    const auto& r = o.at("regularize").as_object();
-    reg.lambda = jd(r, "lambda", 0.0);
-    reg.curves = jia(r, "curves");
-    reg.tension = jb(r, "tension", false);
-    reg.sigma = jd(r, "sigma", 0.0);
-  }
+  const RegSpec reg = reg_from_json(o);  // the one decoder (swaps/api/codec.hpp)
 
   const cal::CalibrationResult& res = sess.calibrate(x0, reg);
 

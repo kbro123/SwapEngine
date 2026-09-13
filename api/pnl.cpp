@@ -31,17 +31,6 @@ namespace {
 Eigen::VectorXd to_vec(const std::vector<double>& v) {
   return Eigen::Map<const Eigen::VectorXd>(v.data(), static_cast<Eigen::Index>(v.size()));
 }
-RegSpec reg_from(const json::object& o) {
-  RegSpec reg;
-  if (o.contains("regularize") && o.at("regularize").is_object()) {
-    const auto& r = o.at("regularize").as_object();
-    reg.lambda = jd(r, "lambda", 0.0);
-    reg.curves = iarr(r, "curves");
-    reg.tension = jb(r, "tension", false);
-    reg.sigma = jd(r, "sigma", 0.0);
-  }
-  return reg;
-}
 }  // namespace
 
 std::string pnl_json(const json::object& request) {
@@ -55,7 +44,7 @@ std::string pnl_json(const json::object& request) {
     throw std::invalid_argument("pnl: missing 'book' object");
 
   const double dt = jd(o, "dt_years", 0.0);
-  const RegSpec reg = reg_from(o);
+  const RegSpec reg = reg_from_json(o);
   const pf::MultiCurveBook book = book_from_json(o.at("book"));
 
   // bundle0: calibrate to q0 -> x0, and the analytic delta ladder dP/dq at (x0, q0).

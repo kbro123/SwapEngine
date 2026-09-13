@@ -101,7 +101,7 @@ inline constexpr bool scheme_is_linear(Scheme s) { return s != Scheme::MonotoneC
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
   std::vector<double> knots;  // knot times (year fractions), ascending, within this region
-  Scheme scheme;              // interpolation scheme over those knots
+  Scheme scheme = Scheme::Hermite;  // interpolation scheme over those knots (the one default; the JSON codec defers to it)
   // Tension hyperparameter (Scheme::Tension only): pulls the spline taut, σ→0 recovers NaturalCubic,
   // σ→∞ approaches piecewise-linear. Ignored by every other scheme. <=0 means "use the default 1.0".
   double sigma = 0.0;

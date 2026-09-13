@@ -21,7 +21,7 @@ a comment is not a loop, and `jd(o, "dt_years", 0.0)` is a default however it is
             linear algebra (Eigen decompositions, dot/norm/solve/...). Integer/index arithmetic is NOT counted.
   branches  if-statements: validation, dispatch and shape checks.
 
-Codec files (json_util.hpp, codec.hpp) exist to decode, so their loops and branches are reported but not
+Codec files (json_util.hpp, codec.hpp, codec.cpp) exist to decode, so their loops and branches are reported but not
 locked; their lookups, defaults and compute are.
 
 NOT measured: orchestration (a verb calling two library functions in sequence with nothing between them).
@@ -58,7 +58,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK = os.path.join(ROOT, "tests", "verb_density.lock")
 METRICS = ("lookups", "defaults", "loops", "compute", "branches")
 
-CODEC = {"include/swaps/api/json_util.hpp", "include/swaps/api/codec.hpp"}
+CODEC = {"include/swaps/api/json_util.hpp", "include/swaps/api/codec.hpp", "api/codec.cpp"}
 CODEC_UNLOCKED = {"loops", "branches"}
 NOT_VERBS = {"api/swaps_capi.cpp", "api/swaps_api_cli.cpp"}  # the C-ABI transport shim and the CLI driver
 PARKED = {"bundle_api", "compile"}  # the session and the spec compiler: staged separately (E7)

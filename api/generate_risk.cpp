@@ -147,16 +147,7 @@ std::string generate_risk_json(const json::object& request) {
   std::vector<cal::BundleProblem> bundles;
   for (const auto& b : g.at("bundles").as_array()) bundles.push_back(bundle_from_json(b));
 
-  RegSpec reg;
-  if (g.contains("regularize")) {
-    const auto& r = g.at("regularize").as_object();
-    reg.lambda = r.contains("lambda") ? r.at("lambda").to_number<double>() : 0.0;
-    reg.tension = r.contains("tension") && r.at("tension").as_bool();
-    reg.sigma = r.contains("sigma") ? r.at("sigma").to_number<double>() : 0.0;
-    if (r.contains("curves") && r.at("curves").is_array())
-      for (const auto& c : r.at("curves").as_array())
-        reg.curves.push_back(static_cast<int>(c.to_number<long long>()));
-  }
+  const RegSpec reg = reg_from_json(g);  // the one decoder (swaps/api/codec.hpp)
 
   const ConsistentRisk cr = generate_risk(book, bundles, reg);
 

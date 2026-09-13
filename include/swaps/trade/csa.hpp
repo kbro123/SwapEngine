@@ -16,6 +16,7 @@
 // rest of the model uses. The economic terms (threshold, MTA, independent amount, rounding) are plain data.
 
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -67,5 +68,16 @@ struct CSA {
   // The discount index id ("USD-SOFR", "EUR-ESTR", ...); empty for an unknown collateral currency.
   std::string discount_index_id() const { return discount_index().id; }
 };
+
+// The index a booked trade DISCOUNTS on: its CSA's collateral-currency OIS when it has a CSA, else an explicitly
+// named discount index. Neither -- or a CSA whose currency resolves no OIS -- THROWS: discounting on the trade's
+// own forecast index is never assumed. One rule for every entry point (api book_from_json decodes into it, E7).
+inline std::string discount_index_for(const std::optional<CSA>& csa, const std::string& explicit_index) {
+  std::string id = csa ? csa->discount_index_id() : explicit_index;
+  if (id.empty())
+    throw std::invalid_argument("trade: needs a 'csa' (collateral_currency) or an explicit 'discount_index' — "
+                                "discounting on the trade's own index is not assumed");
+  return id;
+}
 
 }  // namespace swaps::trade

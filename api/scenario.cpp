@@ -123,15 +123,7 @@ std::string scenario_json(const json::object& request) {
   } else {
     x0 = flat_x0(P);
   }
-  RegSpec reg;
-  if (o.contains("regularize") && o.at("regularize").is_object()) {
-    const auto& r = o.at("regularize").as_object();
-    reg.lambda = jd(r, "lambda", 0.0);
-    if (r.contains("curves") && r.at("curves").is_array())
-      for (const auto& e : r.at("curves").as_array()) reg.curves.push_back(static_cast<int>(e.to_number<long long>()));
-    reg.tension = r.contains("tension") && r.at("tension").as_bool();
-    reg.sigma = jd(r, "sigma", 0.0);
-  }
+  const RegSpec reg = reg_from_json(o);  // the one decoder (swaps/api/codec.hpp)
   sess.calibrate(x0, reg);
   const Eigen::VectorXd x_base = sess.x();  // the anchor: NEVER mutated below (each scenario copies it)
 
