@@ -23,6 +23,7 @@
 #include "swaps/derive/bond_rv.hpp"  // BondUniverseRequest, GovvieFitRequest, SwapSpreadRequest
 #include "swaps/derive/scenario.hpp"  // ScenarioRequest, ScenarioResult
 #include "swaps/derive/scenario_grid.hpp"  // ScenarioGridRequest, ScenarioGridResult
+#include "swaps/derive/var.hpp"  // VarRequest, VarResult
 #include "swaps/calibration/pnl_explain.hpp"  // PnlRequest, PnlReport
 #include "swaps/trade/csa.hpp"    // discount_index_for
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
@@ -1321,7 +1322,7 @@ json::object conventions_listing_to_json(const cvd::Registry::Listings& l) {
 namespace {
 
 // A shift_curve key names an integer curve role: a bundle's curves have no string names.
-int curve_role_from_key(const std::string& key) {
+int curve_role_from_key(const std::string& key, const char* verb) {
   try {
     std::size_t pos = 0;
     const int role = std::stoi(key, &pos);
@@ -1329,18 +1330,24 @@ int curve_role_from_key(const std::string& key) {
     return role;
   } catch (const std::exception&) {
     throw std::invalid_argument(
-        "scenario: shift_curve key '" + key +
+        std::string(verb) + ": shift_curve key '" + key +
         "' is not an integer curve role (curves in a bundle are addressed by integer index, not name)");
   }
 }
 
-derive::ScenarioMove scenario_move_from_json(const json::object& o) {
+derive::ScenarioMove scenario_move_from_json(const json::object& o, const char* verb) {
   derive::ScenarioMove m;
   into(o, "name", m.name);
   into(o, "parallel_bp", m.parallel_bp);
   if (present(o, "shift_curve"))
-    for (const auto& kv : o.at("shift_curve").as_object())
-      m.shift_curve_bp[curve_role_from_key(std::string(kv.key()))] = kv.value().to_number<double>();
+    for (const auto& kv : o.at("shift_curve").as_object()) {
+      const int role = curve_role_from_key(std::string(kv.key()), verb);
+      // "0" and "00" name one role: refused, rather than silently keeping one of them.
+      if (m.shift_curve_bp.count(role))
+        throw std::invalid_argument(std::string(verb) + ": shift_curve names curve role " + std::to_string(role) +
+                                    " twice");
+      m.shift_curve_bp[role] = kv.value().to_number<double>();
+    }
   if (present(o, "bump_fx"))
     for (const auto& e : o.at("bump_fx").as_array()) {
       const json::object& fo = e.as_object();
@@ -1366,7 +1373,7 @@ derive::ScenarioRequest scenario_request_from_json(const json::object& payload) 
   into(o, "sample_times", r.sample_times);
   if (present(o, "book")) r.book = book_from_json(o.at("book"));
   if (present(o, "scenarios"))
-    for (const auto& e : o.at("scenarios").as_array()) r.scenarios.push_back(scenario_move_from_json(e.as_object()));
+    for (const auto& e : o.at("scenarios").as_array()) r.scenarios.push_back(scenario_move_from_json(e.as_object(), "scenario"));
   return r;
 }
 
@@ -1501,6 +1508,61 @@ json::object scenario_grid_result_to_json(const derive::ScenarioGridResult& r) {
   return json::object{{"scenario_grid", std::move(out)}};
 }
 
+
+// ---- VaR / ES (the `var` verb) --------------------------------------------------------------------------------------
+derive::VarRequest var_request_from_json(const json::object& payload) {
+  const json::object* body = &payload;
+  if (present(payload, "var")) body = &payload.at("var").as_object();
+  const json::object& o = *body;
+  derive::VarRequest r;
+  into(o, "quantiles", r.quantiles);
+  into(o, "pnl", r.pnl);
+  if (present(o, "bundle") || present(o, "book") || present(o, "scenarios")) {
+    // Presence first, in the verb's order, so a request missing two pieces names the one the verb named.
+    const json::value& bundle = need(o, "bundle", "var: needs either 'pnl' or 'bundle'+'scenarios'");
+    const json::value& scenarios = need(o, "scenarios", "var: reval mode needs a 'scenarios' array of market moves");
+    const json::value& book = need(o, "book", "var: reval mode needs a 'book' to reprice");
+    derive::VarRevalRequest v;
+    v.bundle = bundle_from_json(bundle);
+    into(o, "x0", v.x0);
+    v.reg = reg_from_json(o);
+    v.book = book_from_json(book);
+    for (const auto& e : scenarios.as_array()) v.scenarios.push_back(scenario_move_from_json(e.as_object(), "var"));
+    r.reval = std::move(v);
+  }
+  return r;
+}
+
+// Key order is the verb's, byte for byte: mode, [calibration (SC3)], [base_npv, n_positions, reval_us], n, mean_pnl,
+// stdev_pnl, pnl_sorted, quantiles[{q, var, es, var_pnl, es_pnl}].
+json::object var_result_to_json(const derive::VarResult& r) {
+  json::object out;
+  if (r.reval) {
+    out["mode"] = "reval";
+    out["base_npv"] = r.reval->base_npv;
+    out["n_positions"] = r.reval->n_positions;
+    out["reval_us"] = r.reval->reval_us;
+  } else {
+    out["mode"] = "supplied";
+  }
+  const derive::PnlDistribution& d = r.distribution;
+  out["n"] = d.n;
+  out["mean_pnl"] = d.mean_pnl;
+  out["stdev_pnl"] = d.stdev_pnl;
+  out["pnl_sorted"] = vecf(d.pnl_sorted);
+  json::array qout;
+  for (const derive::VarQuantile& q : d.quantiles) {
+    json::object qo;
+    qo["q"] = q.q;
+    qo["var"] = q.var;
+    qo["es"] = q.es;
+    qo["var_pnl"] = q.var_pnl;
+    qo["es_pnl"] = q.es_pnl;
+    qout.push_back(std::move(qo));
+  }
+  out["quantiles"] = std::move(qout);
+  return json::object{{"var", std::move(out)}};
+}
 
 // ---- P&L explain (the `pnl` verb) -------------------------------------------------------------------------------
 cal::PnlRequest pnl_request_from_json(const json::object& payload) {

@@ -69,14 +69,16 @@ inline void add_curve_shock(int role, double bp, std::vector<double>& curve_delt
   curve_delta[static_cast<std::size_t>(role)] += bp / 1e4;
 }
 
-inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, const std::vector<pricing::CurveStructure>& curves) {
+// `verb` names the request in the messages (scenario, var).
+inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, const std::vector<pricing::CurveStructure>& curves,
+                                         const char* verb = "scenario") {
   const int n_curves = static_cast<int>(curves.size());
   ResolvedMove r;
   r.curve_delta.assign(curves.size(), 0.0);
   if (m.parallel_bp) add_parallel_shock(curves, *m.parallel_bp, r.curve_delta);
   for (const auto& [role, bp] : m.shift_curve_bp) {
     if (role < 0 || role >= n_curves)
-      throw std::invalid_argument("scenario: shift_curve role " + std::to_string(role) +
+      throw std::invalid_argument(std::string(verb) + ": shift_curve role " + std::to_string(role) +
                                   " is out of range for this bundle");
     add_curve_shock(role, bp, r.curve_delta);
   }

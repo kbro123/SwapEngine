@@ -24,6 +24,62 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 var lift: derive/var.hpp, the library behind the var verb.
+    ("var_base_at_the_seed", "include/swaps/derive/var.hpp",
+     "  const Eigen::VectorXd x_base = sess.x();  // the anchor every move forks from; never mutated",
+     "  const Eigen::VectorXd x_base = calibration::seed_or_flat(P, r.x0, \"var\");",
+     ["derive_var_test.cpp"], "*", "revaluing at the calibrated state (not the seed) is unpinned (E7 var)"),
+    ("var_fx_factor_ignored", "include/swaps/derive/var.hpp",
+     "books.at(rm.fx_factor).npv(",
+     "books.at(1.0).npv(",
+     ["derive_var_test.cpp"], "*", "an FX move repricing the scaled book is unpinned (E7 var)"),
+    ("var_pnl_not_against_base", "include/swaps/derive/var.hpp",
+     "rm.curve_delta)) -\n                      out.base_npv);",
+     "rm.curve_delta)));",
+     ["derive_var_test.cpp"], "*", "the P&L against the base is unpinned (E7 var)"),
+    ("var_moves_resolved_after_calibrating", "include/swaps/derive/var.hpp",
+     "  for (const ScenarioMove& m : r.scenarios) moves.push_back(resolve_scenario_move(m, r.bundle.curves, \"var\"));\n\n"
+     "  Session sess(std::move(r.bundle));\n"
+     "  const calibration::BundleProblem& P = sess.problem();\n"
+     "  VarRevalResult out;\n"
+     "  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, \"var\"), r.reg);\n",
+     "\n"
+     "  Session sess(std::move(r.bundle));\n"
+     "  const calibration::BundleProblem& P = sess.problem();\n"
+     "  VarRevalResult out;\n"
+     "  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, \"var\"), r.reg);\n"
+     "  for (const ScenarioMove& m : r.scenarios) moves.push_back(resolve_scenario_move(m, P.curves, \"var\"));\n",
+     ["derive_var_test.cpp"], "*", "resolving every move before calibrating is unpinned (E7 var)"),
+    ("var_calibration_not_reported", "include/swaps/derive/var.hpp",
+     "  out.calibration = sess.calibrate(",
+     "  sess.calibrate(",
+     ["derive_var_test.cpp"], "*", "the base's calibration outcome is unpinned (E7 var / SC3)"),
+    ("var_both_modes_accepted", "include/swaps/derive/var.hpp",
+     "  if (r.pnl && r.reval)\n    throw",
+     "  if (false)\n    throw",
+     ["derive_var_test.cpp"], "*", "refusing pnl and a reval request together is unpinned (E7 var)"),
+    ("var_quantiles_checked_after_calibrating", "include/swaps/derive/var.hpp",
+     "  check_var_quantiles(r.quantiles);  // before any calibration, as the verb did\n",
+     "",
+     ["derive_var_test.cpp"], "*", "checking the quantiles before calibrating is unpinned (E7 var)"),
+    ("var_quantile_not_interpolated", "include/swaps/derive/var.hpp",
+     "  return s[static_cast<std::size_t>(i)] * (1.0 - frac) + s[static_cast<std::size_t>(i + 1)] * frac;",
+     "  return s[static_cast<std::size_t>(i)];",
+     ["derive_var_test.cpp"], "*", "the type-7 interpolation is unpinned (E7 var)"),
+    # NOT a mutation: removing `if (i >= n - 1) return s[n - 1];` reads s[n] * 0.0 (frac is exactly 0 at p = 1) -- UB
+    # that returns the right number unless the byte past the vector is inf/NaN. Only a sanitizer run could catch it.
+    ("var_es_tail_unclamped", "include/swaps/derive/var.hpp",
+     "  if (m < 1) m = 1;",
+     "",
+     ["derive_var_test.cpp"], "*", "ES over at least one point is unpinned (E7 var)"),
+    ("var_stdev_population", "include/swaps/derive/var.hpp",
+     "std::sqrt(var_acc / (out.n - 1))",
+     "std::sqrt(var_acc / out.n)",
+     ["derive_var_test.cpp"], "*", "the sample (n - 1) standard deviation is unpinned (E7 var)"),
+    ("var_loss_not_negated", "include/swaps/derive/var.hpp",
+     "  out.var = -out.var_pnl;",
+     "  out.var = out.var_pnl;",
+     ["derive_var_test.cpp"], "*", "var as a LOSS (-P&L) is unpinned (E7 var)"),
     # E7 stage 6.7: calibration::pnl_report, the library behind the pnl verb.
     ("pnl_report_x0_override_ignored", "include/swaps/calibration/pnl_explain.hpp",
      "  const Eigen::VectorXd x0 = r.x0 ? *r.x0 : s0.x();",

@@ -22,6 +22,7 @@ add_executable(swaps_tests
   calibration_diagnostics_test.cpp
   bundle_state_test.cpp
   derive_scenario_test.cpp
+  derive_var_test.cpp
   derive_scenario_grid_test.cpp
   pnl_report_test.cpp
   scenario_spread_repro_test.cpp

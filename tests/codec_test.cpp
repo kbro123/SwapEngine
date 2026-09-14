@@ -15,6 +15,8 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/codec.hpp"
 #include "swaps/derive/bond_rv.hpp"
+#include "swaps/derive/scenario.hpp"
+#include "swaps/derive/var.hpp"
 #include "swaps/trade/csa.hpp"
 
 namespace api = swaps::api;
@@ -553,4 +555,39 @@ TEST(Codec, ConventionsEmittersNameOnlyFamiliesWithRowsAndCarryTheOverlaySize) {
   EXPECT_EQ(json::serialize(listed.at("cds_products")), R"({"baked":[],"overlay":[]})");
   EXPECT_EQ(listed.at("overlay_size").as_int64(), 1);
   EXPECT_EQ(listed.size(), 12u) << "eleven families and the overlay size";
+}
+
+// The scenario / var move decoder (E7 var lift, 2026-09-14). "0" and "00" name ONE curve role: refused, where scenario
+// silently kept the last alias and var added both. A key that is not an integer names the verb that decoded it.
+TEST(CodecScenarioMoves, AMoveNamingACurveRoleTwiceIsRefusedByBothDecoders) {
+  const auto message = [](const auto& decode, const json::object& req) {
+    try {
+      (void)decode(req);
+    } catch (const std::invalid_argument& e) {
+      return std::string(e.what());
+    }
+    return std::string("no throw");
+  };
+  const auto scenario = [](const json::object& r) { return api::scenario_request_from_json(r); };
+  const auto var = [](const json::object& r) { return api::var_request_from_json(r); };
+  const auto with_move = [](const char* verb, json::object move) {
+    json::object body{{"bundle", json::object{{"curves", json::array{}}, {"instruments", json::array{}}}},
+                      {"book", json::object{{"positions", json::array{}}}},
+                      {"scenarios", json::array{std::move(move)}}};
+    return json::object{{verb, std::move(body)}};
+  };
+
+  const json::object once{{"shift_curve", json::object{{"0", 1.5}}}};
+  EXPECT_EQ(api::scenario_request_from_json(with_move("scenario", once)).scenarios.at(0).shift_curve_bp.at(0), 1.5)
+      << "the control: one key per role decodes";
+  EXPECT_EQ(api::var_request_from_json(with_move("var", once)).reval->scenarios.at(0).shift_curve_bp.at(0), 1.5);
+
+  const json::object twice{{"shift_curve", json::object{{"0", 1.5}, {"00", 2.5}}}};
+  EXPECT_EQ(message(scenario, with_move("scenario", twice)), "scenario: shift_curve names curve role 0 twice");
+  EXPECT_EQ(message(var, with_move("var", twice)), "var: shift_curve names curve role 0 twice");
+
+  const json::object named{{"shift_curve", json::object{{"SOFR", 1.5}}}};
+  EXPECT_EQ(message(var, with_move("var", named)).rfind("var: shift_curve key 'SOFR' is not an integer curve role", 0), 0u)
+      << message(var, with_move("var", named));
+  EXPECT_EQ(message(scenario, with_move("scenario", named)).rfind("scenario: shift_curve key 'SOFR'", 0), 0u);
 }

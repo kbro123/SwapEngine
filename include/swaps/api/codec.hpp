@@ -45,6 +45,8 @@ struct ScenarioRequest;  // derive/scenario.hpp
 struct ScenarioResult;   // derive/scenario.hpp
 struct ScenarioGridRequest;  // derive/scenario_grid.hpp
 struct ScenarioGridResult;   // derive/scenario_grid.hpp
+struct VarRequest;           // derive/var.hpp
+struct VarResult;            // derive/var.hpp
 }  // namespace swaps::derive
 
 namespace swaps::calibration {
@@ -177,6 +179,15 @@ swaps::derive::ScenarioGridRequest scenario_grid_request_from_json(const boost::
 // {"scenario_grid": {n_curves, n_knots, axes, shape: [n0, n1], base: {x, curves?, npv?, n?}, npv?, pnl?, grid_us?,
 // n_cells?}} -- the surface fields when a book was given.
 boost::json::object scenario_grid_result_to_json(const swaps::derive::ScenarioGridResult& r);
+
+// ---- VaR / ES (the `var` verb) ----------------------------------------------------------------------------------
+// {"var": {quantiles?, pnl? | bundle + book + scenarios: [<scenario move>], x0?, regularize?}} (or the body itself).
+// Exactly one mode (derive::var refuses both and neither). quantiles absent = the struct's [0.95, 0.99]; an explicit []
+// throws. A move is the `scenario` verb's shape; its shift_curve keys are integer curve roles, each named once.
+swaps::derive::VarRequest var_request_from_json(const boost::json::object& payload);
+// {"var": {mode, base_npv?, n_positions?, reval_us?, n, mean_pnl, stdev_pnl, pnl_sorted,
+// quantiles: [{q, var, es, var_pnl, es_pnl}]}} -- the reval fields when mode is "reval".
+boost::json::object var_result_to_json(const swaps::derive::VarResult& r);
 
 // ---- P&L explain (the `pnl` verb) -------------------------------------------------------------------------------
 // {"pnl": {bundle0, bundle1?, book, dt_years?, x0?, x1?, regularize?}} (or the body itself).
