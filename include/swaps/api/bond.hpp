@@ -20,7 +20,7 @@ namespace swaps::api {
 // `convention` selects the YIELD convention — specifically how the fractional first period is discounted,
 // which is the one thing the per-flow exponent cannot encode (pricing/bond.hpp YieldConvention):
 //   "US-TREASURY"      US street: compound stub, SIMPLE once only the final coupon remains (~0.7 bp).
-//   "US-TREASURY-TSY"  31 CFR Part 356 App B / the Bloomberg "Treasury method": simple stub always.
+//   "US-TREASURY-TSY"  31 CFR Part 356 App B "Treasury method" (Rateslib us_gb_tsy): simple stub always.
 // The ids and their fields come from the conventions DB, shared with the Python web layer; an unknown id
 // is an error rather than a silent default.
 //

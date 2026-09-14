@@ -8076,7 +8076,7 @@
       "final_period_simple": true
     },
     "US-TREASURY-TSY": {
-      "description": "The SAME instrument quoted on the TREASURY METHOD -- 31 CFR Part 356 Appendix B, which is also what Bloomberg reports as the Treasury (as opposed to street) yield. Identical cashflows and accrued; the fractional first period is discounted SIMPLE always, not only in the final period. Every App B Section II sub-case is written 'P[1 + (r/s)(i/2)] = ...'. Matches QuantLib SimpleThenCompounded and Rateslib 'ust_31bii' / 'us_gb_tsy'. This is the convention App B's worked examples (new issues and reopenings) are written for, so it is the natural pairing for when-issued quotes.",
+      "description": "The SAME instrument quoted on the TREASURY METHOD -- 31 CFR Part 356 Appendix B (whether Bloomberg's Treasury, as opposed to street, yield is identical is unverified). Identical cashflows and accrued; the fractional first period is discounted SIMPLE always, not only in the final period. Every App B Section II sub-case is written 'P[1 + (r/s)(i/2)] = ...'. Matches QuantLib SimpleThenCompounded and Rateslib 'ust_31bii' / 'us_gb_tsy'. This is the convention App B's worked examples (new issues and reopenings) are written for, so it is the natural pairing for when-issued quotes.",
       "currency": "USD",
       "calendar": "USD",
       "day_count": "ACT/ACT-ICMA",

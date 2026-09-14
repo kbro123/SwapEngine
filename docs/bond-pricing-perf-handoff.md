@@ -143,8 +143,8 @@ checks the street↔Treasury identity, and asserts the two genuinely differ by m
 **Open decision for the user, deliberately not taken here:** whether to implement a Treasury-convention
 mode on `YieldBond`. It is cheap and stays on the Horner fast path — only the single `pow(v,w)` factor
 becomes `1/(1+w·y/f)`, derivatives follow — but it changes what `bond_dirty_from_yield` *means*, so it
-wants an explicit mode flag, not a silent switch. Bloomberg's Treasury method is the App B one, so anyone
-reconciling to a Bloomberg YAS Treasury quote will need it.
+wants an explicit mode flag, not a silent switch. App B is the documented Treasury method (whether Bloomberg YAS's
+Treasury yield is the same is unverified), so anyone reconciling to a Treasury-method quote will need it.
 
 ---
 

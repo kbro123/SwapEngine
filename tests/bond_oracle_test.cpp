@@ -108,7 +108,7 @@ TEST(BondOracle, YieldSpaceMatchesBondFunctions) {
 // ---------------------------------------------------------------------------------------------------
 // The STUB-DISCOUNT convention (pricing::YieldConvention). QuantLib's Compounding enum spans both forms:
 //   Compounded            -> compound stub  (UK gilt / French OAT; our default)
-//   SimpleThenCompounded  -> simple stub    (31 CFR Part 356 App B / Bloomberg "Treasury method"), since
+//   SimpleThenCompounded  -> simple stub    (31 CFR Part 356 App B "Treasury method"), since
 //                            it applies simple interest exactly when the step t <= 1/f, i.e. the stub.
 // So both conventions have a first-class QuantLib oracle and neither rests on a hand-rolled formula.
 // ---------------------------------------------------------------------------------------------------

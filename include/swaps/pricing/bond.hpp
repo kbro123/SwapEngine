@@ -141,10 +141,12 @@ struct YieldFlow {
 //   UK gilt / French OAT / Chinese GB  Compound  false                QuantLib Compounded
 //   US Treasury STREET (us_gb), Bund   Compound  TRUE                 QuantLib Compounded / ...ThenSimple
 //   US Treasury METHOD  (ust_31bii)    Simple    -                    QuantLib SimpleThenCompounded
-//     == 31 CFR Part 356 Appendix B == Bloomberg's Treasury method
+//     == 31 CFR Part 356 Appendix B (Rateslib us_gb_tsy); Bloomberg's "Treasury" yield: unverified
 //
-// QuantLib's Compounding::SimpleThenCompounded reproduces the App B convention exactly (it applies simple
-// interest whenever the step t <= 1/f, which is the stub and nothing else), so BOTH modes have a QuantLib
+// QuantLib's Compounding::SimpleThenCompounded reproduces the App B convention exactly for a regular or short first
+// period (CashFlows::npv chains stepwise discount factors and applies simple interest whenever the step t <= 1/f, which
+// is the stub -- a full period of exactly 1/f is the same simple or compound). QuantLib 1.35 compounds a LONG first
+// period (issue #2172, PR #2473), which the engine's builders cannot express, so BOTH modes have a QuantLib
 // oracle -- see tests/bond_oracle_test.cpp. Ours defaults to Compound/false, i.e. the gilt/OAT mode, which
 // is what this kernel has always computed.
 enum class StubDiscount { Compound, Simple };

@@ -46,7 +46,7 @@ struct FixedBondTerms {
   int freq = -1;        // coupons per year (also the yield compounding frequency f) — REQUIRED, no default
   // Yield CONVENTION — how the fractional first period is discounted (pricing/bond.hpp YieldConvention).
   // The default is the plain compound stub (UK gilt / French OAT). A US Treasury quoted STREET wants
-  // final_period_simple = true; the 31 CFR App B / Bloomberg "Treasury method" wants stub = Simple. Use
+  // final_period_simple = true; the 31 CFR App B "Treasury method" wants stub = Simple. Use
   // the named builders below rather than setting these by hand.
   px::StubDiscount stub = px::StubDiscount::Compound;
   bool final_period_simple = false;
@@ -164,8 +164,9 @@ inline BuiltBond us_treasury(const Date& value_date, const Date& settle, const D
                                         px::StubDiscount::Compound, /*final_period_simple=*/true});
 }
 
-// The TREASURY METHOD: 31 CFR Part 356 Appendix B, which is also what Bloomberg reports as the Treasury
-// (as opposed to street) yield, and Rateslib's `ust_31bii`/`us_gb_tsy`. The regulation writes EVERY
+// The TREASURY METHOD: 31 CFR Part 356 Appendix B, as Rateslib's `ust_31bii`/`us_gb_tsy` implements it for any
+// settlement date (App B's reopening examples price mid-period settlement; whether Bloomberg's "Treasury" yield is
+// identical is UNVERIFIED -- its documentation is not public). The regulation writes EVERY
 // sub-case as "P[1 + (r/s)(i/2)] = ...", i.e. the fractional period is discounted SIMPLE always — not
 // only in the final period. Oracle: QuantLib with Compounding::SimpleThenCompounded.
 inline BuiltBond us_treasury_tsy(const Date& value_date, const Date& settle, const Date& issue,

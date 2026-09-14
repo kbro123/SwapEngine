@@ -153,7 +153,7 @@ Both conventions agree on the cashflows, on accrued, and on the entire coupon po
 |---|---|---|---|---|
 | UK gilt / French OAT / Chinese GB | `Q(v)·v^w` (compound) always | `stub=Compound`, `final_period_simple=false` | `fixed_rate_bond` (default) | `Compounded` |
 | **US Treasury STREET**, Bund | compound, **simple once only the final coupon remains** | `stub=Compound`, `final_period_simple=true` | `us_treasury`, `us_treasury_wi` | `Compounded`, then `SimpleThenCompounded` in the final period |
-| **US Treasury METHOD** (31 CFR App B, Bloomberg) | `Q(v)/(1 + w·y/f)` (simple) always | `stub=Simple` | `us_treasury_tsy`, `us_treasury_wi_tsy` | `SimpleThenCompounded` |
+| **US Treasury METHOD** (31 CFR App B; Bloomberg unverified) | `Q(v)/(1 + w·y/f)` (simple) always | `stub=Simple` | `us_treasury_tsy`, `us_treasury_wi_tsy` | `SimpleThenCompounded` |
 
 The regulation is uniform on this — Appendix B Section II writes *every* sub-case (regular first period,
 short first, long first, and the three reopened cases) as `P[1 + (r/s)(i/2)] = …`, never as a compound
