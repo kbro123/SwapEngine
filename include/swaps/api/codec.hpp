@@ -41,6 +41,8 @@ struct GovvieFitRequest;
 struct GovvieFitResult;
 struct SwapSpreadRequest;
 struct SwapSpreadResult;
+struct ScenarioRequest;  // derive/scenario.hpp
+struct ScenarioResult;   // derive/scenario.hpp
 }  // namespace swaps::derive
 
 namespace swaps::calibration {
@@ -153,6 +155,15 @@ swaps::conventions::OverlayBatch overlay_batch_from_json(const boost::json::obje
 boost::json::object overlay_added_to_json(const swaps::conventions::OverlayBatch& batch, int overlay_size);
 // {family: {"baked": [...], "overlay": [...]}, ..., "overlay_size": n}
 boost::json::object conventions_listing_to_json(const swaps::conventions::Registry::Listings& listing);
+
+// ---- scenario (the `scenario` verb) ------------------------------------------------------------------------------
+// {"scenario": {bundle, x0?, regularize?, sample_times?, book?, scenarios: [{name?, parallel_bp?, shift_curve?:
+// {"<role>": bp}, bump_fx?: [{base, quote, rel}]}]}} (or the body itself). A shift_curve key must be an integer curve
+// role.
+swaps::derive::ScenarioRequest scenario_request_from_json(const boost::json::object& payload);
+// {"scenario": {n_curves, n_knots, base: {x, curves?, npv?, n?}, scenarios: [{name, curves?, npv?, npv_delta?,
+// parallel_bp?, shift_bp?, fx?}]}} -- curves when sample_times were given, npv when a book was.
+boost::json::object scenario_result_to_json(const swaps::derive::ScenarioResult& r);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

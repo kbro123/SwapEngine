@@ -24,6 +24,27 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 5.2: derive/scenario.hpp, the library behind the scenario verb.
+    ("scenario_parallel_dropped", "include/swaps/derive/scenario.hpp",
+     "  if (m.parallel_bp) scn = market::Scenario::parallel(*m.parallel_bp);",
+     "",
+     ["derive_scenario_test.cpp"], "*", "a move's parallel shift is unpinned (E7 5.2)"),
+    ("scenario_fx_ignored", "include/swaps/derive/scenario.hpp",
+     "  for (const FxBump& b : m.fx) r.fx_factor *= (1.0 + b.rel);",
+     "",
+     ["derive_scenario_test.cpp"], "*", "a move's FX bumps are unpinned (E7 5.2)"),
+    ("scenario_role_range_unchecked", "include/swaps/derive/scenario.hpp",
+     "    if (role < 0 || role >= n_curves)",
+     "    if (false)",
+     ["derive_scenario_test.cpp"], "*", "the shift_curve role range is unpinned (E7 5.2)"),
+    ("scenario_scaled_book_unused", "include/swaps/derive/scenario.hpp",
+     "      row.npv = rm.fx_factor != 1.0 ?",
+     "      row.npv = false ?",
+     ["derive_scenario_test.cpp"], "*", "valuing an FX move on the scaled book is unpinned (E7 5.2)"),
+    ("scenario_npv_delta_not_against_base", "include/swaps/derive/scenario.hpp",
+     "      row.npv_delta = row.npv - out.base_npv;",
+     "      row.npv_delta = row.npv;",
+     ["derive_scenario_test.cpp"], "*", "npv_delta against the base is unpinned (E7 5.2)"),
     # E7 stage 5.1: calibration/bundle_state.hpp and portfolio/xccy_fx_scaled.hpp.
     ("bundle_state_shift_reaches_turns", "include/swaps/calibration/bundle_state.hpp",
      "x.segment(p.offset(c), p.curves[c].n_interp_knots()).array() += d;",

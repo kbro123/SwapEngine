@@ -21,6 +21,7 @@
 #include "swaps/calibration/consistent_risk.hpp"  // ConsistentRiskRequest, ConsistentRisk
 #include "swaps/calibration/diagnostics.hpp"  // QuoteDiagnostic, CalibrationReport
 #include "swaps/derive/bond_rv.hpp"  // BondUniverseRequest, GovvieFitRequest, SwapSpreadRequest
+#include "swaps/derive/scenario.hpp"  // ScenarioRequest, ScenarioResult
 #include "swaps/trade/csa.hpp"    // discount_index_for
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
 
@@ -1311,6 +1312,101 @@ json::object conventions_listing_to_json(const cvd::Registry::Listings& l) {
                       {"fixing_sources", listing_to_json(l.fixing_sources)},
                       {"inflation", listing_to_json(l.inflation_indices)},
                       {"overlay_size", l.overlay_size}};
+}
+
+
+// ---- scenario (the `scenario` verb) ---------------------------------------------------------------------------
+namespace {
+
+// A shift_curve key names an integer curve role: a bundle's curves have no string names.
+int curve_role_from_key(const std::string& key) {
+  try {
+    std::size_t pos = 0;
+    const int role = std::stoi(key, &pos);
+    if (pos != key.size()) throw std::invalid_argument("trailing");
+    return role;
+  } catch (const std::exception&) {
+    throw std::invalid_argument(
+        "scenario: shift_curve key '" + key +
+        "' is not an integer curve role (curves in a bundle are addressed by integer index, not name)");
+  }
+}
+
+derive::ScenarioMove scenario_move_from_json(const json::object& o) {
+  derive::ScenarioMove m;
+  into(o, "name", m.name);
+  into(o, "parallel_bp", m.parallel_bp);
+  if (present(o, "shift_curve"))
+    for (const auto& kv : o.at("shift_curve").as_object())
+      m.shift_curve_bp[curve_role_from_key(std::string(kv.key()))] = kv.value().to_number<double>();
+  if (present(o, "bump_fx"))
+    for (const auto& e : o.at("bump_fx").as_array()) {
+      const json::object& fo = e.as_object();
+      derive::FxBump b;
+      into(fo, "base", b.base);
+      into(fo, "quote", b.quote);
+      into(fo, "rel", b.rel);
+      m.fx.push_back(std::move(b));
+    }
+  return m;
+}
+
+}  // namespace
+
+derive::ScenarioRequest scenario_request_from_json(const json::object& payload) {
+  const json::object* body = &payload;
+  if (present(payload, "scenario")) body = &payload.at("scenario").as_object();
+  const json::object& o = *body;
+  derive::ScenarioRequest r;
+  r.bundle = bundle_from_json(need(o, "bundle", "scenario: missing 'bundle' object"));
+  into(o, "x0", r.x0);
+  r.reg = reg_from_json(o);
+  into(o, "sample_times", r.sample_times);
+  if (present(o, "book")) r.book = book_from_json(o.at("book"));
+  if (present(o, "scenarios"))
+    for (const auto& e : o.at("scenarios").as_array()) r.scenarios.push_back(scenario_move_from_json(e.as_object()));
+  return r;
+}
+
+json::object scenario_result_to_json(const derive::ScenarioResult& r) {
+  json::object out;
+  out["n_curves"] = r.n_curves;
+  out["n_knots"] = r.n_knots;
+  {
+    json::object b;
+    b["x"] = vecf(r.x_base);
+    if (!r.base_curves.empty()) b["curves"] = sample_to_json(r.base_curves);
+    if (r.has_book) {
+      b["npv"] = r.base_npv;
+      b["n"] = r.n_positions;
+    }
+    out["base"] = std::move(b);
+  }
+  json::array rows;
+  for (const derive::ScenarioRow& row : r.rows) {
+    const derive::ScenarioMove& m = r.moves[row.move];
+    json::object o;
+    o["name"] = m.name;
+    if (!row.curves.empty()) o["curves"] = sample_to_json(row.curves);
+    if (r.has_book) {
+      o["npv"] = row.npv;
+      o["npv_delta"] = row.npv_delta;
+    }
+    if (m.parallel_bp) o["parallel_bp"] = *m.parallel_bp;  // the move as given, echoed
+    if (!m.shift_curve_bp.empty()) {
+      json::object shifts;
+      for (const auto& [role, bp] : m.shift_curve_bp) shifts[std::to_string(role)] = bp;
+      o["shift_bp"] = std::move(shifts);
+    }
+    if (!m.fx.empty()) {
+      json::array bumps;
+      for (const derive::FxBump& f : m.fx) bumps.push_back(json::object{{"base", f.base}, {"quote", f.quote}, {"rel", f.rel}});
+      o["fx"] = std::move(bumps);
+    }
+    rows.push_back(std::move(o));
+  }
+  out["scenarios"] = std::move(rows);
+  return json::object{{"scenario", std::move(out)}};
 }
 
 }  // namespace swaps::api
