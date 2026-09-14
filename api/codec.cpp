@@ -23,6 +23,7 @@
 #include "swaps/derive/bond_rv.hpp"  // BondUniverseRequest, GovvieFitRequest, SwapSpreadRequest
 #include "swaps/derive/scenario.hpp"  // ScenarioRequest, ScenarioResult
 #include "swaps/derive/scenario_grid.hpp"  // ScenarioGridRequest, ScenarioGridResult
+#include "swaps/calibration/pnl_explain.hpp"  // PnlRequest, PnlReport
 #include "swaps/trade/csa.hpp"    // discount_index_for
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
 
@@ -1498,6 +1499,39 @@ json::object scenario_grid_result_to_json(const derive::ScenarioGridResult& r) {
     out["n_cells"] = r.n_cells;
   }
   return json::object{{"scenario_grid", std::move(out)}};
+}
+
+
+// ---- P&L explain (the `pnl` verb) -------------------------------------------------------------------------------
+cal::PnlRequest pnl_request_from_json(const json::object& payload) {
+  const json::object* body = &payload;
+  if (present(payload, "pnl")) body = &payload.at("pnl").as_object();
+  const json::object& o = *body;
+  cal::PnlRequest r;
+  r.bundle0 = bundle_from_json(need(o, "bundle0", "pnl: missing 'bundle0' object"));
+  if (present(o, "bundle1")) r.bundle1 = bundle_from_json(o.at("bundle1"));
+  r.book = book_from_json(need(o, "book", "pnl: missing 'book' object"));
+  into(o, "dt_years", r.dt_years);
+  into(o, "x0", r.x0);
+  into(o, "x1", r.x1);
+  r.reg = reg_from_json(o);
+  return r;
+}
+
+json::object pnl_report_to_json(const cal::PnlReport& r) {
+  json::object out;
+  out["total"] = r.explain.total;
+  out["carry"] = r.explain.carry;
+  out["roll"] = r.explain.roll;
+  out["market"] = r.explain.market;
+  out["residual"] = r.explain.residual;
+  out["npv_t0"] = r.explain.npv_t0;
+  out["npv_t1"] = r.explain.npv_t1;
+  out["market_ladder"] = vecf(r.explain.market_ladder);
+  out["dq"] = vecf(r.dq);
+  out["dt_years"] = r.dt_years;
+  out["n"] = r.n;
+  return json::object{{"pnl", std::move(out)}};
 }
 
 }  // namespace swaps::api

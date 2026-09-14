@@ -508,6 +508,9 @@ def write_lock(counts):
 SELFTEST_SNIPPET = """
 #include <cmath>
 #include <optional>
+#include <string_view>
+#include "swaps/api/json_util.hpp"  // jd -- the snippet brings every include it uses: the borrowed host file may not
+                                     // (api/pnl.cpp stopped including json_util.hpp when it became one expression)
 #include "swaps/conventions_data.hpp"
 namespace swaps::api {
 namespace {

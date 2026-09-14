@@ -54,6 +54,8 @@ struct CalibrationReport;         // calibration/diagnostics.hpp
 struct ConsistentRiskRequest;     // calibration/consistent_risk.hpp
 struct ConsistentRisk;            // calibration/consistent_risk.hpp
 struct CurveSample;               // calibration/bundle_state.hpp
+struct PnlRequest;                // calibration/pnl_explain.hpp
+struct PnlReport;                 // calibration/pnl_explain.hpp
 }  // namespace swaps::calibration
 
 namespace swaps::api {
@@ -175,6 +177,12 @@ swaps::derive::ScenarioGridRequest scenario_grid_request_from_json(const boost::
 // {"scenario_grid": {n_curves, n_knots, axes, shape: [n0, n1], base: {x, curves?, npv?, n?}, npv?, pnl?, grid_us?,
 // n_cells?}} -- the surface fields when a book was given.
 boost::json::object scenario_grid_result_to_json(const swaps::derive::ScenarioGridResult& r);
+
+// ---- P&L explain (the `pnl` verb) -------------------------------------------------------------------------------
+// {"pnl": {bundle0, bundle1?, book, dt_years?, x0?, x1?, regularize?}} (or the body itself).
+cal::PnlRequest pnl_request_from_json(const boost::json::object& payload);
+// {"pnl": {total, carry, roll, market, residual, npv_t0, npv_t1, market_ladder, dq, dt_years, n}}
+boost::json::object pnl_report_to_json(const cal::PnlReport& r);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

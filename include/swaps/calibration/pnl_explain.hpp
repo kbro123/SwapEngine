@@ -73,11 +73,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"  // BundleProblem, build_bundle_curves, CurveHandle
+#include "swaps/calibration/diagnostics.hpp"     // CalibrationSession, seed_or_flat
+#include "swaps/calibration/regularize.hpp"      // RegSpec
 #include "swaps/portfolio/portfolio.hpp"         // MultiCurveBook
 #include "swaps/pricing/cashflows.hpp"           // FloatCoupon / FixedCoupon
 
@@ -199,6 +204,64 @@ inline PnlExplain pnl_explain(const BundleProblem& prob, const portfolio::MultiC
   out.market_ladder.resize(dq.size());
   for (int i = 0; i < dq.size(); ++i)
     out.market_ladder[i] = (i < ladder.size() ? ladder[i] : 0.0) * dq[i];
+  return out;
+}
+
+
+// ---- the `pnl` verb's whole computation (E7 stage 6.7) ------------------------------------------------------------
+// bundle0 calibrates to q0 -> x0 and the analytic ladder dP/dq at (x0, q0); an optional bundle1 of the same shape
+// calibrates to q1 -> x1 and dq = q1 - q0 (absent: x1 = x0, dq = 0, pure carry / roll). An explicit x0 / x1 SEEDS the
+// calibration and also OVERRIDES the state the decomposition reprices at (the ladder stays at the calibrated x0).
+struct PnlRequest {
+  BundleProblem bundle0;
+  std::optional<BundleProblem> bundle1;  // absent => pure carry / roll
+  portfolio::MultiCurveBook book;
+  double dt_years = 0.0;
+  std::optional<Eigen::VectorXd> x0, x1;  // seed AND decomposition override; a wrong length throws
+  RegSpec reg;
+};
+
+struct PnlReport {
+  PnlExplain explain;
+  Eigen::VectorXd dq;
+  double dt_years = 0.0;
+  int n = 0;  // positions
+};
+
+template <class S>
+concept PnlSession = CalibrationSession<S> &&
+    requires(const S cs, const portfolio::MultiCurveBook& b, const RegSpec& r) {
+      { cs.price_portfolio_risk(b, r).ladder } -> std::convertible_to<Eigen::VectorXd>;
+    };
+
+template <PnlSession Session>
+PnlReport pnl_report(PnlRequest r) {
+  if (r.bundle0.n_curves() == 0) throw std::invalid_argument("pnl: bundle0 has no curves");
+  Session s0(std::move(r.bundle0));
+  const BundleProblem& P0 = s0.problem();
+  s0.calibrate(seed_or_flat(P0, r.x0, "pnl"), r.reg);
+  const Eigen::VectorXd ladder = s0.price_portfolio_risk(r.book, r.reg).ladder;  // dP/dq at (x0, q0)
+  if (r.x1 && r.x1->size() != P0.n_knots())
+    throw std::invalid_argument("pnl: x1 length does not match the bundle's knot count");
+
+  PnlReport out;
+  out.dq = Eigen::VectorXd::Zero(P0.n_residuals());
+  Eigen::VectorXd x1 = s0.x();
+  if (r.bundle1) {
+    if (r.bundle1->n_knots() != P0.n_knots())
+      throw std::invalid_argument("pnl: bundle1 must share bundle0's curve topology (knot count differs)");
+    if (r.bundle1->n_residuals() != P0.n_residuals())
+      throw std::invalid_argument("pnl: bundle1 must share bundle0's instruments (residual count differs)");
+    Session s1(std::move(*r.bundle1));
+    s1.calibrate(seed_or_flat(s1.problem(), r.x1, "pnl"), r.reg);
+    x1 = s1.x();
+    out.dq = s1.problem().market() - P0.market();
+  }
+  const Eigen::VectorXd x0 = r.x0 ? *r.x0 : s0.x();
+  if (r.x1) x1 = *r.x1;
+  out.explain = pnl_explain(P0, r.book, x0, x1, r.dt_years, ladder, out.dq);
+  out.dt_years = r.dt_years;
+  out.n = static_cast<int>(r.book.positions.size());
   return out;
 }
 

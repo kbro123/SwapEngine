@@ -24,6 +24,23 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 6.7: calibration::pnl_report, the library behind the pnl verb.
+    ("pnl_report_x0_override_ignored", "include/swaps/calibration/pnl_explain.hpp",
+     "  const Eigen::VectorXd x0 = r.x0 ? *r.x0 : s0.x();",
+     "  const Eigen::VectorXd x0 = s0.x();",
+     ["pnl_report_test.cpp"], "*", "the x0 decomposition override is unpinned (E7 6.7)"),
+    ("pnl_report_x1_override_ignored", "include/swaps/calibration/pnl_explain.hpp",
+     "  if (r.x1) x1 = *r.x1;",
+     "",
+     ["pnl_report_test.cpp"], "*", "the x1 decomposition override is unpinned (E7 6.7)"),
+    ("pnl_report_dq_not_differenced", "include/swaps/calibration/pnl_explain.hpp",
+     "    out.dq = s1.problem().market() - P0.market();",
+     "    out.dq = s1.problem().market();",
+     ["pnl_report_test.cpp"], "*", "dq = q1 - q0 is unpinned (E7 6.7)"),
+    ("pnl_report_x1_length_unchecked", "include/swaps/calibration/pnl_explain.hpp",
+     "  if (r.x1 && r.x1->size() != P0.n_knots())",
+     "  if (false)",
+     ["pnl_report_test.cpp"], "*", "the x1 length check is unpinned (E7 6.7)"),
     # 2026-09-14 SW1: a fixing day before curve time 0 is past whatever the evaluation date says.
     ("fixings_past_by_curve_time", "include/swaps/pricing/fixings.hpp",
      "        d.t_start < 0.0 || d.fixing_date < ctx.evaluation_date ||",
