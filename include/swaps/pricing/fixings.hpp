@@ -141,8 +141,12 @@ inline RateObservation resolve(const FixingSchedule& sch, const PricingContext& 
   double realized = 0.0, rf = 1.0;
   bool all_one = true;
   for (const FixingDay& d : sch.days) {
+    // A day that STARTS before curve time 0 (the value date the schedule was built on) is in the past by construction,
+    // whatever the context's evaluation date says: before 2026-09-14 a session with no evaluation date (0) called every
+    // such day the future and FORECAST a seasoned coupon's realized part off a curve that starts at the value date
+    // (tests/seasoned_eval_date_repro_test.cpp). It needs a fixing like any other past day.
     const bool is_past =
-        d.fixing_date < ctx.evaluation_date ||
+        d.t_start < 0.0 || d.fixing_date < ctx.evaluation_date ||
         (d.fixing_date == ctx.evaluation_date && ctx.fixings && ctx.fixings->has(sch.index, d.fixing_date));
     if (is_past) {
       if (!ctx.fixings) throw MissingFixing(sch.index, d.fixing_date);  // past day, no table attached

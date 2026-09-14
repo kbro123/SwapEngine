@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 SW1: a fixing day before curve time 0 is past whatever the evaluation date says.
+    ("fixings_past_by_curve_time", "include/swaps/pricing/fixings.hpp",
+     "        d.t_start < 0.0 || d.fixing_date < ctx.evaluation_date ||",
+     "        d.fixing_date < ctx.evaluation_date ||",
+     ["fixings_test.cpp"], "*", "a seasoned day with no evaluation date being refused is unpinned"),
     ("schedule_isda_interior_on_end", "include/swaps/build/schedule.hpp",
      "    if (a < end) bounds.push_back(a);",
      "    bounds.push_back(a);",

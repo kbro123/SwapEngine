@@ -123,6 +123,7 @@ if(TARGET quantlib_oracle)
     risk_ladder_oracle_test.cpp
     bond_rv_oracle_test.cpp
     scenario_oracle_test.cpp
+    portfolio_verb_oracle_test.cpp
     extract_test.cpp
     bundle_test.cpp
     bspline_oracle_test.cpp

@@ -161,3 +161,18 @@ TEST(Fixings, TableRejectsDatesThatAreNotUnixDaySerials) {
   EXPECT_THROW(t.bulk_set("USD-SOFR", {{20454, 0.04}, {739617, 0.04}}), std::invalid_argument);
   EXPECT_EQ(t.size("USD-SOFR"), 1u);
 }
+
+// 2026-09-14 (SW1): a day that STARTS before curve time 0 -- the value date its schedule was built on -- is in the past
+// whatever the evaluation date says. With no evaluation date and no table it must throw, never be forecast; a day after
+// curve time 0 still forecasts. tests/seasoned_eval_date_repro_test.cpp reproduces the silent forecast end to end.
+TEST(FixingsResolve, ADayBeforeCurveTimeZeroIsPastWithoutAnEvaluationDate) {
+  swaps::pricing::FixingSchedule sch;
+  sch.index = "USD-SOFR";
+  sch.tau_index = 1.0;
+  sch.compounded = true;
+  sch.days.push_back(swaps::pricing::FixingDay{20279, 1.0 / 360.0, -0.99, -0.987, 1.0});
+  EXPECT_THROW((void)swaps::pricing::resolve(sch, swaps::pricing::PricingContext{}), swaps::pricing::MissingFixing);
+  sch.days[0].t_start = 0.01;
+  sch.days[0].t_end = 0.013;
+  EXPECT_NO_THROW((void)swaps::pricing::resolve(sch, swaps::pricing::PricingContext{})) << "a future day forecasts";
+}
