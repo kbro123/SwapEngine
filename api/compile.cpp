@@ -20,6 +20,7 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/bundle_api.hpp"        // bundle_to_json (reused for the "bundle" field)
+#include "swaps/api/json_util.hpp"         // required_number / required_text: fields with no default
 #include "swaps/build/instruments.hpp"     // the whole build/ object model (schedule/conventions/observations)
 #include "swaps/market/quote.hpp"          // CalibrationTarget -- the ONE quote->instrument hand-off POD
 
@@ -663,7 +664,13 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
           throw CompileError("FX forward on '" + cname + "' needs a valid 'fx_den' curve.");
         if (idx.at(den) == ci)
           throw CompileError("FX forward on '" + cname + "' cannot use its own curve as fx_den.");
-        obj = b::fx_forward(ci, idx.at(den), get_d(ins, "fx_spot", 1.0), T, mkt);
+        // O-X3: fx_spot is REQUIRED (the spot-date quote) and applies at the curve pair's spot date (the library resolves it).
+        obj = b::fx_forward_for_pair(
+            ci, idx.at(den),
+            required_number(ins, "fx_spot", "FX forward on '" + cname + "' needs 'fx_spot' (the spot-date quote; there is no default)."),
+            T, mkt,
+            required_text(c, "pair", "FX forward on '" + cname + "' needs the curve's 'pair' (e.g. EURUSD): fx_pairs supplies its spot date."),
+            value_date);
       } else if (kind == "XccyMtmBasis") {
         const std::string fund = get_s(ins, "fx_den");
         if (fund.empty() || !idx.count(fund))
@@ -674,7 +681,9 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         if (pair.empty())
           throw CompileError("Xccy basis on '" + cname + "' needs the curve's 'pair' (e.g. EURUSD) — the DB product XCCY-MTM-<PAIR> supplies the conventions.");
         obj = b::xccy_mtm_basis(value_date, b::xccy_conv(pair), mat_date, ci, bench_of(ins), idx.at(fund),
-                               get_d(ins, "fx_spot", 1.0), mkt);
+                               required_number(ins, "fx_spot", "Xccy basis on '" + cname +
+                                                                  "' needs 'fx_spot' (the spot-date quote; there is no default)."),
+                               mkt);
       } else if (kind == "TurnJump") {
         auto it = turn_index_of.find({cid, iid});
         if (it == turn_index_of.end())

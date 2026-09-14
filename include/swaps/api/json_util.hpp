@@ -10,12 +10,25 @@
 #include <Eigen/Core>
 #include <boost/json.hpp>
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace swaps::api {
 
 namespace json = boost::json;
+
+// ---- required readers (missing / null / wrong type => throw: a field the library has NO default for) -------------
+// The codec's side of P14 (2026-09-14, O-X3): a verb that needs a value no struct can default names it here instead of
+// branching or inventing a fallback itself.
+inline double required_number(const json::object& o, const char* k, const std::string& why) {
+  if (!o.contains(k) || !o.at(k).is_number()) throw std::invalid_argument(why);
+  return o.at(k).to_number<double>();
+}
+inline std::string required_text(const json::object& o, const char* k, const std::string& why) {
+  if (!o.contains(k) || !o.at(k).is_string() || o.at(k).as_string().empty()) throw std::invalid_argument(why);
+  return std::string(o.at(k).as_string().c_str());
+}
 
 // ---- readers (missing / null => the supplied default) -----------------------------------------------
 inline double jd(const json::object& o, const char* k, double d) {

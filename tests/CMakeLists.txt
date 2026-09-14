@@ -39,6 +39,7 @@ add_executable(swaps_tests
   xccy_carr_example_repro_test.cpp
   fx_spot_time_repro_test.cpp
   fx_spot_time_compiled_test.cpp
+  fx_spot_time_piece2_test.cpp
   alloc_scope_thread_repro_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp

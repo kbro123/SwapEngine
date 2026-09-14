@@ -126,6 +126,12 @@ struct FloatCoupon {
   // FIXED FX reset (same quoting as the leg's fx_spot) for an MtM coupon whose reset date is in the past:
   // the notional is this number, not a curve-implied forward. < 0 = not fixed (the reset must then be >= 0).
   double reset_fx = -1.0;
+  // FX FIXING of the resetting notional (O-X3 piece 2, 2026-09-14): when set, the curve time the rate was (or will be) fixed --
+  // CARR: fx_reset_fixing_lag business days before the period start, for value ON the start. It decides SEASONING only (a
+  // fixing before today means the notional is a known number: reset_fx is required); the forward is still read at
+  // reset_time (unset = the accrual start).
+  bool fx_fixing_set = false;
+  double fx_fixing_time = 0.0;
 };
 
 // True iff an MtM coupon is SEASONED -- a fixed FX reset, a settled initial exchange or a past reset date --
@@ -133,6 +139,7 @@ struct FloatCoupon {
 // product of registered DFs at non-negative times). Shared by the hybrid router and the compiled guard.
 inline bool mtm_coupon_is_seasoned(const FloatCoupon& c) {
   if (c.reset_fx >= 0.0) return true;
+  if (c.fx_fixing_set && c.fx_fixing_time < 0.0) return true;  // the FX already fixed: the notional is a known number
   const double s = c.accrual_set ? c.accrual_start : (c.obs.sub_start.empty() ? -1.0 : c.obs.sub_start.front());
   if (s < 0.0) return true;  // strictly in the past: an exchange dated today (t = 0, DF = 1) is still to be paid
   const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;
@@ -357,6 +364,10 @@ Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, cons
     Scalar v = float_coupon_pv<Scalar>(c, fc, dc) + dc.discount(e);
     if (s >= 0.0) v -= dc.discount(s);  // a start dated today is still a flow to pay (DF = 1)
     if (c.reset_fx >= 0.0) return v * c.reset_fx;  // the notional was FIXED at the reset
+    if (c.fx_fixing_set && c.fx_fixing_time < 0.0)
+      throw std::runtime_error(
+          "xccy_mtm_leg_pv: the MtM notional's FX fixed at t=" + std::to_string(c.fx_fixing_time) +
+          " (before the valuation date); supply reset_fx -- a curve-implied forward for a known fixing is not a price");
     if (reset < 0.0)
       throw std::runtime_error(
           "xccy_mtm_leg_pv: the MtM notional reset at t=" + std::to_string(reset) +

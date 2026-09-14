@@ -93,6 +93,7 @@ inline void hash_float(FnvHasher& H, const FloatLeg& lg) {
     H.d(c.accrual_set ? c.accrual_start : (c.obs.sub_start.empty() ? -1.0 : c.obs.sub_start.front()));  // effective exchange dates
     H.d(c.accrual_set ? c.accrual_end : (c.obs.sub_end.empty() ? -1.0 : c.obs.sub_end.back()));
     H.d(c.reset_fx);
+    if (c.fx_fixing_set) H.d(c.fx_fixing_time);  // O-X3 piece 2 (hashed only when set)
   }
 }
 
@@ -138,6 +139,7 @@ inline bool float_equal(const FloatLeg& a, const FloatLeg& b) {
     const auto eff_s = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_start : (x.obs.sub_start.empty() ? -1.0 : x.obs.sub_start.front()); };
     const auto eff_e = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_end : (x.obs.sub_end.empty() ? -1.0 : x.obs.sub_end.back()); };
     if (eff_s(c) != eff_s(d) || eff_e(c) != eff_e(d) || c.reset_fx != d.reset_fx) return false;
+    if (c.fx_fixing_set != d.fx_fixing_set || (c.fx_fixing_set && c.fx_fixing_time != d.fx_fixing_time)) return false;
     if (!obs_equal(c.obs, d.obs)) return false;
   }
   return true;

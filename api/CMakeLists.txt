@@ -52,7 +52,8 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/scenario_golden_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/scenario_fx_pairs_repro_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/spread_pv01_var_repro_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/seasoned_eval_date_repro_test.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/seasoned_eval_date_repro_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/fx_spot_time_compile_test.cpp)
   target_link_libraries(swaps_api_tests PRIVATE swaps_api GTest::gtest_main)
   target_include_directories(swaps_api_tests PRIVATE ${SWAPS_THIRD_PARTY}/boost ${CMAKE_SOURCE_DIR}/bench/fixtures)
   # Golden compiler-parity data (server/compile.py output), committed under tests/golden/compile/; and the

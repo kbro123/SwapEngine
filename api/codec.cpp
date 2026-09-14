@@ -208,6 +208,10 @@ px::FloatCoupon fcpn_from(const json::object& o) {
     into(o, "accrual_end", c.accrual_end);
   }
   into(o, "reset_fx", c.reset_fx);  // a seasoned MtM coupon's FIXED FX reset
+  if (o.contains("fx_fixing_time")) {  // O-X3 piece 2: when the MtM notional's FX fixes
+    c.fx_fixing_set = true;
+    into(o, "fx_fixing_time", c.fx_fixing_time);
+  }
   return c;
 }
 px::FixedCoupon xcpn_from(const json::object& o) {
@@ -345,6 +349,7 @@ json::object fcpn_to(const px::FloatCoupon& c) {
     o["accrual_end"] = c.accrual_end;
   }
   if (c.reset_fx >= 0.0) o["reset_fx"] = c.reset_fx;
+  if (c.fx_fixing_set) o["fx_fixing_time"] = c.fx_fixing_time;
   return o;
 }
 json::object xcpn_to(const px::FixedCoupon& c) {

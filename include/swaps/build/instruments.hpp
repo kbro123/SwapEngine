@@ -296,7 +296,21 @@ inline cal::Instrument xccy_mtm_basis(const Date& vd, const XccyConv& x, const D
   // The resetting notional's FX forward is taken at each period START (reset_time unset = the accrual start): the rate
   // FIXED fx_reset_lag business days earlier (CARR 2021: 7 June for the period from 9 June) is a SPOT rate for value on
   // that start, so the fixing date never moves the forward. The DB carries the fixing lag and calendar; when a fixing
-  // makes a coupon seasoned is designed with fx_spot_time (owner decision 2026-09-14).
+  // makes a coupon seasoned is each coupon's fx_fixing_time below (owner decision 2026-09-14).
+  // O-X3 piece 2: fx_spot is the quote for this product's SPOT date; each MtM period's FX fixes fx_reset_lag business days
+  // before its start on fx_reset_calendar (CARR), for value ON the start. A first fixing before the value date (a weekend /
+  // holiday value date on a NEW swap) is floored at it.
+  ins.mtm.fx_spot_time = curve_time(vd, spot_date(vd, x.calendar, x.spot_lag));
+  {
+    const auto periods = swap_periods_to(vd, x.calendar, mat, x.freq_tok, x.bdc, x.spot_lag);
+    if (periods.size() != ins.mtm.coupons.size())
+      throw std::logic_error("xccy_mtm_basis: MtM periods and coupons disagree");
+    for (std::size_t i = 0; i < periods.size(); ++i) {
+      const Date fixing = advance_bd(x.fx_reset_calendar, periods[i].first, -x.fx_reset_lag);
+      ins.mtm.coupons[i].fx_fixing_set = true;
+      ins.mtm.coupons[i].fx_fixing_time = curve_time(vd, fixing < vd ? vd : fixing);
+    }
+  }
   cal::FixedLeg fixed;
   fixed.discount = ci;
   for (const auto& [s, e] : swap_periods_to(vd, x.calendar, mat, x.freq_tok, x.bdc, x.spot_lag)) {
@@ -332,15 +346,26 @@ inline px::RateObservation plain_rate_obs(double a, double T) {  // single brack
 }
 
 // FX forward (compile_spec FxForward): pins curve `ci`'s DF vs `den` via the outright FX level.
-inline cal::Instrument fx_forward(int ci, int den, double fx_spot, double fx_time, double market) {
+inline cal::Instrument fx_forward(int ci, int den, double fx_spot, double fx_time, double market, double fx_spot_time = 0.0) {
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::FxForward;
   ins.fx_num = ci;
   ins.fx_den = den;
   ins.fx_spot = fx_spot;
   ins.fx_time = fx_time;
+  ins.fx_spot_time = fx_spot_time;  // O-X3: the curve time of the spot date fx_spot is quoted for
   ins.market = market;
   return ins;
+}
+
+// FX forward quoted against a currency PAIR (the compile verb's row): fx_spot is the quote for the pair's SPOT date --
+// fx_pairs[pair]'s spot lag on its joint calendar (O-X3), never a curve index's calendar (an EUR-ESTR curve would miss a
+// US holiday).
+inline cal::Instrument fx_forward_for_pair(int ci, int den, double fx_spot, double fx_time, double market,
+                                           const std::string& pair, const Date& value_date) {
+  const swaps::conventions::FxPairConv fp = swaps::conventions::require_fx_pair(pair);
+  return fx_forward(ci, den, fx_spot, fx_time, market,
+                    curve_time(value_date, spot_date(value_date, std::string(fp.calendar), fp.spot_lag)));
 }
 
 // Turn jump (compile_spec TurnJump): pins turn `turn_index` on curve `ci`.

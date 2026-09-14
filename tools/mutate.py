@@ -24,6 +24,29 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 O-X3 fx_spot_time (piece 2): a passed FX fixing seasons the MtM coupon ...
+    ("seasoning_ignores_fx_fixing", "include/swaps/pricing/cashflows.hpp",
+     "  if (c.fx_fixing_set && c.fx_fixing_time < 0.0) return true;  // the FX already fixed: the notional is a known number",
+     "",
+     ["fx_spot_time_piece2_test.cpp"], "*", "a passed FX fixing making the coupon seasoned is unpinned"),
+    ("kernel_prices_a_passed_fixing_off_the_forward", "include/swaps/pricing/cashflows.hpp",
+     "    if (c.fx_fixing_set && c.fx_fixing_time < 0.0)\n      throw std::runtime_error(",
+     "    if (false)\n      throw std::runtime_error(",
+     ["fx_spot_time_piece2_test.cpp"], "*", "refusing a curve-implied forward for a known fixing is unpinned"),
+    # ... the builder's CARR fixing lag and spot time ...
+    ("builder_fixing_ignores_the_lag", "include/swaps/build/instruments.hpp",
+     "      const Date fixing = advance_bd(x.fx_reset_calendar, periods[i].first, -x.fx_reset_lag);",
+     "      const Date fixing = periods[i].first;",
+     ["fx_spot_time_piece2_test.cpp"], "*", "the CARR fixing date (2 BD before the start) is unpinned"),
+    ("builder_spot_time_is_today", "include/swaps/build/instruments.hpp",
+     "  ins.mtm.fx_spot_time = curve_time(vd, spot_date(vd, x.calendar, x.spot_lag));",
+     "  ins.mtm.fx_spot_time = 0.0;",
+     ["fx_spot_time_piece2_test.cpp"], "*", "the MtM leg's spot-date quote is unpinned"),
+    # ... and roll_book ages the fixing.
+    ("roll_book_keeps_the_fixing_time", "include/swaps/calibration/pnl_explain.hpp",
+     "        if (c.fx_fixing_set) c.fx_fixing_time -= dt;  // O-X3 piece 2: a fixing ages like any cashflow time (unfloored: passed = known)",
+     "",
+     ["fx_spot_time_piece2_test.cpp"], "*", "ageing the FX fixing time is unpinned"),
     # 2026-09-14 O-X3 fx_spot_time (piece 1): the FX outright rolls back from the spot date ...
     ("fx_forward_ignores_spot_time", "include/swaps/calibration/problem.hpp",
      "      if (ins.fx_spot_time == 0.0)  // the t = 0 reading, byte-identical",

@@ -122,6 +122,8 @@ struct RebasedHandle : CurveHandle<double> {
 // (floored at 0) — the roll leg; `shift` false => keep times, only drop already-paid coupons — the
 // carry (numeraire-rebase) leg. Positions with no surviving floating cashflow are dropped. A dated principal
 // exchange ages like a coupon in both legs: settled (t <= dt) it is gone, otherwise shift re-times it (PN2).
+// An xccy position's fx_spot_time is NOT shifted: an unchanged market is the same spot quote for the NEW spot date (owner
+// decision 2026-09-14), so the rolled book reads the spot quote at the same curve time from the new valuation date.
 inline portfolio::MultiCurveBook roll_book(const portfolio::MultiCurveBook& in, double dt, bool shift) {
   using Book = portfolio::MultiCurveBook;
   Book out;
@@ -140,6 +142,7 @@ inline portfolio::MultiCurveBook roll_book(const portfolio::MultiCurveBook& in, 
           c.accrual_start -= dt;
           c.accrual_end -= dt;
         }
+        if (c.fx_fixing_set) c.fx_fixing_time -= dt;  // O-X3 piece 2: a fixing ages like any cashflow time (unfloored: passed = known)
       }
       keep.push_back(std::move(c));
     }

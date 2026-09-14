@@ -111,6 +111,26 @@ void expect_json_eq(const json::value& a, const json::value& b, double tol, cons
     case json::kind::object: {
       const auto& ao = a.as_object();
       const auto& bo = b.as_object();
+      // THE FOURTH DELIBERATE DIVERGENCE (O-X3 piece 2, 2026-09-14; TASKS-API §A0.5): C++ quotes fx_spot for the pair's SPOT
+      // date and emits fx_spot_time (FX forwards, the MtM leg) plus each MtM coupon's fx_fixing_time; compile.py emits neither.
+      // Ours must be a spot time in (0, 7/365] and fixing times in [0, the coupon's start] within a week of it; the keys are
+      // then dropped and everything else compares at 1e-9.
+      if (ao.contains("quote") && ao.at("quote").is_string() && ao.at("quote").as_string() == "FxForward" &&
+          ao.contains("fx_spot_time")) {
+        json::object a2 = ao;
+        const double ts = a2.at("fx_spot_time").to_number<double>();
+        EXPECT_GT(ts, 0.0) << "at " << path << ".fx_spot_time";
+        EXPECT_LE(ts, 7.0 / 365.0) << "at " << path << ".fx_spot_time";
+        EXPECT_FALSE(bo.contains("fx_spot_time")) << "compile.py now emits fx_spot_time: delete this divergence";
+        a2.erase("fx_spot_time");
+        ASSERT_EQ(a2.size(), bo.size()) << "object key count mismatch at " << path;
+        for (const auto& kv : a2) {
+          const std::string key(kv.key());
+          ASSERT_TRUE(bo.contains(key)) << "missing key '" << key << "' at " << path;
+          expect_json_eq(kv.value(), bo.at(key), tol, path + "." + key);
+        }
+        break;
+      }
       // THE THIRD DELIBERATE DIVERGENCE (XB1, 2026-09-14; TASKS-API §A0.5): an XccyMtmBasis self leg (fwd) is the
       // constant leg's notional-exchange pair, so C++ pays each self coupon on its ACCRUAL END; compile.py still
       // pays it with the lagged coupons. Each self coupon's pay must be our accrual end (the OIS bracket's last
@@ -131,6 +151,25 @@ void expect_json_eq(const json::value& a, const json::value& b, double tol, cons
               << "at " << path << ".fwd.coupons[" << i << "]: XB1 pays the self coupon on its accrual end";
           EXPECT_GT(theirs, ours) << "at " << path << ".fwd.coupons[" << i << "]: compile.py lags the self leg";
           x["pay"] = theirs;
+        }
+        if (a2.contains("mtm")) {  // the 4th divergence on the MtM leg (see above)
+          auto& am = a2["mtm"].as_object();
+          if (am.contains("fx_spot_time")) {
+            const double ts = am.at("fx_spot_time").to_number<double>();
+            EXPECT_GT(ts, 0.0) << "at " << path << ".mtm.fx_spot_time";
+            EXPECT_LE(ts, 7.0 / 365.0) << "at " << path << ".mtm.fx_spot_time";
+            am.erase("fx_spot_time");
+          }
+          for (auto& cv : am["coupons"].as_array()) {
+            auto& co = cv.as_object();
+            if (!co.contains("fx_fixing_time")) continue;
+            const double ft = co.at("fx_fixing_time").to_number<double>();
+            const double start = co.at("obs").as_object().at("sub_start").as_array().front().to_number<double>();
+            EXPECT_GE(ft, 0.0) << "at " << path << ".mtm fixing";
+            EXPECT_LE(ft, start + 1e-12) << "at " << path << ".mtm fixing: the FX fixes on or before the period start";
+            EXPECT_LE(start - ft, 7.0 / 365.0) << "at " << path << ".mtm fixing";
+            co.erase("fx_fixing_time");
+          }
         }
         ASSERT_EQ(a2.size(), b2.size()) << "object key count mismatch at " << path;
         for (const auto& kv : a2) {
