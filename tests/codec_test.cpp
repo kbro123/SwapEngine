@@ -591,3 +591,20 @@ TEST(CodecScenarioMoves, AMoveNamingACurveRoleTwiceIsRefusedByBothDecoders) {
       << message(var, with_move("var", named));
   EXPECT_EQ(message(scenario, with_move("scenario", named)).rfind("scenario: shift_curve key 'SOFR'", 0), 0u);
 }
+
+// SC3: one calibration-status shape for scenario / scenario_grid / var -- the calibrate request's "calibration" keys in
+// its order, without the regularize_* echo and without wall-clock time.
+TEST(CodecCalibrationStatus, IsTheCalibrateObjectsKeysInOrderWithoutTiming) {
+  cal::CalibrationResult c;
+  c.iterations = 12;
+  c.rms_residual = 0.5;
+  c.stationarity = 0.25;
+  c.info = 2;
+  c.converged = true;
+  c.status = "relative error too small";
+  c.rank_deficiency = 0;
+  c.solve_micros = 123.0;
+  EXPECT_EQ(json::serialize(api::calibration_status_to_json(c)),
+            R"({"iterations":12,"rms_residual":5E-1,"stationarity":2.5E-1,"info":2,"converged":true,)"
+            R"("status":"relative error too small","rank_deficiency":0})");
+}

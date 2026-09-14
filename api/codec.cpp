@@ -916,6 +916,20 @@ json::array sample_to_json(const std::vector<CurveSample>& samples) {
   return carr;
 }
 
+// A calibration's outcome: the calibrate request's "calibration" keys, in its order, without the regularize_* request
+// echo and without wall-clock time (so a golden needs no timing cut). One shape for scenario, scenario_grid and var.
+json::object calibration_status_to_json(const cal::CalibrationResult& c) {
+  json::object o;
+  o["iterations"] = c.iterations;
+  o["rms_residual"] = c.rms_residual;
+  o["stationarity"] = c.stationarity;
+  o["info"] = c.info;
+  o["converged"] = c.converged;
+  o["status"] = c.status;
+  o["rank_deficiency"] = c.rank_deficiency;
+  return o;
+}
+
 RegSpec reg_from_json(const json::object& request) {
   RegSpec reg;
   if (!request.contains("regularize") || request.at("regularize").is_null()) return reg;
@@ -1385,6 +1399,7 @@ json::object scenario_result_to_json(const derive::ScenarioResult& r) {
   json::object out;
   out["n_curves"] = r.n_curves;
   out["n_knots"] = r.n_knots;
+  out["calibration"] = calibration_status_to_json(r.calibration);
   {
     json::object b;
     b["x"] = vecf(r.x_base);
@@ -1474,6 +1489,7 @@ json::object scenario_grid_result_to_json(const derive::ScenarioGridResult& r) {
   json::object out;
   out["n_curves"] = r.n_curves;
   out["n_knots"] = r.n_knots;
+  out["calibration"] = calibration_status_to_json(r.calibration);
   {
     json::array axes;
     for (const derive::ShockAxis& ax : r.axes) {
@@ -1545,6 +1561,7 @@ json::object var_result_to_json(const derive::VarResult& r) {
   json::object out;
   if (r.reval) {
     out["mode"] = "reval";
+    out["calibration"] = calibration_status_to_json(r.reval->calibration);
     out["base_npv"] = r.reval->base_npv;
     out["n_positions"] = r.reval->n_positions;
     out["reval_us"] = r.reval->reval_us;

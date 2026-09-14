@@ -18,6 +18,7 @@
 //
 //   -> {"var": {
 //         mode: "reval" | "supplied",
+//         calibration?: {iterations, rms_residual, stationarity, info, converged, status, rank_deficiency}  (reval)
 //         base_npv?, n_positions?, reval_us?,   (reval) reval_us = wall time of the fork+reprice sweep (µs)
 //         n, mean_pnl, stdev_pnl,
 //         pnl_sorted: [...],              ascending — the full distribution (a loss is negative)

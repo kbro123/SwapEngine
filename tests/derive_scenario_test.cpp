@@ -31,6 +31,8 @@ class SeedSession {
     last_lambda = reg.lambda;
     res_.x = x_;
     res_.converged = true;
+    res_.iterations = 4;
+    res_.status = "cosine too small";
     return res_;
   }
   const cal::BundleProblem& problem() const { return p_; }
@@ -154,6 +156,8 @@ TEST(Scenarios, CalibratesOnceAndValuesEveryMoveAtItsForkOfTheBase) {
   const dv::ScenarioResult out = dv::scenarios<SeedSession>(r);
   EXPECT_EQ(SeedSession::calls, 1) << "one calibration for every move";
   EXPECT_EQ(SeedSession::last_lambda, 0.25);
+  EXPECT_EQ(out.calibration.iterations, 4) << "the base's solve is reported as the session returned it (SC3)";
+  EXPECT_EQ(std::string(out.calibration.status), "cosine too small");
   EXPECT_EQ(out.n_curves, 2);
   EXPECT_EQ(out.n_knots, 2);
   EXPECT_TRUE(out.x_base == x0);

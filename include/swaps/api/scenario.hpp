@@ -25,6 +25,8 @@
 //                                                              against; needed for a pair the bumps do not determine
 //              }}
 //   -> {"scenario": {n_curves, n_knots,
+//                    "calibration": {iterations, rms_residual, stationarity, info, converged, status,
+//                                  rank_deficiency}   the base's solve, reported not refused (SC3)
 //                    "base": {x, curves?, npv?, n?},
 //                    "scenarios": [{name, curves?, npv?, npv_delta?, shift_bp?, parallel_bp?, fx?}, ...]}}
 //

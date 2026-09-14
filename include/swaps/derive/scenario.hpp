@@ -96,6 +96,7 @@ struct ScenarioRow {
 
 struct ScenarioResult {
   int n_curves = 0, n_knots = 0;
+  calibration::CalibrationResult calibration;  // the base's solve, as the session reported it (SC3)
   Eigen::VectorXd x_base;
   std::vector<calibration::CurveSample> base_curves;
   bool has_book = false;
@@ -124,9 +125,8 @@ ScenarioResult scenarios(ScenarioRequest r) {
   }
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
-  sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario"), r.reg);
-
   ScenarioResult out;
+  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario"), r.reg);
   out.n_curves = P.n_curves();
   out.n_knots = P.n_knots();
   out.x_base = sess.x();  // the anchor every move forks from; never mutated

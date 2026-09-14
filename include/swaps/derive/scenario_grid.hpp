@@ -84,6 +84,7 @@ struct ScenarioGridRequest {
 
 struct ScenarioGridResult {
   int n_curves = 0, n_knots = 0;
+  calibration::CalibrationResult calibration;  // the base's solve, as the session reported it (SC3)
   std::vector<ShockAxis> axes;  // the request's, echoed by the codec
   int n0 = 0, n1 = 0;           // cells: n0 x n1 (n1 = 1 for a single axis)
   Eigen::VectorXd x_base;
@@ -118,9 +119,8 @@ ScenarioGridResult scenario_grid(ScenarioGridRequest r) {
 
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
-  sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario_grid"), r.reg);
-
   ScenarioGridResult out;
+  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario_grid"), r.reg);
   out.n_curves = P.n_curves();
   out.n_knots = P.n_knots();
   out.axes = std::move(r.axes);

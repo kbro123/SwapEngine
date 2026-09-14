@@ -209,6 +209,7 @@ TEST(ScenarioGolden, ScenarioResponseIsBitwiseAndItsShocksAreTheOnesClaimed) {
   const json::value& out = v.as_object().at("scenario");
   const json::array& rows = out.as_object().at("scenarios").as_array();
   ASSERT_EQ(rows.size(), 5u);
+  EXPECT_TRUE(out.as_object().at("calibration").as_object().at("converged").as_bool()) << "SC3: the base's solve is reported";
   const auto zero_move = [&](int row, int c) {
     const json::value& r = rows[static_cast<std::size_t>(row)];
     return at(r, {"curves"}, c, 4) - at(out, {"base", "curves"}, c, 4);  // at t = 9
@@ -240,6 +241,7 @@ TEST(ScenarioGolden, GridResponsesAreBitwise) {
   expect_golden("grid_curve_plus_parallel", b);
 
   const json::object g = json::parse(a).as_object().at("scenario_grid").as_object();
+  EXPECT_TRUE(g.at("calibration").as_object().at("converged").as_bool()) << "SC3: the base's solve is reported";
   const auto pnl = [&g](int i, int j) {
     return g.at("pnl").as_array()[static_cast<std::size_t>(i)].as_array()[static_cast<std::size_t>(j)].to_number<double>();
   };
@@ -266,6 +268,8 @@ TEST(ScenarioGolden, VarRevaluationResponseIsBitwise) {
       json::object{}};
   const std::string response = api::var_json(json::object{{"var", req}});
   expect_golden("var_reval", response);
+  EXPECT_TRUE(json::parse(response).as_object().at("var").as_object().at("calibration").as_object().at("converged").as_bool())
+      << "SC3: the base's solve is reported";
 
   const json::object out = json::parse(response).as_object().at("var").as_object();
   EXPECT_EQ(out.at("mode").as_string(), "reval");
@@ -289,6 +293,7 @@ TEST(ScenarioGolden, VarSuppliedResponseIsBitwise) {
 
   const json::object out = json::parse(response).as_object().at("var").as_object();
   EXPECT_EQ(out.at("mode").as_string(), "supplied");
+  EXPECT_FALSE(out.contains("calibration")) << "nothing was calibrated";
   const json::array& q = out.at("quantiles").as_array();
   EXPECT_EQ(q[2].as_object().at("es_pnl").to_number<double>(), -12.5) << "q = 0.99 on 7 points: the single worst";
   EXPECT_EQ(q[3].as_object().at("var_pnl").to_number<double>(), 7.75) << "q = 1e-17: the last point";
@@ -317,6 +322,7 @@ TEST(ScenarioGolden, VarRevalSeededAndSmoothedResponseIsBitwise) {
   const json::object out = json::parse(response).as_object().at("var").as_object();
   const json::array& q = out.at("quantiles").as_array();
   ASSERT_EQ(q.size(), 2u);
+  EXPECT_TRUE(out.at("calibration").as_object().at("converged").as_bool()) << "SC3: the seeded, smoothed base converged";
   EXPECT_EQ(q[0].as_object().at("q").to_number<double>(), 0.95) << "absent quantiles take the default";
   // The regulariser reaches the calibration: the same request without it (same seed) prices another base.
   json::object plain = req;

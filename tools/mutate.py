@@ -24,6 +24,15 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 SC3 (owner decision): the base calibration's status is reported by scenario / grid / var.
+    ("scenario_calibration_not_reported", "include/swaps/derive/scenario.hpp",
+     "  out.calibration = sess.calibrate(",
+     "  sess.calibrate(",
+     ["derive_scenario_test.cpp"], "*", "scenario's calibration outcome is unpinned (SC3)"),
+    ("grid_calibration_not_reported", "include/swaps/derive/scenario_grid.hpp",
+     "  out.calibration = sess.calibrate(",
+     "  sess.calibrate(",
+     ["derive_scenario_grid_test.cpp"], "*", "scenario_grid's calibration outcome is unpinned (SC3)"),
     # 2026-09-14 SC2 (owner decision): FX moves are exact per currency pair.
     ("fx_pairs_orientation_flipped", "include/swaps/portfolio/fx_pairs.hpp",
      "    const int b = curves[static_cast<std::size_t>(p.mtm_reset_num)].currency;\n    const int q = curves[static_cast<std::size_t>(p.mtm_reset_den)].currency;",

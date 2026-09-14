@@ -28,7 +28,8 @@ class SeedSession {
     x_ = x0;
     ++calls;
     res_.x = x_;
-    res_.converged = true;
+    res_.converged = false;
+    res_.iterations = 9;
     return res_;
   }
   const cal::BundleProblem& problem() const { return p_; }
@@ -219,6 +220,8 @@ TEST(ScenarioGrid, WithoutABookThereIsNoSurfaceAndItChecksItsInputs) {
   EXPECT_EQ(out.n_cells, 0);
   EXPECT_EQ(out.grid_us, 0.0);
   EXPECT_EQ(out.n0, 2);
+  EXPECT_EQ(out.calibration.iterations, 9) << "reported without a book too (SC3)";
+  EXPECT_FALSE(out.calibration.converged) << "a failed solve is reported, not refused";
 
   SeedSession::calls = 0;
   dv::ScenarioGridRequest none = three_curve_request();

@@ -58,6 +58,7 @@ struct ConsistentRisk;            // calibration/consistent_risk.hpp
 struct CurveSample;               // calibration/bundle_state.hpp
 struct PnlRequest;                // calibration/pnl_explain.hpp
 struct PnlReport;                 // calibration/pnl_explain.hpp
+struct CalibrationResult;        // calibration/lm.hpp
 }  // namespace swaps::calibration
 
 namespace swaps::api {
@@ -168,7 +169,7 @@ boost::json::object conventions_listing_to_json(const swaps::conventions::Regist
 // role. FX bumps are exact per currency pair (derive/fx_move.hpp): on a book with xccy positions they need
 // bundle.currency_codes, and a pair the bumps do not determine needs fx_pivot.
 swaps::derive::ScenarioRequest scenario_request_from_json(const boost::json::object& payload);
-// {"scenario": {n_curves, n_knots, base: {x, curves?, npv?, n?}, scenarios: [{name, curves?, npv?, npv_delta?,
+// {"scenario": {n_curves, n_knots, calibration, base: {x, curves?, npv?, n?}, scenarios: [{name, curves?, npv?, npv_delta?,
 // parallel_bp?, shift_bp?, fx?}]}} -- curves when sample_times were given, npv when a book was.
 boost::json::object scenario_result_to_json(const swaps::derive::ScenarioResult& r);
 
@@ -177,7 +178,7 @@ boost::json::object scenario_result_to_json(const swaps::derive::ScenarioResult&
 // base + quote (fx), values}], x0?, regularize?, sample_times?, book?, fx_pivot?}} (or the body itself). kind absent = the axis
 // struct's own (parallel_bp); an unknown kind throws.
 swaps::derive::ScenarioGridRequest scenario_grid_request_from_json(const boost::json::object& payload);
-// {"scenario_grid": {n_curves, n_knots, axes, shape: [n0, n1], base: {x, curves?, npv?, n?}, npv?, pnl?, grid_us?,
+// {"scenario_grid": {n_curves, n_knots, calibration, axes, shape: [n0, n1], base: {x, curves?, npv?, n?}, npv?, pnl?, grid_us?,
 // n_cells?}} -- the surface fields when a book was given.
 boost::json::object scenario_grid_result_to_json(const swaps::derive::ScenarioGridResult& r);
 
@@ -186,7 +187,7 @@ boost::json::object scenario_grid_result_to_json(const swaps::derive::ScenarioGr
 // Exactly one mode (derive::var refuses both and neither). quantiles absent = the struct's [0.95, 0.99]; an explicit []
 // throws. A move is the `scenario` verb's shape; its shift_curve keys are integer curve roles, each named once.
 swaps::derive::VarRequest var_request_from_json(const boost::json::object& payload);
-// {"var": {mode, base_npv?, n_positions?, reval_us?, n, mean_pnl, stdev_pnl, pnl_sorted,
+// {"var": {mode, calibration?, base_npv?, n_positions?, reval_us?, n, mean_pnl, stdev_pnl, pnl_sorted,
 // quantiles: [{q, var, es, var_pnl, es_pnl}]}} -- the reval fields when mode is "reval".
 boost::json::object var_result_to_json(const swaps::derive::VarResult& r);
 
@@ -198,6 +199,10 @@ boost::json::object pnl_report_to_json(const cal::PnlReport& r);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);
+// A calibration's outcome, as the calibrate request's "calibration" object reports it (without its regularize_* echo
+// and without wall-clock time): {iterations, rms_residual, stationarity, info, converged, status, rank_deficiency}.
+// scenario, scenario_grid and var (reval) emit it as "calibration" (SC3).
+boost::json::object calibration_status_to_json(const cal::CalibrationResult& c);
 // request["regularize"] -> RegSpec. Absent or null => RegSpec{}; present and not an object => throws.
 RegSpec reg_from_json(const boost::json::object& request);
 
