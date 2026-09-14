@@ -7661,10 +7661,10 @@
       "type": "irs"
     },
     "CAD-CORRA-OIS": {
-      "description": "CAD fixed vs CORRA OIS. Toronto calendar; ACT/365F both legs, annual, compounded. Spot T+1. CORRA-first standard (CDOR ceased Jun 2024).",
+      "description": "CAD fixed vs CORRA OIS. Toronto calendar; ACT/365F both legs, annual, compounded. Spot T+1; payment 1 Toronto business day after the period end (CARR; LCH conversion consultation 2023). CORRA-first standard (CDOR ceased Jun 2024).",
       "currency": "CAD",
       "spot_lag": 1,
-      "payment_lag": 2,
+      "payment_lag": 1,
       "bdc": "ModifiedFollowing",
       "calendar": "CAD",
       "fixed_leg": {
@@ -7755,9 +7755,9 @@
       "type": "ois"
     },
     "BRL-CDI-SWAP": {
-      "description": "BRL DI x Pre swap (fixed vs CDI), B3/ANBIMA calendar, BUS/252 both legs, Following. ZERO-COUPON: the CDI leg compounds daily to maturity and the fixed leg pays (1+r)^tau - 1 at maturity, one settlement; r is the annually-compounded (exponential, BUS/252) DI rate = QuoteKind ZeroCouponRate. CDI ~ SELIC overnight.",
+      "description": "BRL DI x Pre swap (fixed vs CDI), B3/ANBIMA calendar, BUS/252 both legs, Following. ZERO-COUPON: the CDI leg compounds daily to maturity and the fixed leg pays (1+r)^tau - 1 at maturity, one settlement; r is the annually-compounded (exponential, BUS/252) DI rate = QuoteKind ZeroCouponRate. CDI ~ SELIC overnight. Spot T+0: registered and started on the trade date, whose CDI accrues (B3 swap manual).",
       "currency": "BRL",
-      "spot_lag": 1,
+      "spot_lag": 0,
       "payment_lag": 0,
       "bdc": "Following",
       "calendar": "BRL",
@@ -7791,9 +7791,9 @@
       "type": "irs"
     },
     "MXN-FTIIE-OIS": {
-      "description": "MXN fixed vs F-TIIE (TIIE de Fondeo, Banxico overnight RFR) OIS. Mexico City calendar; ACT/360 both legs, annual, compounded. Spot T+1. New RFR replacing TIIE-28.",
+      "description": "MXN fixed vs F-TIIE (TIIE de Fondeo, Banxico overnight RFR) OIS. Mexico City calendar; ACT/360 both legs, annual, compounded. Spot T+2 (LatAm SEF certification 2024; DTCC trades). New RFR replacing TIIE-28.",
       "currency": "MXN",
-      "spot_lag": 1,
+      "spot_lag": 2,
       "payment_lag": 0,
       "bdc": "ModifiedFollowing",
       "calendar": "MXN",
