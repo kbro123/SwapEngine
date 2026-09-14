@@ -298,22 +298,7 @@ void BundleSession::record_tick(const cal::StreamTick& tick, double solve_us) {
 }
 
 std::vector<CurveSample> BundleSession::sample(const std::vector<double>& times) const {
-  const auto C = cal::build_bundle_curves<double>(
-      prob_.curves, [&](int c, int i) { return x_[prob_.offset(c) + i]; });
-  std::vector<CurveSample> out(prob_.n_curves());
-  for (int c = 0; c < prob_.n_curves(); ++c) {
-    out[c].currency = prob_.curves[c].currency;
-    out[c].t = times;
-    out[c].discount.reserve(times.size());
-    out[c].zero.reserve(times.size());
-    out[c].forward.reserve(times.size());
-    for (double t : times) {
-      out[c].discount.push_back(C[c]->discount(t));
-      out[c].forward.push_back(C[c]->forward(t));
-      out[c].zero.push_back(t > 1e-12 ? C[c]->integral(t) / t : C[c]->forward(0.0));
-    }
-  }
-  return out;
+  return cal::sample_bundle_curves(prob_, x_, times);
 }
 
 double BundleSession::model_quote(const cal::Instrument& ins) const {

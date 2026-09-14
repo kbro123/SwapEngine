@@ -24,6 +24,23 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 5.1: calibration/bundle_state.hpp and portfolio/xccy_fx_scaled.hpp.
+    ("bundle_state_shift_reaches_turns", "include/swaps/calibration/bundle_state.hpp",
+     "x.segment(p.offset(c), p.curves[c].n_interp_knots()).array() += d;",
+     "x.segment(p.offset(c), p.curves[c].n_knots()).array() += d;",
+     ["bundle_state_test.cpp"], "*", "a shift leaving turn jumps alone is unpinned (E7 5.1)"),
+    ("bundle_state_zero_at_t0_divides", "include/swaps/calibration/bundle_state.hpp",
+     "t > 1e-12 ? C[c]->integral(t) / t : C[c]->forward(0.0)",
+     "C[c]->integral(t) / t",
+     ["bundle_state_test.cpp"], "*", "the t = 0 zero rate is unpinned (E7 5.1)"),
+    ("xccy_fx_scaled_every_position", "include/swaps/portfolio/xccy_fx_scaled.hpp",
+     "    if (p.kind == MultiCurveBook::Kind::Xccy) p.fx_spot *= factor;",
+     "    p.fx_spot *= factor;",
+     ["bundle_state_test.cpp"], "*", "FX scaling only xccy positions is unpinned (E7 5.1)"),
+    ("xccy_fx_books_coarse_key", "include/swaps/portfolio/xccy_fx_scaled.hpp",
+     "std::llround(factor * 1e12)",
+     "std::llround(factor * 1e0)",
+     ["bundle_state_test.cpp"], "*", "one compiled book per distinct FX factor is unpinned (E7 5.1)"),
     # E7 stage 4.2: the conventions Registry's row rules and all-or-nothing batches.
     ("conventions_stub_discount_enum_dropped", "include/swaps/conventions_db.hpp",
      '  r.one_of(b.stub_discount, "stub_discount", kSchemaStubDiscounts);',

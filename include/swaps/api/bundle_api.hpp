@@ -29,6 +29,7 @@
 #include <boost/json/fwd.hpp>
 
 #include "swaps/calibration/bundle_problem.hpp"
+#include "swaps/calibration/bundle_state.hpp"  // CurveSample, sample_bundle_curves
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/regularize.hpp"  // RegSpec, smoothing_preset
 #include "swaps/calibration/streaming.hpp"
@@ -43,14 +44,8 @@ namespace cal = swaps::calibration;
 
 // ---- plain result structs (no Boost types, so they cross the header boundary cheaply) -------------
 
-// A curve sampled on a time grid: continuously-compounded zero, instantaneous forward, discount factor.
-struct CurveSample {
-  int currency = 0;
-  std::vector<double> t;
-  std::vector<double> discount;
-  std::vector<double> zero;     // integral(t)/t (cont-comp), == forward(0) at t==0
-  std::vector<double> forward;  // instantaneous forward
-};
+// CurveSample (a curve on a time grid) lives with sample_bundle_curves in calibration/bundle_state.hpp; codec.hpp
+// aliases it here as api::CurveSample.
 
 // RegSpec (the smoothness regulariser) lives with its operators in calibration/regularize.hpp.
 using RegSpec = cal::RegSpec;

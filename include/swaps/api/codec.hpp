@@ -17,7 +17,7 @@
 // Decoders carry no conventions lookups, no arithmetic and no invented defaults -- tools/verb_density.py locks
 // that for api/codec.cpp. They may loop over arrays and branch on presence.
 //
-// Declared against a forward-declared CurveSample (defined in bundle_api.hpp, which includes this header), so
+// Declared against a forward-declared CurveSample (defined in calibration/bundle_state.hpp, which bundle_api.hpp includes), so
 // including either header gives the whole API.
 
 #include <vector>
@@ -49,6 +49,7 @@ struct CalibrationReportRequest;  // calibration/diagnostics.hpp
 struct CalibrationReport;         // calibration/diagnostics.hpp
 struct ConsistentRiskRequest;     // calibration/consistent_risk.hpp
 struct ConsistentRisk;            // calibration/consistent_risk.hpp
+struct CurveSample;               // calibration/bundle_state.hpp
 }  // namespace swaps::calibration
 
 namespace swaps::api {
@@ -56,7 +57,7 @@ namespace swaps::api {
 namespace cal = swaps::calibration;
 
 using RegSpec = cal::RegSpec;  // calibration/regularize.hpp
-struct CurveSample;  // bundle_api.hpp
+using CurveSample = cal::CurveSample;  // calibration/bundle_state.hpp
 
 // ---- the calibration problem -----------------------------------------------------------------------
 cal::BundleProblem bundle_from_json(const boost::json::value& v);

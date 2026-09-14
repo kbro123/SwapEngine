@@ -20,6 +20,7 @@ add_executable(swaps_tests
   derive_rv_test.cpp
   asset_swap_leg_test.cpp
   calibration_diagnostics_test.cpp
+  bundle_state_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
   turns_test.cpp
