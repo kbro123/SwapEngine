@@ -19,15 +19,17 @@
 //   * INDEPENDENT schedules. The float schedule is QuantLib's own Schedule(Backward, endOfMonth=false) on the
 //     conventions the DB names for the bond currency's default swap product (build::swap_conv ->
 //     conventions_ql.hpp) — not the verb's dates. The bond is QuantLib's FixedRateBond on the DB row's frequency.
-//   * The par-floater identity holds EXACTLY in QuantLib: par coupons, 0 fixing days, index day count == payment
-//     day count, pay date == accrual end, forwarding curve == discount curve => the float leg telescopes to
-//     N·(DF(settle) − DF(T)), which is what the verb's annuity-only formula assumes.
+//   * The float COUPONS pay the DB product's payment_lag business days after their accrual end (owner decision
+//     2026-09-14: "floating legs generically follow normal swap convention pay lags"); the upfront and the
+//     back-payment do not. ql::AssetSwap has no payment lag, so its legs (ql/instruments/assetswap.cpp) are
+//     written out below as a ql::Swap with IborLeg::withPaymentLag -- and at lag 0 that Swap reproduces
+//     ql::AssetSwap exactly (pinned), so the only thing the hand-built legs add is the lag.
 //   * settle = value_date + 1. QuantLib's DiscountingSwapEngine DROPS flows ON the evaluation date
 //     (includeReferenceDateEvents = false), which would silently lose the par swap's upfront at settle.
 //     (That is the likely reason bond_asset_swap_oracle.cpp needs 5e-5: its settle == today.)
 //
-// SCOPE, stated rather than implied: single-curve (projection == discount); no payment lag (the verb ignores the
-// DB's payment_lag); bond coupons unadjusted (build::fixed_rate_bond's choice, pinned in bond_oracle_test).
+// SCOPE, stated rather than implied: single-curve (projection == discount); float coupons lagged by the DB's
+// payment_lag, exchanges unlagged; bond coupons unadjusted (build::fixed_rate_bond's choice, pinned in bond_oracle_test).
 #include <gtest/gtest.h>
 #include <ql/quantlib.hpp>
 
@@ -181,11 +183,13 @@ class QlPackage {
                                                cal_, bdc, /*endOfMonth=*/false, dc_, disc_);
     fsched_ = ql::Schedule(qd(settle), qd(bc.maturity), tenor, cal_, bdc, bdc, ql::DateGeneration::Backward,
                            /*endOfMonth=*/false);
+    lag_ = sc.pay_lag;
   }
 
   const ql::ext::shared_ptr<ql::FixedRateBond>& bond() const { return bond_; }
   const ql::Schedule& float_schedule() const { return fsched_; }
   const ql::DayCounter& float_dc() const { return dc_; }
+  int pay_lag() const { return lag_; }
 
   // QuantLib's fair spread. parSwap=true: par asset swap (upfront = dirty − 100 at settle, float notional 100).
   // parSwap=false: market-value / proceeds asset swap (float notional scaled by the dirty price).
@@ -206,6 +210,47 @@ class QlPackage {
            disc_->discount(fsched_.startDate());
   }
 
+  // ql::AssetSwap's legs (ql/instruments/assetswap.cpp, payBondCoupon = true) written out as a ql::Swap, with the
+  // float COUPONS paid `lag` business days after their accrual end on the float calendar (IborLeg::withPaymentLag).
+  // The upfront (float start) and the back-payment / final notional (the Following-adjusted end) are not lagged.
+  struct Package { double npv, bps, notional; };
+  Package lagged_package(double clean_per_100, bool par_swap, int lag, const ql::DayCounter& pay_dc) const {
+    const ql::Date start = fsched_.startDate();
+    const ql::Date final_date = fsched_.calendar().adjust(fsched_.endDate(), ql::Following);
+    const double dirty = clean_per_100 + bond_->accruedAmount(start);
+    double notional = bond_->notional(start);
+    if (!par_swap) notional *= dirty / 100.0;
+    ql::Leg flt = ql::IborLeg(fsched_, idx_)
+                      .withNotionals(notional)
+                      .withPaymentDayCounter(pay_dc)
+                      .withPaymentAdjustment(ql::Following)
+                      .withPaymentCalendar(cal_)
+                      .withPaymentLag(lag)
+                      .withSpreads(0.0);
+    if (par_swap)
+      flt.insert(flt.begin(), ql::ext::make_shared<ql::SimpleCashFlow>((dirty - 100.0) / 100.0 * notional, start));
+    flt.push_back(ql::ext::make_shared<ql::SimpleCashFlow>(notional, final_date));
+    ql::Leg bnd;
+    for (const auto& c : bond_->cashflows())
+      if (!c->hasOccurred(start, false)) bnd.push_back(c);
+    ql::Swap sw(std::vector<ql::Leg>{bnd, flt}, std::vector<bool>{true, false});
+    sw.setPricingEngine(ql::ext::make_shared<ql::DiscountingSwapEngine>(disc_));
+    return {sw.NPV(), sw.legBPS(1), notional};
+  }
+  // That package's fair spread: NPV(s) = NPV(0) + s·BPS/1bp, as AssetSwap::fairSpread at spread 0.
+  double lagged_fair_spread(double clean_per_100, bool par_swap, int lag) const {
+    const Package p = lagged_package(clean_per_100, par_swap, lag, dc_);
+    const double basis_point = 1.0e-4;  // QuantLib's BPS unit, not a tolerance
+    return -p.npv / (p.bps / basis_point);
+  }
+  // annuity() on the lagged coupons: Σ τ·DF(pay) per unit notional, forward to settle.
+  double lagged_annuity(const ql::DayCounter& pay_dc, int lag) const {
+    const Package p = lagged_package(100.0, /*par_swap=*/true, lag, pay_dc);
+    const double basis_point = 1.0e-4;  // QuantLib's BPS unit, not a tolerance
+    return std::abs(p.bps) / (basis_point * p.notional) * disc_->discount(disc_->referenceDate()) /
+           disc_->discount(fsched_.startDate());
+  }
+
  private:
   ql::Handle<ql::YieldTermStructure> disc_;
   ql::ext::shared_ptr<ql::FixedRateBond> bond_;
@@ -213,6 +258,7 @@ class QlPackage {
   ql::Schedule fsched_;
   ql::Calendar cal_;
   ql::DayCounter dc_;
+  int lag_ = 0;
 };
 
 // ---- the verb ----------------------------------------------------------------------------------------------
@@ -277,8 +323,17 @@ TEST(AssetSwapVerbOracle, SpreadAnnuityAndCurvePricesMatchQuantLib) {
   ASSERT_FALSE(out.contains("error")) << json::serialize(out);
   ASSERT_EQ(out.at("n").to_number<int>(), 3);
 
+  // The hand-built package IS ql::AssetSwap at lag 0 (both structures, and the annuity): all it adds below is
+  // the DB payment lag.
+  ASSERT_GT(q.pay_lag(), 0) << "premise: the DB product lags its float coupons";
+  EXPECT_NEAR(q.lagged_fair_spread(100.0, true, 0), q.fair_spread(100.0, true), tol::curve_rel);
+  EXPECT_NEAR(q.lagged_fair_spread(clean_mkt * 100.0, true, 0), q.fair_spread(clean_mkt * 100.0, true), tol::curve_rel);
+  EXPECT_NEAR(q.lagged_fair_spread(clean_mkt * 100.0, false, 0), q.fair_spread(clean_mkt * 100.0, false),
+              tol::curve_rel);
+  EXPECT_NEAR(q.lagged_annuity(q.float_dc(), 0), q.annuity(q.float_dc()), tol::curve_rel * q.annuity(q.float_dc()));
+
   // Bond side: accrued and the curve prices (independent of the price mode).
-  const double ann_ql = q.annuity(q.float_dc());
+  const double ann_ql = q.lagged_annuity(q.float_dc(), q.pay_lag());
   for (std::size_t i = 0; i < 3; ++i) {
     EXPECT_NEAR(num(out, "accrued", i), accrued_ql, tol::curve_rel) << "row " << i;
     EXPECT_NEAR(num(out, "dirty_curve", i), q.bond()->dirtyPrice() / 100.0, tol::curve_rel) << "row " << i;
@@ -287,9 +342,10 @@ TEST(AssetSwapVerbOracle, SpreadAnnuityAndCurvePricesMatchQuantLib) {
   }
 
   // Spreads. The verb's formula is QuantLib's PAR asset swap at the purchase price it resolves.
-  const double par_at_100_ql = q.fair_spread(100.0, /*par_swap=*/true);
-  const double par_at_mkt_ql = q.fair_spread(clean_mkt * 100.0, /*par_swap=*/true);
-  const double proceeds_ql = q.fair_spread(clean_mkt * 100.0, /*par_swap=*/false);
+  const int lag = q.pay_lag();
+  const double par_at_100_ql = q.lagged_fair_spread(100.0, /*par_swap=*/true, lag);
+  const double par_at_mkt_ql = q.lagged_fair_spread(clean_mkt * 100.0, /*par_swap=*/true, lag);
+  const double proceeds_ql = q.lagged_fair_spread(clean_mkt * 100.0, /*par_swap=*/false, lag);
   EXPECT_NEAR(num(out, "asw_spread", 0), par_at_100_ql, tol::curve_rel);
   EXPECT_NEAR(num(out, "asw_spread", 1), par_at_mkt_ql, tol::curve_rel);
   EXPECT_NEAR(num(out, "asw_spread", 2), par_at_mkt_ql, tol::curve_rel);
@@ -297,7 +353,10 @@ TEST(AssetSwapVerbOracle, SpreadAnnuityAndCurvePricesMatchQuantLib) {
   // PROCEEDS. The verb's comment calls [1] "the proceeds spread"; it is not. QuantLib's market-value (proceeds)
   // spread is the par spread divided by the dirty purchase price — pinned here as an identity, plus a control
   // that the verb's number is NOT the proceeds number (they differ by the factor 1/dirty ≈ 2.6 % here).
-  EXPECT_NEAR(num(out, "asw_spread", 1) / dirty_mkt, proceeds_ql, tol::curve_rel);
+  // par / dirty == proceeds is EXACT only for unlagged coupons (the lag's deferred value enters the par package at
+  // unit notional and the proceeds package at dirty notional), so the identity is pinned on ql::AssetSwap (lag 0).
+  EXPECT_NEAR(q.fair_spread(clean_mkt * 100.0, true) / dirty_mkt, q.fair_spread(clean_mkt * 100.0, false),
+              tol::curve_rel);
   EXPECT_GT(std::abs(num(out, "asw_spread", 1) - proceeds_ql), 1e-6)
       << "the verb now returns the proceeds spread: update the identity above and the verb's docs together";
 
@@ -305,7 +364,9 @@ TEST(AssetSwapVerbOracle, SpreadAnnuityAndCurvePricesMatchQuantLib) {
   //   the price mode is live ((1 − 0.9725)/annuity ≈ 47 bp between rows 0 and 1) ...
   EXPECT_GT(std::abs(par_at_mkt_ql - par_at_100_ql), 1e-4);
   //   ... and the DB float day count is live (ACT/365F would move the annuity by 365/360 − 1 ≈ 1.4 %).
-  EXPECT_GT(std::abs(q.annuity(ql::Actual365Fixed()) / ann_ql - 1.0), 1e-3);
+  EXPECT_GT(std::abs(q.lagged_annuity(ql::Actual365Fixed(), lag) / ann_ql - 1.0), 1e-3);
+  //   ... and the payment lag is live (~0.1 bp on this 10Y bond).
+  EXPECT_GT(std::abs(par_at_mkt_ql - q.fair_spread(clean_mkt * 100.0, true)), 1e-7);
 }
 
 // PREDICTED TO FAIL against api/bond.cpp as of 2026-09-13 (annuity by ~2.6e-7 relative, spreads by ~2.5e-9 and
@@ -344,14 +405,14 @@ TEST(AssetSwapVerbOracle, LeapDayMaturityFloatRollMatchesQuantLib) {
   ASSERT_FALSE(out.contains("error")) << json::serialize(out);
   ASSERT_EQ(out.at("n").to_number<int>(), 2);
 
-  const double ann_ql = q.annuity(q.float_dc());
+  const double ann_ql = q.lagged_annuity(q.float_dc(), q.pay_lag());
   // Bond side is unaffected by the float roll — these pass today.
   EXPECT_NEAR(num(out, "dirty_curve", 0), q.bond()->dirtyPrice() / 100.0, tol::curve_rel);
   EXPECT_NEAR(num(out, "accrued", 0), q.bond()->accruedAmount(qd(settle)) / 100.0, tol::curve_rel);
   // Float side — these fail until the roll is fixed.
   EXPECT_NEAR(num(out, "annuity", 0), ann_ql, tol::curve_rel * ann_ql);
-  EXPECT_NEAR(num(out, "asw_spread", 0), q.fair_spread(100.0, true), tol::curve_rel);
-  EXPECT_NEAR(num(out, "asw_spread", 1), q.fair_spread(clean_mkt * 100.0, true), tol::curve_rel);
+  EXPECT_NEAR(num(out, "asw_spread", 0), q.lagged_fair_spread(100.0, true, q.pay_lag()), tol::curve_rel);
+  EXPECT_NEAR(num(out, "asw_spread", 1), q.lagged_fair_spread(clean_mkt * 100.0, true, q.pay_lag()), tol::curve_rel);
 }
 
 }  // namespace

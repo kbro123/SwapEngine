@@ -24,6 +24,16 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 ASW pay lag: the asset-swap float coupons pay the product's payment_lag after the accrual end ...
+    ("asw_float_leg_pays_on_accrual_end", "include/swaps/build/par_asset_swap.hpp",
+     "    f.pay.push_back(curve_time(value_date, advance_bd(swc.calendar, p.second, swc.pay_lag)));",
+     "    f.pay.push_back(curve_time(value_date, p.second));",
+     ["asset_swap_pay_lag_repro_test.cpp"], "*", "the asset-swap float leg's payment lag is unpinned"),
+    # ... and the par spread carries the lag's deferred value E (a lagged floater is not DF(settle) - DF(T)).
+    ("asw_spread_drops_lag_value", "include/swaps/build/par_asset_swap.hpp",
+     "  return (dirty_curve - dirty_market + lag_value / df_settle) / annuity;",
+     "  return (dirty_curve - dirty_market) / annuity;",
+     ["asset_swap_pay_lag_repro_test.cpp"], "*", "the lagged par floater's deferred value E is unpinned"),
     # 2026-09-14 XB1: the xccy basis self leg is the exchange pair, paid on the accrual ends (not with the lagged coupons).
     ("xccy_self_leg_pays_lagged", "include/swaps/build/instruments.hpp",
      "  for (auto& c : ins.fwd.coupons) c.pay = c.accrual_end;\n",

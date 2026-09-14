@@ -65,18 +65,20 @@ void check(double curve_rate, const bld::Date& value, const bld::Date& issue, co
   bld::FixedBondTerms t;
   t.value_date = value; t.settle = value; t.issue = issue; t.maturity = maturity; t.coupon = coupon; t.freq = 2;
   const bld::BuiltBond bond = bld::fixed_rate_bond(t);
-  std::vector<double> fpay, ftau;
+  std::vector<double> fpay, ftau, fstart, fend;  // pays on the accrual end: ql::AssetSwap has no payment lag
   for (std::size_t i = 1; i < fsched.size(); ++i) {
     const QuantLib::Date a = fsched[i - 1], b = fsched[i];
     ftau.push_back(Actual360().yearFraction(a, b));
     fpay.push_back(bld::curve_time(value, bld::Date::ymd(b.year(), b.month(), b.dayOfMonth())));
+    fstart.push_back(bld::curve_time(value, bld::Date::ymd(a.year(), a.month(), a.dayOfMonth())));
+    fend.push_back(fpay.back());
   }
-  const double ours = bld::par_asset_swap_spread(bond.curve, qc, 1.0 + bond.accrued, fpay, ftau);
+  const double ours = bld::par_asset_swap_spread(bond.curve, qc, 1.0 + bond.accrued, fpay, ftau, fstart, fend);
   EXPECT_NEAR(ours, fair_ql, 5e-5) << "rate=" << curve_rate << " coupon=" << coupon
                                    << " ql=" << fair_ql << " ours=" << ours;
 
   // The market/proceeds spread widens as the bond cheapens (buy below par -> wider running spread).
-  const double cheap = bld::par_asset_swap_spread(bond.curve, qc, 0.97 + bond.accrued, fpay, ftau);
+  const double cheap = bld::par_asset_swap_spread(bond.curve, qc, 0.97 + bond.accrued, fpay, ftau, fstart, fend);
   EXPECT_GT(cheap, ours);
 }
 
