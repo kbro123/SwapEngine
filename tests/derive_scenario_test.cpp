@@ -105,13 +105,14 @@ cal::BundleProblem two_flat_curves() {
 
 }  // namespace
 
-TEST(ResolveScenarioMove, AnExplicitCurveKeyReplacesTheParallelAndFxCompoundsInOrder) {
+TEST(ResolveScenarioMove, AnExplicitCurveKeyAddsOntoTheParallelAndFxCompoundsInOrder) {
   dv::ScenarioMove m;
   m.parallel_bp = 34.0;
   m.shift_curve_bp = {{0, 14.5}};
   m.fx = {{"EUR", "USD", 0.02}, {"EUR", "USD", 0.02}, {"GBP", "USD", -0.01}};
   const dv::ResolvedMove r = dv::resolve_scenario_move(m, outright_curves(3));
-  EXPECT_EQ(r.curve_delta, (std::vector<double>{14.5 / 1e4, 34.0 / 1e4, 34.0 / 1e4}));
+  EXPECT_EQ(r.curve_delta, (std::vector<double>{34.0 / 1e4 + 14.5 / 1e4, 34.0 / 1e4, 34.0 / 1e4}))
+      << "a key ADDS onto the parallel (SC1, owner decision 2026-09-14), as in scenario_grid and var";
   EXPECT_NE(r.curve_delta[1], 34.0 * 1e-4) << "bp / 1e4, bit for bit: bp * 1e-4 differs at 34 bp";
   EXPECT_EQ(r.fx_factor, 1.0 * (1.0 + 0.02) * (1.0 + 0.02) * (1.0 + -0.01)) << "every bump, a repeated pair too, in order";
 
@@ -122,8 +123,8 @@ TEST(ResolveScenarioMove, AnExplicitCurveKeyReplacesTheParallelAndFxCompoundsInO
   dv::ScenarioMove held;
   held.parallel_bp = 20.0;
   held.shift_curve_bp = {{1, 0.0}};
-  EXPECT_EQ(dv::resolve_scenario_move(held, outright_curves(2)).curve_delta, (std::vector<double>{20.0 / 1e4, 0.0}))
-      << "an explicit 0 holds its curve still";
+  EXPECT_EQ(dv::resolve_scenario_move(held, outright_curves(2)).curve_delta, (std::vector<double>{20.0 / 1e4, 20.0 / 1e4}))
+      << "an explicit 0 adds nothing (under SC1 it no longer holds its curve still)";
 
   dv::ScenarioMove out_of_range;
   out_of_range.shift_curve_bp = {{2, 1.0}};

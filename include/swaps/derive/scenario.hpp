@@ -7,9 +7,10 @@
 // curve's interpolation forwards (turn jumps untouched), sample the curves and value the book there. The base state
 // is never mutated, so N moves cost one calibration plus N forks.
 //
-// A MOVE (ScenarioMove) in the `scenario` rule, market::Scenario's: an explicit shift_curve key REPLACES the parallel
-// for its curve, the parallel applies to every other curve. (var and scenario_grid ADD the two -- SC1, an owner
-// decision, tests/scenario_golden_test.cpp pins both as they stand.) FX bumps compound IN REQUEST ORDER into one
+// A MOVE (ScenarioMove): shocks ADD. The parallel moves every curve's forward once (add_parallel_shock) and an
+// explicit shift_curve key adds its bp onto whatever its curve already carries (add_curve_shock) -- the one rule
+// scenario, scenario_grid and var share (SC1, owner decision 2026-09-14; before it a key REPLACED the parallel
+// here). FX bumps compound IN REQUEST ORDER into one
 // factor on every xccy position's fx_spot (portfolio/xccy_fx_scaled.hpp); a book position carries no pair, so a
 // multi-pair move multiplies (SC2, an owner decision).
 //
@@ -31,7 +32,6 @@
 #include "swaps/calibration/bundle_state.hpp"
 #include "swaps/calibration/diagnostics.hpp"  // CalibrationSession, seed_or_flat
 #include "swaps/calibration/regularize.hpp"
-#include "swaps/market/scenario.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 #include "swaps/portfolio/xccy_fx_scaled.hpp"
 
@@ -44,8 +44,8 @@ struct FxBump {
 
 struct ScenarioMove {
   std::string name;
-  std::optional<double> parallel_bp;       // every curve without an explicit key
-  std::map<int, double> shift_curve_bp;    // curve role -> bp; replaces the parallel for that curve
+  std::optional<double> parallel_bp;       // every curve's forward, once
+  std::map<int, double> shift_curve_bp;    // curve role -> bp; ADDS onto the parallel
   std::vector<FxBump> fx;                  // compounded in order
 };
 
@@ -58,21 +58,27 @@ struct ResolvedMove {
 // A parallel shift moves EVERY curve's forward once: an OUTRIGHT curve takes it on its knots and a SPREAD curve inherits it
 // from its base (giving the spread's knots the parallel as well moved it twice -- tests/scenario_spread_repro_test.cpp,
 // fixed 2026-09-14). An explicit key moves exactly the curve it names (on a spread curve: the spread).
+inline void add_parallel_shock(const std::vector<pricing::CurveStructure>& curves, double bp,
+                               std::vector<double>& curve_delta) {
+  for (std::size_t c = 0; c < curves.size(); ++c)
+    if (curves[c].base < 0) curve_delta[c] += bp / 1e4;
+}
+
+// An explicit per-curve shock: `bp` ADDED onto whatever the curve already carries (SC1).
+inline void add_curve_shock(int role, double bp, std::vector<double>& curve_delta) {
+  curve_delta[static_cast<std::size_t>(role)] += bp / 1e4;
+}
+
 inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, const std::vector<pricing::CurveStructure>& curves) {
   const int n_curves = static_cast<int>(curves.size());
-  market::Scenario scn;
-  if (m.parallel_bp) scn = market::Scenario::parallel(*m.parallel_bp);
+  ResolvedMove r;
+  r.curve_delta.assign(curves.size(), 0.0);
+  if (m.parallel_bp) add_parallel_shock(curves, *m.parallel_bp, r.curve_delta);
   for (const auto& [role, bp] : m.shift_curve_bp) {
     if (role < 0 || role >= n_curves)
       throw std::invalid_argument("scenario: shift_curve role " + std::to_string(role) +
                                   " is out of range for this bundle");
-    scn.shift_curve(std::to_string(role), bp);
-  }
-  ResolvedMove r;
-  r.curve_delta.resize(static_cast<std::size_t>(n_curves));
-  for (int c = 0; c < n_curves; ++c) {
-    const bool moves = curves[static_cast<std::size_t>(c)].base < 0 || m.shift_curve_bp.count(c) > 0;
-    r.curve_delta[static_cast<std::size_t>(c)] = moves ? scn.curve_shift(std::to_string(c)) : 0.0;
+    add_curve_shock(role, bp, r.curve_delta);
   }
   for (const FxBump& b : m.fx) r.fx_factor *= (1.0 + b.rel);
   return r;

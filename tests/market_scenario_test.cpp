@@ -49,13 +49,13 @@ TEST(Scenario, BumpsFxPairRelativelyOnACopy) {
   EXPECT_NEAR(fx.rate("EUR", "USD"), 1.09, 1e-9);
 }
 
-TEST(Scenario, GlobalParallelShiftsAllUnkeyedCurves) {
+TEST(Scenario, GlobalParallelShiftsEveryCurveAndAKeyAddsOntoIt) {
   Eigen::VectorXd x(3);
   x << 0.043, 0.041, 0.038;
 
-  // A global "shift ALL curves" default, with an explicit override for one curve.
+  // A global "shift ALL curves" default, and an explicit key that ADDS onto it for one curve (SC1, 2026-09-14).
   mkt::Scenario s = mkt::Scenario::parallel(10.0);  // +10bp everywhere
-  s.shift_curve("SOFR", 25.0);                      // SOFR overridden to +25bp
+  s.shift_curve("SOFR", 25.0);                      // SOFR: +10bp + 25bp
 
   // Any unkeyed curve gets the global +10bp (+0.0010).
   const Eigen::VectorXd estr = s.shocked_forwards("ESTR", x);
@@ -63,7 +63,7 @@ TEST(Scenario, GlobalParallelShiftsAllUnkeyedCurves) {
   EXPECT_NEAR(estr[1], 0.042, 1e-9);
   EXPECT_NEAR(estr[2], 0.039, 1e-9);
 
-  // The explicitly keyed curve uses its own +25bp, not the global.
+  // The keyed curve takes the global +10bp AND its own +25bp: shocks add.
   const Eigen::VectorXd sofr = s.shocked_forwards("SOFR", x);
-  EXPECT_NEAR(sofr[0], 0.0455, 1e-9);
+  EXPECT_NEAR(sofr[0], 0.0465, 1e-9);
 }

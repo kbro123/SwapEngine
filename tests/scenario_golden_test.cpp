@@ -193,7 +193,7 @@ TEST(ScenarioGolden, ScenarioResponseIsBitwiseAndItsShocksAreTheOnesClaimed) {
   json::object req = base_request();
   req["scenarios"] = json::array{
       json::object{{"name", "parallel"}, {"parallel_bp", 37.5}},
-      json::object{{"name", "override"}, {"parallel_bp", 34.0}, {"shift_curve", json::object{{"0", 14.5}}}},
+      json::object{{"name", "keyed_plus_parallel"}, {"parallel_bp", 34.0}, {"shift_curve", json::object{{"0", 14.5}}}},
       json::object{{"name", "foreign"}, {"shift_curve", json::object{{"2", -33.25}}}},
       json::object{{"name", "fx"},
                    {"bump_fx", json::array{json::object{{"base", "EUR"}, {"quote", "USD"}, {"rel", 0.02}},
@@ -210,8 +210,8 @@ TEST(ScenarioGolden, ScenarioResponseIsBitwiseAndItsShocksAreTheOnesClaimed) {
     const json::value& r = rows[static_cast<std::size_t>(row)];
     return at(r, {"curves"}, c, 4) - at(out, {"base", "curves"}, c, 4);  // at t = 9
   };
-  EXPECT_NEAR(zero_move(1, 0), 14.5e-4, 1e-12) << "override: an explicit shift_curve replaces the parallel (SC1 today)";
-  EXPECT_NEAR(zero_move(1, 1), 34e-4, 1e-12) << "override: an unkeyed curve takes the parallel";
+  EXPECT_NEAR(zero_move(1, 0), 48.5e-4, 1e-12) << "an explicit shift_curve ADDS onto the parallel (SC1, owner 2026-09-14)";
+  EXPECT_NEAR(zero_move(1, 1), 34e-4, 1e-12) << "an unkeyed curve takes the parallel alone";
   EXPECT_NEAR(zero_move(2, 2), -33.25e-4, 1e-12);
   EXPECT_EQ(zero_move(2, 0), 0.0);
   const double npv_fx = rows[3].as_object().at("npv").to_number<double>();
@@ -246,7 +246,7 @@ TEST(ScenarioGolden, GridResponsesAreBitwise) {
 }
 
 // var (deferred, but it shares the fork and the compiled-book cache the stage-5 lift moves): the reval P&L
-// distribution over moves of every kind, including a parallel with an explicit curve key (var ADDS them: SC1).
+// distribution over moves of every kind, including a parallel with an explicit curve key (every verb ADDS them: SC1).
 TEST(ScenarioGolden, VarRevaluationResponseIsBitwise) {
   json::object req = base_request();
   req.erase("sample_times");

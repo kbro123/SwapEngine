@@ -13,8 +13,9 @@
 // SHOCK MODEL
 //   * curve rate shocks   — a PARALLEL shift, in basis points, added to every forward of a named curve.
 //                           1bp = 1e-4 in forward-rate space. An unshocked curve is returned unchanged.
-//                           A global "shift ALL curves" default (Scenario::parallel(bp)) applies to any curve
-//                           that is not explicitly keyed; an explicit shift_curve() for a name overrides it.
+//                           A global "shift ALL curves" default (Scenario::parallel(bp)) applies to every curve
+//                           and an explicit shift_curve() for a name ADDS onto it (SC1, owner decision
+//                           2026-09-14: the rule derive/scenario.hpp's verbs use).
 //   * fx spot shocks      — a RELATIVE bump per pair: rate' = rate * (1 + rel). +0.01 == +1%. Applied on a
 //                           COPY of the FxMatrix (it is a copyable value type), leaving the base untouched.
 //
@@ -50,7 +51,7 @@ class Scenario {
   }
 
   // A named convention for "shift ALL curves by bp": a global default applied to any curve that is not
-  // explicitly keyed via shift_curve(). An explicit shift_curve(name, ...) always overrides the global.
+  // explicitly keyed via shift_curve(); an explicit shift_curve(name, ...) adds onto it.
   static Scenario parallel(double bp) {
     Scenario s;
     s.has_global_ = true;
@@ -60,12 +61,12 @@ class Scenario {
 
   // ---- application to build inputs ------------------------------------------------------------------
   // The parallel forward shift (in rate space, bp/1e4) that applies to `curve_name`:
-  //   an explicit shift_curve() entry, else the global parallel() default, else 0.
+  //   the global parallel() default (if any) plus an explicit shift_curve() entry (if any).
   double curve_shift(const std::string& curve_name) const {
+    double d = has_global_ ? global_bp_ / 1e4 : 0.0;
     auto it = curve_bp_.find(curve_name);
-    if (it != curve_bp_.end()) return it->second / 1e4;
-    if (has_global_) return global_bp_ / 1e4;
-    return 0.0;
+    if (it != curve_bp_.end()) d += it->second / 1e4;
+    return d;
   }
 
   // Return `x` with this scenario's shift for `curve_name` added to every forward. An unshocked curve

@@ -7,7 +7,8 @@
 // (scenario_golden_test.cpp), which only prove a refactor changed nothing. Nobody had checked that the NUMBERS are
 // right against an independent pricer: request decode -> calibrate -> fork the fitted state by the move -> sample
 // the curves -> value the book, plus the unit (bp / 1e4), the sign, the per-curve role wiring and the SC1 rules
-// (`scenario` lets an explicit shift_curve key REPLACE the parallel; `scenario_grid` ADDS axes).
+// (both verbs ADD an explicit shift_curve key onto the parallel -- owner decision 2026-09-14; before it `scenario`
+// let the key REPLACE the parallel).
 //
 // THE BOOK IS REAL DATED TRADES, BUILT TWICE FROM THE CONVENTIONS DB:
 //   ours      build::swap_conv -> build::par_swap (spot lag, roll, pay lag, both frequencies, both day counts)
@@ -33,7 +34,7 @@
 // 1e8 gross notional, DF 3.3e-16, zero 3.9e-15. The drafted bounds (NPV tol::analytics_rel × gross = 0.01, DF/zero
 // tol::curve_rel = 1e-10) sat 4e5x / 2.5e4x above that, so they are re-locked near it: kNpvTol = 1e-6 (~40x) and
 // kCurveTol = 1e-13 (~25x). Still >= 1e7 below the smallest defect the NPV check exists to catch (a one-day pay-date
-// error on one coupon ≈ 40; a 365/360 day count ≈ 1e5). Measured negative-control gaps: add-rule 5.5e5, sign 1.9e6,
+// error on one coupon ≈ 40; a 365/360 day count ≈ 1e5). Measured negative-control gaps: replace-rule 5.5e5 (SC1, re-measured 2026-09-14), sign 1.9e6,
 // turn 1035 (book) / 4e-5 (DF), grid override-rule 1.1e6, wrong role 1.7e6.
 //
 // SCOPE, stated rather than implied. OUT (no QuantLib counterpart, so not faked): MtM XCCY positions and every
@@ -348,16 +349,16 @@ TEST(ScenarioVerbOracle, EveryMoveMatchesQuantLibOnTheShockedCurves) {
 
   struct Move {
     json::object request;
-    std::vector<double> bp;  // per role, the `scenario` rule applied BY HAND: a key replaces the parallel
+    std::vector<double> bp;  // per role, the rule applied BY HAND: a key ADDS onto the parallel (SC1)
   };
   const std::vector<Move> moves = {
       {json::object{{"name", "parallel"}, {"parallel_bp", 37.5}}, {37.5, 37.5, 37.5}},
       {json::object{{"name", "override"}, {"parallel_bp", 34.0}, {"shift_curve", json::object{{"0", 14.5}}}},
-       {14.5, 34.0, 34.0}},
+       {48.5, 34.0, 34.0}},
       {json::object{{"name", "euribor"}, {"shift_curve", json::object{{"1", -21.25}}}}, {0.0, -21.25, 0.0}},
       {json::object{{"name", "sofr"}, {"shift_curve", json::object{{"2", 45.5}}}}, {0.0, 0.0, 45.5}},
       {json::object{{"name", "down_estr_up"}, {"parallel_bp", -50.0}, {"shift_curve", json::object{{"0", 5.0}}}},
-       {5.0, -50.0, -50.0}},
+       {-45.0, -50.0, -50.0}},
       {json::object{{"name", "noop"}}, {0.0, 0.0, 0.0}},
   };
   const std::vector<double> times = {0.05, 0.25, 0.5, 2.5, 7.0, 12.0};  // 0.25 before the turn, 0.5 after it
@@ -427,11 +428,11 @@ TEST(ScenarioVerbOracle, EveryMoveMatchesQuantLibOnTheShockedCurves) {
             << worst_df << ", zero " << worst_zero << "\n";
 
   // NEGATIVE CONTROLS -- the comparison has teeth.
-  // 1. SC1 against QuantLib: the override move priced with the ADD rule (ESTR +48.5 instead of +14.5) disagrees
-  //    by ~34 bp of ESTR PV01 (order 1e5 here).
-  link_zero_spread(*f, x_base, shift_of({48.5, 34.0, 34.0}));
+  // 1. SC1 against QuantLib: the keyed-plus-parallel move priced with the old REPLACE rule (ESTR +14.5 instead of
+  //    +48.5) disagrees by ~34 bp of ESTR PV01 (order 1e5 here).
+  link_zero_spread(*f, x_base, shift_of({14.5, 34.0, 34.0}));
   const double gap_rule = std::abs(verb_npv[1] - ql_book_npv(*f));
-  EXPECT_GT(gap_rule, 1e3 * tol_npv) << "the override row must not price like the add rule";
+  EXPECT_GT(gap_rule, 1e3 * tol_npv) << "a key must add onto the parallel, not replace it (SC1)";
   // 2. The sign of a move: +37.5 bp priced by QuantLib as −37.5 bp.
   link_zero_spread(*f, x_base, shift_of({-37.5, -37.5, -37.5}));
   const double gap_sign = std::abs(verb_npv[0] - ql_book_npv(*f));
@@ -445,7 +446,7 @@ TEST(ScenarioVerbOracle, EveryMoveMatchesQuantLibOnTheShockedCurves) {
   const std::vector<double> df0 = nums(rows[0].as_object().at("curves").as_array()[ESTR].as_object().at("discount"));
   EXPECT_GT(std::abs(df0[2] - f->h[ESTR]->discount(times[2])), 1e3 * kCurveTol) << "t=0.5, after the turn";
   EXPECT_NEAR(df0[1], f->h[ESTR]->discount(times[1]), kCurveTol) << "t=0.25, before the turn";
-  std::cout << "  [scenario] negative-control gaps: add-rule " << gap_rule << ", sign " << gap_sign << ", turn "
+  std::cout << "  [scenario] negative-control gaps: replace-rule " << gap_rule << ", sign " << gap_sign << ", turn "
             << gap_turn << "\n";
 }
 

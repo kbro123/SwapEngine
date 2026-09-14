@@ -13,7 +13,7 @@
 //                  {"name": "+25bp SOFR",
 //                   "shift_curve": {"0": 25, "1": -5},         per-curve parallel forward shift in bp,
 //                                                              keyed by INTEGER curve role (a bundle has
-//                                                              no string curve names); overrides parallel_bp
+//                                                              no string curve names); adds onto parallel_bp (SC1)
 //                   "parallel_bp": 25,                         global shift applied to every un-keyed curve
 //                   "bump_fx": [{"base":"EUR","quote":"USD","rel":0.01}]}  relative FX bump (+1% => 0.01)
 //                  , ...],

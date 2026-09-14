@@ -7,8 +7,8 @@
 // one book across every rate cell). An N x M grid costs one calibration plus N x M compiled repricings.
 //
 // The GRID RULE: every axis ADDS its shift (bp / 1e4) to the curves it moves, and an fx axis compounds its factor.
-// So a shift_curve axis on top of a parallel axis moves that curve by both -- where `scenario` lets an explicit key
-// REPLACE the parallel (SC1, an owner decision; tests/scenario_golden_test.cpp pins both as they stand). An fx axis
+// So a shift_curve axis on top of a parallel axis moves that curve by both -- the rule `scenario` and `var` share
+// (derive/scenario.hpp add_parallel_shock / add_curve_shock; SC1, owner decision 2026-09-14). An fx axis
 // names a pair but reaches every xccy position (a position carries none: SC2).
 //
 // Bitwise with the verb it replaces (the grid goldens): bp / 1e4 accumulated axis by axis, the fork through
@@ -28,6 +28,7 @@
 #include "swaps/calibration/bundle_state.hpp"
 #include "swaps/calibration/diagnostics.hpp"  // CalibrationSession, seed_or_flat
 #include "swaps/calibration/regularize.hpp"
+#include "swaps/derive/scenario.hpp"  // add_parallel_shock, add_curve_shock: the one shock-combining rule
 #include "swaps/portfolio/portfolio.hpp"
 #include "swaps/portfolio/xccy_fx_scaled.hpp"
 
@@ -56,15 +57,6 @@ inline void check_shock_axis(const ShockAxis& ax, int n_curves) {
     throw std::invalid_argument("scenario_grid: axis '" + ax.label + "' has an empty 'values' array");
 }
 
-// A parallel shift of `bp` moves EVERY curve's forward once: only OUTRIGHT curves' knots take it, and a spread curve
-// inherits it from its base (fixed 2026-09-14: giving spread knots the parallel as well moved a spread curve twice --
-// tests/scenario_spread_repro_test.cpp). var's reval moves use it too.
-inline void add_parallel_shock(const std::vector<pricing::CurveStructure>& curves, double bp,
-                               std::vector<double>& curve_delta) {
-  for (std::size_t c = 0; c < curves.size(); ++c)
-    if (curves[c].base < 0) curve_delta[c] += bp / 1e4;
-}
-
 // One axis's contribution to a cell, added onto what the other axis already put there.
 inline void add_axis_shock(const ShockAxis& ax, double value, const std::vector<pricing::CurveStructure>& curves,
                            std::vector<double>& curve_delta, double& fx_factor) {
@@ -73,7 +65,7 @@ inline void add_axis_shock(const ShockAxis& ax, double value, const std::vector<
       add_parallel_shock(curves, value, curve_delta);
       break;
     case ShockAxisKind::ShiftCurve:
-      curve_delta[static_cast<std::size_t>(*ax.role)] += value / 1e4;
+      add_curve_shock(*ax.role, value, curve_delta);
       break;
     case ShockAxisKind::Fx:
       fx_factor *= (1.0 + value);
