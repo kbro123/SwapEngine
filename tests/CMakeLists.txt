@@ -22,6 +22,7 @@ add_executable(swaps_tests
   calibration_diagnostics_test.cpp
   bundle_state_test.cpp
   derive_scenario_test.cpp
+  derive_scenario_grid_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
   turns_test.cpp

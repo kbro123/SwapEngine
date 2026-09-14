@@ -24,6 +24,31 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # E7 stage 5.3: derive/scenario_grid.hpp, the library behind the scenario_grid verb.
+    ("grid_shift_curve_axis_overrides", "include/swaps/derive/scenario_grid.hpp",
+     "      curve_delta[static_cast<std::size_t>(*ax.role)] += value / 1e4;",
+     "      curve_delta[static_cast<std::size_t>(*ax.role)] = value / 1e4;",
+     ["derive_scenario_grid_test.cpp"], "*", "a shift_curve axis adding onto the cell is unpinned (E7 5.3)"),
+    ("grid_fx_axis_ignored", "include/swaps/derive/scenario_grid.hpp",
+     "      fx_factor *= (1.0 + value);",
+     "      fx_factor *= 1.0;",
+     ["derive_scenario_grid_test.cpp"], "*", "an fx axis's factor is unpinned (E7 5.3)"),
+    ("grid_second_axis_ignored", "include/swaps/derive/scenario_grid.hpp",
+     "      if (out.axes.size() == 2)\n        add_axis_shock(",
+     "      if (false)\n        add_axis_shock(",
+     ["derive_scenario_grid_test.cpp"], "*", "the second axis is unpinned (E7 5.3)"),
+    ("grid_role_optional", "include/swaps/derive/scenario_grid.hpp",
+     "    if (!ax.role) throw std::invalid_argument(\"scenario_grid: a shift_curve axis needs a 'role'\");",
+     "",
+     ["derive_scenario_grid_test.cpp"], "*", "a shift_curve axis's required role is unpinned (E7 5.3)"),
+    ("grid_axes_checked_after_calibrating", "include/swaps/derive/scenario_grid.hpp",
+     "  for (const ShockAxis& ax : r.axes) check_shock_axis(ax, r.bundle.n_curves());\n",
+     "",
+     ["derive_scenario_grid_test.cpp"], "*", "checking the axes before calibrating is unpinned (E7 5.3)"),
+    ("grid_pnl_not_against_base", "include/swaps/derive/scenario_grid.hpp",
+     "      pnl_row.push_back(npv - out.base_npv);",
+     "      pnl_row.push_back(npv);",
+     ["derive_scenario_grid_test.cpp"], "*", "the P&L against the base is unpinned (E7 5.3)"),
     # E7 stage 5.2: derive/scenario.hpp, the library behind the scenario verb.
     ("scenario_parallel_dropped", "include/swaps/derive/scenario.hpp",
      "  if (m.parallel_bp) scn = market::Scenario::parallel(*m.parallel_bp);",

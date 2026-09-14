@@ -43,6 +43,8 @@ struct SwapSpreadRequest;
 struct SwapSpreadResult;
 struct ScenarioRequest;  // derive/scenario.hpp
 struct ScenarioResult;   // derive/scenario.hpp
+struct ScenarioGridRequest;  // derive/scenario_grid.hpp
+struct ScenarioGridResult;   // derive/scenario_grid.hpp
 }  // namespace swaps::derive
 
 namespace swaps::calibration {
@@ -164,6 +166,15 @@ swaps::derive::ScenarioRequest scenario_request_from_json(const boost::json::obj
 // {"scenario": {n_curves, n_knots, base: {x, curves?, npv?, n?}, scenarios: [{name, curves?, npv?, npv_delta?,
 // parallel_bp?, shift_bp?, fx?}]}} -- curves when sample_times were given, npv when a book was.
 boost::json::object scenario_result_to_json(const swaps::derive::ScenarioResult& r);
+
+// ---- scenario grid (the `scenario_grid` verb) --------------------------------------------------------------------
+// {"scenario_grid": {bundle, axes: [1 or 2 of {label?, kind?: parallel_bp | shift_curve | fx, role (shift_curve),
+// base + quote (fx), values}], x0?, regularize?, sample_times?, book?}} (or the body itself). kind absent = the axis
+// struct's own (parallel_bp); an unknown kind throws.
+swaps::derive::ScenarioGridRequest scenario_grid_request_from_json(const boost::json::object& payload);
+// {"scenario_grid": {n_curves, n_knots, axes, shape: [n0, n1], base: {x, curves?, npv?, n?}, npv?, pnl?, grid_us?,
+// n_cells?}} -- the surface fields when a book was given.
+boost::json::object scenario_grid_result_to_json(const swaps::derive::ScenarioGridResult& r);
 
 // ---- request pieces shared by run_json, the verbs and the C ABI ------------------------------------
 boost::json::array sample_to_json(const std::vector<CurveSample>& samples);

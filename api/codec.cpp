@@ -22,6 +22,7 @@
 #include "swaps/calibration/diagnostics.hpp"  // QuoteDiagnostic, CalibrationReport
 #include "swaps/derive/bond_rv.hpp"  // BondUniverseRequest, GovvieFitRequest, SwapSpreadRequest
 #include "swaps/derive/scenario.hpp"  // ScenarioRequest, ScenarioResult
+#include "swaps/derive/scenario_grid.hpp"  // ScenarioGridRequest, ScenarioGridResult
 #include "swaps/trade/csa.hpp"    // discount_index_for
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
 
@@ -1407,6 +1408,96 @@ json::object scenario_result_to_json(const derive::ScenarioResult& r) {
   }
   out["scenarios"] = std::move(rows);
   return json::object{{"scenario", std::move(out)}};
+}
+
+
+// ---- scenario grid (the `scenario_grid` verb) -----------------------------------------------------------------
+namespace {
+
+derive::ShockAxisKind shock_axis_kind_from_str(const std::string& s) {
+  if (s == "parallel_bp") return derive::ShockAxisKind::ParallelBp;
+  if (s == "shift_curve") return derive::ShockAxisKind::ShiftCurve;
+  if (s == "fx") return derive::ShockAxisKind::Fx;
+  throw std::invalid_argument("scenario_grid: axis kind '" + s + "' is not one of parallel_bp / shift_curve / fx");
+}
+const char* shock_axis_kind_to_str(derive::ShockAxisKind k) {
+  switch (k) {
+    case derive::ShockAxisKind::ParallelBp: return "parallel_bp";
+    case derive::ShockAxisKind::ShiftCurve: return "shift_curve";
+    case derive::ShockAxisKind::Fx: return "fx";
+  }
+  throw std::invalid_argument("scenario_grid: unknown axis kind");
+}
+
+derive::ShockAxis shock_axis_from_json(const json::object& o) {
+  derive::ShockAxis ax;
+  into(o, "label", ax.label);
+  if (present(o, "kind")) ax.kind = shock_axis_kind_from_str(str(o.at("kind")));
+  into(o, "role", ax.role);
+  into(o, "base", ax.base);
+  into(o, "quote", ax.quote);
+  into(o, "values", ax.values);
+  return ax;
+}
+
+}  // namespace
+
+derive::ScenarioGridRequest scenario_grid_request_from_json(const json::object& payload) {
+  const json::object* body = &payload;
+  if (present(payload, "scenario_grid")) body = &payload.at("scenario_grid").as_object();
+  const json::object& o = *body;
+  derive::ScenarioGridRequest r;
+  r.bundle = bundle_from_json(need(o, "bundle", "scenario_grid: missing 'bundle' object"));
+  for (const auto& e : need(o, "axes", "scenario_grid: missing 'axes' array (1 or 2 shock axes)").as_array())
+    r.axes.push_back(shock_axis_from_json(e.as_object()));
+  into(o, "x0", r.x0);
+  r.reg = reg_from_json(o);
+  into(o, "sample_times", r.sample_times);
+  if (present(o, "book")) r.book = book_from_json(o.at("book"));
+  return r;
+}
+
+json::object scenario_grid_result_to_json(const derive::ScenarioGridResult& r) {
+  json::object out;
+  out["n_curves"] = r.n_curves;
+  out["n_knots"] = r.n_knots;
+  {
+    json::array axes;
+    for (const derive::ShockAxis& ax : r.axes) {
+      json::object a;
+      a["label"] = ax.label;
+      a["kind"] = shock_axis_kind_to_str(ax.kind);
+      if (ax.kind == derive::ShockAxisKind::ShiftCurve) a["role"] = *ax.role;
+      if (ax.kind == derive::ShockAxisKind::Fx) {
+        a["base"] = ax.base;
+        a["quote"] = ax.quote;
+      }
+      a["values"] = vecf(ax.values);
+      axes.push_back(std::move(a));
+    }
+    out["axes"] = std::move(axes);
+  }
+  out["shape"] = json::array{r.n0, r.n1};
+  {
+    json::object b;
+    b["x"] = vecf(r.x_base);
+    if (!r.base_curves.empty()) b["curves"] = sample_to_json(r.base_curves);
+    if (r.has_book) {
+      b["npv"] = r.base_npv;
+      b["n"] = r.n_positions;
+    }
+    out["base"] = std::move(b);
+  }
+  if (r.has_book) {
+    json::array npv, pnl;
+    for (const auto& row : r.npv) npv.push_back(vecf(row));
+    for (const auto& row : r.pnl) pnl.push_back(vecf(row));
+    out["npv"] = std::move(npv);
+    out["pnl"] = std::move(pnl);
+    out["grid_us"] = r.grid_us;
+    out["n_cells"] = r.n_cells;
+  }
+  return json::object{{"scenario_grid", std::move(out)}};
 }
 
 }  // namespace swaps::api
