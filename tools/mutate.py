@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 FLK1: an allocation scope counts only the thread that armed it.
+    ("alloc_scope_counts_every_thread", "bench/fixtures/malloc_count.hpp",
+     "  if (!pthread_equal(pthread_self(), alloc_counting_thread())) return;  // FLK1: count only the arming thread\n",
+     "",
+     ["alloc_scope_thread_repro_test.cpp"], "*", "counting other threads' allocations in a hot-path pin is unpinned (FLK1)"),
     # 2026-09-14 xccy exchange-lag fields: a lagged notional exchange is refused, not ignored ...
     ("xccy_exchange_lag_accepted", "include/swaps/build/instruments.hpp",
      "  if (x.exchange_lag_initial != 0 || x.exchange_lag_intermediate != 0 || x.exchange_lag_final != 0)",
@@ -594,8 +599,9 @@ MUTATIONS = [
 def compile_and_run(name, header, old, new, tus, flt, keep_dir, jobs_note=""):
     """Returns (name, caught: bool|None, detail)."""
     work = os.path.join(keep_dir, name)
-    # the mutant lives in a scratch tree that mirrors the repo (include/... or tests/...); both roots are
-    # searched BEFORE the real ones, so the TU sees the mutated header and the pristine rest
+    # the mutant lives in a scratch tree that mirrors the repo (include/..., tests/... or bench/fixtures/...); every
+    # mirrored root is searched BEFORE the real one, so the TU sees the mutated header and the pristine rest. A test
+    # must reach a header THROUGH these -I roots (never a relative "../" include, which bypasses the mirror: FLK1).
     mut = os.path.join(work, header)
     os.makedirs(os.path.dirname(mut), exist_ok=True)
     src = open(os.path.join(ROOT, header)).read()
@@ -605,12 +611,13 @@ def compile_and_run(name, header, old, new, tus, flt, keep_dir, jobs_note=""):
     open(mut, "w").write(src.replace(old, new))
     inc = os.path.join(work, "include")
     tst = os.path.join(work, "tests")
-    os.makedirs(inc, exist_ok=True); os.makedirs(tst, exist_ok=True)
+    fix = os.path.join(work, "bench", "fixtures")
+    os.makedirs(inc, exist_ok=True); os.makedirs(tst, exist_ok=True); os.makedirs(fix, exist_ok=True)
     for tu in tus:
         exe = os.path.join(work, tu.replace(".cpp", ""))
-        cmd = CXX + FLAGS + ["-I", inc, "-I", tst, "-I", os.path.join(ROOT, "include"), "-I", os.path.join(ROOT, "third_party/eigen"),
+        cmd = CXX + FLAGS + ["-I", inc, "-I", tst, "-I", fix, "-I", os.path.join(ROOT, "include"), "-I", os.path.join(ROOT, "third_party/eigen"),
                              "-I", os.path.join(ROOT, "third_party/boost"), "-I", os.path.join(ROOT, "build/generated"),
-                             "-I", os.path.join(ROOT, "tests"), "-I", os.path.join(ROOT, GTEST_INC),
+                             "-I", os.path.join(ROOT, "tests"), "-I", os.path.join(ROOT, "bench/fixtures"), "-I", os.path.join(ROOT, GTEST_INC),
                              os.path.join(ROOT, "tests", tu)] + [os.path.join(ROOT, l) for l in GTEST_LIBS] + ["-o", exe]
         cc = subprocess.run(cmd, capture_output=True, text=True)
         if cc.returncode != 0:

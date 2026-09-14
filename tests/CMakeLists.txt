@@ -37,6 +37,7 @@ add_executable(swaps_tests
   roll_book_accrual_repro_test.cpp
   asset_swap_bus252_repro_test.cpp
   xccy_carr_example_repro_test.cpp
+  alloc_scope_thread_repro_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
   turns_test.cpp
@@ -95,7 +96,7 @@ add_executable(swaps_tests
   cds_closed_form_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)
-target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(swaps_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/bench/fixtures)
 # Golden data lives in the source tree and is committed.
 target_compile_definitions(swaps_tests PRIVATE
   SWAPS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
