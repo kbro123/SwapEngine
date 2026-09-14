@@ -103,7 +103,7 @@ class CompiledMultiCurveBook {
         const auto& fN = p.float_coupons.back();
         const double s0 = f0.accrual_set ? f0.accrual_start : f0.obs.sub_start.front();
         const double eN = fN.accrual_set ? fN.accrual_end : fN.obs.sub_end.back();
-        exch.push_back({eN, 1.0, 1.0});
+        if (eN >= 0.0) exch.push_back({eN, 1.0, 1.0});  // the final exchange, unless already settled (PN2b)
         if (s0 >= 0.0) exch.push_back({s0, -1.0, 1.0});  // the initial exchange, unless already settled
         fixed_.add(cs_, p.disc_curve, exch);
         ++n_compiled_positions_;

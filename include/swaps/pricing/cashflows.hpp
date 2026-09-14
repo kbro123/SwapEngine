@@ -359,10 +359,13 @@ Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, cons
       e = c.obs.sub_end.back();
     }
     const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;  // notional fixes at the period start
-    // The coupon's value: the float PV, the final exchange +DF(e), and the initial exchange −DF(s) ONLY if it
-    // has not settled yet (s > 0). A seasoned coupon's initial exchange is cash already paid.
-    Scalar v = float_coupon_pv<Scalar>(c, fc, dc) + dc.discount(e);
-    if (s >= 0.0) v -= dc.discount(s);  // a start dated today is still a flow to pay (DF = 1)
+    // The coupon's value: the float PV, and each notional exchange ONLY if it has not settled yet -- the initial
+    // −DF(s) while s >= 0 and the final +DF(e) while e >= 0 (a flow dated today is still to be paid, DF = 1). PN2b
+    // (2026-09-14): a coupon rolled into its payment-lag window (e < 0 < pay) still owes its interest, but its end-of-period
+    // exchange has settled -- it used to be booked at a negative time.
+    Scalar v = float_coupon_pv<Scalar>(c, fc, dc);
+    if (e >= 0.0) v += dc.discount(e);
+    if (s >= 0.0) v -= dc.discount(s);
     if (c.reset_fx >= 0.0) return v * c.reset_fx;  // the notional was FIXED at the reset
     if (c.fx_fixing_set && c.fx_fixing_time < 0.0)
       throw std::runtime_error(

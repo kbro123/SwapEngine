@@ -157,7 +157,9 @@ struct MultiCurveBook {
               "the notional exchange on; supply principal_flows explicitly or set accrual_start/accrual_end");
         const double s0 = fc0.accrual_set ? fc0.accrual_start : fc0.obs.sub_start.front();
         const double eN = fcN.accrual_set ? fcN.accrual_end : fcN.obs.sub_end.back();
-        dom = dom + C(p.disc_curve).discount(eN);
+        // Each exchange only while unsettled (>= 0: dated today still pays). PN2b: a book rolled into the last coupon's
+        // payment-lag window keeps the coupon (interest owed) after its final exchange settled (e_N < 0).
+        if (eN >= 0.0) dom = dom + C(p.disc_curve).discount(eN);
         if (s0 >= 0.0) dom = dom - C(p.disc_curve).discount(s0);  // the initial exchange, unless already settled (s0 < 0)
       }
       return p.notional * (mtm - dom);

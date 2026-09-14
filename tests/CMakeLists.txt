@@ -35,6 +35,7 @@ add_executable(swaps_tests
   xccy_basis_exchange_pair_repro_test.cpp
   asset_swap_pay_lag_repro_test.cpp
   roll_book_accrual_repro_test.cpp
+  roll_book_settled_end_repro_test.cpp
   asset_swap_bus252_repro_test.cpp
   xccy_carr_example_repro_test.cpp
   fx_spot_time_repro_test.cpp
