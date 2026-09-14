@@ -62,9 +62,10 @@
 //     `trades` path cannot book one (Trade::vanilla_swap only).
 //   * Averaged float legs, RFR lookback / lockout / observation shift, float spreads, stepped fixed rates,
 //     principal exchanges: not expressible through the typed `trades` JSON (book_from_json reads none of them).
-//   * Stubs and unadjusted-weekend maturities: every trade here is a whole number of coupon steps on business-day
-//     dates. The engine uses the booked maturity RAW (swap_periods_between) while QuantLib adjusts the termination
-//     date — a weekend maturity is an open risk, not covered (see NOTES).
+//   * Stubs: every trade here is a whole number of coupon steps. (Weekend maturities ARE covered: T6 and T7 are booked
+//     to their unadjusted weekend anniversaries, which QuantLib's Schedule rolls by the convention. Before d52038c the
+//     engine accrued to the raw weekend date -- WK1 -- and a QuantLib build with an Unadjusted termination is kept
+//     below as the control that the weekend is live.)
 //   * Regularised risk (`regularize` present): M becomes a penalised pseudo-inverse whose penalty is an engine
 //     modelling choice with no QuantLib counterpart. Only reg OFF is compared.
 //   * vol_cube: out of scope.
@@ -273,18 +274,26 @@ struct TradeCase {
   const char* maturity;
 };
 
-// Every effective/maturity is a business day on its calendar and a whole number of coupon steps apart (no stub, no
-// termination adjustment). Interior anniversaries DO hit weekends (2027-07-10 Sat, 2031-07-12 Sat, 2033-07-10 Sun),
-// so the modified-following interior roll is live. T2 and T4 are FORWARD-starting (T4's first EURIBOR fixing,
-// 2027-01-08, is after the value date, so no "today's fixing" is involved on either side).
+// Every effective date is a business day on its calendar, and every maturity is a whole number of coupon steps after
+// it (no stub). T1-T4 mature on business days. Interior anniversaries DO hit weekends (2027-07-10 Sat, 2031-07-12 Sat),
+// so the modified-following interior roll is live. T6 and T7 are booked to a WEEKEND maturity -- the unadjusted
+// anniversary, as a trader books it -- so the termination roll is live too: Sunday 2033-07-10 -> Monday 07-11 on
+// US-GOVT-SOFR, Saturday 2031-01-11 -> Monday 01-13 on TARGET. Both are well off par (1.5%) so a one- or two-day
+// accrual error is far outside the tolerance. T2, T4 and T7 are FORWARD-starting (T4's and T7's first EURIBOR
+// fixings, 2027-01-08 and 2027-01-07, are after the value date, so no "today's fixing" is involved on either side).
 const TradeCase kSofr10yPayer{"T1", "USD-SOFR", "USD", "fixed", 10.0e6, 0.0325, "2026-07-10", "2036-07-10"};
 const TradeCase kSofrFwd5yReceiver{"T2", "USD-SOFR", "USD", "float", 25.0e6, 0.0290, "2027-07-12", "2032-07-12"};
 const TradeCase kEstr5yPayer{"T3", "EUR-ESTR", "EUR", "fixed", 15.0e6, 0.0240, "2026-07-10", "2031-07-10"};
 const TradeCase kEuriborFwd10yReceiver{"T4", "EUR-EURIBOR-6M", "EUR", "float", 20.0e6, 0.0310, "2027-01-12",
                                        "2037-01-12"};
+const TradeCase kSofr7ySundayPayer{"T6", "USD-SOFR", "USD", "fixed", 12.0e6, 0.0450, "2026-07-10", "2033-07-10"};
+const TradeCase kEuriborFwd4ySaturdayReceiver{"T7", "EUR-EURIBOR-6M", "EUR", "float", 8.0e6, 0.0150, "2027-01-11",
+                                              "2031-01-11"};
 
 const std::vector<TradeCase>& book_cases() {
-  static const std::vector<TradeCase> b{kSofr10yPayer, kSofrFwd5yReceiver, kEstr5yPayer, kEuriborFwd10yReceiver};
+  // Appended, never inserted: the controls below address T1 as [0] and T4 as [3].
+  static const std::vector<TradeCase> b{kSofr10yPayer,         kSofrFwd5yReceiver, kEstr5yPayer,
+                                        kEuriborFwd10yReceiver, kSofr7ySundayPayer, kEuriborFwd4ySaturdayReceiver};
   return b;
 }
 
@@ -354,7 +363,7 @@ Eigen::MatrixXd mat(const json::value& v) {
 
 // ---- QuantLib's side of a booked trade: built from the RAW DB row of the trade's index, dates and all -------------
 SwapPtr ql_trade(World& w, const TradeCase& t, ql::Swap::Type type, Role discount,
-                 const std::string& fixed_dc_override = "") {
+                 const std::string& fixed_dc_override = "", bool raw_termination = false) {
   const cvd::IndexConv ix = qconv::index(t.index);
   const cvd::ProductConv p = qconv::product(ix.par_product);
   const ql::Calendar calendar = qconv::calendar(p.calendar);
@@ -363,8 +372,8 @@ SwapPtr ql_trade(World& w, const TradeCase& t, ql::Swap::Type type, Role discoun
       qconv::day_counter(fixed_dc_override.empty() ? p.fixed.day_count : std::string_view(fixed_dc_override));
   const ql::Date eff = qd(t.effective), mat_date = qd(t.maturity);
   const auto schedule = [&](std::string_view freq) {
-    return ql::Schedule(eff, mat_date, qconv::period(freq), calendar, bdc, bdc, ql::DateGeneration::Forward,
-                        /*endOfMonth=*/false);
+    return ql::Schedule(eff, mat_date, qconv::period(freq), calendar, bdc, raw_termination ? ql::Unadjusted : bdc,
+                        ql::DateGeneration::Forward, /*endOfMonth=*/false);
   };
 
   SwapPtr s;
@@ -505,7 +514,8 @@ TEST(PortfolioVerbOracle, EachTypedTradeNpvAndPv01MatchQuantLib) {
 }
 
 // ================================================================================================================
-// portfolio — the whole book, par feedback, and negative controls (direction, discount role, day count, seasoned).
+// portfolio — the whole book, par feedback, and negative controls (direction, discount role, day count, seasoned,
+// weekend maturity).
 // ================================================================================================================
 TEST(PortfolioVerbOracle, WholeBookParFeedbackAndNegativeControls) {
   ql::SavedSettings saved;
@@ -584,8 +594,23 @@ TEST(PortfolioVerbOracle, WholeBookParFeedbackAndNegativeControls) {
   EXPECT_NE(std::string(out_s.at("error").as_string().c_str()).find("fixing"), std::string::npos)
       << json::serialize(out_s);
 
+  // (6) WEEKEND MATURITY is live: T6 (Sunday) and T7 (Saturday) built by QuantLib with an UNADJUSTED termination --
+  //     accruing to the raw weekend date, as the engine did before d52038c -- must miss the book. The premise that the
+  //     booked dates really are weekends is asserted, not assumed.
+  double weekend_gap = 1e300;
+  for (const std::size_t i : {std::size_t{4}, std::size_t{5}}) {
+    const TradeCase& t = book_cases()[i];
+    ASSERT_GE(bld::Date::from_iso(t.maturity).weekday(), 5) << t.id << " fixture premise: a weekend maturity";
+    std::vector<SwapPtr> raw_end = qbook;
+    raw_end[i] = ql_trade(*w, t, ql_type(t), csa_discount_role(t), "", /*raw_termination=*/true);
+    const double gap = std::abs(npv - ql_npv(*w, raw_end, x)) / t.notional;
+    EXPECT_GT(gap, kControlGap) << t.id << ": accruing to the raw weekend maturity must be visible";
+    weekend_gap = std::min(weekend_gap, gap);
+  }
+
   std::cout << "  [portfolio verb, book] |NPV - QuantLib| = " << std::abs(npv - npv_ql) << " on "
-            << total_notional << " notional\n";
+            << total_notional << " notional; weekend-maturity control misses by >= " << weekend_gap
+            << " per unit notional\n";
 }
 
 // ================================================================================================================

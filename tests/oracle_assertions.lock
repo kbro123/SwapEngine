@@ -27,7 +27,7 @@ swaps_oracle_tests|monotone_cubic_oracle_test.cpp|2|2
 swaps_oracle_tests|multicurrency_test.cpp|39|100
 swaps_oracle_tests|ois_weekend_test.cpp|2|12
 swaps_oracle_tests|pnl_reference_test.cpp|2|27
-swaps_oracle_tests|portfolio_verb_oracle_test.cpp|4|55
+swaps_oracle_tests|portfolio_verb_oracle_test.cpp|4|57
 swaps_oracle_tests|pricing_test.cpp|5|13
 swaps_oracle_tests|rfr_coupon_oracle_test.cpp|3|7
 swaps_oracle_tests|risk_ladder_oracle_test.cpp|6|33
