@@ -30,6 +30,7 @@ add_executable(swaps_tests
   trade_weekend_maturity_repro_test.cpp
   schedule_front_stub_onto_spot_repro_test.cpp
   swap_spread_matched_maturity_repro_test.cpp
+  sofr_calendar_repro_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
   turns_test.cpp

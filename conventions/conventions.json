@@ -512,6 +512,12 @@
         }
       ]
     },
+    "USD+USD-FED": {
+      "name": "SOFR swap spot / roll / payment days: U.S. Government Securities Business Day (SIFMA) AND New York business day (Fedwire) -- ISDA SOFR market practice note 2022; ISDA Good Friday 2026 guidance section 4, fn 8",
+      "quantlib": "JointCalendar(UnitedStates::GovernmentBond, UnitedStates::FederalReserve)",
+      "weekend": [5, 6],
+      "join": ["USD", "USD-FED"]
+    },
     "EURUSD": {
       "name": "Joint US-SIFMA + TARGET (FX/xccy USD side = SIFMA government-bond)",
       "weekend": [
@@ -7450,7 +7456,7 @@
       "spot_lag": 2,
       "payment_lag": 2,
       "bdc": "ModifiedFollowing",
-      "calendar": "USD-SOFR",
+      "calendar": "USD+USD-FED",
       "fixed_leg": {
         "day_count": "ACT/360",
         "frequency": "1Y"

@@ -219,7 +219,8 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
 
     // ---- premises (DB rows; QuantLib's calendars) -------------------------------------------------------------------
     ASSERT_FALSE(sc.zero_coupon) << "premise: zero-coupon products are out of scope";
-    ASSERT_EQ(std::string(ix.calendar), sc.calendar) << "premise: the index fixes on the product calendar";
+    if (ix.type != "overnight")  // an OIS fixes on the index's own calendar (SOFR: USD-SOFR), the swap counts on the
+      ASSERT_EQ(std::string(ix.calendar), sc.calendar) << "premise: the index fixes on the product calendar";  // product's
     ASSERT_EQ(std::string(ix.day_count), sc.float_dc) << "premise: the float leg accrues on the index day count";
     if (ix.type != "overnight") ASSERT_EQ(sc.pay_lag, 0) << "premise: VanillaSwap has no payment lag";
     const ql::Calendar pc = qconv::calendar(sc.calendar);

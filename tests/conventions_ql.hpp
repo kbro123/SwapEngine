@@ -46,6 +46,7 @@ inline QuantLib::Calendar calendar(std::string_view cid) {
   if (cid == "USD-SOFR") return Sofr(RelinkableHandle<YieldTermStructure>()).fixingCalendar();
   if (cid == "USD-FED") return UnitedStates(UnitedStates::FederalReserve);
   if (cid == "EURUSD") return JointCalendar(UnitedStates(UnitedStates::GovernmentBond), TARGET());
+  if (cid == "USD+USD-FED") return JointCalendar(UnitedStates(UnitedStates::GovernmentBond), UnitedStates(UnitedStates::FederalReserve));
   // The same QuantLib calendars tests/calendar_ql_oracle_test.cpp checks against the DB day by day.
   if (cid == "GBP") return UnitedKingdom(UnitedKingdom::Settlement);  // not ql::Sonia's fixing calendar (Exchange)
   if (cid == "JPY") return Japan();

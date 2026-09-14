@@ -124,7 +124,7 @@ inline constexpr std::array<ProductConv, 34> kProducts = {{
   {"USD-PRIME", "administered-basis", "USD", "USD-FED", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"USD-SOFR-1M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"USD-SOFR-3M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
-  {"USD-SOFR-OIS", "ois", "USD", "USD-SOFR", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/360", "1Y", "", false, false, false}, {"USD-SOFR", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
+  {"USD-SOFR-OIS", "ois", "USD", "USD+USD-FED", "ModifiedFollowing", "", "", "", "", 2, 2, false, {"", "ACT/360", "1Y", "", false, false, false}, {"USD-SOFR", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
   {"XCCY-MTM-EURUSD", "xccy_mtm", "", "EURUSD", "ModifiedFollowing", "3M", "", "EURUSD", "EUR", 2, 2, false, {"", "", "", "", false, false, false}, {"USD-SOFR", "ACT/360", "3M", "compounded", false, true, true}, {"EUR-ESTR", "ACT/360", "3M", "compounded", true, false, false}},
   {"ZAR-JIBAR-3M-IRS", "irs", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", 0, 0, false, {"", "ACT/365F", "3M", "", false, false, false}, {"ZAR-JIBAR-3M", "ACT/365F", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"ZAR-ZARONIA-OIS", "ois", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", 0, 0, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"ZAR-ZARONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
@@ -1051,12 +1051,14 @@ inline constexpr std::array<HolidayRule, 751> kHolidayRules = {{
   {"fixed", 5, 29, -1, 0, 0, 2024, 2024, "", false},
 }};
 
-inline constexpr std::array<std::string_view, 2> kCalendarJoins = {{
+inline constexpr std::array<std::string_view, 4> kCalendarJoins = {{
   "USD",
   "EUR",
+  "USD",
+  "USD-FED",
 }};
 
-inline constexpr std::array<CalendarConv, 22> kCalendars = {{
+inline constexpr std::array<CalendarConv, 23> kCalendars = {{
   {"ARS", "Buenos Aires / Argentina settlement", "none", 96, 0, 16, 0, 0, false},
   {"AUD", "Sydney / Australia (ASX, NSW) settlement", "weekend_to_next_weekday", 96, 16, 10, 0, 0, false},
   {"BRL", "Brazil (B3 / ANBIMA) settlement", "none", 96, 26, 13, 0, 0, false},
@@ -1076,9 +1078,10 @@ inline constexpr std::array<CalendarConv, 22> kCalendars = {{
   {"SAR", "Riyadh / Saudi Arabia settlement (Fri/Sat weekend)", "none", 48, 492, 83, 2, 0, false},
   {"TRY", "Istanbul / Turkey settlement", "none", 96, 575, 128, 2, 0, false},
   {"USD", "US SIFMA / US government securities (bond market)", "sat_to_fri_sun_to_mon", 96, 703, 12, 2, 0, false},
-  {"USD-FED", "US Federal Reserve (Fedwire)", "sun_to_mon", 96, 715, 11, 2, 0, false},
-  {"USD-SOFR", "SOFR fixing calendar (SIFMA, incl. Good Friday close)", "sat_to_fri_sun_to_mon", 96, 726, 12, 2, 0, false},
-  {"ZAR", "Johannesburg / South Africa settlement", "sun_to_mon", 96, 738, 13, 2, 0, false},
+  {"USD+USD-FED", "SOFR swap spot / roll / payment days: U.S. Government Securities Business Day (SIFMA) AND New York business day (Fedwire) -- ISDA SOFR market practice note 2022; ISDA Good Friday 2026 guidance section 4, fn 8", "", 96, 715, 0, 2, 2, false},
+  {"USD-FED", "US Federal Reserve (Fedwire)", "sun_to_mon", 96, 715, 11, 4, 0, false},
+  {"USD-SOFR", "SOFR fixing calendar (SIFMA, incl. Good Friday close)", "sat_to_fri_sun_to_mon", 96, 726, 12, 4, 0, false},
+  {"ZAR", "Johannesburg / South Africa settlement", "sun_to_mon", 96, 738, 13, 4, 0, false},
 }};
 
 // conventions.schema.json's enum vocabularies: Registry's row rules (conventions_db.hpp) check against these.

@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 SC-CAL1: a joint calendar is open only when every leg is open (SOFR swaps: SIFMA AND New York).
+    ("calendar_join_any_leg_open", "include/swaps/build/calendar.hpp",
+     "      if (!is_business_day(std::string(view.joins[j]), d)) return false;",
+     "      if (is_business_day(std::string(view.joins[j]), d)) return true;",
+     ["sofr_calendar_repro_test.cpp"], "*", "a join requiring every leg open is unpinned (SC-CAL1)"),
     # 2026-09-14 O5 (owner decision): spot counts from the RAW value date, not from the next business day.
     ("spot_adjusts_value_date_first", "include/swaps/build/schedule.hpp",
      "  return advance_bd(cal_id, value_date, spot_lag);",

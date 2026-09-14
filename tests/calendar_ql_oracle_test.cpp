@@ -40,6 +40,7 @@ std::map<std::string, Oracle> oracles() {
       {"USD-FED",  {UnitedStates(UnitedStates::FederalReserve), 2035}},
       {"EUR",      {TARGET(), 2035}},
       {"EURUSD",   {JointCalendar(UnitedStates(UnitedStates::GovernmentBond), TARGET(), JoinHolidays), 2035}},
+      {"USD+USD-FED", {JointCalendar(UnitedStates(UnitedStates::GovernmentBond), UnitedStates(UnitedStates::FederalReserve), JoinHolidays), 2035}},
       {"GBP",      {UnitedKingdom(UnitedKingdom::Settlement), 2035}},
       {"JPY",      {Japan(), 2035}},
       {"AUD",      {Australia(Australia::Settlement), 2035}},
