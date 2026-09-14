@@ -13,6 +13,7 @@ swaps_consistency_tests|tension_regularizer_oracle_test.cpp|2|8
 swaps_oracle_tests|asset_swap_oracle_test.cpp|2|22
 swaps_oracle_tests|bond_asset_swap_oracle.cpp|1|2
 swaps_oracle_tests|bond_oracle_test.cpp|6|29
+swaps_oracle_tests|bond_rv_oracle_test.cpp|5|58
 swaps_oracle_tests|bspline_oracle_test.cpp|2|3
 swaps_oracle_tests|bundle_test.cpp|9|19
 swaps_oracle_tests|calendar_ql_oracle_test.cpp|1|2

@@ -121,6 +121,7 @@ if(TARGET quantlib_oracle)
     bond_asset_swap_oracle.cpp
     asset_swap_oracle_test.cpp
     risk_ladder_oracle_test.cpp
+    bond_rv_oracle_test.cpp
     extract_test.cpp
     bundle_test.cpp
     bspline_oracle_test.cpp
