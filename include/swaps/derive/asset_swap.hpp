@@ -48,11 +48,11 @@ namespace curve = swaps::curve;
 namespace market = swaps::market;
 namespace pricing = swaps::pricing;
 
-// How a currency turns a bond yield + a matched swap into a swap-spread quote. (Only HeadlineYield is wired
-// end-to-end today; the others name the remaining desk conventions so the type is stable as they land.)
+// How a currency turns a bond yield + a matched swap into a swap-spread quote. HeadlineYield and MatchedMaturity are
+// wired end to end (derive::spread_swap); the others name the remaining desk conventions so the type is stable.
 enum class SwapSpreadType {
   HeadlineYield,    // OTR benchmark bond STREET yield vs the spot-start par swap of the same TENOR (USD).
-  MatchedMaturity,  // the benchmark yield vs a swap of the bond's OWN maturity.
+  MatchedMaturity,  // the benchmark yield vs a par swap from the product's spot to the bond's OWN maturity.
   ParAssetSwap,     // the par-par asset-swap spread (bond repriced on the swap curve; endogenous, later).
   Invoice,          // bond-future CTD FORWARD yield to delivery vs the matched swap.
 };
@@ -247,12 +247,20 @@ inline cal::ParametricBondFit<Model> make_parametric_fit(const AssetSwapConventi
 }
 
 // =================================================================================================
-// swap_spread — the `swap_spread` verb's whole computation (E7 stage 3.4).
+// swap_spread — the `swap_spread` verb's whole computation (E7 stage 3.4; matched maturity 2026-09-14).
 // =================================================================================================
-// The benchmark bond + its clean price and the quoted spread; the matched spot-start par swap built from the
-// index's conventions DB row to `tenor` from SPOT on the index calendar; the govvie factor anchor (default: that
-// swap's maturity in curve time). KNOWN GAP, kept bit-for-bit pending an owner decision: MatchedMaturity also
-// matches the TENOR swap (TASKS-ENGINE E7 3.4 finding (1)) -- it returns headline numbers under its own label.
+// The benchmark bond + its clean price and the quoted spread, and the par swap the spread is matched to: the index's
+// conventions-DB par product, single-curve on `swap_curve`, starting at THAT PRODUCT's spot (its spot_lag business days
+// on its calendar -- per currency, never an assumed T+2 or a US calendar).
+//   * HeadlineYield   -- the swap of `tenor` (spot + tenor on the product calendar, adjusted), rolled forward from spot.
+//                        `tenor` is REQUIRED.
+//   * MatchedMaturity -- the swap TERMINATING ON THE BOND'S MATURITY: rolled BACKWARD from the UNADJUSTED maturity (a
+//                        short FRONT stub, roll day = the maturity's day of month, no end-of-month roll), the
+//                        termination rolled by the product's bdc -- QuantLib's DateGeneration::Backward and
+//                        build::asset_swap_float_leg's rule. `tenor` must be ABSENT. Month/year-frequency products only.
+// spread = swap par rate - benchmark yield for both (build/swap_spread.hpp). The govvie factor anchor defaults to the
+// swap's termination in curve time. The bond's and the index's currencies need not match (owner decision 2026-09-14:
+// a bond against another currency's swap curve is a wanted use; its cross-currency form is designed separately).
 inline constexpr const char* kSwapSpreadQuoteId = "spread";  // the Market key the quoted spread is stored under
 
 struct SwapSpreadRequest {
@@ -263,19 +271,57 @@ struct SwapSpreadRequest {
   double clean = 0.0;   // benchmark clean price -- REQUIRED, > 0
   double spread = 0.0;  // the quoted swap spread
   std::string index;    // the matched swap's index -- REQUIRED, e.g. USD-SOFR
-  std::string tenor;    // REQUIRED, e.g. 5Y
+  std::string tenor;    // HeadlineYield: REQUIRED, e.g. 5Y. MatchedMaturity: must be empty
   int swap_curve = -1, factor_curve = -1;  // bundle roles -- REQUIRED
-  std::optional<double> anchor;             // absent => curve_time(value_date, swap maturity)
+  std::optional<double> anchor;             // absent => curve_time(value_date, the swap's termination)
 };
 struct SwapSpreadResult {
   DerivedAssetSwap derived;
   double anchor = 0.0;
+  build::Date swap_maturity;  // the matched swap's termination (its last accrual end), business-day adjusted
 };
+
+// The par swap a swap-spread quote is matched to, and its termination.
+struct SpreadSwap {
+  cal::Instrument swap;
+  build::Date maturity;
+};
+
+// The ONE place a spread type picks its swap. Bond-free apart from the bond's maturity, so it is the currency-generic
+// seam the per-currency tests drive.
+inline SpreadSwap spread_swap(const SwapSpreadRequest& r, const build::SwapConv& sconv) {
+  if (r.type == SwapSpreadType::HeadlineYield) {
+    if (r.tenor.empty()) throw std::invalid_argument("swap_spread: missing swap 'tenor' (e.g. 5Y)");
+    const build::Date mat = build::resolve(r.tenor, r.value_date, sconv.calendar, sconv.bdc, sconv.spot_lag);
+    return {build::par_swap(r.value_date, sconv, mat, r.swap_curve, r.swap_curve, 0.0), mat};
+  }
+  if (r.type == SwapSpreadType::MatchedMaturity) {
+    if (!r.tenor.empty())
+      throw std::invalid_argument("swap_spread: 'tenor' names the headline swap; a matched_maturity spread matches the "
+                                  "bond's own maturity (drop 'tenor')");
+    // A backward roll from a maturity is a whole-month roll; a zero_coupon product has one period and is rule-invariant.
+    if (!sconv.zero_coupon &&
+        (build::tok_step(sconv.fixed_freq_tok).days || build::tok_step(sconv.float_freq_tok).days))
+      throw std::invalid_argument("swap_spread: matched_maturity rolls the swap back from the bond's maturity by whole "
+                                  "months; product '" + sconv.product_id + "' rolls by days -- no matched swap");
+    const build::Date spot = build::spot_date(r.value_date, sconv.calendar, sconv.spot_lag);
+    const build::Date maturity = build::adjust(sconv.calendar, r.bond.maturity, sconv.bdc);
+    if (!(maturity > spot))
+      throw std::invalid_argument("swap_spread: the bond matures on or before the swap's spot date (product '" +
+                                  sconv.product_id + "') -- there is no matched swap");
+    build::ScheduleRule from_maturity;
+    from_maturity.side = build::StubSide::Front;
+    // The UNADJUSTED maturity: the schedule rolls the termination itself and takes the roll day from the date given.
+    return {build::par_swap(r.value_date, sconv, r.bond.maturity, r.swap_curve, r.swap_curve, 0.0,
+                            /*float_spread=*/0.0, /*notionals=*/{}, /*fixed_freq=*/"", from_maturity),
+            maturity};
+  }
+  throw std::invalid_argument("swap_spread: spread_type is not this verb's (headline | matched_maturity)");
+}
 
 inline SwapSpreadResult swap_spread(const SwapSpreadRequest& r) {
   if (!(r.clean > 0.0)) throw std::invalid_argument("swap_spread: needs a positive benchmark 'clean' price");
   if (r.index.empty()) throw std::invalid_argument("swap_spread: missing swap 'index'");
-  if (r.tenor.empty()) throw std::invalid_argument("swap_spread: missing swap 'tenor' (e.g. 5Y)");
   if (r.swap_curve < 0 || r.factor_curve < 0)
     throw std::invalid_argument("swap_spread: needs 'swap_curve' and 'factor_curve' (bundle curve roles)");
   if (r.bond.id == kSwapSpreadQuoteId)
@@ -284,15 +330,15 @@ inline SwapSpreadResult swap_spread(const SwapSpreadRequest& r) {
   conv.type = r.type;
   conv.swap_index = r.index;
   const build::SwapConv sconv = build::Index(r.index).par_convention().resolve();
-  const build::Date mat = build::resolve(r.tenor, r.value_date, sconv.calendar, sconv.bdc, sconv.spot_lag);
-  const cal::Instrument spot_swap = build::par_swap(r.value_date, sconv, mat, r.swap_curve, r.swap_curve, 0.0);
+  const SpreadSwap m = spread_swap(r, sconv);
   SwapSpreadResult out;
-  out.anchor = r.anchor.value_or(build::curve_time(r.value_date, mat));
-  market::Market m;
-  m.as_of(r.value_date);
-  m.add_quote(r.bond.id, market::Quote::mid(r.clean));
-  m.add_quote(kSwapSpreadQuoteId, market::Quote::mid(r.spread));
-  out.derived = derive_asset_swap(conv, r.bond, spot_swap, r.factor_curve, out.anchor, m, kSwapSpreadQuoteId);
+  out.swap_maturity = m.maturity;
+  out.anchor = r.anchor.value_or(build::curve_time(r.value_date, m.maturity));
+  market::Market mk;
+  mk.as_of(r.value_date);
+  mk.add_quote(r.bond.id, market::Quote::mid(r.clean));
+  mk.add_quote(kSwapSpreadQuoteId, market::Quote::mid(r.spread));
+  out.derived = derive_asset_swap(conv, r.bond, m.swap, r.factor_curve, out.anchor, mk, kSwapSpreadQuoteId);
   return out;
 }
 

@@ -761,6 +761,7 @@ json::object swap_spread_to_json(const der::SwapSpreadResult& r) {
   out["bond_yield"] = r.derived.bond_yield;
   out["spread"] = r.derived.spread;
   out["anchor"] = r.anchor;
+  out["swap_maturity"] = swaps::build::iso(r.swap_maturity);  // the matched swap's termination
   json::object rows;
   rows["pin"] = instrument_to_json(r.derived.rows.pin);  // QuoteKind::Rate on the govvie factor (bond bucket)
   rows["asw"] = instrument_to_json(r.derived.rows.asw);  // Portfolio{+swap, -Rate(factor)} (the ASW basis row)

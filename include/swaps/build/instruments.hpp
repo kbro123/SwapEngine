@@ -73,12 +73,13 @@ inline px::FloatCoupon ois_coupon(const Date& vd, const SwapConv& conv, const Da
 // `fixed_freq` "" = the product's fixed-leg frequency (conv.fixed_freq_tok); never a literal default.
 inline cal::FixedLeg fixed_coupons(const Date& vd, const SwapConv& conv, const Date& mat, int disc,
                                    const std::string& fixed_freq = "",
-                                   const std::vector<double>& notionals = {}) {
+                                   const std::vector<double>& notionals = {},
+                                   const ScheduleRule& rule = {}) {
   cal::FixedLeg leg;
   leg.discount = disc;
   const std::string& freq = fixed_freq.empty() ? conv.fixed_freq_tok : fixed_freq;
   if (freq.empty()) throw std::invalid_argument("fixed_coupons: no fixed-leg frequency (product '" + conv.product_id + "')");
-  const auto periods = swap_periods_to(vd, conv.calendar, mat, freq, conv.bdc, conv.spot_lag);
+  const auto periods = swap_periods_to(vd, conv.calendar, mat, freq, conv.bdc, conv.spot_lag, rule);
   for (std::size_t i = 0; i < periods.size(); ++i) {
     const auto& [s, e] = periods[i];
     const Date pay = advance_bd(conv.calendar, e, conv.pay_lag);
@@ -98,14 +99,14 @@ inline cal::FloatLeg float_leg(const Date& vd, const SwapConv& conv, const Date&
                                const std::string& freq_tok, const std::string& dc,
                                int reset_num = -1, int reset_den = -1, double fx_spot = 1.0,
                                double spread = 0.0, const std::vector<double>& notionals = {},
-                               const RfrLag& lag = {}) {
+                               const RfrLag& lag = {}, const ScheduleRule& rule = {}) {
   cal::FloatLeg leg;
   leg.forecast = forecast;
   leg.discount = disc;
   leg.reset_num = reset_num;
   leg.reset_den = reset_den;
   leg.fx_spot = fx_spot;
-  const auto periods = swap_periods_to(vd, conv.calendar, mat, freq_tok, conv.bdc, conv.spot_lag);
+  const auto periods = swap_periods_to(vd, conv.calendar, mat, freq_tok, conv.bdc, conv.spot_lag, rule);
   for (std::size_t i = 0; i < periods.size(); ++i) {
     px::FloatCoupon c = ois_coupon(vd, conv, periods[i].first, periods[i].second, dc, lag);
     c.spread = spread;
@@ -222,10 +223,14 @@ inline cal::Instrument zero_coupon_swap(const Date& vd, const SwapConv& conv, co
   return ins;
 }
 
+// `rule` places the stub and roll day on BOTH legs (default: rolled forward from spot, a short back stub). A swap matched
+// to a bond's maturity rolls BACKWARD from it (StubSide::Front; derive::spread_swap). A zero_coupon product has one
+// period whatever the rule.
 inline cal::Instrument par_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int disc,
                                 double market, double float_spread = 0.0,
                                 const std::vector<double>& notionals = {},
-                                const std::string& fixed_freq = "") {
+                                const std::string& fixed_freq = "",
+                                const ScheduleRule& rule = {}) {
   if (conv.zero_coupon) {  // the PRODUCT decides the shape: a zero_coupon row has no coupon schedule at all
     if (float_spread != 0.0 || !notionals.empty() || !fixed_freq.empty())
       throw std::invalid_argument("par_swap: zero_coupon product '" + conv.product_id + "' takes no spread/notionals/fixed_freq");
@@ -234,8 +239,9 @@ inline cal::Instrument par_swap(const Date& vd, const SwapConv& conv, const Date
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::ParRate;
   ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, float_spread,
-                      notionals);
-  ins.fixed = fixed_coupons(vd, conv, mat, disc, fixed_freq.empty() ? conv.fixed_freq_tok : fixed_freq, notionals);
+                      notionals, /*lag=*/{}, rule);
+  ins.fixed = fixed_coupons(vd, conv, mat, disc, fixed_freq.empty() ? conv.fixed_freq_tok : fixed_freq, notionals,
+                            rule);
   ins.market = market;
   return ins;
 }

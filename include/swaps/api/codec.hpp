@@ -120,6 +120,8 @@ boost::json::object govvie_fit_to_json(const swaps::derive::GovvieFitResult& r);
 // swap_spread: {value_date, convention, bond, clean, spread, index, tenor, swap_curve, factor_curve, anchor?,
 //               spread_type? (headline | matched_maturity), settle_calendar?, settle_lag?}
 swaps::derive::SwapSpreadRequest swap_spread_request_from_json(const boost::json::object& payload);
+// {bond_yield, spread, anchor, swap_maturity (ISO: the matched swap's termination), rows: {pin, asw}}. matched_maturity
+// matches the bond's own maturity from the product's spot and refuses a `tenor`.
 boost::json::object swap_spread_to_json(const swaps::derive::SwapSpreadResult& r);
 
 // ---- asset swap (the `asset_swap` verb) ----------------------------------------------------------------------
