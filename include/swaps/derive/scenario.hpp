@@ -10,13 +10,11 @@
 // A MOVE (ScenarioMove): shocks ADD. The parallel moves every curve's forward once (add_parallel_shock) and an
 // explicit shift_curve key adds its bp onto whatever its curve already carries (add_curve_shock) -- the one rule
 // scenario, scenario_grid and var share (SC1, owner decision 2026-09-14; before it a key REPLACED the parallel
-// here). FX bumps compound IN REQUEST ORDER into one
-// factor on every xccy position's fx_spot (portfolio/xccy_fx_scaled.hpp); a book position carries no pair, so a
-// multi-pair move multiplies (SC2, an owner decision).
+// here). FX bumps are EXACT PER CURRENCY PAIR (SC2, owner decision 2026-09-14; derive/fx_move.hpp): each xccy
+// position's spot moves by its own pair's factor, resolved for every move before calibrating.
 //
 // Bitwise with the verb it replaces: shifts are bp / 1e4 (not bp * 1e-4, which differs in the last bit for many
-// sizes), the book is revalued through the templated handles, and the scaled book is used only when the factor is
-// not exactly 1.
+// sizes), the book is revalued through the templated handles, and a move without FX bumps values the book itself.
 
 #include <cstddef>
 #include <map>
@@ -32,27 +30,22 @@
 #include "swaps/calibration/bundle_state.hpp"
 #include "swaps/calibration/diagnostics.hpp"  // CalibrationSession, seed_or_flat
 #include "swaps/calibration/regularize.hpp"
+#include "swaps/derive/fx_move.hpp"  // FxBump, book_fx_moves: FX per currency pair (SC2)
+#include "swaps/portfolio/fx_pairs.hpp"
 #include "swaps/portfolio/portfolio.hpp"
-#include "swaps/portfolio/xccy_fx_scaled.hpp"
 
 namespace swaps::derive {
-
-struct FxBump {
-  std::string base, quote;
-  double rel = 0.0;  // rate' = rate * (1 + rel)
-};
 
 struct ScenarioMove {
   std::string name;
   std::optional<double> parallel_bp;       // every curve's forward, once
   std::map<int, double> shift_curve_bp;    // curve role -> bp; ADDS onto the parallel
-  std::vector<FxBump> fx;                  // compounded in order
+  std::vector<FxBump> fx;                  // exact per currency pair (derive/fx_move.hpp)
 };
 
-// A move resolved against a bundle: the rate-space shift per curve and the compounded FX factor.
+// A move's RATE part resolved against a bundle: the rate-space shift per curve (its FX part: book_fx_moves).
 struct ResolvedMove {
   std::vector<double> curve_delta;
-  double fx_factor = 1.0;
 };
 
 // A parallel shift moves EVERY curve's forward once: an OUTRIGHT curve takes it on its knots and a SPREAD curve inherits it
@@ -82,7 +75,6 @@ inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, const std::vect
                                   " is out of range for this bundle");
     add_curve_shock(role, bp, r.curve_delta);
   }
-  for (const FxBump& b : m.fx) r.fx_factor *= (1.0 + b.rel);
   return r;
 }
 
@@ -93,6 +85,7 @@ struct ScenarioRequest {
   std::vector<double> sample_times;               // empty => no curve samples
   std::optional<portfolio::MultiCurveBook> book;  // absent => no valuation
   std::vector<ScenarioMove> scenarios;
+  std::optional<std::string> fx_pivot;            // the currency unbumped currencies hold against (SC2)
 };
 
 struct ScenarioRow {
@@ -115,6 +108,20 @@ struct ScenarioResult {
 template <calibration::CalibrationSession Session>
 ScenarioResult scenarios(ScenarioRequest r) {
   if (r.bundle.n_curves() == 0) throw std::invalid_argument("scenario: bundle has no curves");
+  // Every move's FX, per currency pair, before calibrating: a missing code or an undetermined pair costs no solve.
+  BookFxMoves fx;
+  std::optional<portfolio::MultiCurveBook> moved;  // one copy for the FX moves: only its xccy spots are overwritten
+  if (r.book) {
+    std::vector<std::vector<FxBump>> bumps;
+    bumps.reserve(r.scenarios.size());
+    for (const ScenarioMove& m : r.scenarios) bumps.push_back(m.fx);
+    fx = book_fx_moves(r.bundle.currency_codes, r.bundle.curves, *r.book, bumps, r.fx_pivot);
+    for (const std::vector<double>& f : fx.factor)
+      if (!f.empty()) {
+        moved = *r.book;
+        break;
+      }
+  }
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
   sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario"), r.reg);
@@ -139,8 +146,13 @@ ScenarioResult scenarios(ScenarioRequest r) {
     row.move = k;
     if (!r.sample_times.empty()) row.curves = calibration::sample_bundle_curves(P, xs, r.sample_times);
     if (out.has_book) {
-      row.npv = rm.fx_factor != 1.0 ? calibration::book_value_at(portfolio::xccy_fx_scaled(*r.book, rm.fx_factor), P, xs)
-                                    : calibration::book_value_at(*r.book, P, xs);
+      const std::vector<double>& f = fx.factor[k];
+      if (f.empty()) {
+        row.npv = calibration::book_value_at(*r.book, P, xs);
+      } else {
+        portfolio::set_xccy_fx(*moved, *r.book, fx.slots, f);
+        row.npv = calibration::book_value_at(*moved, P, xs);
+      }
       row.npv_delta = row.npv - out.base_npv;
     }
     out.rows.push_back(std::move(row));

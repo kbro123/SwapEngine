@@ -3,16 +3,16 @@
 // `scenario_grid` verb's whole computation as library code over any calibration::CalibrationSession.
 //
 // Calibrate the base ONCE; for every cell, fork the fitted state by the cell's shifts and reprice the book through its
-// compiled twin (portfolio::XccyFxScaledBooks: one compiled book per distinct FX factor, so a grid's fx column reuses
-// one book across every rate cell). An N x M grid costs one calibration plus N x M compiled repricings.
+// compiled twin, built ONCE (an fx cell sets the xccy rows' spots per pair in place:
+// CompiledMultiCurveBook::set_fx_factors). An N x M grid costs one calibration plus N x M compiled repricings.
 //
-// The GRID RULE: every axis ADDS its shift (bp / 1e4) to the curves it moves, and an fx axis compounds its factor.
+// The GRID RULE: every axis ADDS its shift (bp / 1e4) to the curves it moves, and a cell's fx axes are one FX move.
 // So a shift_curve axis on top of a parallel axis moves that curve by both -- the rule `scenario` and `var` share
 // (derive/scenario.hpp add_parallel_shock / add_curve_shock; SC1, owner decision 2026-09-14). An fx axis
-// names a pair but reaches every xccy position (a position carries none: SC2).
+// bumps its pair, and each xccy position moves with its own pair (SC2, derive/fx_move.hpp).
 //
 // Bitwise with the verb it replaces (the grid goldens): bp / 1e4 accumulated axis by axis, the fork through
-// calibration::shift_interp_forwards, the compiled book keyed by factor to 1e-12.
+// calibration::shift_interp_forwards, a single-pair fx factor 1.0 * (1 + v) on notional * fx_spot as a fresh compile.
 
 #include <chrono>
 #include <cstddef>
@@ -30,7 +30,7 @@
 #include "swaps/calibration/regularize.hpp"
 #include "swaps/derive/scenario.hpp"  // add_parallel_shock, add_curve_shock: the one shock-combining rule
 #include "swaps/portfolio/portfolio.hpp"
-#include "swaps/portfolio/xccy_fx_scaled.hpp"
+#include "swaps/portfolio/compiled_multi.hpp"
 
 namespace swaps::derive {
 
@@ -59,7 +59,7 @@ inline void check_shock_axis(const ShockAxis& ax, int n_curves) {
 
 // One axis's contribution to a cell, added onto what the other axis already put there.
 inline void add_axis_shock(const ShockAxis& ax, double value, const std::vector<pricing::CurveStructure>& curves,
-                           std::vector<double>& curve_delta, double& fx_factor) {
+                           std::vector<double>& curve_delta) {
   switch (ax.kind) {
     case ShockAxisKind::ParallelBp:
       add_parallel_shock(curves, value, curve_delta);
@@ -68,8 +68,7 @@ inline void add_axis_shock(const ShockAxis& ax, double value, const std::vector<
       add_curve_shock(*ax.role, value, curve_delta);
       break;
     case ShockAxisKind::Fx:
-      fx_factor *= (1.0 + value);
-      break;
+      break;  // an fx axis moves no curve: a cell's FX move is resolved per pair (book_fx_moves)
   }
 }
 
@@ -80,6 +79,7 @@ struct ScenarioGridRequest {
   std::vector<double> sample_times;               // base curves only; empty => none
   std::optional<portfolio::MultiCurveBook> book;  // absent => no surface
   std::vector<ShockAxis> axes;                    // 1 or 2
+  std::optional<std::string> fx_pivot;            // the currency unbumped currencies hold against (SC2)
 };
 
 struct ScenarioGridResult {
@@ -101,6 +101,20 @@ ScenarioGridResult scenario_grid(ScenarioGridRequest r) {
   if (r.bundle.n_curves() == 0) throw std::invalid_argument("scenario_grid: bundle has no curves");
   if (r.axes.empty() || r.axes.size() > 2) throw std::invalid_argument("scenario_grid: 'axes' must hold 1 or 2 axes");
   for (const ShockAxis& ax : r.axes) check_shock_axis(ax, r.bundle.n_curves());
+  // Every cell's FX move, per currency pair, before calibrating (SC2): a cell's fx axes bump their pairs together.
+  BookFxMoves fx;
+  if (r.book) {
+    const int n0 = static_cast<int>(r.axes[0].values.size());
+    const int n1 = r.axes.size() == 2 ? static_cast<int>(r.axes[1].values.size()) : 1;
+    std::vector<std::vector<FxBump>> cells(static_cast<std::size_t>(n0 * n1));
+    for (int i = 0; i < n0; ++i)
+      for (int j = 0; j < n1; ++j)
+        for (std::size_t a = 0; a < r.axes.size(); ++a)
+          if (r.axes[a].kind == ShockAxisKind::Fx)
+            cells[static_cast<std::size_t>(i * n1 + j)].push_back(
+                {r.axes[a].base, r.axes[a].quote, r.axes[a].values[static_cast<std::size_t>(a == 0 ? i : j)]});
+    fx = book_fx_moves(r.bundle.currency_codes, r.bundle.curves, *r.book, cells, r.fx_pivot);
+  }
 
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
@@ -117,9 +131,9 @@ ScenarioGridResult scenario_grid(ScenarioGridRequest r) {
   out.has_book = r.book.has_value();
   if (!out.has_book) return out;
 
-  portfolio::XccyFxScaledBooks books(P.curves, std::move(*r.book));
-  out.n_positions = static_cast<int>(books.book().positions.size());
-  out.base_npv = books.at(1.0).npv(out.x_base);
+  portfolio::CompiledMultiCurveBook book(P.curves, *r.book);
+  out.n_positions = static_cast<int>(r.book->positions.size());
+  out.base_npv = book.npv(out.x_base);
   out.npv.reserve(static_cast<std::size_t>(out.n0));
   out.pnl.reserve(static_cast<std::size_t>(out.n0));
   const auto t0 = std::chrono::steady_clock::now();
@@ -127,11 +141,12 @@ ScenarioGridResult scenario_grid(ScenarioGridRequest r) {
     std::vector<double> npv_row, pnl_row;
     for (int j = 0; j < out.n1; ++j) {
       std::vector<double> curve_delta(static_cast<std::size_t>(P.n_curves()), 0.0);
-      double fx_factor = 1.0;
-      add_axis_shock(out.axes[0], out.axes[0].values[static_cast<std::size_t>(i)], P.curves, curve_delta, fx_factor);
+      add_axis_shock(out.axes[0], out.axes[0].values[static_cast<std::size_t>(i)], P.curves, curve_delta);
       if (out.axes.size() == 2)
-        add_axis_shock(out.axes[1], out.axes[1].values[static_cast<std::size_t>(j)], P.curves, curve_delta, fx_factor);
-      const double npv = books.at(fx_factor).npv(calibration::shift_interp_forwards(P, out.x_base, curve_delta));
+        add_axis_shock(out.axes[1], out.axes[1].values[static_cast<std::size_t>(j)], P.curves, curve_delta);
+      const std::vector<double>& f = fx.factor[static_cast<std::size_t>(i * out.n1 + j)];
+      if (!f.empty()) book.set_fx_factors(fx.slots, f);
+      const double npv = book.npv(calibration::shift_interp_forwards(P, out.x_base, curve_delta));
       npv_row.push_back(npv);
       pnl_row.push_back(npv - out.base_npv);
     }

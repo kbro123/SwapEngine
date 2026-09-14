@@ -6,22 +6,22 @@
 // Two modes, exactly one per request:
 //   SUPPLIED -- a P&L series handed in (an external full reval or a realised history) is reduced as it stands.
 //   REVAL    -- calibrate the base ONCE, then for each market move fork the fitted state and reprice the book through
-//               its compiled twin (portfolio::XccyFxScaledBooks: one compiled book per distinct FX factor):
+//               its compiled twin, built once (an FX move sets its xccy rows' spots per pair in place):
 //               pnl_k = npv(move_k) - base_npv. N moves cost one calibration plus N compiled repricings.
 // Both reduce the distribution the same way (pnl_distribution).
 //
 // A MOVE is the `scenario` verb's (derive::ScenarioMove) resolved by the SAME rule (resolve_scenario_move): after SC1
 // every verb ADDS an explicit shift_curve to parallel_bp -- a parallel reaches outright curves only (a spread curve
-// inherits it from its base), each key adds bp / 1e4 to the curve it names, FX bumps compound in request order into
-// one factor on every xccy position (SC2 will make that per pair; var picks it up through ResolvedMove for free).
+// inherits it from its base), each key adds bp / 1e4 to the curve it names; FX bumps are exact per currency pair
+// (SC2, derive/fx_move.hpp book_fx_moves), resolved for every move before calibrating.
 //
 // CONVENTION. var / es are LOSSES (positive for a loss): loss = -P&L. VaR at confidence q is -(the numpy "type 7"
 // linearly interpolated (1-q) lower-tail P&L quantile, position (1-q)(N-1)); ES at q is -(the mean of the
 // m = clamp(round((1-q) N), 1, N) smallest P&Ls). var_pnl / es_pnl are the same numbers as signed P&L.
 //
 // Bitwise with the verb it replaces (tests/golden/scenario/var_*.json): the fork through
-// calibration::shift_interp_forwards (== var.cpp's segment add), the compiled book keyed by factor to 1e-12 (the
-// factor-1 book is xccy_fx_scaled(book, 1.0), an exact copy), the mean / variance accumulated in pnl order, one
+// calibration::shift_interp_forwards (== var.cpp's segment add), a single-pair FX factor on notional * fx_spot exactly
+// as a fresh compile of the scaled book, the mean / variance accumulated in pnl order, one
 // std::sort, m and the quantile position in the verb's own int -> double conversions.
 
 #include <algorithm>
@@ -41,7 +41,7 @@
 #include "swaps/calibration/regularize.hpp"
 #include "swaps/derive/scenario.hpp"           // ScenarioMove, ResolvedMove, resolve_scenario_move
 #include "swaps/portfolio/portfolio.hpp"
-#include "swaps/portfolio/xccy_fx_scaled.hpp"
+#include "swaps/portfolio/compiled_multi.hpp"
 
 namespace swaps::derive {
 
@@ -125,6 +125,7 @@ struct VarRevalRequest {
   calibration::RegSpec reg;
   portfolio::MultiCurveBook book;     // required in reval mode (the codec's `need`)
   std::vector<ScenarioMove> scenarios;
+  std::optional<std::string> fx_pivot;  // the currency unbumped currencies hold against (SC2)
 };
 
 struct VarRevalResult {
@@ -143,6 +144,10 @@ VarRevalResult var_reval(VarRevalRequest r) {
   std::vector<ResolvedMove> moves;
   moves.reserve(r.scenarios.size());
   for (const ScenarioMove& m : r.scenarios) moves.push_back(resolve_scenario_move(m, r.bundle.curves, "var"));
+  std::vector<std::vector<FxBump>> bumps;
+  bumps.reserve(r.scenarios.size());
+  for (const ScenarioMove& m : r.scenarios) bumps.push_back(m.fx);
+  const BookFxMoves fx = book_fx_moves(r.bundle.currency_codes, r.bundle.curves, r.book, bumps, r.fx_pivot);
 
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
@@ -150,14 +155,24 @@ VarRevalResult var_reval(VarRevalRequest r) {
   out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "var"), r.reg);
   const Eigen::VectorXd x_base = sess.x();  // the anchor every move forks from; never mutated
 
-  portfolio::XccyFxScaledBooks books(P.curves, std::move(r.book));
-  out.n_positions = static_cast<int>(books.book().positions.size());
-  out.base_npv = books.at(1.0).npv(x_base);
+  portfolio::CompiledMultiCurveBook book(P.curves, r.book);
+  out.n_positions = static_cast<int>(r.book.positions.size());
+  out.base_npv = book.npv(x_base);
+  const std::vector<double> ones(static_cast<std::size_t>(fx.slots.n_slots()), 1.0);
+  bool fx_moved = false;  // the compiled book's spots are away from the base
   out.pnl.reserve(moves.size());
   const auto t0 = std::chrono::steady_clock::now();
-  for (const ResolvedMove& rm : moves)
-    out.pnl.push_back(books.at(rm.fx_factor).npv(calibration::shift_interp_forwards(P, x_base, rm.curve_delta)) -
-                      out.base_npv);
+  for (std::size_t k = 0; k < moves.size(); ++k) {
+    const std::vector<double>& f = fx.factor[k];
+    if (!f.empty()) {
+      book.set_fx_factors(fx.slots, f);
+      fx_moved = true;
+    } else if (fx_moved) {
+      book.set_fx_factors(fx.slots, ones);
+      fx_moved = false;
+    }
+    out.pnl.push_back(book.npv(calibration::shift_interp_forwards(P, x_base, moves[k].curve_delta)) - out.base_npv);
+  }
   out.reval_us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
   return out;
 }

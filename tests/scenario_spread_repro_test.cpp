@@ -61,8 +61,7 @@ TEST(ScenarioSpreadRepro, AParallelGridAxisMovesASpreadCurvesForwardOnce) {
   dv::ShockAxis axis;
   axis.values = {25.0};
   std::vector<double> delta(2, 0.0);
-  double fx = 1.0;
-  dv::add_axis_shock(axis, 25.0, p.curves, delta, fx);
+  dv::add_axis_shock(axis, 25.0, p.curves, delta);
   const std::vector<double> moved = forward_moves(p, delta);
   EXPECT_NEAR(moved[0], 25e-4, 1e-15);
   EXPECT_NEAR(moved[1], 25e-4, 1e-15) << "the spread curve moved by base AND spread: 2x the parallel";

@@ -1,7 +1,7 @@
 // E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // derive/scenario.hpp (E7 stage 5.2): the library behind the `scenario` verb, driven by a session whose calibration
 // returns its seed -- so the move rule, the fork, the one calibration and the valuation are checked against the
-// library pieces they are made of (calibration/bundle_state.hpp, portfolio/xccy_fx_scaled.hpp), independent of any
+// library pieces they are made of (calibration/bundle_state.hpp, portfolio/fx_pairs.hpp), independent of any
 // solver. Header-only (swaps_tests), so tools/mutate.py reaches it; the verb end to end stays pinned byte for byte by
 // tests/scenario_golden_test.cpp.
 #include <stdexcept>
@@ -100,25 +100,24 @@ std::vector<cal::BundleCurveSpec> outright_curves(int n) { return std::vector<ca
 cal::BundleProblem two_flat_curves() {
   cal::BundleProblem p;
   p.curves = {flat_curve(0), flat_curve(1)};
+  p.currency_codes = {"USD", "EUR"};
   return p;
 }
 
 }  // namespace
 
-TEST(ResolveScenarioMove, AnExplicitCurveKeyAddsOntoTheParallelAndFxCompoundsInOrder) {
+TEST(ResolveScenarioMove, AnExplicitCurveKeyAddsOntoTheParallel) {
   dv::ScenarioMove m;
   m.parallel_bp = 34.0;
   m.shift_curve_bp = {{0, 14.5}};
-  m.fx = {{"EUR", "USD", 0.02}, {"EUR", "USD", 0.02}, {"GBP", "USD", -0.01}};
+  m.fx = {{"EUR", "USD", 0.02}};  // FX is resolved per pair by book_fx_moves (fx_pairs_test.cpp), not here
   const dv::ResolvedMove r = dv::resolve_scenario_move(m, outright_curves(3));
   EXPECT_EQ(r.curve_delta, (std::vector<double>{34.0 / 1e4 + 14.5 / 1e4, 34.0 / 1e4, 34.0 / 1e4}))
       << "a key ADDS onto the parallel (SC1, owner decision 2026-09-14), as in scenario_grid and var";
   EXPECT_NE(r.curve_delta[1], 34.0 * 1e-4) << "bp / 1e4, bit for bit: bp * 1e-4 differs at 34 bp";
-  EXPECT_EQ(r.fx_factor, 1.0 * (1.0 + 0.02) * (1.0 + 0.02) * (1.0 + -0.01)) << "every bump, a repeated pair too, in order";
 
   const dv::ResolvedMove none = dv::resolve_scenario_move(dv::ScenarioMove{}, outright_curves(2));
   EXPECT_EQ(none.curve_delta, (std::vector<double>{0.0, 0.0}));
-  EXPECT_EQ(none.fx_factor, 1.0);
 
   dv::ScenarioMove held;
   held.parallel_bp = 20.0;
@@ -169,7 +168,9 @@ TEST(Scenarios, CalibratesOnceAndValuesEveryMoveAtItsForkOfTheBase) {
   EXPECT_EQ(out.rows[0].npv_delta, out.rows[0].npv - out.base_npv);
   EXPECT_EQ(out.rows[0].curves[1].zero, cal::sample_bundle_curves(p, shifted, {0.0, 2.0})[1].zero);
 
-  EXPECT_EQ(out.rows[1].npv, cal::book_value_at(pf::xccy_fx_scaled(book, 1.02), p, x0)) << "the FX row values the scaled book";
+  pf::MultiCurveBook eurusd_up = book;  // the xccy position is EURUSD: num curve 1 (EUR) over den curve 0 (USD)
+  eurusd_up.positions[1].fx_spot = 1.10 * (1.0 * (1.0 + 0.02));
+  EXPECT_EQ(out.rows[1].npv, cal::book_value_at(eurusd_up, p, x0)) << "the FX row values the book at its pair's factor";
   EXPECT_NE(out.rows[1].npv, out.base_npv);
   EXPECT_EQ(out.rows[2].npv, out.base_npv) << "no earlier move mutated the base";
   EXPECT_EQ(out.rows[2].curves[0].zero, out.base_curves[0].zero);
@@ -195,4 +196,22 @@ TEST(Scenarios, WithoutABookOrSampleTimesItOnlyForksAndItChecksItsInputs) {
   bad_seed.x0 = Eigen::VectorXd::Zero(3);
   EXPECT_THROW((void)dv::scenarios<SeedSession>(bad_seed), std::invalid_argument);
   EXPECT_THROW((void)dv::scenarios<SeedSession>(dv::ScenarioRequest{}), std::invalid_argument) << "a bundle with no curves";
+}
+
+// SC2: a move's FX is resolved per currency pair BEFORE calibrating -- a book with xccy positions under an FX bump needs
+// bundle.currency_codes (the pair's orientation), and a move with no FX bump needs none.
+TEST(Scenarios, AnFxMoveOnAnXccyBookIsResolvedPerPairBeforeCalibrating) {
+  dv::ScenarioRequest r;
+  r.bundle = two_flat_curves();
+  r.bundle.currency_codes.clear();
+  r.x0 = Eigen::Vector2d(0.03, 0.02);
+  r.book = pf::MultiCurveBook{{xccy_position()}};
+  dv::ScenarioMove fx;
+  fx.fx = {{"EUR", "USD", 0.02}};
+  r.scenarios = {fx};
+  SeedSession::calls = 0;
+  EXPECT_THROW((void)dv::scenarios<SeedSession>(r), std::invalid_argument) << "no currency codes: the orientation is unknown";
+  EXPECT_EQ(SeedSession::calls, 0) << "refused before calibrating";
+  r.scenarios = {dv::ScenarioMove{}};
+  EXPECT_NO_THROW((void)dv::scenarios<SeedSession>(r)) << "no FX move: no codes needed";
 }

@@ -24,9 +24,9 @@
 //                 "values": [ ... ] }                   the axis sweep (bp for rate axes; rel for fx)
 //
 //   A cell (i, j) applies axis0.values[i] AND axis1.values[j] together — a parallel_bp axis shifts every
-//   curve, a shift_curve axis shifts only its role, an fx axis scales every xccy position's FX reset. The
-//   two axes compose (their curve shifts add; their fx factors multiply), exactly as two `scenario`
-//   moves would. With one axis, n1 = 1 and the surface is a single column.
+//   curve, a shift_curve axis shifts only its role, an fx axis bumps its pair and each xccy position moves with its own
+//   pair (SC2: needs bundle.currency_codes, and "fx_pivot" for a pair the axes do not determine). The two axes
+//   compose (their curve shifts add; their fx bumps form one FX move), exactly as two `scenario` moves would. With one axis, n1 = 1 and the surface is a single column.
 //
 //   -> {"scenario_grid": {
 //         n_curves, n_knots,

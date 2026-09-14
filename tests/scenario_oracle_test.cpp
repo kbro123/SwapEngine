@@ -38,7 +38,8 @@
 // turn 1035 (book) / 4e-5 (DF), grid override-rule 1.1e6, wrong role 1.7e6.
 //
 // SCOPE, stated rather than implied. OUT (no QuantLib counterpart, so not faked): MtM XCCY positions and every
-// `bump_fx` move / `fx` grid axis (a MultiCurveBook position carries no pair; the FX factor is SC2, an owner rule);
+// `bump_fx` move / `fx` grid axis (exact per currency pair since SC2, pinned against closed forms by
+// tests/scenario_fx_pairs_repro_test.cpp);
 // a TURN JUMP as a calibrated free variable (QuantLib cannot calibrate it -- here it is only READ through the
 // adapter, and the rule that a shift leaves it untouched IS checked, by L2 and by negative control 3); bands.
 // The book `npv` is the verb's raw sum of per-position values, each in its own discount currency (EUR + USD here,

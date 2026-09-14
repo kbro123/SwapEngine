@@ -1,7 +1,7 @@
 // E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // derive/scenario_grid.hpp (E7 stage 5.3): the library behind the `scenario_grid` verb, driven by a session whose
 // calibration returns its seed -- so the axis rule, the checks, the one calibration and every cell are compared with
-// the library pieces they are made of (calibration/bundle_state.hpp, portfolio/xccy_fx_scaled.hpp). Header-only
+// the library pieces they are made of (calibration/bundle_state.hpp, portfolio/compiled_multi.hpp). Header-only
 // (swaps_tests), so tools/mutate.py reaches it; the verb end to end stays pinned byte for byte by
 // tests/scenario_golden_test.cpp.
 #include <stdexcept>
@@ -116,6 +116,7 @@ dv::ShockAxis fx(std::vector<double> rel) {
 dv::ScenarioGridRequest three_curve_request() {
   dv::ScenarioGridRequest r;
   r.bundle.curves = {flat_curve(0), flat_curve(0), flat_curve(1)};
+  r.bundle.currency_codes = {"USD", "EUR"};
   r.x0 = Eigen::Vector3d(0.030, 0.033, 0.020);
   r.book = book_with_xccy();
   return r;
@@ -123,20 +124,17 @@ dv::ScenarioGridRequest three_curve_request() {
 
 }  // namespace
 
-TEST(AddAxisShock, EveryAxisAddsOntoTheCellAndFxCompounds) {
+TEST(AddAxisShock, EveryRateAxisAddsOntoTheCellAndAnFxAxisMovesNoCurve) {
   const std::vector<cal::BundleCurveSpec> curves{flat_curve(0), flat_curve(0), flat_curve(1)};
   std::vector<double> delta(3, 0.0);
-  double factor = 1.0;
-  dv::add_axis_shock(parallel({}), 42.0, curves, delta, factor);
-  dv::add_axis_shock(shift_curve(1, {}), -31.75, curves, delta, factor);
+  dv::add_axis_shock(parallel({}), 42.0, curves, delta);
+  dv::add_axis_shock(shift_curve(1, {}), -31.75, curves, delta);
   EXPECT_EQ(delta, (std::vector<double>{42.0 / 1e4, 42.0 / 1e4 + -31.75 / 1e4, 42.0 / 1e4}))
       << "a shift_curve axis ADDS to the parallel in a grid (SC1)";
   EXPECT_NE(delta[0], 42.0 * 1e-4) << "bp / 1e4, bit for bit";
-  EXPECT_EQ(factor, 1.0);
-  dv::add_axis_shock(fx({}), 0.05, curves, delta, factor);
-  dv::add_axis_shock(fx({}), -0.02, curves, delta, factor);
-  EXPECT_EQ(factor, 1.0 * (1.0 + 0.05) * (1.0 + -0.02));
-  EXPECT_EQ(delta[2], 42.0 / 1e4) << "an fx axis moves no curve";
+  dv::add_axis_shock(fx({}), 0.05, curves, delta);
+  EXPECT_EQ(delta, (std::vector<double>{42.0 / 1e4, 42.0 / 1e4 + -31.75 / 1e4, 42.0 / 1e4}))
+      << "an fx axis moves no curve (its move is resolved per pair: book_fx_moves)";
 }
 
 TEST(CheckShockAxis, NamesWhatAnAxisIsMissing) {
@@ -172,13 +170,17 @@ TEST(ScenarioGrid, EveryCellIsTheCompiledBookAtItsForkAndItsFxFactor) {
   ASSERT_EQ(out.base_curves.size(), 3u);
   EXPECT_GE(out.grid_us, 0.0);
 
-  pf::XccyFxScaledBooks books(P.curves, book);
-  EXPECT_EQ(out.base_npv, books.at(1.0).npv(x0));
+  const auto at_fx = [&P, &book](double factor) {  // the EURUSD spot moved by hand, freshly compiled
+    pf::MultiCurveBook moved = book;
+    moved.positions[1].fx_spot = 1.10 * factor;
+    return pf::CompiledMultiCurveBook(P.curves, moved);
+  };
+  EXPECT_EQ(out.base_npv, pf::CompiledMultiCurveBook(P.curves, book).npv(x0));
   const double par[] = {-36.0, 0.0, 34.5}, rel[] = {-0.05, 0.0, 0.05};
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) {
       const std::vector<double> delta(3, 0.0 + par[i] / 1e4);
-      const double want = books.at(1.0 * (1.0 + rel[j])).npv(cal::shift_interp_forwards(P, x0, delta));
+      const double want = at_fx(1.0 * (1.0 + rel[j])).npv(cal::shift_interp_forwards(P, x0, delta));
       EXPECT_EQ(out.npv[i][j], want) << i << "," << j;
       EXPECT_EQ(out.pnl[i][j], out.npv[i][j] - out.base_npv);
     }
@@ -191,19 +193,19 @@ TEST(ScenarioGrid, AShiftCurveAxisAfterAParallelAddsAndOneAxisIsAColumn) {
   r.axes = {parallel({42.0}), shift_curve(1, {-31.75, 36.75})};
   const cal::BundleProblem P = r.bundle;
   const Eigen::VectorXd x0 = *r.x0;
-  pf::XccyFxScaledBooks books(P.curves, *r.book);
+  const pf::CompiledMultiCurveBook compiled(P.curves, *r.book);
   const dv::ScenarioGridResult out = dv::scenario_grid<SeedSession>(r);
   ASSERT_EQ(out.n0, 1);
   ASSERT_EQ(out.n1, 2);
   const std::vector<double> delta{42.0 / 1e4, 42.0 / 1e4 + -31.75 / 1e4, 42.0 / 1e4};
-  EXPECT_EQ(out.npv[0][0], books.at(1.0).npv(cal::shift_interp_forwards(P, x0, delta)));
+  EXPECT_EQ(out.npv[0][0], compiled.npv(cal::shift_interp_forwards(P, x0, delta)));
 
   dv::ScenarioGridRequest column = three_curve_request();
   column.axes = {shift_curve(2, {-33.25, 14.5})};
   const dv::ScenarioGridResult col = dv::scenario_grid<SeedSession>(column);
   EXPECT_EQ(col.n0, 2);
   EXPECT_EQ(col.n1, 1);
-  EXPECT_EQ(col.npv[1][0], books.at(1.0).npv(cal::shift_interp_forwards(P, x0, {0.0, 0.0, 14.5 / 1e4})));
+  EXPECT_EQ(col.npv[1][0], compiled.npv(cal::shift_interp_forwards(P, x0, {0.0, 0.0, 14.5 / 1e4})));
 }
 
 TEST(ScenarioGrid, WithoutABookThereIsNoSurfaceAndItChecksItsInputs) {
@@ -230,4 +232,17 @@ TEST(ScenarioGrid, WithoutABookThereIsNoSurfaceAndItChecksItsInputs) {
   none.x0 = Eigen::VectorXd::Zero(2);
   EXPECT_THROW((void)dv::scenario_grid<SeedSession>(none), std::invalid_argument) << "x0 length";
   EXPECT_THROW((void)dv::scenario_grid<SeedSession>(dv::ScenarioGridRequest{}), std::invalid_argument);
+}
+
+// SC2: a grid's fx axes are resolved per currency pair BEFORE calibrating; an fx axis on an xccy book needs
+// bundle.currency_codes, and a grid with no fx axis needs none.
+TEST(ScenarioGrid, AnFxAxisOnAnXccyBookNeedsCurrencyCodesAndIsCheckedBeforeCalibrating) {
+  dv::ScenarioGridRequest r = three_curve_request();
+  r.bundle.currency_codes.clear();
+  r.axes = {fx({0.01})};
+  SeedSession::calls = 0;
+  EXPECT_THROW((void)dv::scenario_grid<SeedSession>(r), std::invalid_argument);
+  EXPECT_EQ(SeedSession::calls, 0) << "refused before calibrating";
+  r.axes = {parallel({1.0})};
+  EXPECT_NO_THROW((void)dv::scenario_grid<SeedSession>(r)) << "no fx axis: no codes needed";
 }

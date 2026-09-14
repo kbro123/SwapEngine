@@ -2,7 +2,7 @@
 #include <boost/json.hpp>
 // Historical / full-revaluation VaR seam (api/var.cpp -> derive/var.hpp): the P&L distribution of a book under a SET of
 // market moves, plus its Value-at-Risk and Expected-Shortfall quantiles. Every move is a real fork of the calibrated
-// market repriced through the cached compiled twin (portfolio::XccyFxScaledBooks), so a 250-day window is 250
+// market repriced through the cached compiled twin (portfolio::CompiledMultiCurveBook, FX spots set per pair in place), so a 250-day window is 250
 // µs-scale repricings against ONE calibration rather than a Taylor expansion around today.
 //
 // EXACTLY ONE input mode (both, or neither, is refused):
@@ -10,6 +10,7 @@
 //              reprice under each move: pnl_k = npv_k − base_npv. A <move> is the `scenario` verb's shape and rule
 //              (an explicit shift_curve ADDS to parallel_bp):
 //                {"parallel_bp"?, "shift_curve"? {"<role>": bp}, "bump_fx"? [{base, quote, rel}], "name"?}
+//              FX bumps are exact per currency pair (bundle.currency_codes; "fx_pivot"? for an undetermined pair).
 //   SUPPLIED — {"pnl":[...]} (non-empty): quantile a P&L series produced elsewhere.
 //
 //   at top level or under "var":

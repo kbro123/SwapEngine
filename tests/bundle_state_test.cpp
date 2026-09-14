@@ -1,6 +1,6 @@
 // E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
-// calibration/bundle_state.hpp and portfolio/xccy_fx_scaled.hpp (E7 stage 5.1): sampling and forking a calibrated
-// state, valuing a book at any state, and a book under an FX move -- the pieces scenario / scenario_grid / var each
+// calibration/bundle_state.hpp (E7 stage 5.1): sampling and forking a calibrated
+// state and valuing a book at any state (FX moves: fx_pairs_test.cpp) -- the pieces scenario / scenario_grid / var each
 // wrote by hand. Header-only (swaps_tests), so tools/mutate.py reaches them; the verbs end to end stay pinned byte for
 // byte by tests/scenario_golden_test.cpp.
 #include <cmath>
@@ -11,7 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "swaps/calibration/bundle_state.hpp"
-#include "swaps/portfolio/xccy_fx_scaled.hpp"
+#include "swaps/portfolio/compiled_multi.hpp"
 
 namespace cal = swaps::calibration;
 namespace crv = swaps::curve;
@@ -53,22 +53,6 @@ pf::MultiCurveBook::Position one_period_swap(double fixed_rate) {
   p.fixed_curve = 0;
   p.float_coupons = {float_coupon(0.0, 1.0)};
   p.fixed_coupons = {fixed_coupon(0.0, 1.0)};
-  return p;
-}
-pf::MultiCurveBook::Position xccy_position() {
-  pf::MultiCurveBook::Position p;
-  p.kind = pf::MultiCurveBook::Kind::Xccy;
-  p.notional = 3e7;
-  p.fwd_curve = 0;
-  p.disc_curve = 0;
-  p.float_coupons = {float_coupon(0.0, 1.0), float_coupon(1.0, 2.0)};
-  p.mtm_coupons = p.float_coupons;
-  for (auto& c : p.mtm_coupons) c.spread = 0.005;
-  p.mtm_fwd_curve = 1;
-  p.mtm_disc_curve = 1;
-  p.mtm_reset_num = 1;
-  p.mtm_reset_den = 0;
-  p.fx_spot = 1.10;
   return p;
 }
 
@@ -131,35 +115,6 @@ TEST(BookValueAt, AOnePeriodSwapOnAFlatCurveHasItsClosedForm) {
   EXPECT_NEAR(cal::book_value_at(pf::MultiCurveBook{{one_period_swap((1.0 - df1) / df1)}}, p, x), 0.0, 1e-8);
   EXPECT_THROW((void)cal::book_value_at(pf::MultiCurveBook{{one_period_swap(0.02)}}, p, Eigen::VectorXd::Zero(2)),
                std::invalid_argument);
-}
-
-TEST(XccyFxScaled, ScalesOnlyTheXccyPositionsFxSpot) {
-  const pf::MultiCurveBook book{{one_period_swap(0.02), xccy_position()}};
-  const pf::MultiCurveBook scaled = pf::xccy_fx_scaled(book, 1.05);
-  EXPECT_EQ(scaled.positions[0].fx_spot, book.positions[0].fx_spot) << "a swap has no FX-reset notional";
-  EXPECT_EQ(scaled.positions[1].fx_spot, 1.10 * 1.05);
-  EXPECT_EQ(book.positions[1].fx_spot, 1.10) << "the input is untouched";
-  EXPECT_EQ(pf::xccy_fx_scaled(book, 1.0).positions[1].fx_spot, 1.10);
-}
-
-TEST(XccyFxScaledBooks, CachesOneCompiledBookPerFactorAndPricesTheScaledBook) {
-  cal::BundleProblem p;
-  p.curves = {flat_curve(0), flat_curve(1)};
-  Eigen::VectorXd x(2);
-  x << 0.03, 0.02;
-  const pf::MultiCurveBook book{{one_period_swap(0.02), xccy_position()}};
-  pf::XccyFxScaledBooks books(p.curves, book);
-
-  const pf::CompiledMultiCurveBook& one = books.at(1.0);
-  EXPECT_EQ(&books.at(1.0), &one);
-  EXPECT_EQ(&books.at(1.0 + 1e-14), &one) << "factors are keyed to 1e-12";
-  const pf::CompiledMultiCurveBook& up = books.at(1.05);
-  EXPECT_NE(&up, &one);
-
-  EXPECT_EQ(one.npv(x), pf::CompiledMultiCurveBook(p.curves, book).npv(x));
-  EXPECT_EQ(up.npv(x), pf::CompiledMultiCurveBook(p.curves, pf::xccy_fx_scaled(book, 1.05)).npv(x));
-  EXPECT_NE(up.npv(x), one.npv(x)) << "the FX move reaches the xccy position";
-  EXPECT_EQ(books.book().positions[1].fx_spot, 1.10);
 }
 
 TEST(ParallelDirection, IsOneOnOutrightInterpolationKnotsOnly) {

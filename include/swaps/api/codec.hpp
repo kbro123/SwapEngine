@@ -163,9 +163,10 @@ boost::json::object overlay_added_to_json(const swaps::conventions::OverlayBatch
 boost::json::object conventions_listing_to_json(const swaps::conventions::Registry::Listings& listing);
 
 // ---- scenario (the `scenario` verb) ------------------------------------------------------------------------------
-// {"scenario": {bundle, x0?, regularize?, sample_times?, book?, scenarios: [{name?, parallel_bp?, shift_curve?:
+// {"scenario": {bundle, x0?, regularize?, sample_times?, book?, fx_pivot?, scenarios: [{name?, parallel_bp?, shift_curve?:
 // {"<role>": bp}, bump_fx?: [{base, quote, rel}]}]}} (or the body itself). A shift_curve key must be an integer curve
-// role.
+// role. FX bumps are exact per currency pair (derive/fx_move.hpp): on a book with xccy positions they need
+// bundle.currency_codes, and a pair the bumps do not determine needs fx_pivot.
 swaps::derive::ScenarioRequest scenario_request_from_json(const boost::json::object& payload);
 // {"scenario": {n_curves, n_knots, base: {x, curves?, npv?, n?}, scenarios: [{name, curves?, npv?, npv_delta?,
 // parallel_bp?, shift_bp?, fx?}]}} -- curves when sample_times were given, npv when a book was.
@@ -173,7 +174,7 @@ boost::json::object scenario_result_to_json(const swaps::derive::ScenarioResult&
 
 // ---- scenario grid (the `scenario_grid` verb) --------------------------------------------------------------------
 // {"scenario_grid": {bundle, axes: [1 or 2 of {label?, kind?: parallel_bp | shift_curve | fx, role (shift_curve),
-// base + quote (fx), values}], x0?, regularize?, sample_times?, book?}} (or the body itself). kind absent = the axis
+// base + quote (fx), values}], x0?, regularize?, sample_times?, book?, fx_pivot?}} (or the body itself). kind absent = the axis
 // struct's own (parallel_bp); an unknown kind throws.
 swaps::derive::ScenarioGridRequest scenario_grid_request_from_json(const boost::json::object& payload);
 // {"scenario_grid": {n_curves, n_knots, axes, shape: [n0, n1], base: {x, curves?, npv?, n?}, npv?, pnl?, grid_us?,
@@ -181,7 +182,7 @@ swaps::derive::ScenarioGridRequest scenario_grid_request_from_json(const boost::
 boost::json::object scenario_grid_result_to_json(const swaps::derive::ScenarioGridResult& r);
 
 // ---- VaR / ES (the `var` verb) ----------------------------------------------------------------------------------
-// {"var": {quantiles?, pnl? | bundle + book + scenarios: [<scenario move>], x0?, regularize?}} (or the body itself).
+// {"var": {quantiles?, pnl? | bundle + book + scenarios: [<scenario move>], x0?, regularize?, fx_pivot?}} (or the body itself).
 // Exactly one mode (derive::var refuses both and neither). quantiles absent = the struct's [0.95, 0.99]; an explicit []
 // throws. A move is the `scenario` verb's shape; its shift_curve keys are integer curve roles, each named once.
 swaps::derive::VarRequest var_request_from_json(const boost::json::object& payload);

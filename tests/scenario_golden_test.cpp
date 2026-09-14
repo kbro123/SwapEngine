@@ -85,6 +85,7 @@ cal::BundleProblem bundle() {
   p.curves[0].turns = {px::Turn{0.10, 0.20}};
   p.curves.push_back({.base = -1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
   p.curves.push_back({.base = -1, .currency = 1, .regions = swaps::curve::flat_hermite(kMeeting, kBack)});
+  p.currency_codes = {"USD", "EUR"};  // tag 0 (curves 0, 1) USD, tag 1 (curve 2) EUR: the xccy position is EURUSD
   const int d = 0, f = 1, x = 2;
   for (int c : {d, f, x}) {
     p.instruments.push_back(rate(0.0, 0.25, c));

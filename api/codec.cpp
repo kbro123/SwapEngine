@@ -485,6 +485,8 @@ cal::BundleProblem bundle_from_json(const json::value& v) {
     for (const auto& e : o.at("curves").as_array()) p.curves.push_back(spec_from(e.as_object()));
   if (o.contains("instruments"))
     for (const auto& e : o.at("instruments").as_array()) p.instruments.push_back(instrument_from_json(e));
+  if (o.contains("currency_codes"))
+    for (const auto& e : o.at("currency_codes").as_array()) p.currency_codes.push_back(str(e));
   return p;
 }
 
@@ -496,6 +498,7 @@ json::value bundle_to_json(const cal::BundleProblem& p) {
   json::array is;
   for (const auto& ins : p.instruments) is.push_back(instrument_to_json(ins));
   o["instruments"] = is;
+  if (!p.currency_codes.empty()) o["currency_codes"] = json::array(p.currency_codes.begin(), p.currency_codes.end());
   return o;
 }
 
@@ -1372,6 +1375,7 @@ derive::ScenarioRequest scenario_request_from_json(const json::object& payload) 
   r.reg = reg_from_json(o);
   into(o, "sample_times", r.sample_times);
   if (present(o, "book")) r.book = book_from_json(o.at("book"));
+  into(o, "fx_pivot", r.fx_pivot);
   if (present(o, "scenarios"))
     for (const auto& e : o.at("scenarios").as_array()) r.scenarios.push_back(scenario_move_from_json(e.as_object(), "scenario"));
   return r;
@@ -1462,6 +1466,7 @@ derive::ScenarioGridRequest scenario_grid_request_from_json(const json::object& 
   r.reg = reg_from_json(o);
   into(o, "sample_times", r.sample_times);
   if (present(o, "book")) r.book = book_from_json(o.at("book"));
+  into(o, "fx_pivot", r.fx_pivot);
   return r;
 }
 
@@ -1527,6 +1532,7 @@ derive::VarRequest var_request_from_json(const json::object& payload) {
     into(o, "x0", v.x0);
     v.reg = reg_from_json(o);
     v.book = book_from_json(book);
+    into(o, "fx_pivot", v.fx_pivot);
     for (const auto& e : scenarios.as_array()) v.scenarios.push_back(scenario_move_from_json(e.as_object(), "var"));
     r.reval = std::move(v);
   }

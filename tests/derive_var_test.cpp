@@ -4,7 +4,7 @@
 // 1e-3 off its seed (so revaluing at the SEED instead of the calibrated state cannot survive) and reports a
 // non-converged status (so the result carries the session's own outcome, and a failed solve is reported, not
 // refused); every P&L is compared bit for bit with the library pieces it is made of (bundle_state.hpp,
-// xccy_fx_scaled.hpp) under the ADD rule (SC1). Header-only (swaps_tests), so tools/mutate.py reaches it; the verb end
+// fx_pairs.hpp) under the ADD rule (SC1). Header-only (swaps_tests), so tools/mutate.py reaches it; the verb end
 // to end stays pinned byte for byte by tests/scenario_golden_test.cpp.
 #include <algorithm>
 #include <cmath>
@@ -115,6 +115,7 @@ dv::ScenarioMove parallel(double bp) {
 dv::VarRevalRequest three_curve_reval() {
   dv::VarRevalRequest r;
   r.bundle.curves = {flat_curve(0), flat_curve(0), flat_curve(1)};
+  r.bundle.currency_codes = {"USD", "EUR"};
   r.x0 = Eigen::Vector3d(0.030, 0.033, 0.020);
   r.book = book_with_xccy();
   return r;
@@ -222,16 +223,21 @@ TEST(Var, RevalPricesEveryMoveAtTheCalibratedStateThroughTheCompiledBookUnderThe
   EXPECT_EQ(rv.n_positions, 2);
   EXPECT_GE(rv.reval_us, 0.0);
 
-  pf::XccyFxScaledBooks books(P.curves, book);
-  EXPECT_EQ(rv.base_npv, books.at(1.0).npv(x)) << "the base is the calibrated state, not the seed";
+  const auto at_fx = [&P, &book](double factor) {  // the EURUSD spot moved by hand, freshly compiled
+    pf::MultiCurveBook moved = book;
+    moved.positions[1].fx_spot = 1.10 * factor;
+    return pf::CompiledMultiCurveBook(P.curves, moved);
+  };
+  EXPECT_EQ(rv.base_npv, pf::CompiledMultiCurveBook(P.curves, book).npv(x)) << "the base is the calibrated state, not the seed";
   const auto pnl_at = [&](const std::vector<double>& delta, double factor) {
-    return books.at(factor).npv(cal::shift_interp_forwards(P, x, delta)) - rv.base_npv;
+    return at_fx(factor).npv(cal::shift_interp_forwards(P, x, delta)) - rv.base_npv;
   };
   ASSERT_EQ(rv.pnl.size(), 5u);
   EXPECT_EQ(rv.pnl[0], pnl_at({37.5 / 1e4, 37.5 / 1e4, 37.5 / 1e4}, 1.0));
   EXPECT_EQ(rv.pnl[1], pnl_at({0.0 + 34.0 / 1e4 + 14.5 / 1e4, 34.0 / 1e4, 34.0 / 1e4}, 1.0))
       << "an explicit curve key ADDS to the parallel (SC1)";
-  EXPECT_EQ(rv.pnl[2], pnl_at({0.0, 0.0, 0.0}, 1.0 * (1.0 + 0.02) * (1.0 + -0.01))) << "the FX move reprices the scaled book";
+  EXPECT_EQ(rv.pnl[2], pnl_at({0.0, 0.0, 0.0}, 1.0 * (1.0 + 0.02)))
+      << "per pair (SC2): the EURUSD position takes the EURUSD bump alone; the GBPUSD bump reaches no position";
   EXPECT_NE(rv.pnl[2], 0.0);
   EXPECT_EQ(rv.pnl[3], pnl_at({-31.75 / 1e4, -31.75 / 1e4, -31.75 / 1e4}, 1.0 * (1.0 + -0.05)));
   EXPECT_EQ(rv.pnl[4], 0.0) << "the no-op move is the base: no earlier move mutated it";
@@ -255,9 +261,8 @@ TEST(Var, WithoutX0TheFlatSeedIsCalibrated) {
   r.reval->scenarios = {parallel(10.0)};
   const cal::BundleProblem P = r.reval->bundle;
   const dv::VarResult out = dv::var<SeedSession>(r);
-  pf::XccyFxScaledBooks books(P.curves, r.reval->book);
   const Eigen::VectorXd x = (cal::flat_x0(P).array() + kCalibrationShift).matrix();
-  EXPECT_EQ(out.reval->base_npv, books.at(1.0).npv(x));
+  EXPECT_EQ(out.reval->base_npv, pf::CompiledMultiCurveBook(P.curves, r.reval->book).npv(x));
 }
 
 TEST(Var, ChecksItsInputsBeforeCalibrating) {
@@ -292,6 +297,12 @@ TEST(Var, ChecksItsInputsBeforeCalibrating) {
   dv::VarRequest no_q = ok;
   no_q.quantiles.clear();
   refused(no_q, "an explicit empty set of quantiles");
+  dv::VarRequest no_codes = ok;
+  no_codes.reval->bundle.currency_codes.clear();
+  dv::ScenarioMove fx_move;
+  fx_move.fx = {{"EUR", "USD", 0.01}};
+  no_codes.reval->scenarios = {fx_move};
+  refused(no_codes, "an FX move on an xccy book with no currency codes");
   dv::VarRequest bad_seed = ok;
   bad_seed.reval->x0 = Eigen::VectorXd::Zero(2);
   refused(bad_seed, "an x0 of the wrong length");

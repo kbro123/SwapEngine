@@ -23,6 +23,7 @@ add_executable(swaps_tests
   bundle_state_test.cpp
   derive_scenario_test.cpp
   derive_var_test.cpp
+  fx_pairs_test.cpp
   derive_scenario_grid_test.cpp
   pnl_report_test.cpp
   scenario_spread_repro_test.cpp

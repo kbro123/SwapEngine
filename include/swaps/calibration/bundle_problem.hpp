@@ -65,6 +65,9 @@ class BundleProblem {
   // spreads, mixed day counts are all THIS type with different DATA -- there is no index-flavoured
   // shorthand and no per-shape engine type.
   std::vector<Instrument> instruments;
+  // The ISO code of each curve currency TAG (index = BundleCurveSpec::currency), e.g. {"USD", "EUR"}. Optional: only
+  // an FX move on a book with cross-currency positions needs it, to know which pair each position's spot quotes (SC2).
+  std::vector<std::string> currency_codes;
 
   int n_curves() const { return static_cast<int>(curves.size()); }
   int n_knots() const {

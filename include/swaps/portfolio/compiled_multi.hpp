@@ -36,10 +36,13 @@
 
 #include <Eigen/Core>
 
+#include <cstddef>
+#include <span>
 #include <vector>
 
 #include "swaps/ad/dual.hpp"                       // ad::Dual -- the fallback PV01 forward-AAD pass
 #include "swaps/pricing/curve_handle.hpp"         // BundleCurveSet / CurveHandle / the W guard (E6.4)
+#include "swaps/portfolio/fx_pairs.hpp"           // FxPairSlots, fx_spot_under (set_fx_factors)
 #include "swaps/portfolio/portfolio.hpp"          // MultiCurveBook
 #include "swaps/pricing/compiled_book.hpp"        // CompiledCurveSet + BundleFloatBatch/BundleFixedLegs
 
@@ -68,7 +71,8 @@ class CompiledMultiCurveBook {
 
     cs_.init(specs_);
     std::vector<double> notional, rate;
-    for (const auto& p : book.positions) {
+    for (std::size_t k = 0; k < book.positions.size(); ++k) {
+      const MultiCurveBook::Position& p = book.positions[k];
       if (!nonlinear && p.kind == MultiCurveBook::Kind::Swap && swap_is_compilable(p)) {
         notional.push_back(p.notional);
         rate.push_back(p.fixed_rate);
@@ -86,6 +90,7 @@ class CompiledMultiCurveBook {
         // first accrual start, the latter only if not yet settled) with rate −1, so
         //   notional_B·pv_B − nf_B·ann_B = −N·pv_dom − N·(DF(e_N) − DF(s_0)),  nf_B = notional_B·rate_B = +N.
         // Exactly MultiCurveBook::position_value's Kind::Xccy formula, term for term.
+        xccy_.push_back({k, static_cast<int>(notional.size()), -1, p.notional, p.fx_spot});
         notional.push_back(p.notional * p.fx_spot);
         rate.push_back(0.0);
         float_.add_mtm(cs_, p.mtm_fwd_curve, p.mtm_disc_curve, p.mtm_reset_num, p.mtm_reset_den, p.mtm_coupons);
@@ -103,6 +108,8 @@ class CompiledMultiCurveBook {
         fixed_.add(cs_, p.disc_curve, exch);
         ++n_compiled_positions_;
       } else {
+        if (p.kind == MultiCurveBook::Kind::Xccy)
+          xccy_.push_back({k, -1, static_cast<int>(fallback_.positions.size()), p.notional, p.fx_spot});
         fallback_.positions.push_back(p);
       }
     }
@@ -132,6 +139,18 @@ class CompiledMultiCurveBook {
   int n_fallback() const { return static_cast<int>(fallback_.positions.size()); }
   int n_times() const { return cs_.n_times(); }
   int n_knots() const { return n_knots_; }
+
+  // SC2: put every xccy position's FX spot at its pair's factor (portfolio::fx_spot_under) IN PLACE -- a compiled
+  // row's scale notional * fx_spot, a fallback position's own fx_spot. `slots` must come from the book this was built
+  // from. Bitwise a fresh compile of the book with those spots; factors of 1 restore the constructed book exactly
+  // (row A's nf_ is notional * 0 and does not move). Allocation-free.
+  void set_fx_factors(const FxPairSlots& slots, std::span<const double> slot_factor) {
+    for (const XccyScale& e : xccy_) {
+      const double fx = fx_spot_under(e.fx_spot, slots.slot_of[e.position], slot_factor);
+      if (e.row >= 0) notional_[static_cast<Eigen::Index>(e.row)] = e.notional * fx;
+      else fallback_.positions[static_cast<std::size_t>(e.fallback)].fx_spot = fx;
+    }
+  }
 
   // Total book NPV at the stacked knot state x. Allocation-free after construction (reused scratch on
   // both halves). Matches MultiCurveBook::value<double> over build_bundle_curves(specs, x) to rounding.
@@ -296,6 +315,14 @@ class CompiledMultiCurveBook {
   // Templated half: the non-cacheable positions (Xccy / compounded / moment), priced through the
   // existing virtual-handle kernel off handles that are reused (values overwritten) every call.
   MultiCurveBook fallback_;
+
+  // Every xccy position as constructed: its compiled row A (or its fallback index) and its base notional and spot.
+  struct XccyScale {
+    std::size_t position = 0;
+    int row = -1, fallback = -1;
+    double notional = 0.0, fx_spot = 0.0;
+  };
+  std::vector<XccyScale> xccy_;
   mutable pricing::BundleCurveSet<double> fb_curves_;
 
   Eigen::VectorXd rowsum_;             // per-registered-time Σ_j W[k,j] (constant): parallel-shift DF tangent scale

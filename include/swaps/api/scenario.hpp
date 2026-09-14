@@ -15,10 +15,14 @@
 //                                                              keyed by INTEGER curve role (a bundle has
 //                                                              no string curve names); adds onto parallel_bp (SC1)
 //                   "parallel_bp": 25,                         global shift applied to every un-keyed curve
-//                   "bump_fx": [{"base":"EUR","quote":"USD","rel":0.01}]}  relative FX bump (+1% => 0.01)
+//                   "bump_fx": [{"base":"EUR","quote":"USD","rel":0.01}]}  relative FX bump (+1% => 0.01),
+//                                                              EXACT per pair (SC2): each xccy position moves with
+//                                                              its own pair; needs bundle.currency_codes
 //                  , ...],
 //                "book": {...MultiCurveBook...},               (optional) a book to reprice under each shock
 //                "sample_times": [...]                         (optional) grid to sample every curve on
+//                "fx_pivot": "USD"                             (optional) the currency unbumped currencies hold
+//                                                              against; needed for a pair the bumps do not determine
 //              }}
 //   -> {"scenario": {n_curves, n_knots,
 //                    "base": {x, curves?, npv?, n?},
