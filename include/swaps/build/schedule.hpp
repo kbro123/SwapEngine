@@ -20,6 +20,13 @@
 namespace swaps::build {
 
 // Spot/settlement date: `spot_lag` business days after the value date on `cal_id` (calendars.spot_date).
+// THE RULE, one for every product (owner decision 2026-09-14, O5): the business days are counted from the RAW value /
+// trade date, even when it is not a business day -- the next business day counts as day 1, so a holiday or weekend
+// value date gets the PREVIOUS business day's spot; a lag of 0 rolls Following. Sources: the one worked market example
+// (a USD swap traded on UK Boxing Day 2019-12-26 had spot 2019-12-30), OpenGamma Strata / rateslib / ObjectLab, and
+// QuantLib's own switch to this rule (PR #2653, 2026-07, closing issue #753); no source varies it by currency. The
+// vendored QuantLib 1.35 MakeOIS / MakeVanillaSwap still adjust the date first -- a known oracle defect, handled in
+// tests/matched_swap_multiccy_oracle_test.cpp by passing the RAW spot as the effective date.
 inline Date spot_date(const Date& value_date, const std::string& cal_id, int spot_lag) {
   return advance_bd(cal_id, value_date, spot_lag);
 }

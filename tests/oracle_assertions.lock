@@ -22,7 +22,7 @@ swaps_oracle_tests|calibration_oracle_test.cpp|2|6
 swaps_oracle_tests|conventions_test.cpp|10|54
 swaps_oracle_tests|convexity_test.cpp|3|4
 swaps_oracle_tests|extract_test.cpp|9|43
-swaps_oracle_tests|matched_swap_multiccy_oracle_test.cpp|2|42
+swaps_oracle_tests|matched_swap_multiccy_oracle_test.cpp|2|47
 swaps_oracle_tests|modular_curve_test.cpp|3|8
 swaps_oracle_tests|monotone_cubic_oracle_test.cpp|2|2
 swaps_oracle_tests|multicurrency_test.cpp|39|100

@@ -31,9 +31,8 @@
 // Structural checks are exact; each rate gap is asserted above a stated threshold with the predicted size alongside.
 //
 // OUT OF SCOPE, stated: zero-coupon products (BRL-CDI-SWAP: no QuantLib DI zero swap, and conventions_ql has no BUS/252);
-// day-frequency products (MXN-TIIE-28: refused by the engine); value dates that are NOT business days of the product
-// calendar with spot_lag >= 1 (the engine counts business days from the raw date, MakeOIS/MakeVanillaSwap adjust first --
-// design O5; premise-excluded here); two-curve swaps (the verb is single-curve); calendars whose QuantLib tabulation ends
+// day-frequency products (MXN-TIIE-28: refused by the engine); an IBOR swap valued on a non-business day (its first
+// fixing falls before the value date -- a past fixing, not a spot question); two-curve swaps (the verb is single-curve); calendars whose QuantLib tabulation ends
 // before the maturity (CNY 2024, INR/IDR 2025, SAR 2029, TRY 2034; RUB/ARS none).
 #include <gtest/gtest.h>
 #include <ql/quantlib.hpp>
@@ -104,6 +103,8 @@ struct Case {
   bool spot_discriminates;  // the value date makes S1 and S2 give a different spot (premise-checked)
   bool stub_live;           // the schedule has a genuine FRONT stub, so S3 (Forward) must differ
   const char* why;
+  bool raw_value_date = false;  // the value date is NOT a business day: QuantLib gets the RAW spot as its effective
+                                // date (O5), and S0 shows its settlement-days path is the adjust-first defect
 };
 const std::vector<Case>& cases() {
   static const std::vector<Case> c = {
@@ -115,6 +116,11 @@ const std::vector<Case>& cases() {
       {"EUR-EURIBOR-6M", "2027-03-24", "2031-05-01", true, true, "IBOR, annual 30E/360 fixed vs 6M float: two front stubs"},
       // Forward and Backward coincide here (both give 2026-10-30 -> 2027-10-29 -> 2028-10-31), so S3 is not live.
       {"USD-SOFR", "2026-10-28", "2028-10-31", false, false, "month-end note: the spot-month roll adjusts ONTO spot (FS1)"},
+      // O5: non-business value dates -- spot counts from the RAW date (build/schedule.hpp spot_date).
+      {"USD-SOFR", "2026-09-07", "2031-08-15", false, true, "valued ON Labor Day: RAW T+2 = 09-09", true},
+      {"USD-SOFR", "2026-09-05", "2031-08-15", false, true, "valued on a Saturday: RAW T+2 = 09-09", true},
+      {"EUR-ESTR", "2027-03-29", "2031-05-01", false, true, "valued ON Easter Monday: RAW T+2 = 03-31", true},
+      {"AUD-AONIA", "2026-10-05", "2032-01-26", false, true, "valued ON NSW Labour Day: RAW T+1 = 10-06", true},
   };
   return c;
 }
@@ -217,7 +223,8 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
     ASSERT_EQ(std::string(ix.day_count), sc.float_dc) << "premise: the float leg accrues on the index day count";
     if (ix.type != "overnight") ASSERT_EQ(sc.pay_lag, 0) << "premise: VanillaSwap has no payment lag";
     const ql::Calendar pc = qconv::calendar(sc.calendar);
-    ASSERT_TRUE(pc.isBusinessDay(vd)) << "premise: a business value date (design O5)";
+    ASSERT_EQ(pc.isBusinessDay(vd), !c.raw_value_date) << "premise: the case's value-date kind";
+    // RAW (O5): Calendar::advance(n, Days) from a non-business date counts the next business day as day 1.
     const ql::Date spot = pc.advance(vd, sc.spot_lag, ql::Days);
 
     const int other_lag = usd.spot_lag != sc.spot_lag ? usd.spot_lag : gbp.spot_lag;
@@ -256,7 +263,10 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
     ASSERT_EQ(swap.quote, cal::QuoteKind::ParRate);
 
     // ---- QuantLib's -----------------------------------------------------------------------------------------------
-    const QlKnobs ref{static_cast<ql::Natural>(sc.spot_lag), ql::Date(), ql::DateGeneration::Backward, qconv::bdc(sc.bdc)};
+    // On a non-business value date the vendored QuantLib's settlement-days path adjusts the date first (fixed upstream in
+    // PR #2653), so the reference is handed the RAW spot explicitly.
+    const QlKnobs ref{static_cast<ql::Natural>(sc.spot_lag), c.raw_value_date ? spot : ql::Date(),
+                      ql::DateGeneration::Backward, qconv::bdc(sc.bdc)};
     const QlSwap q = ql_matched(c.index, sc, disc, mat, ref);
     ASSERT_EQ(q->fixedSchedule().startDate(), spot) << "premise: QuantLib's start is the product spot";
 
@@ -296,7 +306,19 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
     // δ business days shifts the float leg by DF·f_spot·δ/365 and the annuity by DF·δ/basis, so
     // Δpar ≈ (f_spot − par·365/basis)·(δ/365)/A ≈ 0.3% · δ/365 / 4 ≈ 2e-6 per day. Asserted > 1e-8 (100× curve_rel,
     // ~200× margin). The START-DATE check is exact and is the primary teeth.
-    double gap_lag = 0.0, gap_cal = 0.0, gap_stub = 0.0, gap_roll = 0.0;
+    double gap_lag = 0.0, gap_cal = 0.0, gap_stub = 0.0, gap_roll = 0.0, gap_adj = 0.0;
+    // S0 (O5) -- the adjust-first rule: QuantLib's own settlement-days path on a non-business value date starts one
+    //    business day LATER than the RAW spot, and must not match the engine.
+    if (c.raw_value_date) {
+      const QlSwap q_adj = ql_matched(c.index, sc, disc, mat, {ref.settlement_days, ql::Date(), ref.rule, ref.termination});
+      ASSERT_EQ(q_adj->fixedSchedule().startDate(), pc.advance(pc.adjust(vd, ql::Following), sc.spot_lag, ql::Days))
+          << "premise: the vendored QuantLib adjusts the value date first";
+      ASSERT_NE(q_adj->fixedSchedule().startDate(), spot) << "premise: adjust-first differs from RAW here";
+      EXPECT_GT(std::abs(swap.fwd.coupons.front().accrual_start - t_of(q_adj->fixedSchedule().startDate())), 0.5 / 365.0)
+          << "the engine must not start on the adjust-first spot";
+      gap_adj = std::abs(par_eng - q_adj->fairRate());
+      EXPECT_GT(gap_adj, 1e-8) << "an adjust-first swap must not match";
+    }
     if (c.spot_discriminates) {
       // S1 -- another currency's spot LAG. For GBP / AUD this is "USD's T+2 applied to a GBP / AUD swap".
       const QlSwap q_lag =
@@ -328,7 +350,7 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
     if (c.stub_live) {
       ASSERT_GT(qfix.size(), 1u) << "premise: a multi-period swap";
       const QlSwap q_fwd =
-          ql_matched(c.index, sc, disc, mat, {ref.settlement_days, ql::Date(), ql::DateGeneration::Forward, ref.termination});
+          ql_matched(c.index, sc, disc, mat, {ref.settlement_days, ref.effective, ql::DateGeneration::Forward, ref.termination});
       const auto c0 = ql::ext::dynamic_pointer_cast<ql::Coupon>(q_fwd->fixedLeg().front());
       ASSERT_TRUE(c0);
       EXPECT_GT(std::abs(swap.fixed.coupons.front().tau - c0->accrualPeriod()), 10.0 / 365.0) << "the stub is FIRST";
@@ -339,7 +361,7 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
     // S4 -- termination roll (a maturity that is closed on the product calendar): Unadjusted termination. Last accrual
     //       differs by >= 1 day exactly; rate ~1e-6 (Δpar ≈ DF·(par − f_end)·Δt/A), asserted > 1e-8. Same drop rule.
     if (!pc.isBusinessDay(mat)) {
-      const QlSwap q_raw = ql_matched(c.index, sc, disc, mat, {ref.settlement_days, ql::Date(), ref.rule, ql::Unadjusted});
+      const QlSwap q_raw = ql_matched(c.index, sc, disc, mat, {ref.settlement_days, ref.effective, ref.rule, ql::Unadjusted});
       const auto cl = ql::ext::dynamic_pointer_cast<ql::Coupon>(q_raw->fixedLeg().back());
       ASSERT_TRUE(cl);
       EXPECT_GT(std::abs(swap.fixed.coupons.back().tau - cl->accrualPeriod()), 0.5 / 365.0) << "the termination rolls";
@@ -352,7 +374,7 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
       if (name.find("-MATCHED-ORACLE") != std::string::npos) ql::IndexManager::instance().clearHistory(name);
     std::cout << "  [matched " << c.index << " " << c.value_date << "->" << c.maturity << "] |eng-QL| par "
               << std::abs(par_eng - fair_ql) << "  S1 lag " << gap_lag << "  S2 calendar " << gap_cal << "  S3 stub "
-              << gap_stub << "  S4 roll " << gap_roll << "\n";
+              << gap_stub << "  S4 roll " << gap_roll << "  S0 adjust-first " << gap_adj << "\n";
   }
   std::cout << "  [matched] worst |eng-QL| par " << worst_par << "\n";
 }
@@ -362,7 +384,11 @@ TEST(MatchedSwapMultiCurrencyOracle, EachCurrencysMatchedSwapIsQuantLibsSwapFrom
 // QuantLib's behaviour and not an assumption.
 TEST(MatchedSwapMultiCurrencyOracle, QuantLibDropsARollDateThatAdjustsOntoSpot) {
   ql::SavedSettings saved;
-  const Case& c = cases().back();
+  // The month-end FS1 case, found by its value date (the RAW value-date cases follow it in the table).
+  const auto fs1 = std::find_if(cases().begin(), cases().end(),
+                                [](const Case& k) { return std::string(k.value_date) == "2026-10-28"; });
+  ASSERT_NE(fs1, cases().end());
+  const Case& c = *fs1;
   ASSERT_FALSE(c.spot_discriminates);
   const bld::SwapConv sc = product_of(c.index);
   const ql::Date vd = qd(c.value_date);

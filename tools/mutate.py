@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 O5 (owner decision): spot counts from the RAW value date, not from the next business day.
+    ("spot_adjusts_value_date_first", "include/swaps/build/schedule.hpp",
+     "  return advance_bd(cal_id, value_date, spot_lag);",
+     "  return spot_lag == 0 ? advance_bd(cal_id, value_date, 0) : advance_bd(cal_id, roll(cal_id, value_date, 1), spot_lag);",
+     ["swap_spread_matched_maturity_repro_test.cpp"], "*", "the RAW spot rule on a non-business value date is unpinned (O5)"),
     # 2026-09-14 swap_spread matched_maturity: from the product's spot to the bond's maturity, rolled back from it.
     ("matched_swap_rolls_forward_from_spot", "include/swaps/derive/asset_swap.hpp",
      "    from_maturity.side = build::StubSide::Front;\n",

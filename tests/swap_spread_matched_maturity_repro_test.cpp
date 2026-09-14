@@ -425,3 +425,31 @@ TEST(SwapSpreadMatchedMaturityRepro, TheRefusalsNameTheirReason) {
   head.type = der::SwapSpreadType::HeadlineYield;
   EXPECT_THROW((void)der::swap_spread(head), std::invalid_argument);
 }
+
+// O5 (owner decision 2026-09-14): spot counts spot_lag business days from the RAW value date even when that date is not a
+// business day (build/schedule.hpp spot_date). Hand dates, premise-checked on the DB calendars; the adjust-first rule
+// (roll to the next business day, then count) gives one business day later in every case and must not be the answer.
+TEST(SwapSpreadMatchedMaturityRepro, SpotCountsFromTheRawValueDateOnANonBusinessDay) {
+  struct RawCase {
+    const char* index;
+    const char* value_date;  // NOT a business day of the product calendar
+    const char* raw_spot;    // hand: the next business day is day 1
+    const char* adjust_first_spot;
+  };
+  const std::vector<RawCase> raw = {
+      {"USD-SOFR", "2026-09-07", "2026-09-09", "2026-09-10"},   // Labor Day, T+2
+      {"USD-SOFR", "2026-09-05", "2026-09-09", "2026-09-10"},   // a Saturday before Labor Day, T+2
+      {"EUR-ESTR", "2027-03-29", "2027-03-31", "2027-04-01"},   // Easter Monday (TARGET), T+2
+      {"AUD-AONIA", "2026-10-05", "2026-10-06", "2026-10-07"},  // NSW Labour Day, T+1
+  };
+  for (const RawCase& rc : raw) {
+    SCOPED_TRACE(std::string(rc.index) + " " + rc.value_date);
+    const b::SwapConv sc = product_of(rc.index);
+    const b::Date vd = d(rc.value_date);
+    ASSERT_FALSE(b::is_business_day(sc.calendar, vd)) << "premise: a non-business value date";
+    const b::Date next_bd = b::adjust(sc.calendar, vd, "Following");
+    ASSERT_EQ(b::advance_bd(sc.calendar, next_bd, sc.spot_lag), d(rc.adjust_first_spot)) << "premise: adjust-first spot";
+    EXPECT_EQ(b::spot_date(vd, sc.calendar, sc.spot_lag), d(rc.raw_spot)) << "the RAW rule";
+    EXPECT_NE(b::spot_date(vd, sc.calendar, sc.spot_lag), d(rc.adjust_first_spot)) << "not adjust-first";
+  }
+}
