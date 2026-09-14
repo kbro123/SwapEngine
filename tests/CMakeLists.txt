@@ -127,6 +127,7 @@ if(TARGET quantlib_oracle)
     asset_swap_oracle_test.cpp
     risk_ladder_oracle_test.cpp
     bond_rv_oracle_test.cpp
+    matched_swap_multiccy_oracle_test.cpp
     scenario_oracle_test.cpp
     portfolio_verb_oracle_test.cpp
     calib_report_oracle_test.cpp

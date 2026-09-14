@@ -46,7 +46,27 @@ inline QuantLib::Calendar calendar(std::string_view cid) {
   if (cid == "USD-SOFR") return Sofr(RelinkableHandle<YieldTermStructure>()).fixingCalendar();
   if (cid == "USD-FED") return UnitedStates(UnitedStates::FederalReserve);
   if (cid == "EURUSD") return JointCalendar(UnitedStates(UnitedStates::GovernmentBond), TARGET());
+  // The same QuantLib calendars tests/calendar_ql_oracle_test.cpp checks against the DB day by day.
+  if (cid == "GBP") return UnitedKingdom(UnitedKingdom::Settlement);  // not ql::Sonia's fixing calendar (Exchange)
+  if (cid == "JPY") return Japan();
+  if (cid == "AUD") return Australia(Australia::Settlement);
+  if (cid == "CAD") return Canada(Canada::Settlement);
+  if (cid == "CHF") return Switzerland();
   throw std::runtime_error("conventions_ql: unknown calendar '" + std::string(cid) + "'");
+}
+
+// ISO code -> QuantLib Currency: a LABEL for QuantLib's index objects (name / fixing-store key). It carries no market
+// convention, so it is not a DB field.
+inline QuantLib::Currency currency(std::string_view iso) {
+  using namespace QuantLib;
+  if (iso == "USD") return USDCurrency();
+  if (iso == "EUR") return EURCurrency();
+  if (iso == "GBP") return GBPCurrency();
+  if (iso == "JPY") return JPYCurrency();
+  if (iso == "AUD") return AUDCurrency();
+  if (iso == "CAD") return CADCurrency();
+  if (iso == "CHF") return CHFCurrency();
+  throw std::runtime_error("conventions_ql: unmapped currency '" + std::string(iso) + "'");
 }
 
 // Frequency/tenor token ("3M", "6M", "1Y") -> QuantLib Period.
