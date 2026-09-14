@@ -8024,11 +8024,16 @@
       "type": "fx_forward"
     },
     "XCCY-MTM-EURUSD": {
-      "description": "EUR/USD mark-to-market cross-currency basis (RFR vs RFR). USD SOFR leg is FLAT and RESETTABLE (notional resets to FX spot); EUR ESTR leg carries the basis spread and has constant notional (EUR is the base). Quarterly, 2 BD lag on coupons/resets/notional exchanges.",
+      "description": "EUR/USD mark-to-market cross-currency basis (RFR vs RFR). USD SOFR leg is FLAT and RESETTABLE (notional resets to FX spot); EUR ESTR leg carries the basis spread and has constant notional (EUR is the base). Quarterly. Coupons pay payment_lag business days after each period end; the notional exchanges (initial, intermediate MtM, final) settle ON the adjusted start / roll / maturity dates, never lagged; the USD notional resets to the FX rate fixed fx_reset_fixing_lag business days before each period on fx_reset_calendar (ARRC 2020 xccy conventions; Bank of Canada / CARR CORRA-SOFR terms 2021 worked example; AFMA; Clarus 2021).",
       "pair": "EURUSD",
       "base_currency": "EUR",
       "spot_lag": 2,
       "payment_lag": 2,
+      "exchange_lag_initial": 0,
+      "exchange_lag_intermediate": 0,
+      "exchange_lag_final": 0,
+      "fx_reset_fixing_lag": 2,
+      "fx_reset_calendar": "EURUSD",
       "calendar": "EURUSD",
       "frequency": "3M",
       "usd_leg": {

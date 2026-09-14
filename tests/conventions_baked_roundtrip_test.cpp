@@ -67,6 +67,8 @@ TEST_F(BakedRoundTrip, TheBakedDatabasePostedThroughTheVerbEqualsTheGeneratedArr
       const cvd::ProductConv got = *R.product(want.id);
       EQ(id); EQ(type); EQ(currency); EQ(calendar); EQ(bdc); EQ(frequency); EQ(discount_index); EQ(pair);
       EQ(base_currency); EQ(spot_lag); EQ(payment_lag); EQ(zero_coupon);
+      EQ(fx_reset_calendar); EQ(exchange_lag_initial); EQ(exchange_lag_intermediate); EQ(exchange_lag_final);
+      EQ(fx_reset_fixing_lag);
       eq_leg(got.fixed, want.fixed, where + " fixed");
       eq_leg(got.floating, want.floating, where + " floating");
       eq_leg(got.other, want.other, where + " other");

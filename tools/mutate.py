@@ -24,6 +24,16 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 xccy exchange-lag fields: a lagged notional exchange is refused, not ignored ...
+    ("xccy_exchange_lag_accepted", "include/swaps/build/instruments.hpp",
+     "  if (x.exchange_lag_initial != 0 || x.exchange_lag_intermediate != 0 || x.exchange_lag_final != 0)",
+     "  if (false)",
+     ["xccy_carr_example_repro_test.cpp"], "*", "refusing a lagged notional exchange is unpinned"),
+    # ... and the DB rule requires the reset calendar.
+    ("xccy_rule_fx_reset_calendar_optional", "include/swaps/conventions_db.hpp",
+     '    r.need(p.fx_reset_calendar, "fx_reset_calendar");\n',
+     "",
+     ["conventions_rules_test.cpp"], "*", "the xccy fx_reset_calendar rule is unpinned"),
     # 2026-09-14 AS2: the asset-swap float accrual counts BUS/252 business days on the product calendar.
     ("asw_float_tau_without_calendar", "include/swaps/build/par_asset_swap.hpp",
      "    f.tau.push_back(year_frac(swc.float_dc, p.first, p.second, swc.calendar));",

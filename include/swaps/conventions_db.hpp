@@ -115,6 +115,10 @@ inline void validate(const ProductConv& p) {
   r.tenor(p.frequency, "frequency");
   r.unset_or_non_negative(p.spot_lag, "spot_lag");
   r.unset_or_non_negative(p.payment_lag, "payment_lag");
+  r.unset_or_non_negative(p.exchange_lag_initial, "exchange_lag_initial");
+  r.unset_or_non_negative(p.exchange_lag_intermediate, "exchange_lag_intermediate");
+  r.unset_or_non_negative(p.exchange_lag_final, "exchange_lag_final");
+  r.unset_or_non_negative(p.fx_reset_fixing_lag, "fx_reset_fixing_lag");
   const bool swap = p.type == "ois" || p.type == "irs", basis = p.type == "basis", xccy = p.type == "xccy_mtm";
   const std::string_view floating = basis ? "spread_leg" : xccy ? "usd_leg" : "float_leg";
   const std::string_view other = xccy ? "eur_leg" : "flat_leg";
@@ -130,6 +134,11 @@ inline void validate(const ProductConv& p) {
     r.need(p.pair, "pair");
     r.need(p.base_currency, "base_currency");
     r.need(p.frequency, "frequency");
+    r.at_least(p.exchange_lag_initial, "exchange_lag_initial", 0);
+    r.at_least(p.exchange_lag_intermediate, "exchange_lag_intermediate", 0);
+    r.at_least(p.exchange_lag_final, "exchange_lag_final", 0);
+    r.at_least(p.fx_reset_fixing_lag, "fx_reset_fixing_lag", 0);
+    r.need(p.fx_reset_calendar, "fx_reset_calendar");
     r.need_leg(p.floating, floating);
     r.need_leg(p.other, other);
     return;
@@ -582,7 +591,7 @@ class Registry {
     ProductConv o = p;
     o.id = intern(p.id); o.type = intern(p.type); o.currency = intern(p.currency); o.calendar = intern(p.calendar);
     o.bdc = intern(p.bdc); o.frequency = intern(p.frequency); o.discount_index = intern(p.discount_index);
-    o.pair = intern(p.pair); o.base_currency = intern(p.base_currency);
+    o.pair = intern(p.pair); o.base_currency = intern(p.base_currency); o.fx_reset_calendar = intern(p.fx_reset_calendar);
     o.fixed = owned(p.fixed); o.floating = owned(p.floating); o.other = owned(p.other);
     return o;
   }

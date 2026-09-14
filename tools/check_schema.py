@@ -24,6 +24,7 @@ for iid, i in idx.items():
 for pid, p in prod.items():
     ref("calendar", cal, p.get("calendar"), f"products/{pid}"); ref("currency", cur, p.get("currency"), f"products/{pid}")
     ref("index", idx, p.get("discount_index"), f"products/{pid}")
+    ref("calendar", cal, p.get("fx_reset_calendar"), f"products/{pid}/fx_reset_calendar")
     for lg in ("fixed_leg", "float_leg", "spread_leg", "flat_leg", "usd_leg", "eur_leg"):
         if lg in p: ref("index", idx, p[lg].get("index"), f"products/{pid}/{lg}")
 for cc, c in cur.items():

@@ -1059,6 +1059,11 @@ void product_from_json(cvd::OverlayBatch& b, std::string_view id, const json::ob
   p.base_currency = f.text("base_currency");
   f.count("spot_lag", p.spot_lag);
   f.count("payment_lag", p.payment_lag);
+  f.count("exchange_lag_initial", p.exchange_lag_initial);
+  f.count("exchange_lag_intermediate", p.exchange_lag_intermediate);
+  f.count("exchange_lag_final", p.exchange_lag_final);
+  f.count("fx_reset_fixing_lag", p.fx_reset_fixing_lag);
+  p.fx_reset_calendar = f.text("fx_reset_calendar");
   f.flag("zero_coupon", p.zero_coupon);
   p.fixed = leg_from_json(f.leg({"fixed_leg"}), f.where);
   p.floating = leg_from_json(f.leg({"float_leg", "spread_leg", "usd_leg"}), f.where);

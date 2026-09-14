@@ -105,6 +105,11 @@ TEST(ConventionsRulesBaked, ZeroCouponBasisAndXccyShapes) {
   rejects([&] { auto p = xccy; p.other = cvd::LegConv{}; cvd::validate(p); }, "eur_leg");
   rejects([&] { auto p = xccy; p.pair = {}; cvd::validate(p); }, "pair");
   rejects([&] { auto p = xccy; p.frequency = {}; cvd::validate(p); }, "frequency");
+  rejects([&] { auto p = xccy; p.exchange_lag_initial = -1; cvd::validate(p); }, "exchange_lag_initial");
+  rejects([&] { auto p = xccy; p.exchange_lag_intermediate = -1; cvd::validate(p); }, "exchange_lag_intermediate");
+  rejects([&] { auto p = xccy; p.exchange_lag_final = -1; cvd::validate(p); }, "exchange_lag_final");
+  rejects([&] { auto p = xccy; p.fx_reset_fixing_lag = -1; cvd::validate(p); }, "fx_reset_fixing_lag");
+  rejects([&] { auto p = xccy; p.fx_reset_calendar = {}; cvd::validate(p); }, "fx_reset_calendar");
 
   const cvd::ProductConv administered = baked_product("administered-basis", false);
   EXPECT_EQ(administered.bdc, "") << "the fixture: a type the schema only asks for a calendar";

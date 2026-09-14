@@ -270,6 +270,13 @@ inline cal::Instrument basis_swap(const Date& vd, const SwapConv& conv, const Da
 // MtM cross-currency OIS basis swap (compile._xccy_mtm_basis).
 inline cal::Instrument xccy_mtm_basis(const Date& vd, const XccyConv& x, const Date& mat, int ci, int foreign,
                                       int fund, double fx_spot, double market) {
+  // The engine books every notional exchange ON its accrual date (ARRC / CARR / AFMA: only coupons pay late); a
+  // product that lags an exchange is refused rather than priced with the exchange on the wrong date.
+  if (x.exchange_lag_initial != 0 || x.exchange_lag_intermediate != 0 || x.exchange_lag_final != 0)
+    throw std::invalid_argument("xccy_mtm_basis: product '" + x.product_id +
+                                "' needs exchange_lag_initial / _intermediate / _final = 0 (a lagged notional exchange is not modelled)");
+  if (x.fx_reset_lag < 0 || x.fx_reset_calendar.empty())
+    throw std::invalid_argument("xccy_mtm_basis: product '" + x.product_id + "' needs fx_reset_fixing_lag and fx_reset_calendar");
   // The XccyConv shares the SwapConv shape for the leg builders (calendar/bdc/spot_lag/freq/dc).
   SwapConv sc;
   sc.calendar = x.calendar; sc.bdc = x.bdc; sc.fixed_dc = x.dc; sc.float_dc = x.dc;
@@ -286,6 +293,10 @@ inline cal::Instrument xccy_mtm_basis(const Date& vd, const XccyConv& x, const D
   for (auto& c : ins.fwd.coupons) c.pay = c.accrual_end;
   ins.bench = float_leg(vd, sc, mat, foreign, ci, x.freq_tok, x.dc);
   ins.mtm = float_leg(vd, sc, mat, fund, fund, x.freq_tok, x.dc, /*reset_num=*/ci, /*reset_den=*/fund, fx_spot);
+  // The resetting notional's FX forward is taken at each period START (reset_time unset = the accrual start): the rate
+  // FIXED fx_reset_lag business days earlier (CARR 2021: 7 June for the period from 9 June) is a SPOT rate for value on
+  // that start, so the fixing date never moves the forward. The DB carries the fixing lag and calendar; when a fixing
+  // makes a coupon seasoned is designed with fx_spot_time (owner decision 2026-09-14).
   cal::FixedLeg fixed;
   fixed.discount = ci;
   for (const auto& [s, e] : swap_periods_to(vd, x.calendar, mat, x.freq_tok, x.bdc, x.spot_lag)) {

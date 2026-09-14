@@ -320,6 +320,30 @@
             "type": "integer",
             "minimum": 0
           },
+          "exchange_lag_initial": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "xccy_mtm: business days after the adjusted start date the initial notional exchange settles (market: 0)."
+          },
+          "exchange_lag_intermediate": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "xccy_mtm: business days after each adjusted roll date the intermediate MtM exchange settles (market: 0)."
+          },
+          "exchange_lag_final": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "xccy_mtm: business days after the adjusted maturity the final notional exchange settles (market: 0)."
+          },
+          "fx_reset_fixing_lag": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "xccy_mtm: business days before each period start the resetting notional's FX rate is fixed (CARR 2021: 2)."
+          },
+          "fx_reset_calendar": {
+            "type": "string",
+            "description": "xccy_mtm: the calendar the FX reset lag counts on."
+          },
           "frequency": {
             "type": "string",
             "pattern": "^[0-9]+[DWMY]$"
@@ -685,7 +709,12 @@
                 "payment_lag",
                 "frequency",
                 "usd_leg",
-                "eur_leg"
+                "eur_leg",
+                "exchange_lag_initial",
+                "exchange_lag_intermediate",
+                "exchange_lag_final",
+                "fx_reset_fixing_lag",
+                "fx_reset_calendar"
               ]
             }
           }

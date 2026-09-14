@@ -114,6 +114,12 @@ TEST(Conventions, XccyMtmLegRolesMatchDeskSpec) {
   EXPECT_EQ(p.floating.index, std::string("USD-SOFR"));
   EXPECT_EQ(p.spot_lag, 2);
   EXPECT_EQ(p.payment_lag, 2);
+  // Only coupons pay late: every notional exchange settles on its date; the FX resets 2 BD before each period.
+  EXPECT_EQ(p.exchange_lag_initial, 0);
+  EXPECT_EQ(p.exchange_lag_intermediate, 0);
+  EXPECT_EQ(p.exchange_lag_final, 0);
+  EXPECT_EQ(p.fx_reset_fixing_lag, 2);
+  EXPECT_EQ(p.fx_reset_calendar, std::string("EURUSD"));
 }
 
 // ---------------------------------------------------------------------------------------------------

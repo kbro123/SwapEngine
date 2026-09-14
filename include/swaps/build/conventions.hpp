@@ -93,6 +93,10 @@ inline SwapConv swap_conv(const std::string& currency, const std::string& index)
 struct XccyConv {
   std::string calendar, bdc, dc, freq_tok, product_id;
   int spot_lag = -1, pay_lag = -1;
+  // Notional exchange settlement lags (the engine books every exchange ON its accrual date: only 0 is modelled)
+  // and the FX reset fixing lag on fx_reset_calendar (CARR 2021: the FX sets 2 business days before each period).
+  int exchange_lag_initial = -1, exchange_lag_intermediate = -1, exchange_lag_final = -1, fx_reset_lag = -1;
+  std::string fx_reset_calendar;
 };
 inline XccyConv xccy_conv(const std::string& pair) {
   const std::string pid = "XCCY-MTM-" + upper(pair);
@@ -105,6 +109,11 @@ inline XccyConv xccy_conv(const std::string& pair) {
   x.freq_tok = sv_str(cvd::require_field(p.frequency, "frequency", p.id));
   x.spot_lag = cvd::require_lag(p.spot_lag, "spot_lag", p.id);
   x.pay_lag = cvd::require_lag(p.payment_lag, "payment_lag", p.id);
+  x.exchange_lag_initial = cvd::require_lag(p.exchange_lag_initial, "exchange_lag_initial", p.id);
+  x.exchange_lag_intermediate = cvd::require_lag(p.exchange_lag_intermediate, "exchange_lag_intermediate", p.id);
+  x.exchange_lag_final = cvd::require_lag(p.exchange_lag_final, "exchange_lag_final", p.id);
+  x.fx_reset_lag = cvd::require_lag(p.fx_reset_fixing_lag, "fx_reset_fixing_lag", p.id);
+  x.fx_reset_calendar = sv_str(cvd::require_field(p.fx_reset_calendar, "fx_reset_calendar", p.id));
   return x;
 }
 

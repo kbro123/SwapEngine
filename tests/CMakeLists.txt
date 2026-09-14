@@ -36,6 +36,7 @@ add_executable(swaps_tests
   asset_swap_pay_lag_repro_test.cpp
   roll_book_accrual_repro_test.cpp
   asset_swap_bus252_repro_test.cpp
+  xccy_carr_example_repro_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
   turns_test.cpp
