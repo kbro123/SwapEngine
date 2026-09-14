@@ -41,6 +41,11 @@ MUTATIONS = [
      "  if (r.x1 && r.x1->size() != P0.n_knots())",
      "  if (false)",
      ["pnl_report_test.cpp"], "*", "the x1 length check is unpinned (E7 6.7)"),
+    # 2026-09-14 PN1: bundle1 must be bundle0 re-quoted (structure_equal), not merely the same counts.
+    ("pnl_report_bundle1_counts_only", "include/swaps/calibration/pnl_explain.hpp",
+     "  if (r.bundle1 && !structure_equal(r.bundle0, *r.bundle1))",
+     "  if (r.bundle1 && (r.bundle1->n_knots() != r.bundle0.n_knots() || r.bundle1->n_residuals() != r.bundle0.n_residuals()))",
+     ["pnl_report_test.cpp"], "*", "bundle1's structure check is back to counts only (PN1)"),
     # 2026-09-14 SW1: a fixing day before curve time 0 is past whatever the evaluation date says.
     ("fixings_past_by_curve_time", "include/swaps/pricing/fixings.hpp",
      "        d.t_start < 0.0 || d.fixing_date < ctx.evaluation_date ||",

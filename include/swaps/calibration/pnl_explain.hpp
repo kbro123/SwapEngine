@@ -83,6 +83,7 @@
 #include "swaps/calibration/bundle_problem.hpp"  // BundleProblem, build_bundle_curves, CurveHandle
 #include "swaps/calibration/diagnostics.hpp"     // CalibrationSession, seed_or_flat
 #include "swaps/calibration/regularize.hpp"      // RegSpec
+#include "swaps/calibration/structure_fingerprint.hpp"  // structure_equal
 #include "swaps/portfolio/portfolio.hpp"         // MultiCurveBook
 #include "swaps/pricing/cashflows.hpp"           // FloatCoupon / FixedCoupon
 
@@ -209,8 +210,9 @@ inline PnlExplain pnl_explain(const BundleProblem& prob, const portfolio::MultiC
 
 
 // ---- the `pnl` verb's whole computation (E7 stage 6.7) ------------------------------------------------------------
-// bundle0 calibrates to q0 -> x0 and the analytic ladder dP/dq at (x0, q0); an optional bundle1 of the same shape
-// calibrates to q1 -> x1 and dq = q1 - q0 (absent: x1 = x0, dq = 0, pure carry / roll). An explicit x0 / x1 SEEDS the
+// bundle0 calibrates to q0 -> x0 and the analytic ladder dP/dq at (x0, q0); an optional bundle1 -- bundle0 RE-QUOTED:
+// structure_equal, so the same curves, knots and instruments in the same order, only the quotes differ (x1 is read on
+// bundle0's knots and dq is formed row by row) -- calibrates to q1 -> x1 and dq = q1 - q0 (absent: x1 = x0, dq = 0, pure carry / roll). An explicit x0 / x1 SEEDS the
 // calibration and also OVERRIDES the state the decomposition reprices at (the ladder stays at the calibrated x0).
 struct PnlRequest {
   BundleProblem bundle0;
@@ -237,6 +239,9 @@ concept PnlSession = CalibrationSession<S> &&
 template <PnlSession Session>
 PnlReport pnl_report(PnlRequest r) {
   if (r.bundle0.n_curves() == 0) throw std::invalid_argument("pnl: bundle0 has no curves");
+  if (r.bundle1 && !structure_equal(r.bundle0, *r.bundle1))
+    throw std::invalid_argument(
+        "pnl: bundle1 must be bundle0 re-quoted -- the same curves, knots and instruments in the same order");
   Session s0(std::move(r.bundle0));
   const BundleProblem& P0 = s0.problem();
   s0.calibrate(seed_or_flat(P0, r.x0, "pnl"), r.reg);
@@ -248,10 +253,6 @@ PnlReport pnl_report(PnlRequest r) {
   out.dq = Eigen::VectorXd::Zero(P0.n_residuals());
   Eigen::VectorXd x1 = s0.x();
   if (r.bundle1) {
-    if (r.bundle1->n_knots() != P0.n_knots())
-      throw std::invalid_argument("pnl: bundle1 must share bundle0's curve topology (knot count differs)");
-    if (r.bundle1->n_residuals() != P0.n_residuals())
-      throw std::invalid_argument("pnl: bundle1 must share bundle0's instruments (residual count differs)");
     Session s1(std::move(*r.bundle1));
     s1.calibrate(seed_or_flat(s1.problem(), r.x1, "pnl"), r.reg);
     x1 = s1.x();

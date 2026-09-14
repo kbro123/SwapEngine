@@ -183,3 +183,29 @@ TEST(PnlReport, ChecksItsInputs) {
   rows.bundle1->instruments.push_back(rate(0.0, 3.0, 0.03));
   EXPECT_THROW((void)cal::pnl_report<SeedSession>(rows), std::invalid_argument);
 }
+
+// PN1 (reproduced 2026-09-14): bundle1 was checked by COUNTS only (n_knots, n_residuals). pnl_explain reads x1 on
+// bundle0's knot grid and forms dq = q1 - q0 row by row, so a bundle1 whose knots sit at other times, or whose rows are
+// the same instruments in another order, was accepted and silently misread. Only the quotes may differ.
+TEST(PnlReport, RefusesABundle1OfADifferentStructure) {
+  cal::PnlRequest ok;
+  ok.bundle0 = bundle(0.030, 0.032);
+  ok.book = book();
+  ok.dt_years = 0.5;
+
+  cal::PnlRequest requoted = ok;
+  requoted.bundle1 = bundle(0.031, 0.0345);
+  EXPECT_NO_THROW((void)cal::pnl_report<SeedSession>(requoted)) << "the control: a re-quote is the use case";
+
+  cal::PnlRequest moved_knots = ok;
+  moved_knots.bundle1 = bundle(0.031, 0.0345);
+  moved_knots.bundle1->curves[0].regions = crv::flat_hermite({}, {1.0, 5.0});  // same count, other times
+  EXPECT_THROW((void)cal::pnl_report<SeedSession>(moved_knots), std::invalid_argument)
+      << "x1 would be read on bundle0's knots {1, 3}";
+
+  cal::PnlRequest reordered = ok;
+  reordered.bundle1 = bundle(0.031, 0.0345);
+  std::swap(reordered.bundle1->instruments[0], reordered.bundle1->instruments[1]);  // same rows, other order
+  EXPECT_THROW((void)cal::pnl_report<SeedSession>(reordered), std::invalid_argument)
+      << "dq would difference the 1y quote against the 1y-3y quote";
+}
