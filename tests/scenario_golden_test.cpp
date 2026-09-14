@@ -3,6 +3,8 @@
 // request -- a 3-curve bundle (domestic discount, domestic forecast, foreign) with a turn, a book of two swaps and an
 // xccy position, parallel / per-curve / override / FX / no-op scenarios, a parallel x fx grid and a shift_curve +
 // parallel grid, and `var`'s full-revaluation P&L over the same kinds of move -- compared BYTE FOR BYTE with tests/golden/scenario/*.json, recorded from the verbs before the lift.
+// Before the var lift (E7, 2026-09-14) two more: var's SUPPLIED reduction and a seeded, smoothed reval, recorded from
+// api/var.cpp as it stood -- a labelled regression freeze of the pieces var_reval.json does not reach.
 // The lift must keep every number bitwise. An owner-gated behaviour change (SC1 override-vs-add, SC2 multi-pair FX)
 // re-records deliberately and says so in its commit:
 //   SWAPS_WRITE_GOLDEN=1 ./build/api/swaps_api_tests --gtest_filter='ScenarioGolden.*'
@@ -271,4 +273,60 @@ TEST(ScenarioGolden, VarRevaluationResponseIsBitwise) {
   int zeros = 0;
   for (const auto& v : sorted) zeros += v.to_number<double>() == 0.0;
   EXPECT_EQ(zeros, 1) << "exactly the no-op move reprices to the base";
+}
+
+// SUPPLIED: every branch of the reduction -- interpolated position, m clamped to 1 (q = 0.99 on 7 points), p == 1 on the
+// last point (q = 1e-17), duplicates -- and the key order of a supplied response. The bare body (no "var" envelope)
+// answers with the same bytes.
+TEST(ScenarioGolden, VarSuppliedResponseIsBitwise) {
+  json::object req;
+  req["pnl"] = json::array{2.5, -3.25, 5.0, -1.0, 7.75, -3.25, -12.5};
+  req["quantiles"] = json::array{0.5, 0.9, 0.99, 1e-17};
+  const std::string response = api::var_json(json::object{{"var", req}});
+  expect_golden("var_supplied", response);
+  EXPECT_EQ(api::var_json(req), response) << "the bare body is the same request";
+
+  const json::object out = json::parse(response).as_object().at("var").as_object();
+  EXPECT_EQ(out.at("mode").as_string(), "supplied");
+  const json::array& q = out.at("quantiles").as_array();
+  EXPECT_EQ(q[2].as_object().at("es_pnl").to_number<double>(), -12.5) << "q = 0.99 on 7 points: the single worst";
+  EXPECT_EQ(q[3].as_object().at("var_pnl").to_number<double>(), 7.75) << "q = 1e-17: the last point";
+}
+
+// REVAL with an explicit seed, a regulariser and no quantiles (the [0.95, 0.99] default): the pieces the lift re-plumbs
+// (seed_or_flat, RegSpec, the default) that var_reval.json does not exercise.
+TEST(ScenarioGolden, VarRevalSeededAndSmoothedResponseIsBitwise) {
+  json::object req = base_request();
+  req.erase("sample_times");
+  json::array x0;
+  const cal::BundleProblem p = bundle();
+  for (int i = 0; i < p.n_knots(); ++i) x0.push_back(0.025 + 0.0005 * i);  // not the flat seed
+  req["x0"] = std::move(x0);
+  json::array reg_curves;
+  for (int c = 0; c < p.n_curves(); ++c) reg_curves.push_back(c);
+  req["regularize"] = json::object{{"lambda", 1e-4}, {"tension", true}, {"curves", reg_curves}};  // on(): lambda AND curves
+  req["scenarios"] = json::array{
+      json::object{{"parallel_bp", 37.5}},
+      json::object{{"parallel_bp", 34.0}, {"shift_curve", json::object{{"1", -31.75}}}},
+      json::object{{"bump_fx", json::array{json::object{{"base", "EUR"}, {"quote", "USD"}, {"rel", 0.02}}}}},
+      json::object{}};
+  const std::string response = api::var_json(json::object{{"var", req}});
+  expect_golden("var_reval_seeded", response);
+
+  const json::object out = json::parse(response).as_object().at("var").as_object();
+  const json::array& q = out.at("quantiles").as_array();
+  ASSERT_EQ(q.size(), 2u);
+  EXPECT_EQ(q[0].as_object().at("q").to_number<double>(), 0.95) << "absent quantiles take the default";
+  // The regulariser reaches the calibration: the same request without it (same seed) prices another base.
+  json::object plain = req;
+  plain.erase("regularize");
+  const double plain_base =
+      json::parse(api::var_json(json::object{{"var", plain}})).as_object().at("var").as_object().at("base_npv").to_number<double>();
+  EXPECT_NE(out.at("base_npv").to_number<double>(), plain_base) << "the regulariser must change the calibrated base";
+  // The golden pins a CONVERGED, regularised base: the same bundle, seed and regulariser through the calibrate dispatch.
+  json::object cal_req{{"bundle", req.at("bundle")}, {"x0", req.at("x0")}, {"regularize", req.at("regularize")}};
+  const json::object cal_out = json::parse(api::run_json(cal_req)).as_object();
+  ASSERT_TRUE(cal_out.contains("calibration")) << json::serialize(cal_out);
+  EXPECT_TRUE(cal_out.at("calibration").at("converged").as_bool()) << json::serialize(cal_out.at("calibration"));
+  EXPECT_TRUE(cal_out.at("calibration").at("regularize_applied").as_bool());
 }
