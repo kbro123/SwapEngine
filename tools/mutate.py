@@ -24,6 +24,16 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 ASW weekend month-end: the asset-swap float leg ends on the maturity adjusted Following (ql::AssetSwap), the
+    # interior boundaries keep the product convention.
+    ("schedule_termination_ignores_rule", "include/swaps/build/schedule.hpp",
+     "  const Date end = adjust(cal_id, maturity_date, rule.termination_bdc.empty() ? bdc : rule.termination_bdc);\n",
+     "  const Date end = adjust(cal_id, maturity_date, bdc);\n",
+     ["asset_swap_leg_test.cpp"], "*", "the schedule's termination convention is unpinned"),
+    ("asw_float_leg_terminates_modified_following", "include/swaps/build/par_asset_swap.hpp",
+     "  rule.termination_bdc = \"Following\";  // the float end sits on the adjusted redemption date\n",
+     "",
+     ["asset_swap_leg_test.cpp"], "*", "the asset-swap float end on the Following-adjusted maturity is unpinned"),
     # 2026-09-14 O-X3 fx_spot_time (piece 2): a passed FX fixing seasons the MtM coupon ...
     ("seasoning_ignores_fx_fixing", "include/swaps/pricing/cashflows.hpp",
      "  if (c.fx_fixing_set && c.fx_fixing_time < 0.0) return true;  // the FX already fixed: the notional is a known number",

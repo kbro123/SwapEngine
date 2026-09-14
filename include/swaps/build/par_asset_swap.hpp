@@ -89,8 +89,10 @@ struct AssetSwapAnalytics {
 };
 
 // The float leg an asset swap receives, as payment times and accruals: the swap product's periods from settlement to
-// the business-day-adjusted maturity, every boundary rolled BACKWARD from maturity on the maturity's own day of month
-// (a short front stub). This is build::swap_periods_between; until 2026-09-13 a hand loop CHAINED the roll from the
+// the maturity adjusted FOLLOWING (ql::AssetSwap requires the float end == the bond maturity adjusted Following; at a
+// weekend month-end the product's Modified Following would end the leg in the previous month, days before redemption --
+// fixed 2026-09-14), every interior boundary rolled BACKWARD from the UNADJUSTED maturity on its own day of month on the
+// product's convention (a short front stub). This is build::swap_periods_between; until 2026-09-13 a hand loop CHAINED the roll from the
 // previous date, so a clamped day stayed clamped (a 2036-02-29 maturity got a 2028-02-28 boundary).
 struct FloatLegTimes {
   std::vector<double> pay, tau;
@@ -100,9 +102,10 @@ inline FloatLegTimes asset_swap_float_leg(const SwapConv& swc, const Date& value
                                           const Date& maturity) {
   ScheduleRule rule;
   rule.side = StubSide::Front;
-  rule.roll_dom = int(maturity.day());  // the UNADJUSTED maturity's day: the anchor below is the adjusted date
+  rule.roll_dom = int(maturity.day());
+  rule.termination_bdc = "Following";  // the float end sits on the adjusted redemption date
   const std::vector<Period> periods =
-      swap_periods_between(settle, swc.calendar, adjust(swc.calendar, maturity, swc.bdc), swc.float_freq_tok, swc.bdc, rule);
+      swap_periods_between(settle, swc.calendar, maturity, swc.float_freq_tok, swc.bdc, rule);
   FloatLegTimes f;
   f.pay.reserve(periods.size());
   f.tau.reserve(periods.size());

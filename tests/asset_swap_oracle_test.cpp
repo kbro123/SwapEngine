@@ -159,7 +159,10 @@ struct BondCase {
 
 class QlPackage {
  public:
-  QlPackage(const Mirror& m, const std::string& conv_id, const BondCase& bc, const std::string& settle)
+  // `following_termination`: end the float schedule on the maturity adjusted FOLLOWING (interior boundaries keep the
+  // product's convention) -- the only float schedule ql::AssetSwap accepts when the maturity is a weekend month-end.
+  QlPackage(const Mirror& m, const std::string& conv_id, const BondCase& bc, const std::string& settle,
+            bool following_termination = false)
       : disc_(m.disc) {
     const swaps::conventions::BondConv bconv = swaps::conventions::require_bond(conv_id);
     // Bond: the DB row's frequency, ACT/ACT ICMA on the unadjusted maturity-anchored grid, coupons paid
@@ -181,8 +184,8 @@ class QlPackage {
     // 0 fixing days, forwarding == discounting; the currency object is a label only (it prices nothing).
     idx_ = ql::ext::make_shared<ql::IborIndex>("AswVerbOracleFloat", tenor, /*fixingDays=*/0, ql::USDCurrency(),
                                                cal_, bdc, /*endOfMonth=*/false, dc_, disc_);
-    fsched_ = ql::Schedule(qd(settle), qd(bc.maturity), tenor, cal_, bdc, bdc, ql::DateGeneration::Backward,
-                           /*endOfMonth=*/false);
+    fsched_ = ql::Schedule(qd(settle), qd(bc.maturity), tenor, cal_, bdc, following_termination ? ql::Following : bdc,
+                           ql::DateGeneration::Backward, /*endOfMonth=*/false);
     lag_ = sc.pay_lag;
   }
 
@@ -410,6 +413,46 @@ TEST(AssetSwapVerbOracle, LeapDayMaturityFloatRollMatchesQuantLib) {
   EXPECT_NEAR(num(out, "dirty_curve", 0), q.bond()->dirtyPrice() / 100.0, tol::curve_rel);
   EXPECT_NEAR(num(out, "accrued", 0), q.bond()->accruedAmount(qd(settle)) / 100.0, tol::curve_rel);
   // Float side — these fail until the roll is fixed.
+  EXPECT_NEAR(num(out, "annuity", 0), ann_ql, tol::curve_rel * ann_ql);
+  EXPECT_NEAR(num(out, "asw_spread", 0), q.lagged_fair_spread(100.0, true, q.pay_lag()), tol::curve_rel);
+  EXPECT_NEAR(num(out, "asw_spread", 1), q.lagged_fair_spread(clean_mkt * 100.0, true, q.pay_lag()), tol::curve_rel);
+}
+
+// ASW WEEKEND MONTH-END MATURITY (reproduction, 2026-09-14; the review's 'a weekend month-end maturity ends the float leg before
+// redemption'). A 7Y note 2025-01-31 -> Sat 2032-01-31. The float product rolls Modified Following, so a ModF schedule ends
+// Fri 2032-01-30 -- and ql::AssetSwap REFUSES it: both constructors require the float end adjusted Following to equal the bond
+// maturity adjusted Following (Mon 2032-02-02; ql/instruments/assetswap.cpp). The only schedule QuantLib accepts terminates
+// Following: the last accrual and the float notional end ON the adjusted redemption date. The verb ends at ModF (Fri 30 Jan),
+// three days short, so its annuity and spread differ.
+TEST(AssetSwapVerbOracle, WeekendMonthEndMaturityFloatLegEndsOnTheFollowingAdjustedMaturity) {
+  const std::string vd = "2026-09-15", settle = "2026-09-16";
+  const std::string conv = "US-TREASURY";
+  ql::SavedSettings saved;
+  ql::Settings::instance().evaluationDate() = qd(vd);
+  ql::IborCoupon::Settings::instance().createAtParCoupons();
+
+  const Mirror m(vd);
+  const BondCase bc{"2025-01-31", "2032-01-31", 0.0425};
+  ASSERT_EQ(qd(bc.maturity).weekday(), ql::Saturday) << "premise: a weekend month-end maturity";
+  const QlPackage modf(m, conv, bc, settle);
+  ASSERT_EQ(modf.float_schedule().endDate(), ql::Date(30, ql::January, 2032)) << "premise: ModF rolls back into January";
+  EXPECT_THROW(modf.fair_spread(100.0, true), ql::Error) << "premise: QuantLib refuses a float end before the adjusted maturity";
+  const QlPackage q(m, conv, bc, settle, /*following_termination=*/true);
+  ASSERT_EQ(q.float_schedule().endDate(), ql::Date(2, ql::February, 2032)) << "premise: the accepted schedule ends Mon 2 Feb";
+  EXPECT_NEAR(q.lagged_fair_spread(100.0, true, 0), q.fair_spread(100.0, true), tol::curve_rel) << "hand legs == ql::AssetSwap at lag 0";
+
+  const double clean_mkt = 0.97;
+  json::array bonds;
+  bonds.push_back(bond_row(conv, bc, settle));
+  json::object with_clean = bond_row(conv, bc, settle);
+  with_clean["clean"] = clean_mkt;
+  bonds.push_back(with_clean);
+  const json::object out = run_verb(m.bundle, vd, bonds);
+  ASSERT_FALSE(out.contains("error")) << json::serialize(out);
+  ASSERT_EQ(out.at("n").to_number<int>(), 2);
+
+  const double ann_ql = q.lagged_annuity(q.float_dc(), q.pay_lag());
+  EXPECT_NEAR(num(out, "dirty_curve", 0), q.bond()->dirtyPrice() / 100.0, tol::curve_rel) << "bond side: unaffected";
   EXPECT_NEAR(num(out, "annuity", 0), ann_ql, tol::curve_rel * ann_ql);
   EXPECT_NEAR(num(out, "asw_spread", 0), q.lagged_fair_spread(100.0, true, q.pay_lag()), tol::curve_rel);
   EXPECT_NEAR(num(out, "asw_spread", 1), q.lagged_fair_spread(clean_mkt * 100.0, true, q.pay_lag()), tol::curve_rel);

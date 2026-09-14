@@ -18,3 +18,4 @@ api/compile.cpp                     NUM   lag-default    # DateConv.spot_lag = -
 
 # ---- RATCHET (adopted 2026-09-08 with 130 entries; 68 after E2.1; 1 after E2 step 2; 0 after E2.6). ----
 
+include/swaps/build/par_asset_swap.hpp FALLBACK ^Following$   # an asset swap's float leg ends on the maturity adjusted Following: ql::AssetSwap's construction rule (assetswap.cpp paymentAdjustment), independent of any product or bond -- the instrument's definition, not a market choice

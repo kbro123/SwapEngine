@@ -103,8 +103,13 @@ struct ScheduleRule {
                            // Front) is itself a month-end date.
   int roll_dom = 0;        // day-of-month the regular boundaries land on; 0 = derive from the anchor
                            // (== today's behaviour: spot's own day of month rolled forward).
+  // Business-day convention for the TERMINATION date only; empty = the schedule's own convention (every swap). An asset
+  // swap's float leg ends on the bond maturity adjusted "Following" (ql::AssetSwap's requirement): at a weekend month-end
+  // Modified Following would end it in the previous month, days before the redemption.
+  std::string termination_bdc;
   bool is_default() const {
-    return side == StubSide::Back && length == StubLen::Short && !eom && !eom_auto && roll_dom == 0;
+    return side == StubSide::Back && length == StubLen::Short && !eom && !eom_auto && roll_dom == 0 &&
+           termination_bdc.empty();
   }
 };
 
@@ -138,7 +143,7 @@ inline std::vector<Period> swap_periods_between(const Date& spot, const std::str
   // date changes nothing. Before 2026-09-14 the raw date closed the last period, so a trade booked to a Sunday
   // anniversary accrued to the Sunday (tests/trade_weekend_maturity_repro_test.cpp). The regular grid and the roll
   // day below still come from the UNADJUSTED dates -- roll conventions anchor on unadjusted dates.
-  const Date end = adjust(cal_id, maturity_date, bdc);
+  const Date end = adjust(cal_id, maturity_date, rule.termination_bdc.empty() ? bdc : rule.termination_bdc);
 
   // Regular grid, forward from `spot` (the legacy path, taken verbatim for monthly steps so the default
   // output can never drift by even one ulp of date; day-based steps, e.g. MXN 28D, step by days).
