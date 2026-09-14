@@ -29,6 +29,7 @@ swaps_oracle_tests|pricing_test.cpp|5|13
 swaps_oracle_tests|rfr_coupon_oracle_test.cpp|3|7
 swaps_oracle_tests|risk_ladder_oracle_test.cpp|6|33
 swaps_oracle_tests|sabr_ql_oracle_test.cpp|1|1
+swaps_oracle_tests|scenario_oracle_test.cpp|3|33
 swaps_oracle_tests|scheme_value_oracle_test.cpp|1|2
 swaps_oracle_tests|tension_oracle_test.cpp|1|2
 swaps_oracle_tests|turns_oracle_test.cpp|2|2
