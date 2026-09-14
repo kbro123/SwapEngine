@@ -1,39 +1,30 @@
-# Bond math — independent reference oracles (beyond QuantLib)
+# External bond reference (`tests/golden/bond_reference.csv`)
 
-We validate the bond kernels penny-perfect against QuantLib (`tests/bond_oracle_test.cpp`), but a single
-oracle can hide a *shared* convention assumption. These are the independent cross-checks, ordered by how
-much they add:
+An **independent, non-QuantLib** reference for the US Treasury **street** convention, checked by
+`tests/bond_reference_test.cpp` section 3 at 1e-9 per unit notional. The CSV is **committed and required**: a missing
+file fails the gate (PRINCIPLES.md P9). The engine never needs Java; only regenerating the CSV does.
 
-| Reference | What it is | How we use it | Independence |
-|-----------|-----------|---------------|--------------|
-| **Excel / OpenFormula `PRICE`/`YIELD`/`ACCRINT`** (basis 1 = Act/Act) | The spreadsheet street-convention formula (LibreOffice/Excel, an independent C++ implementation) | Reimplemented from its published formula in `tests/bond_reference_test.cpp` and checked against the kernel — a *different algebra* than our Horner evaluation | High (different code lineage, same convention) |
-| **31 CFR Part 356 Appendix B** | The **official** US Treasury price/yield formula, incl. short/long first coupon & when-issued. It discounts the fractional first period by **simple** interest — a *different convention* from the street `v^w` our kernel implements | Reimplemented (regular + short-first) in `tests/bond_reference_test.cpp`, which pins the exact street↔Treasury relationship rather than equality | Authoritative — it *defines* the Treasury convention |
-| **[Rateslib](https://rateslib.com)** (`calc_mode="us_gb"` **and** `"ust_31bii"`) | Independent Python fixed-income lib, Bloomberg-aligned. `us_gb` = the street convention we implement; `ust_31bii` (= `us_gb_tsy`) = the App B Treasury convention | `gen_golden.py` emits BOTH into `tests/golden/bond_reference.csv` with a `mode` column; `BondReference.ExternalGoldenIfPresent` asserts equality for `us_gb` and equality-after-the-convention-factor for `ust_31bii` (skips if absent) | High (independent implementation + Bloomberg-aligned) |
-| **[FinancePy](https://github.com/domokane/FinancePy)** | Independent Python lib (`Bond.yield_to_maturity`, US street) | Alternative golden source — swap into `gen_golden.py` | High |
-| **Bloomberg YAS / Tradeweb** | The market's own price/yield for a specific CUSIP | Manual spot-checks; paste a few (settle, ytm, clean) into the golden CSV | Gold standard (market truth) |
+| Source | Licence | Rows |
+|---|---|---|
+| [OpenGamma Strata](https://strata.opengamma.io) 2.12.56, `FixedCouponBondYieldConvention.US_STREET`, driven by `gen_golden.py` through JPype | Apache-2.0 | seasoned regular-period bonds, a when-issued new issue with a short (prorated) first coupon, bonds settling in their final coupon period |
 
-## Generating the external golden (Rateslib)
+Street = a compound fractional first period (`Q(v)·v^w`), simple once only the final coupon remains -- what
+`build::us_treasury` / `us_treasury_wi` implement.
 
-> **Licence.** Rateslib is **source-available, not open-source**. Without a registered commercial licence
-> its dual licence permits **non-commercial use only** (at-home / academic). Running `gen_golden.py` is a
-> use of the software, and the CSV it writes is derived from it. If this repository is ever used
-> commercially, obtain a licence (<https://rateslib.com/licence>) or drop the Rateslib golden — the
-> QuantLib oracle plus the QL-free Excel/OpenFormula and 31 CFR App B checks in
-> `tests/bond_reference_test.cpp` need no third-party code. (An earlier version of this file and of
-> `gen_golden.py` said "MIT". That was wrong.)
+**Not covered here, deliberately:**
+- 31 CFR Part 356 App B (the Treasury method): Strata has no such mode. It is pinned by `bond_reference_test.cpp`
+  section 2 (the regulation reimplemented) and the QuantLib `SimpleThenCompounded` oracle (`tests/bond_oracle_test.cpp`).
+- A LONG first coupon: the engine's builders reject it; support is a separate queued item.
 
-```bash
-pip install rateslib            # tested with 2.7.1
-python tools/bond_reference/gen_golden.py
-ctest --test-dir build -R BondReference   # ExternalGoldenIfPresent now runs instead of skipping
-```
+**History.** Until 2026-09-14 this CSV came from Rateslib, whose licence permits non-commercial use only (LIC1). It was
+replaced by Strata; the ust_31bii rows went with it.
 
-The C++ test reads `tests/golden/bond_reference.csv` with columns
-`mode,value_date,settle,issue,maturity,coupon,yield,clean,dirty,accrued` (dates ISO, coupon/yield decimals,
-prices per unit notional; `mode` is the Rateslib `calc_mode` the row was priced under). The CSV is
-intentionally NOT committed by default — it is machine-generated from
-whichever external tool you trust; commit it if you want the pin to be part of the gate.
+## Regenerating
 
-> Rateslib's method names have drifted across versions; if `gen_golden.py` errors on `bond.price(...)` /
-> `bond.accrued(...)`, adjust those three calls to your installed version — the CSV schema is the contract.
-> Rateslib >= 2 also requires `datetime`, not `date`, for schedule endpoints (`_dt()` in the script).
+1. Fetch the jars listed in `strata_jars.sha256` from Maven Central into one directory (the file carries each jar's
+   coordinates and SHA-256).
+2. `python3 -m venv /tmp/jpype-venv && /tmp/jpype-venv/bin/pip install JPype1==1.5.2`
+3. `/tmp/jpype-venv/bin/python tools/bond_reference/gen_golden.py --jars DIR [--jvm /path/to/libjvm.dylib]`
+
+The script verifies every jar's SHA-256 and the Strata version before starting the JVM, then rewrites the CSV. Run
+`ctest -R BondReference` afterwards and commit the CSV with the change that needed it.

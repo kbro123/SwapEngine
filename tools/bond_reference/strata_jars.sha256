@@ -1,0 +1,17 @@
+# SHA-256 pins for tools/bond_reference/gen_golden.py (OpenGamma Strata 2.12.56 and its runtime dependencies).
+# format: sha256  file  maven-coordinates (download from Maven Central; the generator refuses any other jar set)
+e1fcbfbdd0d0caedadfb59febace5a62812db3b9425f3a03ef4c4cbba3ed0ee3  colt.jar  colt:colt:1.2.0 (no pom inside; pinned by hash)
+1e56d7b058d28b65abd256b8458e3885b674c1d588fa43cd7d1cbb9c7ef2b308  commons-math3.jar  org.apache.commons:commons-math3:3.6.1
+8a8f81cf9b359e3f6dfa691a1e776985c061ef2f223c9b2c80753e1b458e8064  failureaccess.jar  com.google.guava:failureaccess:1.0.2
+b918c98a7e44dbe94ebd9fe3e40cddaadb5a93e6a78eb6008b42df237241e538  guava.jar  com.google.guava:guava:33.4.0-jre
+0c0847347fdb1ad0994833c71337ce608cafb30498bdf21dff1a45633d6bfdad  joda-beans.jar  org.joda:joda-beans:2.11.1
+b490286aecdb3f63a850c1f26f63c6e30a91f2447baf8acc30d9c3ff6574eba5  joda-convert.jar  org.joda:joda-convert:2.2.3
+d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0  slf4j-api.jar  org.slf4j:slf4j-api:1.7.36
+c214958b07816cb4412b30c7bdbd4308ffdc6ba2a83767b8f3a9229cbd9274d6  slf4j-nop.jar  org.slf4j:slf4j-nop:1.7.36
+bb54aa7ef41c718d7966619d8342a6202e8d3debc7f1962e549e5038cdd5a7c4  strata-basics.jar  com.opengamma.strata:strata-basics:2.12.56
+1232e1942339f3e20c2f6f99acfa0aa2e88f84d9cde850f42d96327464b6936c  strata-collect.jar  com.opengamma.strata:strata-collect:2.12.56
+32eddf42def2f766ffbec005efcddb5c2a830a1a194b700815cb7564b85384bc  strata-data.jar  com.opengamma.strata:strata-data:2.12.56
+ec0651e38b3a9d34ec3a49f4cd2187b8e82538743ad15aa77ace2bfc225afdc6  strata-market.jar  com.opengamma.strata:strata-market:2.12.56
+abbbf94f1e823ce7474f5f9da3cb66f7b43eb3b660bae4c4a779b4775913f9b2  strata-math.jar  com.opengamma.strata:strata-math:2.12.56
+ec698d173b11604e0752bcfb3fd959ec2099e6ed73e919ef060814de7cbd9aef  strata-pricer.jar  com.opengamma.strata:strata-pricer:2.12.56
+02ce5a30679c584a48d3cab6fe9e30b1e80ecb71c8d58268375a88466bf91a6b  strata-product.jar  com.opengamma.strata:strata-product:2.12.56
