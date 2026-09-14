@@ -181,9 +181,14 @@ MUTATIONS = [
      "        d.t_start < 0.0 || d.fixing_date < ctx.evaluation_date ||",
      "        d.fixing_date < ctx.evaluation_date ||",
      ["fixings_test.cpp"], "*", "a seasoned day with no evaluation date being refused is unpinned"),
-    ("schedule_isda_interior_on_end", "include/swaps/build/schedule.hpp",
+    # 2026-09-14 FS1: a front-stub roll date that adjusts onto spot is not a boundary.
+    ("schedule_front_roll_onto_spot_kept", "include/swaps/build/schedule.hpp",
+     "    if (a < end && a > bounds.back()) bounds.push_back(a);",
      "    if (a < end) bounds.push_back(a);",
-     "    bounds.push_back(a);",
+     ["schedule_front_stub_onto_spot_repro_test.cpp"], "*", "dropping a roll date that adjusts onto spot is unpinned (FS1)"),
+    ("schedule_isda_interior_on_end", "include/swaps/build/schedule.hpp",
+     "    if (a < end && a > bounds.back()) bounds.push_back(a);",
+     "    if (a > bounds.back()) bounds.push_back(a);",
      ["trade_weekend_maturity_repro_test.cpp"], "*", "an ISDA boundary rolling onto the end is unpinned"),
     # 2026-09-14 weekend-maturity fix: a schedule ends on the termination date rolled by the convention.
     ("schedule_raw_termination", "include/swaps/build/schedule.hpp",

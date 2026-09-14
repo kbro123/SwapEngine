@@ -192,7 +192,10 @@ inline std::vector<Period> swap_periods_between(const Date& spot, const std::str
   std::vector<Date> bounds{spot};
   for (const Date& d : interior) {
     const Date a = adjust(cal_id, d, bdc);
-    if (a < end) bounds.push_back(a);  // an unadjusted boundary just before the maturity can roll onto the end
+    // An unadjusted boundary just before the maturity can roll onto the end, and one just after spot can roll back ONTO
+    // spot (Modified Following at a weekend month-end): neither is a period boundary (FS1, 2026-09-14; QuantLib's
+    // Schedule drops both).
+    if (a < end && a > bounds.back()) bounds.push_back(a);
   }
   bounds.push_back(end);
   std::vector<Period> out;
