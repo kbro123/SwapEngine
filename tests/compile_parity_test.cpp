@@ -111,6 +111,35 @@ void expect_json_eq(const json::value& a, const json::value& b, double tol, cons
     case json::kind::object: {
       const auto& ao = a.as_object();
       const auto& bo = b.as_object();
+      // THE THIRD DELIBERATE DIVERGENCE (XB1, 2026-09-14; TASKS-API §A0.5): an XccyMtmBasis self leg (fwd) is the
+      // constant leg's notional-exchange pair, so C++ pays each self coupon on its ACCRUAL END; compile.py still
+      // pays it with the lagged coupons. Each self coupon's pay must be our accrual end (the OIS bracket's last
+      // sub_end) and strictly before Python's; that one field is then neutralised and the rest compares normally.
+      if (ao.contains("quote") && ao.at("quote").is_string() && ao.at("quote").as_string() == "XccyMtmBasis" &&
+          ao.contains("fwd") && bo.contains("fwd")) {
+        json::object a2 = ao, b2 = bo;
+        auto& ac = a2["fwd"].as_object()["coupons"].as_array();
+        const auto& bc = b2["fwd"].as_object()["coupons"].as_array();
+        ASSERT_EQ(ac.size(), bc.size()) << "at " << path << ".fwd.coupons";
+        for (std::size_t i = 0; i < ac.size(); ++i) {
+          auto& x = ac[i].as_object();
+          const double ours = x.at("pay").to_number<double>();
+          const double theirs = bc[i].as_object().at("pay").to_number<double>();
+          const auto& ends = x.at("obs").as_object().at("sub_end").as_array();
+          ASSERT_FALSE(ends.empty()) << "at " << path << ".fwd.coupons[" << i << "]";
+          EXPECT_NEAR(ours, ends.back().to_number<double>(), 1e-15)
+              << "at " << path << ".fwd.coupons[" << i << "]: XB1 pays the self coupon on its accrual end";
+          EXPECT_GT(theirs, ours) << "at " << path << ".fwd.coupons[" << i << "]: compile.py lags the self leg";
+          x["pay"] = theirs;
+        }
+        ASSERT_EQ(a2.size(), b2.size()) << "object key count mismatch at " << path;
+        for (const auto& kv : a2) {
+          const std::string key(kv.key());
+          ASSERT_TRUE(b2.contains(key)) << "missing key '" << key << "' at " << path;
+          expect_json_eq(kv.value(), b2.at(key), tol, path + "." + key);
+        }
+        break;
+      }
       ASSERT_EQ(ao.size(), bo.size()) << "object key count mismatch at " << path;
       for (const auto& kv : ao) {
         const std::string key(kv.key());

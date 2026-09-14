@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 XB1: the xccy basis self leg is the exchange pair, paid on the accrual ends (not with the lagged coupons).
+    ("xccy_self_leg_pays_lagged", "include/swaps/build/instruments.hpp",
+     "  for (auto& c : ins.fwd.coupons) c.pay = c.accrual_end;\n",
+     "\n",
+     ["xccy_basis_exchange_pair_repro_test.cpp"], "*", "the exchange pair at the accrual dates is unpinned (XB1)"),
     # 2026-09-14 SC-CAL1: a joint calendar is open only when every leg is open (SOFR swaps: SIFMA AND New York).
     ("calendar_join_any_leg_open", "include/swaps/build/calendar.hpp",
      "      if (!is_business_day(std::string(view.joins[j]), d)) return false;",

@@ -32,6 +32,7 @@ add_executable(swaps_tests
   swap_spread_matched_maturity_repro_test.cpp
   sofr_calendar_repro_test.cpp
   lag_conventions_repro_test.cpp
+  xccy_basis_exchange_pair_repro_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
   turns_test.cpp

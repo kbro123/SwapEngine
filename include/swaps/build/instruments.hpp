@@ -278,6 +278,12 @@ inline cal::Instrument xccy_mtm_basis(const Date& vd, const XccyConv& x, const D
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::XccyMtmBasis;
   ins.fwd = float_leg(vd, sc, mat, ci, ci, x.freq_tok, x.dc);
+  // XB1 (2026-09-14): the self leg is the constant-notional leg's EXCHANGE PAIR, not a paid leg. Its value must be
+  // DF(s0) - DF(eN): the exchanges settle ON the accrual dates while only the coupons are lagged (ARRC / CARR /
+  // AFMA term sheets). Paying each self coupon on its accrual end makes the telescoped pv_self exactly that pair,
+  // on the templated quote and the compiled W-cache alike; at the lagged pay dates it was off by
+  // sum (DF(s)/DF(e) - 1)(DF(e) - DF(p)) / annuity.
+  for (auto& c : ins.fwd.coupons) c.pay = c.accrual_end;
   ins.bench = float_leg(vd, sc, mat, foreign, ci, x.freq_tok, x.dc);
   ins.mtm = float_leg(vd, sc, mat, fund, fund, x.freq_tok, x.dc, /*reset_num=*/ci, /*reset_den=*/fund, fx_spot);
   cal::FixedLeg fixed;

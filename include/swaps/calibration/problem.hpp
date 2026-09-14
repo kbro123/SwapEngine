@@ -335,7 +335,8 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
       return ins.fx_spot * (C(ins.fx_num).discount(ins.fx_time) / C(ins.fx_den).discount(ins.fx_time));
     case QuoteKind::XccyMtmBasis: {
       // Par basis of a MtM (FX-resettable-notional) xccy swap. fwd = the collateral curve's self-forecast
-      // leg (pv telescopes to the par-float value), bench = the foreign-index forecast leg, fixed = the
+      // leg paying on its accrual ends (pv telescopes to the exchange pair DF(s0) − DF(eN); build::xccy_mtm_basis,
+      // XB1), bench = the foreign-index forecast leg, fixed = the
       // annuity, all discounted on the collateral (pinned) curve; mtm = the resetting funding leg.
       //   b = (pv_self − pv_foreign)/annuity + mtm_leg_pv / (fx_spot · annuity)
       // The funding leg is par (SOFR-flat) so the mtm term ~0, but computing it exercises the resettable-
