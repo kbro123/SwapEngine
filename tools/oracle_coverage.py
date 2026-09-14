@@ -13,7 +13,9 @@ closure provably has no QuantLib check; one with an oracle merely might.
 
 The verb table is computed separately because api/*.hpp is reached by LINKING, not by including: a test
 that calls run_json("bonds", ...) exercises api/bond.hpp without ever naming the header. Verbs are matched
-by their request key appearing as a string literal in a test.
+by a test that BUILDS A REQUEST with their key (names_request: `req["key"] =`, a `{"key", v}` pair, `run_verb("key",
+...)`, JSON text `{"key": ...}`, or the verb's `key_json(` entry) -- not by any literal that happens to share the name.
+`--check` runs the matcher's selftest first.
 
   --check  compare against tests/oracle_coverage.lock and FAIL if any header LOST its oracle reach
            (gaining reach is always fine and updates nothing; closing a gap is not a gate failure)
@@ -83,6 +85,45 @@ def all_headers():
     return sorted(out)
 
 
+def names_request(text, key):
+    """True iff `text` BUILDS a request with `key`, in any of the forms the tests use:
+         C++ json   `["key"] = ...` (assigning into a request object), or a `{"key", value}` pair whose brace follows
+                    another brace or a comma (`json::object{{"key", v}}`, `..., {"key", v}`) -- NOT the first element of
+                    a string array (`keys[] = {"key", ...}`), whose brace follows `=`
+         a call     `run_verb("key", ...)` -- the key passed as a call's first argument
+         JSON text  `{"key": ...}` in a raw string, or `{\\"key\\": ...}` in an escaped one
+         the verb's own entry point, `key_json(`
+    Excluded on purpose: a response field that merely shares the verb's name (`out.at("pnl")` reading scenario_grid's
+    P&L array -- it made the tool report the `pnl` verb as oracle-named for two commits, found 2026-09-14), a greek or
+    field mention, and a bare list of keys (api_test.cpp's dispatch smoke sends each `{key: {}}` and asserts only that
+    dispatch reached a verb: it exercises routing, not the verb)."""
+    k = re.escape(key)
+    return bool(re.search(r'\[\s*"' + k + r'"\s*\]\s*=(?!=)', text) or
+                re.search(r'[{,]\s*\{\s*"' + k + r'"\s*,', text) or
+                re.search(r'\(\s*"' + k + r'"\s*,', text) or
+                re.search(r'"' + k + r'"\s*:', text) or
+                re.search(r'\\"' + k + r'\\"\s*:', text) or
+                re.search(r'\b' + k + r'_json\s*\(', text))
+
+
+def names_request_selftest():
+    """The matcher counts every request form and none of the shapes that fooled the literal rule. -> list of failures."""
+    counts = [('req["pnl"] = std::move(payload);', "pnl"),
+              ('api::scenario_json(json::object{{"scenario", body}});', "scenario"),
+              ('json::object{{"bundle", b}, {"portfolio", book}}', "portfolio"),
+              ('const json::object out = run_verb("bond_universe", body);', "bond_universe"),
+              ('api::run_json(R"({"credit": {"product": "X"}})");', "credit"),
+              ('api::run_json("{\\"ndf\\": {}}");', "ndf"),
+              ('api::list_conventions_json(req);', "list_conventions")]
+    ignores = [('const json::array& pnl = out.at("pnl").as_array();', "pnl"),
+               ('EXPECT_GT(r.vega, 0.0) << "vega";', "vega"),
+               ('const char* keys[] = {"generate_risk", "swaption"};', "generate_risk"),
+               ('const char* keys[] = {"generate_risk", "fx_vol", "ndf"};', "fx_vol")]
+    bad = [f"missed a request: {t!r} ({k})" for t, k in counts if not names_request(t, k)]
+    bad += [f"counted a non-request: {t!r} ({k})" for t, k in ignores if names_request(t, k)]
+    return bad
+
+
 def verbs():
     """request key -> tests naming it, split by whether any of those is a registered oracle."""
     d = open(os.path.join(ROOT, "api", "run_json_dispatch.gen.inc"), encoding="utf-8").read()
@@ -94,7 +135,7 @@ def verbs():
         t = open(p, encoding="utf-8", errors="ignore").read()
         base = os.path.basename(p)
         for k in keys:
-            if '"' + k + '"' in t:
+            if names_request(t, k):
                 named.setdefault(k, []).append(base)
                 if base in oracles:
                     by_oracle.setdefault(k, []).append(base)
@@ -114,12 +155,12 @@ def report():
         gap = [h.split("/")[-1] for h in hs if h not in reach]
         print(f"  {l:<12} {len(cov):>4}/{len(hs):<4}  {' '.join(gap) if gap else '-'}")
     keys, named, by_oracle = verbs()
-    print(f"\nrun_json VERBS: {len(keys)} total, {len(named)} named by some test, "
-          f"{len(by_oracle)} named by an ORACLE test")
+    print(f"\nrun_json VERBS: {len(keys)} total, {len(named)} driven by a test request, "
+          f"{len(by_oracle)} driven by an ORACLE test")
     if keys - set(named):
-        print("  named by NO test: " + " ".join(sorted(keys - set(named))))
+        print("  no test sends a request: " + " ".join(sorted(keys - set(named))))
     if keys - set(by_oracle):
-        print("  no oracle names:  " + " ".join(sorted(keys - set(by_oracle))))
+        print("  no oracle drives:        " + " ".join(sorted(keys - set(by_oracle))))
 
 
 def lock_lines():
@@ -142,6 +183,12 @@ def main():
         print(f"oracle_coverage: locked {len(cur)} headers")
         return 0
     if a.check:
+        bad = names_request_selftest()
+        if bad:
+            print("oracle_coverage: FAIL — the verb matcher's selftest:", file=sys.stderr)
+            for b in bad:
+                print("    " + b, file=sys.stderr)
+            return 1
         if not os.path.exists(LOCK):
             print("oracle_coverage: FAIL — no lock; run --update", file=sys.stderr)
             return 1
