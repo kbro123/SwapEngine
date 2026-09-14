@@ -124,16 +124,17 @@ dv::ScenarioGridRequest three_curve_request() {
 }  // namespace
 
 TEST(AddAxisShock, EveryAxisAddsOntoTheCellAndFxCompounds) {
+  const std::vector<cal::BundleCurveSpec> curves{flat_curve(0), flat_curve(0), flat_curve(1)};
   std::vector<double> delta(3, 0.0);
   double factor = 1.0;
-  dv::add_axis_shock(parallel({}), 42.0, delta, factor);
-  dv::add_axis_shock(shift_curve(1, {}), -31.75, delta, factor);
+  dv::add_axis_shock(parallel({}), 42.0, curves, delta, factor);
+  dv::add_axis_shock(shift_curve(1, {}), -31.75, curves, delta, factor);
   EXPECT_EQ(delta, (std::vector<double>{42.0 / 1e4, 42.0 / 1e4 + -31.75 / 1e4, 42.0 / 1e4}))
       << "a shift_curve axis ADDS to the parallel in a grid (SC1)";
   EXPECT_NE(delta[0], 42.0 * 1e-4) << "bp / 1e4, bit for bit";
   EXPECT_EQ(factor, 1.0);
-  dv::add_axis_shock(fx({}), 0.05, delta, factor);
-  dv::add_axis_shock(fx({}), -0.02, delta, factor);
+  dv::add_axis_shock(fx({}), 0.05, curves, delta, factor);
+  dv::add_axis_shock(fx({}), -0.02, curves, delta, factor);
   EXPECT_EQ(factor, 1.0 * (1.0 + 0.05) * (1.0 + -0.02));
   EXPECT_EQ(delta[2], 42.0 / 1e4) << "an fx axis moves no curve";
 }

@@ -10,7 +10,10 @@
 // them into one type removes that drift hazard.
 
 #include <algorithm>
+#include <cstddef>
 #include <vector>
+
+#include <Eigen/Core>
 
 #include "swaps/curve/curve_module.hpp"
 
@@ -73,5 +76,23 @@ struct CurveStructure {
   // itself (which uses n_interp_knots()).
   int n_knots() const { return n_interp_knots() + static_cast<int>(turns.size()); }
 };
+
+// The PARALLEL direction in a bundle's stacked state x (curves in order, each block [interp knots | turn deltas]): 1 on
+// every OUTRIGHT curve's interpolation knots, 0 on a SPREAD curve's knots and on every turn delta. x + e * direction
+// moves every curve's forward by exactly e -- a spread curve inherits the move from its base (its forward is base +
+// spread), and a turn delta is a jump over its window, not a level. A PV01 and a parallel scenario are derivatives /
+// moves along THIS direction; moving every state entry (the all-ones vector) moved a spread curve twice and moved turn
+// jumps (tests/spread_pv01_var_repro_test.cpp, fixed 2026-09-14).
+inline Eigen::VectorXd parallel_direction(const std::vector<CurveStructure>& curves) {
+  int n = 0;
+  for (const CurveStructure& c : curves) n += c.n_knots();
+  Eigen::VectorXd d = Eigen::VectorXd::Zero(n);
+  int offset = 0;
+  for (const CurveStructure& c : curves) {
+    if (c.base < 0) d.segment(offset, c.n_interp_knots()).setOnes();
+    offset += c.n_knots();
+  }
+  return d;
+}
 
 }  // namespace swaps::pricing

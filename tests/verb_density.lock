@@ -10,7 +10,7 @@ api/inflation.cpp lookups=1 defaults=15 loops=6 compute=8 branches=16   # deferr
 api/ndf.cpp lookups=0 defaults=13 loops=3 compute=1 branches=7   # deferred
 api/options.cpp lookups=7 defaults=45 loops=36 compute=14 branches=39   # deferred
 api/pnl.cpp lookups=0 defaults=4 loops=0 compute=1 branches=8   # core
-api/var.cpp lookups=0 defaults=3 loops=12 compute=33 branches=24   # deferred
+api/var.cpp lookups=0 defaults=3 loops=11 compute=31 branches=24   # deferred
 api/vega.cpp lookups=3 defaults=19 loops=9 compute=4 branches=15   # deferred
 include/swaps/api/bundle_api.hpp lookups=0 defaults=1 loops=0 compute=1 branches=1   # parked
 include/swaps/api/json_util.hpp lookups=0 defaults=4 compute=0   # codec

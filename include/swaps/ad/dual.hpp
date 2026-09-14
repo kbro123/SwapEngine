@@ -60,6 +60,19 @@ inline Eigen::Matrix<DualDir, Eigen::Dynamic, 1> seed_directional(const Eigen::V
   return xd;
 }
 
+// The same width-one pass along an ARBITRARY direction (length of x): f.derivatives()[0] = Σⱼ direction[j]·∂f/∂xⱼ.
+// A PV01 is this along pricing::parallel_direction. With an all-ones direction it is seed_directional(x) bit for bit.
+inline Eigen::Matrix<DualDir, Eigen::Dynamic, 1> seed_directional(const Eigen::VectorXd& x, const Eigen::VectorXd& direction) {
+  const int m = static_cast<int>(x.size());
+  Eigen::Matrix<DualDir, Eigen::Dynamic, 1> xd(m);
+  for (int i = 0; i < m; ++i) {
+    DualDir::DerType der(1);
+    der[0] = direction[i];
+    xd[i] = DualDir(x[i], der);
+  }
+  return xd;
+}
+
 template <int MaxW>
 inline Eigen::Matrix<DualPooled<MaxW>, Eigen::Dynamic, 1> seed_pooled(const Eigen::VectorXd& x) {
   const int m = static_cast<int>(x.size());

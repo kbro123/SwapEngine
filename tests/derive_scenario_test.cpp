@@ -95,6 +95,8 @@ pf::MultiCurveBook::Position xccy_position() {
   p.fx_spot = 1.10;
   return p;
 }
+std::vector<cal::BundleCurveSpec> outright_curves(int n) { return std::vector<cal::BundleCurveSpec>(static_cast<std::size_t>(n), flat_curve(0)); }
+
 cal::BundleProblem two_flat_curves() {
   cal::BundleProblem p;
   p.curves = {flat_curve(0), flat_curve(1)};
@@ -108,26 +110,26 @@ TEST(ResolveScenarioMove, AnExplicitCurveKeyReplacesTheParallelAndFxCompoundsInO
   m.parallel_bp = 34.0;
   m.shift_curve_bp = {{0, 14.5}};
   m.fx = {{"EUR", "USD", 0.02}, {"EUR", "USD", 0.02}, {"GBP", "USD", -0.01}};
-  const dv::ResolvedMove r = dv::resolve_scenario_move(m, 3);
+  const dv::ResolvedMove r = dv::resolve_scenario_move(m, outright_curves(3));
   EXPECT_EQ(r.curve_delta, (std::vector<double>{14.5 / 1e4, 34.0 / 1e4, 34.0 / 1e4}));
   EXPECT_NE(r.curve_delta[1], 34.0 * 1e-4) << "bp / 1e4, bit for bit: bp * 1e-4 differs at 34 bp";
   EXPECT_EQ(r.fx_factor, 1.0 * (1.0 + 0.02) * (1.0 + 0.02) * (1.0 + -0.01)) << "every bump, a repeated pair too, in order";
 
-  const dv::ResolvedMove none = dv::resolve_scenario_move(dv::ScenarioMove{}, 2);
+  const dv::ResolvedMove none = dv::resolve_scenario_move(dv::ScenarioMove{}, outright_curves(2));
   EXPECT_EQ(none.curve_delta, (std::vector<double>{0.0, 0.0}));
   EXPECT_EQ(none.fx_factor, 1.0);
 
   dv::ScenarioMove held;
   held.parallel_bp = 20.0;
   held.shift_curve_bp = {{1, 0.0}};
-  EXPECT_EQ(dv::resolve_scenario_move(held, 2).curve_delta, (std::vector<double>{20.0 / 1e4, 0.0}))
+  EXPECT_EQ(dv::resolve_scenario_move(held, outright_curves(2)).curve_delta, (std::vector<double>{20.0 / 1e4, 0.0}))
       << "an explicit 0 holds its curve still";
 
   dv::ScenarioMove out_of_range;
   out_of_range.shift_curve_bp = {{2, 1.0}};
-  EXPECT_THROW((void)dv::resolve_scenario_move(out_of_range, 2), std::invalid_argument);
+  EXPECT_THROW((void)dv::resolve_scenario_move(out_of_range, outright_curves(2)), std::invalid_argument);
   out_of_range.shift_curve_bp = {{-1, 1.0}};
-  EXPECT_THROW((void)dv::resolve_scenario_move(out_of_range, 2), std::invalid_argument);
+  EXPECT_THROW((void)dv::resolve_scenario_move(out_of_range, outright_curves(2)), std::invalid_argument);
 }
 
 TEST(Scenarios, CalibratesOnceAndValuesEveryMoveAtItsForkOfTheBase) {

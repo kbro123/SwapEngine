@@ -24,6 +24,31 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 spread-curve fix: a parallel move / PV01 moves every curve's forward once.
+    ("parallel_direction_spread_knots_move", "include/swaps/pricing/curve_spec.hpp",
+     "    if (c.base < 0) d.segment(offset, c.n_interp_knots()).setOnes();",
+     "    d.segment(offset, c.n_interp_knots()).setOnes();",
+     ["bundle_state_test.cpp"], "*", "the parallel direction skipping spread knots is unpinned"),
+    ("parallel_direction_turns_move", "include/swaps/pricing/curve_spec.hpp",
+     "d.segment(offset, c.n_interp_knots()).setOnes();",
+     "d.segment(offset, c.n_knots()).setOnes();",
+     ["bundle_state_test.cpp"], "*", "the parallel direction skipping turn deltas is unpinned"),
+    ("compiled_pv01_all_ones_direction", "include/swaps/portfolio/compiled_multi.hpp",
+     "rowsum_ = cs_.W() * dir_;",
+     "rowsum_ = cs_.W().rowwise().sum();",
+     ["bundle_state_test.cpp"], "*", "the compiled PV01 direction is unpinned"),
+    ("compiled_pv01_fallback_all_ones", "include/swaps/portfolio/compiled_multi.hpp",
+     "swaps::ad::seed_directional(x, dir_)",
+     "swaps::ad::seed_directional(x)",
+     ["bundle_state_test.cpp"], "*", "the fallback PV01 direction is unpinned"),
+    ("scenario_parallel_reaches_spread_curves", "include/swaps/derive/scenario.hpp",
+     "    const bool moves = curves[static_cast<std::size_t>(c)].base < 0 || m.shift_curve_bp.count(c) > 0;",
+     "    const bool moves = true;",
+     ["scenario_spread_repro_test.cpp"], "*", "a scenario parallel skipping spread curves is unpinned"),
+    ("grid_parallel_reaches_spread_curves", "include/swaps/derive/scenario_grid.hpp",
+     "    if (curves[c].base < 0) curve_delta[c] += bp / 1e4;",
+     "    curve_delta[c] += bp / 1e4;",
+     ["scenario_spread_repro_test.cpp"], "*", "a grid parallel skipping spread curves is unpinned"),
     # E7 stage 5.3: derive/scenario_grid.hpp, the library behind the scenario_grid verb.
     ("grid_shift_curve_axis_overrides", "include/swaps/derive/scenario_grid.hpp",
      "      curve_delta[static_cast<std::size_t>(*ax.role)] += value / 1e4;",

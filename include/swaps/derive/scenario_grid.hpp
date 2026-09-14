@@ -56,11 +56,21 @@ inline void check_shock_axis(const ShockAxis& ax, int n_curves) {
     throw std::invalid_argument("scenario_grid: axis '" + ax.label + "' has an empty 'values' array");
 }
 
+// A parallel shift of `bp` moves EVERY curve's forward once: only OUTRIGHT curves' knots take it, and a spread curve
+// inherits it from its base (fixed 2026-09-14: giving spread knots the parallel as well moved a spread curve twice --
+// tests/scenario_spread_repro_test.cpp). var's reval moves use it too.
+inline void add_parallel_shock(const std::vector<pricing::CurveStructure>& curves, double bp,
+                               std::vector<double>& curve_delta) {
+  for (std::size_t c = 0; c < curves.size(); ++c)
+    if (curves[c].base < 0) curve_delta[c] += bp / 1e4;
+}
+
 // One axis's contribution to a cell, added onto what the other axis already put there.
-inline void add_axis_shock(const ShockAxis& ax, double value, std::vector<double>& curve_delta, double& fx_factor) {
+inline void add_axis_shock(const ShockAxis& ax, double value, const std::vector<pricing::CurveStructure>& curves,
+                           std::vector<double>& curve_delta, double& fx_factor) {
   switch (ax.kind) {
     case ShockAxisKind::ParallelBp:
-      for (double& d : curve_delta) d += value / 1e4;
+      add_parallel_shock(curves, value, curve_delta);
       break;
     case ShockAxisKind::ShiftCurve:
       curve_delta[static_cast<std::size_t>(*ax.role)] += value / 1e4;
@@ -126,9 +136,9 @@ ScenarioGridResult scenario_grid(ScenarioGridRequest r) {
     for (int j = 0; j < out.n1; ++j) {
       std::vector<double> curve_delta(static_cast<std::size_t>(P.n_curves()), 0.0);
       double fx_factor = 1.0;
-      add_axis_shock(out.axes[0], out.axes[0].values[static_cast<std::size_t>(i)], curve_delta, fx_factor);
+      add_axis_shock(out.axes[0], out.axes[0].values[static_cast<std::size_t>(i)], P.curves, curve_delta, fx_factor);
       if (out.axes.size() == 2)
-        add_axis_shock(out.axes[1], out.axes[1].values[static_cast<std::size_t>(j)], curve_delta, fx_factor);
+        add_axis_shock(out.axes[1], out.axes[1].values[static_cast<std::size_t>(j)], P.curves, curve_delta, fx_factor);
       const double npv = books.at(fx_factor).npv(calibration::shift_interp_forwards(P, out.x_base, curve_delta));
       npv_row.push_back(npv);
       pnl_row.push_back(npv - out.base_npv);

@@ -28,6 +28,7 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/json_util.hpp"
 #include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/derive/scenario_grid.hpp"  // add_parallel_shock
 
 namespace swaps::api {
 
@@ -38,15 +39,15 @@ namespace pf = swaps::portfolio;
 namespace {
 
 
-// One market move -> per-curve rate shift (bp/1e4) + a compounded fx factor. Same arithmetic as
-// api/scenario.cpp: parallel_bp shifts every curve, shift_curve{role:bp} shifts one, bump_fx compounds.
-void parse_move(const json::object& m, int n_curves, std::vector<double>& curve_delta, double& fx_factor) {
-  curve_delta.assign(n_curves, 0.0);
+// One market move -> per-curve rate shift (bp/1e4) + a compounded fx factor, in scenario_grid's ADD rule: parallel_bp
+// moves every curve once (a spread curve through its base), shift_curve{role:bp} ADDS to one, bump_fx compounds.
+void parse_move(const json::object& m, const std::vector<swaps::pricing::CurveStructure>& curves,
+                std::vector<double>& curve_delta, double& fx_factor) {
+  const int n_curves = static_cast<int>(curves.size());
+  curve_delta.assign(curves.size(), 0.0);
   fx_factor = 1.0;
-  if (m.contains("parallel_bp") && !m.at("parallel_bp").is_null()) {
-    const double d = m.at("parallel_bp").to_number<double>() / 1e4;
-    for (double& x : curve_delta) x += d;
-  }
+  if (m.contains("parallel_bp") && !m.at("parallel_bp").is_null())
+    derive::add_parallel_shock(curves, m.at("parallel_bp").to_number<double>(), curve_delta);
   if (m.contains("shift_curve") && m.at("shift_curve").is_object())
     for (const auto& kv : m.at("shift_curve").as_object()) {
       int role = 0;
@@ -164,7 +165,7 @@ std::string var_json(const json::object& request) {
     double fx_factor = 1.0;
     const auto t0 = std::chrono::steady_clock::now();
     for (const auto& me : moves) {
-      parse_move(me.as_object(), P.n_curves(), curve_delta, fx_factor);
+      parse_move(me.as_object(), P.curves, curve_delta, fx_factor);
       Eigen::VectorXd xs = x_base;
       for (int c = 0; c < P.n_curves(); ++c) {
         const double d = curve_delta[static_cast<std::size_t>(c)];

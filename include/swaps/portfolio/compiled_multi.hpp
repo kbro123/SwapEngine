@@ -110,10 +110,13 @@ class CompiledMultiCurveBook {
     float_.finalize();
     fixed_.finalize();
 
-    // Per-registered-time row sum of W_all (Σ_j W[k,j]) -- CONSTANT for a fixed topology. Under a parallel
-    // knot shift x -> x + ε·1, log-DF_k gains ε·rowsum_k, so DF_k's tangent is dDF_k/dε = -rowsum_k·DF_k.
+    // Per-registered-time W_all·u along the PARALLEL direction u = pricing::parallel_direction (1 on outright curves'
+    // interpolation knots, 0 on spread knots and turn deltas) -- CONSTANT for a fixed topology. Under x -> x + ε·u every
+    // curve's forward moves by ε once, log-DF_k gains ε·rowsum_k, so DF_k's tangent is dDF_k/dε = -rowsum_k·DF_k.
+    // (The all-ones direction counted a spread curve twice and moved turns: fixed 2026-09-14.)
     // This is all pv01()'s compiled half needs to turn the batch's dr/dDF partials into a d(NPV)/dε.
-    if (cs_.n_times() > 0) rowsum_ = cs_.W().rowwise().sum();
+    dir_ = pricing::parallel_direction(specs_);
+    if (cs_.n_times() > 0) rowsum_ = cs_.W() * dir_;
 
     const int n = static_cast<int>(notional.size());
     notional_ = Eigen::Map<const Eigen::VectorXd>(notional.data(), n);
@@ -167,7 +170,7 @@ class CompiledMultiCurveBook {
   // Summing weight·tangent[·] per contribution (not forming ∂NPV/∂DF first) handles the structural DF
   // aliasing (e_k == s_{k+1}, pay == e_k) for free -- each contribution adds its own term.
   double pv01(const Eigen::VectorXd& x) const {
-    double g = 0.0;  // Σⱼ ∂NPV/∂xⱼ = the directional derivative along the all-ones knot direction
+    double g = 0.0;  // Σⱼ dir_ⱼ·∂NPV/∂xⱼ = the directional derivative along the parallel direction
     if (n_rows() > 0) {
       cs_.df_into(x, df_);
       inv_ = df_.cwiseInverse();
@@ -214,7 +217,9 @@ class CompiledMultiCurveBook {
           const double f = notional_[i] * DF[float_.pay[c]] * float_.k[c] * float_.sub_w[mc.sub];
           g -= f * (tt[s] * IV[e] - tt[e] * DF[s] * IV[e] * IV[e]);
           g += f * (tt[s] * IV[s] - tt[e] * IV[e]);
-          g += f * mc.dmom.sum();
+          double along = 0.0;
+          for (std::size_t j = 0; j < mc.support.size(); ++j) along += mc.dmom[static_cast<Eigen::Index>(j)] * dir_[mc.support[j]];
+          g += f * along;
         }
       }
       // Fixed annuities enter NPV as −(notional·fixed_rate)·Σ τ·DF[pay]: ∂/∂DF[pay] = −nf·τ.
@@ -265,9 +270,9 @@ class CompiledMultiCurveBook {
   // with derivative 1, read the summed derivative). Heap-allocating (full-width ad::Dual), but reached
   // ONLY for a book carrying Xccy/compounded/moment positions -- never the all-compilable streaming path.
   double fallback_directional(const Eigen::VectorXd& x) const {
-    // Width-ONE directional dual (ad::seed_directional, 2026-09-10): the all-ones directional derivative in one
+    // Width-ONE directional dual (ad::seed_directional, 2026-09-10): the derivative along dir_ in one
     // heap-free pass, instead of a full-width gradient summed afterwards.
-    const auto xd = swaps::ad::seed_directional(x);
+    const auto xd = swaps::ad::seed_directional(x, dir_);
     const auto C = pricing::build_bundle_curves<swaps::ad::DualDir>(
         specs_, [&](int c, int i) { return xd[off_[c] + i]; });
     const auto cof = [&C](int i) -> const pricing::CurveHandle<swaps::ad::DualDir>& { return *C[i]; };
@@ -277,6 +282,7 @@ class CompiledMultiCurveBook {
 
   std::vector<pricing::CurveStructure> specs_;  // owned copy (fb_curves_ references it; ctor arg may die)
   std::vector<int> off_;                        // curve -> offset of its state block in the stacked x
+  Eigen::VectorXd dir_;                         // pricing::parallel_direction(specs_): the pv01() direction
   int n_knots_ = 0;
 
   // Compiled half: the multi-curve W-cache and role-aware batches (one row per compiled position).

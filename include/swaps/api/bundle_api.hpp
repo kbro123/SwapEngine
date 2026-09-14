@@ -437,6 +437,7 @@ class BundleSession {
   cal::BundleProblem prob_;
   std::uint64_t fingerprint_ = 0;  // structure hash at compile time (the warm-vs-recompile switch)
   Eigen::VectorXd x_;
+  Eigen::VectorXd parallel_dir_;  // pricing::parallel_direction(prob_.curves): the PV01 direction, fixed per structure
   cal::CalibrationResult result_;
   bool has_fx_ = false;
   bool has_modular_ = false;

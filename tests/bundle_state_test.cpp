@@ -161,3 +161,44 @@ TEST(XccyFxScaledBooks, CachesOneCompiledBookPerFactorAndPricesTheScaledBook) {
   EXPECT_NE(up.npv(x), one.npv(x)) << "the FX move reaches the xccy position";
   EXPECT_EQ(books.book().positions[1].fx_spot, 1.10);
 }
+
+TEST(ParallelDirection, IsOneOnOutrightInterpolationKnotsOnly) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec turned = flat_curve(0);
+  turned.regions[0].scheme = crv::Scheme::Linear;
+  turned.regions[0].knots = {1.0, 2.0, 5.0};
+  turned.turns = {px::Turn{0.10, 0.20}};
+  cal::BundleCurveSpec spread = flat_curve(0);
+  spread.base = 0;
+  p.curves = {turned, spread, flat_curve(1)};
+  Eigen::VectorXd want(6);
+  want << 1.0, 1.0, 1.0, 0.0, 0.0, 1.0;  // curve 0: three knots then its turn; curve 1 a spread knot; curve 2 outright
+  EXPECT_TRUE(px::parallel_direction(p.curves) == want);
+}
+
+// CompiledMultiCurveBook::pv01 is the book's move along the parallel direction -- on a spread curve and across a turn,
+// through both its compiled half and its templated fallback (a compounded observation cannot compile).
+TEST(CompiledPv01, IsTheBooksMoveAlongTheParallelDirectionOnSpreadAndTurnedCurves) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec outright = flat_curve(0);
+  outright.regions[0].scheme = crv::Scheme::Linear;
+  outright.regions[0].knots = {1.0, 3.0};
+  outright.turns = {px::Turn{0.4, 0.6}};
+  cal::BundleCurveSpec spread = flat_curve(0);
+  spread.base = 0;
+  p.curves = {outright, spread};
+  Eigen::VectorXd x(4);
+  x << 0.030, 0.035, 0.004, 0.005;
+  pf::MultiCurveBook::Position arithmetic = one_period_swap(0.02);
+  arithmetic.fwd_curve = 1;
+  pf::MultiCurveBook::Position compounded = arithmetic;
+  compounded.float_coupons[0].obs.compounded = true;
+  const pf::CompiledMultiCurveBook book(p.curves, pf::MultiCurveBook{{arithmetic, compounded}});
+  const Eigen::VectorXd u = px::parallel_direction(p.curves);
+  const double h = 1e-6;
+  const double along = 1e-4 * (book.npv(x + h * u) - book.npv(x - h * u)) / (2.0 * h);
+  EXPECT_NEAR(book.pv01(x), along, 1e-7 * std::abs(along));
+  const Eigen::VectorXd ones = Eigen::VectorXd::Ones(4);
+  EXPECT_GT(std::abs(1e-4 * (book.npv(x + h * ones) - book.npv(x - h * ones)) / (2.0 * h) - along), 1e-3 * std::abs(along))
+      << "the fixture must tell the parallel direction from moving every state entry";
+}

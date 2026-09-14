@@ -1,6 +1,8 @@
 // E5 taxonomy: T4 hot-path invariant (allocation / determinism / structure) | T3 cross-path parity (two engine paths, same inputs)
-// E4.D A4/D7 + D6 (2026-09-10): the ONE-SHOT price_portfolio's PV01 is the all-ones directional derivative of a
-// width-1 dual (ad::seed_directional) -- equal to the full-width gradient's sum to rounding -- so the one-shot no
+// E4.D A4/D7 + D6 (2026-09-10): the ONE-SHOT price_portfolio's PV01 is a directional derivative of a width-1 dual
+// (ad::seed_directional) along pricing::parallel_direction -- equal to the full-width gradient dotted with that
+// direction to rounding (it was the all-ones direction until 2026-09-14, which counted this spread chain's base move
+// once per curve: tests/spread_pv01_var_repro_test.cpp) -- so the one-shot no
 // longer pays a heap-vector dual per knot to compute one sum (71k allocations on chain8x26/book200 in the E3
 // census); and risk_operator takes its tension block from the session cache (ensure_reg_R) instead of rebuilding
 // it per call (4,449 allocations). Both are pinned by an AllocScope count; the pins may only DECREASE.
@@ -78,18 +80,21 @@ struct Chain {
 };
 }  // namespace
 
-TEST(ApiHotPath, OneShotPv01IsTheGradientSumFromOneNarrowPass) {
+TEST(ApiHotPath, OneShotPv01IsTheGradientAlongTheParallelDirectionFromOneNarrowPass) {
   const Chain f;
   api::BundleSession s(f.prob);
   s.calibrate(f.x0);
   ASSERT_TRUE(s.result().converged) << s.result().status;
-  // Reference: the full-width gradient (one heap Dual per knot), summed.
+  // Reference: the full-width gradient (one heap Dual per knot) along the parallel direction.
   const Eigen::VectorXd x = s.x();
   const auto xd = ad::seed(x);
   const auto Cad = cal::build_bundle_curves<ad::Dual>(f.prob.curves, [&](int c, int i) { return xd[f.prob.offset(c) + i]; });
   const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::Dual>& { return *Cad[i]; };
   const ad::Dual npv_ad = f.book.value<ad::Dual>(curve_ad);
-  const double pv01_ref = 1e-4 * npv_ad.derivatives().sum();
+  const double pv01_ref = 1e-4 * npv_ad.derivatives().dot(px::parallel_direction(f.prob.curves));
+  const double all_ones = 1e-4 * npv_ad.derivatives().sum();
+  ASSERT_GT(std::abs(all_ones - pv01_ref), 1e-2 * std::abs(pv01_ref))
+      << "the spread chain must tell the parallel direction from moving every state entry";
   const auto first = s.price_portfolio(f.book);  // warm-up (resolve_book's first pass, telemetry)
   unsigned long allocs = 0;
   api::PortfolioReprice r;
@@ -98,7 +103,7 @@ TEST(ApiHotPath, OneShotPv01IsTheGradientSumFromOneNarrowPass) {
     r = s.price_portfolio(f.book);
     allocs = scope.allocs();
   }
-  std::cout << "  [hotpath] one-shot price_portfolio: npv " << r.npv << " pv01 " << r.pv01 << " (gradient sum " << pv01_ref
+  std::cout << "  [hotpath] one-shot price_portfolio: npv " << r.npv << " pv01 " << r.pv01 << " (gradient along the parallel direction " << pv01_ref
             << ", |diff| " << std::abs(r.pv01 - pv01_ref) << "), " << allocs << " allocs\n";
   EXPECT_NEAR(r.npv, npv_ad.value(), 1e-12 * std::max(1.0, std::abs(r.npv)));
   EXPECT_NEAR(r.pv01, pv01_ref, 1e-12 * std::max(1.0, std::abs(pv01_ref)));

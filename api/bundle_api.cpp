@@ -108,6 +108,7 @@ int BundleSession::resolve_fixings() {
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   cal::validate_problem(prob_, "BundleSession");  // E1/E2/B12: a malformed bundle is an error, not a crash/NaN
   fingerprint_ = cal::structure_fingerprint(prob_);  // an identity stamp of the compiled document (not a gate)
+  parallel_dir_ = swaps::pricing::parallel_direction(prob_.curves);
   for (const auto& ins : prob_.instruments) {
     // `has_fx_` reports the ENGINE's partition (E6.1c: the API used to keep a second, disagreeing definition
     // that called every FX forward / MtM row non-cacheable; standalone ones ride the W-cache since 2026-09-09).
@@ -398,15 +399,17 @@ PortfolioReprice BundleSession::price_portfolio(const pf::MultiCurveBook& book_i
 
   // ---- PV01: ONE forward-AAD pass (not part of the timed pricing pass) -----------------------------
   // Seed x as vector-duals, reprice the book once with Scalar = ad::Dual, and read d(NPV)/d(knot forward)
-  // straight off the derivative vector. PV01 = 1bp · Σⱼ ∂NPV/∂xⱼ = the book's NPV change for a +1bp
-  // PARALLEL shift of every fitted knot forward -- no bump-and-reprice. (Left-multiplying this same
+  // straight off the derivative vector. PV01 = 1bp · Σⱼ uⱼ·∂NPV/∂xⱼ along u = pricing::parallel_direction: the book's
+  // NPV change for +1bp on EVERY curve's forward once (outright curves' interpolation knots; a spread curve inherits it
+  // and a turn delta is not a level -- the all-ones direction counted spread curves twice and moved turns, fixed
+  // 2026-09-14, tests/spread_pv01_var_repro_test.cpp) -- no bump-and-reprice. (Left-multiplying this same
   // gradient by risk_operator() would instead give the full per-quote delta ladder, CLAUDE.md #4.)
   // A WIDTH-ONE directional dual (ad::seed_directional, 2026-09-10): every knot seeded with the same unit
   // derivative, so one heap-free pass returns Σⱼ ∂NPV/∂xⱼ directly -- the quantity PV01 needs -- instead of
   // a full-width gradient (E3-A4/D7: 96 % of the one-shot's 71k allocations were the 208-wide heap duals of
   // that pass, spent to compute one sum). Identical to the gradient's sum to rounding.
   {
-    const auto xd = ad::seed_directional(x_);
+    const auto xd = ad::seed_directional(x_, parallel_dir_);
     const auto Cad = cal::build_bundle_curves<ad::DualDir>(
         prob_.curves, [&](int c, int i) { return xd[prob_.offset(c) + i]; });
     const auto curve_ad = [&Cad](int i) -> const cal::CurveHandle<ad::DualDir>& { return *Cad[i]; };

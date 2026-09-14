@@ -55,7 +55,11 @@ struct ResolvedMove {
   double fx_factor = 1.0;
 };
 
-inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, int n_curves) {
+// A parallel shift moves EVERY curve's forward once: an OUTRIGHT curve takes it on its knots and a SPREAD curve inherits it
+// from its base (giving the spread's knots the parallel as well moved it twice -- tests/scenario_spread_repro_test.cpp,
+// fixed 2026-09-14). An explicit key moves exactly the curve it names (on a spread curve: the spread).
+inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, const std::vector<pricing::CurveStructure>& curves) {
+  const int n_curves = static_cast<int>(curves.size());
   market::Scenario scn;
   if (m.parallel_bp) scn = market::Scenario::parallel(*m.parallel_bp);
   for (const auto& [role, bp] : m.shift_curve_bp) {
@@ -66,7 +70,10 @@ inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, int n_curves) {
   }
   ResolvedMove r;
   r.curve_delta.resize(static_cast<std::size_t>(n_curves));
-  for (int c = 0; c < n_curves; ++c) r.curve_delta[static_cast<std::size_t>(c)] = scn.curve_shift(std::to_string(c));
+  for (int c = 0; c < n_curves; ++c) {
+    const bool moves = curves[static_cast<std::size_t>(c)].base < 0 || m.shift_curve_bp.count(c) > 0;
+    r.curve_delta[static_cast<std::size_t>(c)] = moves ? scn.curve_shift(std::to_string(c)) : 0.0;
+  }
   for (const FxBump& b : m.fx) r.fx_factor *= (1.0 + b.rel);
   return r;
 }
@@ -118,7 +125,7 @@ ScenarioResult scenarios(ScenarioRequest r) {
   out.moves = std::move(r.scenarios);
   out.rows.reserve(out.moves.size());
   for (std::size_t k = 0; k < out.moves.size(); ++k) {
-    const ResolvedMove rm = resolve_scenario_move(out.moves[k], P.n_curves());
+    const ResolvedMove rm = resolve_scenario_move(out.moves[k], P.curves);
     const Eigen::VectorXd xs = calibration::shift_interp_forwards(P, out.x_base, rm.curve_delta);
     ScenarioRow row;
     row.move = k;
