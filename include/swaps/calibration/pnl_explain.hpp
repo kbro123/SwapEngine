@@ -120,7 +120,8 @@ struct RebasedHandle : CurveHandle<double> {
 
 // Advance the valuation date of `in` by dt. `shift` true => subtract dt from every cashflow curve-time
 // (floored at 0) — the roll leg; `shift` false => keep times, only drop already-paid coupons — the
-// carry (numeraire-rebase) leg. Positions with no surviving floating cashflow are dropped.
+// carry (numeraire-rebase) leg. Positions with no surviving floating cashflow are dropped. A dated principal
+// exchange ages like a coupon in both legs: settled (t <= dt) it is gone, otherwise shift re-times it (PN2).
 inline portfolio::MultiCurveBook roll_book(const portfolio::MultiCurveBook& in, double dt, bool shift) {
   using Book = portfolio::MultiCurveBook;
   Book out;
@@ -133,6 +134,12 @@ inline portfolio::MultiCurveBook roll_book(const portfolio::MultiCurveBook& in, 
         for (auto& s : c.obs.sub_start) s = std::max(0.0, s - dt);
         for (auto& e : c.obs.sub_end) e = std::max(0.0, e - dt);
         if (c.reset_time >= 0.0) c.reset_time = std::max(0.0, c.reset_time - dt);
+        // PN2 (2026-09-14): the ACCRUAL period moves too -- an MtM coupon books its notional exchanges on it
+        // (xccy_mtm_leg_pv). Not floored: a start before the new valuation date is a settled initial exchange (< 0).
+        if (c.accrual_set) {
+          c.accrual_start -= dt;
+          c.accrual_end -= dt;
+        }
       }
       keep.push_back(std::move(c));
     }
@@ -151,6 +158,11 @@ inline portfolio::MultiCurveBook roll_book(const portfolio::MultiCurveBook& in, 
     Book::Position q = pos;
     q.float_coupons = proc_float(pos.float_coupons);
     q.fixed_coupons = proc_fixed(pos.fixed_coupons);
+    q.principal_flows.clear();  // PN2: settled exchanges are gone; shift re-times the rest
+    for (const auto& [t, amount] : pos.principal_flows) {
+      if (t <= dt) continue;
+      q.principal_flows.emplace_back(shift ? t - dt : t, amount);
+    }
     if (pos.kind == Book::Kind::Xccy) {
       q.mtm_coupons = proc_float(pos.mtm_coupons);
       if (q.float_coupons.empty() || q.mtm_coupons.empty()) continue;  // xccy needs both legs alive

@@ -24,6 +24,19 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 PN2: roll_book ages the MtM accrual period and the principal exchanges with every other cashflow.
+    ("roll_book_keeps_accrual_times", "include/swaps/calibration/pnl_explain.hpp",
+     "          c.accrual_start -= dt;\n          c.accrual_end -= dt;\n",
+     "",
+     ["roll_book_accrual_repro_test.cpp"], "*", "the rolled MtM exchange dates are unpinned (PN2)"),
+    ("roll_book_keeps_principal_times", "include/swaps/calibration/pnl_explain.hpp",
+     "      q.principal_flows.emplace_back(shift ? t - dt : t, amount);",
+     "      q.principal_flows.emplace_back(t, amount);",
+     ["roll_book_accrual_repro_test.cpp"], "*", "the rolled principal exchange times are unpinned (PN2)"),
+    ("roll_book_keeps_settled_principal", "include/swaps/calibration/pnl_explain.hpp",
+     "      if (t <= dt) continue;\n",
+     "",
+     ["roll_book_accrual_repro_test.cpp"], "*", "dropping a settled principal exchange is unpinned (PN2)"),
     # 2026-09-14 ASW pay lag: the asset-swap float coupons pay the product's payment_lag after the accrual end ...
     ("asw_float_leg_pays_on_accrual_end", "include/swaps/build/par_asset_swap.hpp",
      "    f.pay.push_back(curve_time(value_date, advance_bd(swc.calendar, p.second, swc.pay_lag)));",
