@@ -126,6 +126,12 @@ inline std::vector<Period> swap_periods_between(const Date& spot, const std::str
     throw std::invalid_argument("schedule: maturity " + iso(maturity_date) + " is on/before the start " + iso(spot) +
                                 " (a swap needs a positive accrual span)");
   const Step step = tok_step(freq_tok);  // months (3M/1Y) or days (28D/1W) — never both
+  // The schedule ENDS on the termination date rolled by the convention: a maturity booked on a non-business day
+  // accrues to the business day it rolls to (QuantLib's Schedule does the same), and adjusting an already-adjusted
+  // date changes nothing. Before 2026-09-14 the raw date closed the last period, so a trade booked to a Sunday
+  // anniversary accrued to the Sunday (tests/trade_weekend_maturity_repro_test.cpp). The regular grid and the roll
+  // day below still come from the UNADJUSTED dates -- roll conventions anchor on unadjusted dates.
+  const Date end = adjust(cal_id, maturity_date, bdc);
 
   // Regular grid, forward from `spot` (the legacy path, taken verbatim for monthly steps so the default
   // output can never drift by even one ulp of date; day-based steps, e.g. MXN 28D, step by days).
@@ -133,10 +139,10 @@ inline std::vector<Period> swap_periods_between(const Date& spot, const std::str
     std::vector<Date> bounds{spot};
     for (int k = 1;; ++k) {
       const Date d = adjust(cal_id, plus_step(spot, step, k), bdc);
-      if (d >= maturity_date) break;
+      if (d >= end) break;
       bounds.push_back(d);
     }
-    bounds.push_back(maturity_date);
+    bounds.push_back(end);
     std::vector<Period> out;
     out.reserve(bounds.size() - 1);
     for (std::size_t i = 0; i + 1 < bounds.size(); ++i) out.emplace_back(bounds[i], bounds[i + 1]);
@@ -184,8 +190,11 @@ inline std::vector<Period> swap_periods_between(const Date& spot, const std::str
   }
 
   std::vector<Date> bounds{spot};
-  for (const Date& d : interior) bounds.push_back(adjust(cal_id, d, bdc));
-  bounds.push_back(maturity_date);
+  for (const Date& d : interior) {
+    const Date a = adjust(cal_id, d, bdc);
+    if (a < end) bounds.push_back(a);  // an unadjusted boundary just before the maturity can roll onto the end
+  }
+  bounds.push_back(end);
   std::vector<Period> out;
   out.reserve(bounds.size() - 1);
   for (std::size_t i = 0; i + 1 < bounds.size(); ++i) out.emplace_back(bounds[i], bounds[i + 1]);

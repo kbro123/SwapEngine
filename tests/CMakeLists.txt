@@ -24,6 +24,7 @@ add_executable(swaps_tests
   derive_scenario_test.cpp
   derive_scenario_grid_test.cpp
   scenario_spread_repro_test.cpp
+  trade_weekend_maturity_repro_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
   turns_test.cpp

@@ -24,6 +24,15 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    ("schedule_isda_interior_on_end", "include/swaps/build/schedule.hpp",
+     "    if (a < end) bounds.push_back(a);",
+     "    bounds.push_back(a);",
+     ["trade_weekend_maturity_repro_test.cpp"], "*", "an ISDA boundary rolling onto the end is unpinned"),
+    # 2026-09-14 weekend-maturity fix: a schedule ends on the termination date rolled by the convention.
+    ("schedule_raw_termination", "include/swaps/build/schedule.hpp",
+     "  const Date end = adjust(cal_id, maturity_date, bdc);",
+     "  const Date end = maturity_date;",
+     ["trade_weekend_maturity_repro_test.cpp"], "*", "rolling a booked non-business-day maturity is unpinned"),
     # 2026-09-14 spread-curve fix: a parallel move / PV01 moves every curve's forward once.
     ("parallel_direction_spread_knots_move", "include/swaps/pricing/curve_spec.hpp",
      "    if (c.base < 0) d.segment(offset, c.n_interp_knots()).setOnes();",
