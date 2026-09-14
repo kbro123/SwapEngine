@@ -109,7 +109,7 @@ inline FloatLegTimes asset_swap_float_leg(const SwapConv& swc, const Date& value
   f.accrual_start.reserve(periods.size());
   f.accrual_end.reserve(periods.size());
   for (const Period& p : periods) {
-    f.tau.push_back(year_frac(swc.float_dc, p.first, p.second));
+    f.tau.push_back(year_frac(swc.float_dc, p.first, p.second, swc.calendar));  // BUS/252 counts on it (AS2)
     // The coupon pays the product's payment_lag business days after the accrual end, on the product calendar --
     // exactly as every swap builder pays it (owner decision 2026-09-14).
     f.pay.push_back(curve_time(value_date, advance_bd(swc.calendar, p.second, swc.pay_lag)));

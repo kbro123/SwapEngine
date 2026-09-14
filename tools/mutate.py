@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 AS2: the asset-swap float accrual counts BUS/252 business days on the product calendar.
+    ("asw_float_tau_without_calendar", "include/swaps/build/par_asset_swap.hpp",
+     "    f.tau.push_back(year_frac(swc.float_dc, p.first, p.second, swc.calendar));",
+     "    f.tau.push_back(year_frac(swc.float_dc, p.first, p.second));",
+     ["asset_swap_bus252_repro_test.cpp"], "*", "the BUS/252 asset-swap float accrual is unpinned (AS2)"),
     # 2026-09-14 PN2: roll_book ages the MtM accrual period and the principal exchanges with every other cashflow.
     ("roll_book_keeps_accrual_times", "include/swaps/calibration/pnl_explain.hpp",
      "          c.accrual_start -= dt;\n          c.accrual_end -= dt;\n",
