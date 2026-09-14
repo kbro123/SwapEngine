@@ -118,6 +118,10 @@ class StreamingCalibrator {
     // count (the old max_frozen = 4) refreshed a converging OIS tick for nothing and let the desk's slow frozen
     // rate run; max_frozen is now only the hard cap. false = count-based stalls only.
     bool adaptive_stall = true;
+    // > 0: the adaptive stall's refresh-vs-step break-even, FIXED (steps) instead of measured at construction. The
+    // measurement is a wall-clock ratio, so the refresh schedule -- not the converged answer -- varies with machine load;
+    // tests and callers that need run-to-run identical schedules pin it here. 0 = measured.
+    double breakeven_steps = 0.0;
     // ACCURACY refresh for problems whose fixed point is NOT r = 0 (over-determined, banded, regularised):
     // there the frozen operator's answer is exact only to second order in the drift, and along a weakly
     // determined direction (a decay-weighted band) that second-order term is amplified -- measured 0.4 bp
@@ -214,9 +218,11 @@ class StreamingCalibrator {
         refresh_ns = std::min(refresh_ns, std::chrono::duration<double, std::nano>(t2 - t1).count());
       }
       breakeven_steps_ = std::min(64.0, std::max(2.0, refresh_ns / std::max(1.0, step_ns)));
+      if (opt_.breakeven_steps > 0.0) breakeven_steps_ = opt_.breakeven_steps;  // pinned (Options::breakeven_steps)
     }
     x_cur_ = x0;
     q_cur_ = q0;
+    last_step_.resize(x0.size());  // sized once: the corrector's 2-cycle check allocates nothing
   }
 
   // The banded rows (FX forwards are never banded): what the per-tick side tracking watches. decay > 0
@@ -280,6 +286,7 @@ class StreamingCalibrator {
     }
     double r0_inf = -1.0;  // the tick's first residual size: the divergence yardstick
     double dx_prev = -1.0;  // |dx| of the previous FULL step under the same operator (-1: none)
+    have_last_step_ = false;  // kink 2-cycle detection: no previous full step yet this tick
     for (;;) {
       // The residual is engine-defined against the live market q_new: model_rates - q_new for hard
       // instruments, the Huber band residual for soft (banded) ones. Driving THIS (not the raw reprice)
@@ -325,6 +332,7 @@ class StreamingCalibrator {
           }
           frozen = 0;
           dx_prev = -1.0;  // a new operator: the contraction history no longer applies
+          have_last_step_ = false;  // an active-set change legitimately turns the step
         }
       }
       dx_.noalias() = M_ * r_;
@@ -333,7 +341,26 @@ class StreamingCalibrator {
       std::size_t hit = 0;
       int hit_side = 0;
       if (!bands_.empty() && have_J_) alpha = breakpoint(q_new, &hit, &hit_side);
-      x.noalias() -= alpha * dx_;
+      // KINK 2-CYCLE (FLK2, 2026-09-14). On a piecewise-smooth residual (MonotoneCubic's Hyman filter) a Newton step can
+      // jump a kink and the step from the far side jumps straight back: dx_{k+1} = -dx_k, |r| unchanged, and a refresh at
+      // either point reproduces it until max_refresh fails the tick (desk_mixed: knot 11 alternating 0.0341513 / 0.0342819
+      // at |dx| 1.306e-4). A full step that REVERSES the previous full step (anti-parallel, similar size) is halved: the
+      // midpoint lands on the kink and the iteration converges. A contracting or merely turning iteration never matches.
+      double damp = 1.0;
+      if (alpha == 1.0) {
+        if (have_last_step_) {
+          const double n2 = dx_.squaredNorm();
+          if (dx_.dot(last_step_) < -0.9 * n2 && last_step_.squaredNorm() < 1.21 * n2) {
+            damp = 0.5;
+            SWAPS_TRACE("  kink 2-cycle: half step\n");
+          }
+        }
+        last_step_ = dx_;  // same size after the first tick: no allocation on the hot path
+        have_last_step_ = true;
+      } else {
+        have_last_step_ = false;  // a breakpoint step: the operator is about to change
+      }
+      x.noalias() -= (alpha * damp) * dx_;
       ++t.newton_steps;
       if (!x.allFinite()) return fail(t, StreamStatus::NonFinite);
       SWAPS_TRACE("  step %d |dx|=%.2e alpha=%.3f pinned=%d rescales=%d refreshes=%d\n", t.newton_steps, dx_.cwiseAbs().maxCoeff(), alpha, n_pinned_, t.rescales, t.refreshes);
@@ -762,6 +789,8 @@ class StreamingCalibrator {
   Eigen::MatrixXd bg_M_;
   // Per-tick scratch so the exact frozen-Newton loop allocates nothing (sized on first use).
   Eigen::VectorXd x_, r_, dx_;
+  Eigen::VectorXd last_step_;     // the previous FULL step this tick (kink 2-cycle detection)
+  bool have_last_step_ = false;
 };
 
 }  // namespace swaps::calibration

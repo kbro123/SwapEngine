@@ -24,6 +24,15 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 FLK2: a full step reversing the previous one (a kink 2-cycle) is halved; the break-even can be pinned.
+    ("kink_cycle_step_not_halved", "include/swaps/calibration/streaming.hpp",
+     "            damp = 0.5;\n",
+     "            damp = 1.0;\n",
+     ["streaming_kink_cycle_repro_test.cpp"], "*", "breaking a MonotoneCubic kink 2-cycle is unpinned (FLK2)"),
+    ("breakeven_override_ignored", "include/swaps/calibration/streaming.hpp",
+     "      if (opt_.breakeven_steps > 0.0) breakeven_steps_ = opt_.breakeven_steps;  // pinned (Options::breakeven_steps)\n",
+     "",
+     ["streaming_kink_cycle_repro_test.cpp"], "*", "Options::breakeven_steps is unpinned (FLK2)"),
     # 2026-09-14 ASW weekend month-end: the asset-swap float leg ends on the maturity adjusted Following (ql::AssetSwap), the
     # interior boundaries keep the product convention.
     ("schedule_termination_ignores_rule", "include/swaps/build/schedule.hpp",
