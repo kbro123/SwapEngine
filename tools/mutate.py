@@ -24,6 +24,42 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-14 O-X3 fx_spot_time (piece 1): the FX outright rolls back from the spot date ...
+    ("fx_forward_ignores_spot_time", "include/swaps/calibration/problem.hpp",
+     "      if (ins.fx_spot_time == 0.0)  // the t = 0 reading, byte-identical",
+     "      if (true)  // the t = 0 reading, byte-identical",
+     ["fx_spot_time_repro_test.cpp"], "*", "the templated spot-date roll-back is unpinned (O-X3)"),
+    # ... on the compiled row, value and Jacobian ...
+    ("compiled_fx_row_ignores_spot_time", "include/swaps/calibration/compiled_bundle.hpp",
+     "      if (f.idx_snum >= 0) out_[f.row] *= DF[f.idx_sden] / DF[f.idx_snum];  // O-X3: roll back from the spot date",
+     "",
+     ["fx_spot_time_compiled_test.cpp"], "*", "the compiled FX outright ignoring the spot time is unpinned"),
+    ("compiled_fx_jacobian_drops_spot_entries", "include/swaps/calibration/compiled_bundle.hpp",
+     "        G(f.row, f.idx_sden) += 1.0 / (DF[f.idx_sden] * f.fx_time);\n        G(f.row, f.idx_snum) += -1.0 / (DF[f.idx_snum] * f.fx_time);\n",
+     "",
+     ["fx_spot_time_compiled_test.cpp"], "*", "the compiled FX row's two spot-time Jacobian entries are unpinned"),
+    # ... the MtM notional and the basis divisor ...
+    ("mtm_notional_ignores_spot_time", "include/swaps/pricing/cashflows.hpp",
+     "    if (fx_spot_time != 0.0) N = N * (denc.discount(fx_spot_time) / numc.discount(fx_spot_time));",
+     "",
+     ["fx_spot_time_repro_test.cpp"], "*", "N_0 = the spot quote (R4a) is unpinned"),
+    ("basis_divides_by_raw_spot", "include/swaps/calibration/problem.hpp",
+     "      return (pv_self - pv_fx) / ann + mtm / (fx0 * ann);",
+     "      return (pv_self - pv_fx) / ann + mtm / (ins.mtm.fx_spot * ann);",
+     ["fx_spot_time_compiled_test.cpp"], "*", "the basis quote's invariance to the spot time is unpinned"),
+    # ... the compiled book's fallback, validation and structure.
+    ("compiled_book_compiles_spot_time_position", "include/swaps/portfolio/compiled_multi.hpp",
+     "    if (p.fx_spot_time != 0.0) return false;  // O-X3: the spot-date roll-back is curve-dependent; the templated fallback prices it",
+     "",
+     ["fx_spot_time_compiled_test.cpp"], "*", "compiling a spot-time xccy position (ignoring the roll-back) is unpinned"),
+    ("validate_accepts_bad_spot_time", "include/swaps/calibration/problem.hpp",
+     "      if (!(ins.fx_spot_time >= 0.0) || !std::isfinite(ins.fx_spot_time)) fail(\"an FX forward needs a finite fx_spot_time >= 0\");",
+     "",
+     ["fx_spot_time_compiled_test.cpp"], "*", "refusing a negative / non-finite FX spot time is unpinned"),
+    ("structure_equal_ignores_fx_spot_time", "include/swaps/calibration/structure_fingerprint.hpp",
+     "  if (a.fx_spot_time != b.fx_spot_time) return false;",
+     "",
+     ["fx_spot_time_compiled_test.cpp"], "*", "rebinding across a spot-time change is unpinned"),
     # 2026-09-14 FLK1: an allocation scope counts only the thread that armed it.
     ("alloc_scope_counts_every_thread", "bench/fixtures/malloc_count.hpp",
      "  if (!pthread_equal(pthread_self(), alloc_counting_thread())) return;  // FLK1: count only the arming thread\n",

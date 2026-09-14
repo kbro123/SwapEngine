@@ -229,6 +229,7 @@ cal::FloatLeg fleg_from(const json::object& o) {
   into(o, "reset_num", L.reset_num);
   into(o, "reset_den", L.reset_den);
   into(o, "fx_spot", L.fx_spot);
+  into(o, "fx_spot_time", L.fx_spot_time);
   return L;
 }
 cal::FixedLeg xleg_from(const json::object& o) {
@@ -363,6 +364,7 @@ json::object fleg_to(const cal::FloatLeg& L) {
   o["reset_num"] = L.reset_num;
   o["reset_den"] = L.reset_den;
   o["fx_spot"] = L.fx_spot;
+  if (L.fx_spot_time != 0.0) o["fx_spot_time"] = L.fx_spot_time;  // emitted only when set: documents stay byte-identical
   return o;
 }
 json::object xleg_to(const cal::FixedLeg& L) {
@@ -428,6 +430,7 @@ cal::Instrument instrument_from_json(const json::value& v) {
   into(o, "fx_den", ins.fx_den);
   into(o, "fx_spot", ins.fx_spot);
   into(o, "fx_time", ins.fx_time);
+  into(o, "fx_spot_time", ins.fx_spot_time);
   into(o, "band_lower", ins.band_lower);
   into(o, "band_upper", ins.band_upper);
   into(o, "band_decay", ins.band_decay);
@@ -460,6 +463,7 @@ json::value instrument_to_json(const cal::Instrument& ins) {
   o["fx_den"] = ins.fx_den;
   o["fx_spot"] = ins.fx_spot;
   o["fx_time"] = ins.fx_time;
+  if (ins.fx_spot_time != 0.0) o["fx_spot_time"] = ins.fx_spot_time;
   o["band_lower"] = ins.band_lower;
   o["band_upper"] = ins.band_upper;
   o["band_decay"] = ins.band_decay;
@@ -571,6 +575,7 @@ pf::MultiCurveBook book_from_json(const json::value& v) {
     into(po, "fixed_curve", p.fixed_curve);
     // xccy-only: the resetting foreign funding leg + its FX-forward reset roles.
     into(po, "fx_spot", p.fx_spot);
+    into(po, "fx_spot_time", p.fx_spot_time);
     into(po, "mtm_fwd_curve", p.mtm_fwd_curve);
     into(po, "mtm_disc_curve", p.mtm_disc_curve);
     into(po, "mtm_reset_num", p.mtm_reset_num);

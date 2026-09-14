@@ -98,6 +98,7 @@ class CompiledBundleResidual {
       for (const auto& f : fx_rows_) {
         sup[f.row].push_back(f.idx_num);
         sup[f.row].push_back(f.idx_den);
+        if (f.idx_snum >= 0) { sup[f.row].push_back(f.idx_snum); sup[f.row].push_back(f.idx_sden); }
       }
       for (int r = 0; r < n_gen_; ++r) {
         std::sort(sup[r].begin(), sup[r].end());
@@ -207,8 +208,10 @@ class CompiledBundleResidual {
     for (const auto& t : turn_rows_) out_[t.row] += t.weight * x[t.state_index];
     // FX forward OUTRIGHT F = fx_spot · DF_num(T) / DF_den(T) (the model quote; its LOG-basis residual is
     // applied in residuals_vs). Just a DF ratio -- the two DFs were registered into W like any other.
-    for (const auto& f : fx_rows_)
+    for (const auto& f : fx_rows_) {
       out_[f.row] = f.fx_spot * DF[f.idx_num] / DF[f.idx_den];
+      if (f.idx_snum >= 0) out_[f.row] *= DF[f.idx_sden] / DF[f.idx_snum];  // O-X3: roll back from the spot date
+    }
     return out_;
   }
 
@@ -304,6 +307,10 @@ class CompiledBundleResidual {
     for (const auto& f : fx_rows_) {
       G(f.row, f.idx_num) += 1.0 / (DF[f.idx_num] * f.fx_time);
       G(f.row, f.idx_den) += -1.0 / (DF[f.idx_den] * f.fx_time);
+      if (f.idx_snum >= 0) {  // O-X3: ln F gains + ln DF_den(t_s) − ln DF_num(t_s)
+        G(f.row, f.idx_sden) += 1.0 / (DF[f.idx_sden] * f.fx_time);
+        G(f.row, f.idx_snum) += -1.0 / (DF[f.idx_snum] * f.fx_time);
+      }
     }
     // Band chain rule: dr/dx = (dr/dq)·dq/dx with dr/dq = decay inside the band, 1 outside (the Huber
     // residual, problem.hpp). Scale each banded row's dr/dDF (G) by that slope before the W matmul (the
@@ -427,6 +434,10 @@ class CompiledBundleResidual {
         throw std::invalid_argument("CompiledBundleResidual: FX-forward inside a Portfolio is not W-cacheable; use the AAD engine");
       fx_rows_.push_back({row, cs_.reg(ins.fx_num, ins.fx_time), cs_.reg(ins.fx_den, ins.fx_time),
                           ins.fx_spot, ins.fx_time});
+      if (ins.fx_spot_time != 0.0) {  // O-X3: two more registered DFs, only when a spot time is set (W layout unchanged at 0)
+        fx_rows_.back().idx_snum = cs_.reg(ins.fx_num, ins.fx_spot_time);
+        fx_rows_.back().idx_sden = cs_.reg(ins.fx_den, ins.fx_spot_time);
+      }
       return;
     }
     if (ins.quote == QuoteKind::XccyMtmBasis) {
@@ -495,7 +506,7 @@ class CompiledBundleResidual {
   std::vector<ZcRow> zc_rows_;
   // FX-forward rows: F = fx_spot·DF[idx_num]/DF[idx_den] at time fx_time; residual (ln F − ln q)/fx_time.
   // Affine in x (ln DF = −Wx), so it rides the W-cache with a constant Jacobian row -- no AAD needed.
-  struct Fx { int row, idx_num, idx_den; double fx_spot, fx_time; };
+  struct Fx { int row, idx_num, idx_den; double fx_spot, fx_time; int idx_snum = -1, idx_sden = -1; };  // spot DFs, -1 = t_s 0
   std::vector<Fx> fx_rows_;
   // Turn state-pin rows: r = (banded) δ − market, δ = weight·x[state_index]. Linear in x, no DF -- the
   // Jacobian is a direct unit entry (see jacobian_vs). Empty for a bundle with no turn instruments.

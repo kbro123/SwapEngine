@@ -333,7 +333,7 @@ Scalar float_leg_pv(const std::vector<FloatCoupon>& leg, const FCurve& fc, const
 // differences all carry derivatives; the accumulator seeds from the first (curve-dependent) contribution.
 template <class Scalar, class FCurve, class DCurve, class NumCurve, class DenCurve>
 Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, const FCurve& fc,
-                       const DCurve& dc, const NumCurve& numc, const DenCurve& denc) {
+                       const DCurve& dc, const NumCurve& numc, const DenCurve& denc, double fx_spot_time = 0.0) {
   if (leg.empty()) return Scalar(0.0);
   auto contrib = [&](const FloatCoupon& c) -> Scalar {
     // The notional exchanges sit on the ACCRUAL period when the coupon carries it (the builders do); a coupon
@@ -362,7 +362,9 @@ Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, cons
           "xccy_mtm_leg_pv: the MtM notional reset at t=" + std::to_string(reset) +
           " is in the past; supply reset_fx (the fixed FX rate) -- a curve-implied forward at a negative time is "
           "not defined (the curve would silently discount at 1)");
-    const Scalar N = fx_spot * (numc.discount(reset) / denc.discount(reset));  // FX-forward notional
+    Scalar N = fx_spot * (numc.discount(reset) / denc.discount(reset));  // FX-forward notional
+    // O-X3: fx_spot is the spot-date quote -> divide by the reset ratio at fx_spot_time (0 = the t = 0 reading, untouched).
+    if (fx_spot_time != 0.0) N = N * (denc.discount(fx_spot_time) / numc.discount(fx_spot_time));
     return N * v;
   };
   Scalar pv = contrib(leg[0]);

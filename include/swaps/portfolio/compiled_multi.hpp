@@ -269,6 +269,7 @@ class CompiledMultiCurveBook {
   // domestic leg with dates to place the exchanges on.
   static bool xccy_is_compilable(const MultiCurveBook::Position& p) {
     if (!p.principal_flows.empty() || !p.fixed_rates.empty()) return false;
+    if (p.fx_spot_time != 0.0) return false;  // O-X3: the spot-date roll-back is curve-dependent; the templated fallback prices it
     if (p.mtm_reset_num < 0 || p.mtm_reset_den < 0 || p.mtm_coupons.empty() || p.float_coupons.empty()) return false;
     for (const auto& c : p.mtm_coupons) {
       if (c.obs.compounded || c.obs.fixing_step > 0.0) return false;

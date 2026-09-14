@@ -37,6 +37,8 @@ add_executable(swaps_tests
   roll_book_accrual_repro_test.cpp
   asset_swap_bus252_repro_test.cpp
   xccy_carr_example_repro_test.cpp
+  fx_spot_time_repro_test.cpp
+  fx_spot_time_compiled_test.cpp
   alloc_scope_thread_repro_test.cpp
   consistent_risk_library_test.cpp
   tension_test.cpp
@@ -136,6 +138,7 @@ if(TARGET quantlib_oracle)
     risk_ladder_oracle_test.cpp
     bond_rv_oracle_test.cpp
     matched_swap_multiccy_oracle_test.cpp
+    fx_forward_spot_date_oracle_test.cpp
     scenario_oracle_test.cpp
     portfolio_verb_oracle_test.cpp
     calib_report_oracle_test.cpp

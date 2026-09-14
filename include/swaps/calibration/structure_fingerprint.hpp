@@ -81,6 +81,7 @@ inline void hash_float(FnvHasher& H, const FloatLeg& lg) {
   H.i(lg.reset_num);
   H.i(lg.reset_den);
   H.d(lg.fx_spot);
+  if (lg.fx_spot_time != 0.0) H.d(lg.fx_spot_time);  // O-X3: hashed only when set (existing fingerprints unchanged)
   H.i(static_cast<long long>(lg.coupons.size()));
   for (const auto& c : lg.coupons) {
     hash_obs(H, c.obs);
@@ -128,7 +129,7 @@ inline bool obs_equal(const pricing::RateObservation& a, const pricing::RateObse
 }
 inline bool float_equal(const FloatLeg& a, const FloatLeg& b) {
   if (a.forecast != b.forecast || a.discount != b.discount || a.reset_num != b.reset_num || a.reset_den != b.reset_den) return false;
-  if (a.fx_spot != b.fx_spot || a.coupons.size() != b.coupons.size()) return false;
+  if (a.fx_spot != b.fx_spot || a.fx_spot_time != b.fx_spot_time || a.coupons.size() != b.coupons.size()) return false;
   for (std::size_t i = 0; i < a.coupons.size(); ++i) {
     const auto &c = a.coupons[i], &d = b.coupons[i];
     if (c.pay != d.pay || c.tau_pay != d.tau_pay || c.spread != d.spread || c.scale != d.scale || c.reset_time != d.reset_time) return false;
@@ -152,6 +153,7 @@ inline bool fixed_equal(const FixedLeg& a, const FixedLeg& b) {
 inline bool instrument_equal(const Instrument& a, const Instrument& b) {
   if (a.quote != b.quote || a.forecast != b.forecast || a.pv_currency != b.pv_currency) return false;
   if (a.fx_num != b.fx_num || a.fx_den != b.fx_den || a.fx_spot != b.fx_spot || a.fx_time != b.fx_time) return false;
+  if (a.fx_spot_time != b.fx_spot_time) return false;
   if (a.turn_curve != b.turn_curve || a.turn_index != b.turn_index || a.convexity != b.convexity) return false;
   if (!obs_equal(a.obs, b.obs) || !float_equal(a.fwd, b.fwd) || !float_equal(a.bench, b.bench) || !float_equal(a.mtm, b.mtm)) return false;
   if (!fixed_equal(a.fixed, b.fixed)) return false;
@@ -183,6 +185,7 @@ inline void hash_instrument(FnvHasher& H, const Instrument& ins) {
   H.i(ins.fx_den);
   H.d(ins.fx_spot);
   H.d(ins.fx_time);
+  if (ins.fx_spot_time != 0.0) H.d(ins.fx_spot_time);
   H.i(ins.turn_curve);
   H.i(ins.turn_index);
   H.d(ins.convexity);

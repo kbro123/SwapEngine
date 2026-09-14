@@ -10,7 +10,7 @@ swaps_consistency_tests|risk_test.cpp|2|4
 swaps_consistency_tests|spread_test.cpp|3|6
 swaps_consistency_tests|streaming_test.cpp|3|7
 swaps_consistency_tests|tension_regularizer_oracle_test.cpp|2|8
-swaps_oracle_tests|asset_swap_oracle_test.cpp|2|22
+swaps_oracle_tests|asset_swap_oracle_test.cpp|2|28
 swaps_oracle_tests|bond_asset_swap_oracle.cpp|1|2
 swaps_oracle_tests|bond_oracle_test.cpp|6|29
 swaps_oracle_tests|bond_rv_oracle_test.cpp|5|58
@@ -19,9 +19,10 @@ swaps_oracle_tests|bundle_test.cpp|9|19
 swaps_oracle_tests|calendar_ql_oracle_test.cpp|1|2
 swaps_oracle_tests|calib_report_oracle_test.cpp|2|25
 swaps_oracle_tests|calibration_oracle_test.cpp|2|6
-swaps_oracle_tests|conventions_test.cpp|10|54
+swaps_oracle_tests|conventions_test.cpp|10|59
 swaps_oracle_tests|convexity_test.cpp|3|4
 swaps_oracle_tests|extract_test.cpp|9|43
+swaps_oracle_tests|fx_forward_spot_date_oracle_test.cpp|1|7
 swaps_oracle_tests|matched_swap_multiccy_oracle_test.cpp|2|47
 swaps_oracle_tests|modular_curve_test.cpp|3|8
 swaps_oracle_tests|monotone_cubic_oracle_test.cpp|2|2

@@ -119,6 +119,7 @@ struct MultiCurveBook {
     int mtm_fwd_curve = 0, mtm_disc_curve = 0;         // foreign leg forecast / discount roles
     int mtm_reset_num = 0, mtm_reset_den = 0;          // FX-forward numerator (foreign) / denominator (dom)
     double fx_spot = 1.0;
+    double fx_spot_time = 0.0;  // O-X3: curve time of the spot date fx_spot is quoted for (0 = today)
   };
   std::vector<Position> positions;
 
@@ -134,7 +135,7 @@ struct MultiCurveBook {
       // notional couples in the xccy/basis curve via reset_num/reset_den. See cashflows.hpp xccy_mtm_leg_pv.
       const Scalar mtm = pricing::xccy_mtm_leg_pv<Scalar>(
           p.mtm_coupons, p.fx_spot, C(p.mtm_fwd_curve), C(p.mtm_disc_curve),
-          C(p.mtm_reset_num), C(p.mtm_reset_den));
+          C(p.mtm_reset_num), C(p.mtm_reset_den), p.fx_spot_time);
       Scalar dom = pricing::float_leg_pv<Scalar>(p.float_coupons, C(p.fwd_curve), C(p.disc_curve));
       // The mtm leg above carries its notional exchanges (each period's DF(e) − DF(s), re-set to the FX
       // forward). The DOMESTIC leg must carry ITS exchanges too -- constant notional: −DF(s₀) at the first

@@ -47,6 +47,9 @@ struct FloatLeg {
   int reset_num = -1;   // FX-forward NUMERATOR (foreign) discount curve role
   int reset_den = -1;   // FX-forward DENOMINATOR (domestic) discount curve role
   double fx_spot = 1.0;  // FX spot for the notional reset
+  // O-X3 (2026-09-14): fx_spot is the SPOT-DATE quote and fx_spot_time the curve time of that spot date, so period i's
+  // notional is fx_spot · ratio(reset_i) / ratio(fx_spot_time), ratio(t) = DF[reset_num](t)/DF[reset_den](t). 0 = today.
+  double fx_spot_time = 0.0;
 };
 
 struct FixedLeg {
@@ -135,6 +138,7 @@ struct Instrument {
   int fx_num = -1, fx_den = -1;
   double fx_spot = 1.0;
   double fx_time = 0.0;
+  double fx_spot_time = 0.0;  // O-X3: curve time of the spot date fx_spot is quoted for (0 = today): F(fx_spot_time) = fx_spot
   // XccyMtmBasis only: the resetting-notional funding leg (its reset_num/reset_den/fx_spot on the leg
   // define the FX-forward notional). fwd = the pinned curve's self-forecast leg, bench = the other-
   // currency forecast leg, fixed = the annuity — all discounted on the pinned (collateral) curve.
@@ -288,10 +292,14 @@ inline void validate_instrument(const Instrument& ins, const std::string& where)
       leg(ins.fwd, "float");
       leg(ins.bench, "benchmark");
       if (ins.fixed.coupons.empty()) fail("the fixed (annuity) leg has no coupons");
+      if (!(ins.mtm.fx_spot_time >= 0.0) || !std::isfinite(ins.mtm.fx_spot_time))
+        fail("the MtM leg needs a finite fx_spot_time >= 0");
       break;
     case QuoteKind::FxForward:
       if (!(ins.fx_time > 0.0)) fail("an FX forward needs fx_time > 0");
       if (!(ins.fx_spot > 0.0)) fail("an FX forward needs fx_spot > 0");
+      // fx_time may be BEFORE fx_spot_time: a tom-next forward delivers before spot.
+      if (!(ins.fx_spot_time >= 0.0) || !std::isfinite(ins.fx_spot_time)) fail("an FX forward needs a finite fx_spot_time >= 0");
       break;
     case QuoteKind::TurnJump:
       if (ins.turn_curve < 0 || ins.turn_index < 0) fail("a TurnJump needs turn_curve and turn_index >= 0");
@@ -332,7 +340,11 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
     case QuoteKind::FxForward:
       // FX-forward outright = fx_spot · DF_foreign(fx_time) / DF_domestic(fx_time). This is exactly the
       // machinery that converts a forward foreign cashflow back to the domestic currency at any date.
-      return ins.fx_spot * (C(ins.fx_num).discount(ins.fx_time) / C(ins.fx_den).discount(ins.fx_time));
+      if (ins.fx_spot_time == 0.0)  // the t = 0 reading, byte-identical
+        return ins.fx_spot * (C(ins.fx_num).discount(ins.fx_time) / C(ins.fx_den).discount(ins.fx_time));
+      // O-X3: fx_spot is the quote for the SPOT DATE, so F(fx_spot_time) = fx_spot, i.e. FX_0 = fx_spot·DF_den(t_s)/DF_num(t_s).
+      return ins.fx_spot * (C(ins.fx_num).discount(ins.fx_time) / C(ins.fx_den).discount(ins.fx_time)) *
+             (C(ins.fx_den).discount(ins.fx_spot_time) / C(ins.fx_num).discount(ins.fx_spot_time));
     case QuoteKind::XccyMtmBasis: {
       // Par basis of a MtM (FX-resettable-notional) xccy swap. fwd = the collateral curve's self-forecast
       // leg paying on its accrual ends (pv telescopes to the exchange pair DF(s0) − DF(eN); build::xccy_mtm_basis,
@@ -348,8 +360,13 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
           pricing::float_leg_pv<Scalar>(ins.bench.coupons, C(ins.bench.forecast), C(ins.bench.discount));
       const Scalar mtm = pricing::xccy_mtm_leg_pv<Scalar>(
           ins.mtm.coupons, ins.mtm.fx_spot, C(ins.mtm.forecast), C(ins.mtm.discount),
-          C(ins.mtm.reset_num), C(ins.mtm.reset_den));
-      return (pv_self - pv_fx) / ann + mtm / (ins.mtm.fx_spot * ann);
+          C(ins.mtm.reset_num), C(ins.mtm.reset_den), ins.mtm.fx_spot_time);
+      if (ins.mtm.fx_spot_time == 0.0) return (pv_self - pv_fx) / ann + mtm / (ins.mtm.fx_spot * ann);
+      // O-X3: divide by FX_0 (the today-rate implied by the spot-date quote): the basis is then invariant to fx_spot AND
+      // fx_spot_time -- exactly the compiled batch's bare reset ratio, which therefore needs no change.
+      const Scalar fx0 = ins.mtm.fx_spot * (C(ins.mtm.reset_den).discount(ins.mtm.fx_spot_time) /
+                                            C(ins.mtm.reset_num).discount(ins.mtm.fx_spot_time));
+      return (pv_self - pv_fx) / ann + mtm / (fx0 * ann);
     }
     case QuoteKind::ZeroCouponRate:
       return zero_coupon_transform<Scalar>(
