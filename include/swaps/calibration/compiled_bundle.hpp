@@ -250,6 +250,11 @@ class CompiledBundleResidual {
   }
   // The same Jacobian written into a caller-owned J, resized only when its shape differs: the streamer keeps J in a member, so a
   // refresh allocates no Jacobian (C6, 2026-09-15). Same operations in the same order as jacobian_vs: bit-identical.
+  // The same, and the residuals_vs(x, q) values into *r (S2, 2026-09-15): what a streamer refresh reads its band sides from.
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) const {
+    jacobian_vs_into(x, q, J);
+    if (r) *r = residuals_vs(x, q);
+  }
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;

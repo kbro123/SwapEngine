@@ -28,6 +28,15 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 # (name, header (repo-relative: include/..., tests/research/... or api/*.cpp), old, new, [api/*.cpp source, ..., test TU, ...],
 #  gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-15 step 4 / S2: a refresh reads its band sides from the Jacobian pass instead of re-pricing every model quote.
+    ("anchor_sides_reprice_model_rates", "include/swaps/calibration/streaming.hpp",
+     "      sides_from_j = !bands_.empty() && opt_.anchor_sides_from_jacobian;\n",
+     "      sides_from_j = false;\n",
+     ["streaming_anchor_sides_repro_test.cpp"], "*", "a refresh re-pricing every model quote for its band sides is unpinned (S2)"),
+    ("aad_residual_value_not_returned", "include/swaps/calibration/aad_block.hpp",
+     "      if (r) (*r)[rows_[j]] = rj.value();\n",
+     "",
+     ["streaming_anchor_sides_parity_test.cpp", "streaming_anchor_sides_repro_test.cpp"], "*", "the AAD rows' residual values feeding the band sides are unpinned (S2)"),
     # 2026-09-15 step 4 / S3: the commit re-anchor is the tick's final refresh.
     ("commit_reanchor_then_final_refresh", "include/swaps/calibration/streaming.hpp",
      "          final_refresh_done = true;\n",
@@ -78,8 +87,8 @@ MUTATIONS = [
      ["api/bundle_api.cpp", "session_stream_commit_repro_test.cpp"], "*", "the shared engine keeping the old targets after a tick is unpinned (P3)"),
     # 2026-09-15 C6a: a refresh writes J in place and reuses one decomposition.
     ("refresh_jacobian_by_value", "include/swaps/calibration/streaming.hpp",
-     "    engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)\n",
-     "    J_ref_ = engine_->jacobian_vs(x, q);\n",
+     "    if (!sides_from_j) engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)\n",
+     "    if (!sides_from_j) J_ref_ = engine_->jacobian_vs(x, q);\n",
      ["streaming_refresh_alloc_repro_test.cpp"], "*", "a refresh writing J in place is unpinned (C6)"),
     ("decomposition_rebuilt_per_refresh", "include/swaps/calibration/streaming.hpp",
      "    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",

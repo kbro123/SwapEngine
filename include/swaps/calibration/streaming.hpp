@@ -145,6 +145,10 @@ class StreamingCalibrator {
     // BAND RE-SCALE by a rank-one operator update (E3-C7, 2026-09-10; see rescale_row) instead of a full
     // re-factorisation. false = re-factorise on every re-scale (the reference the parity test compares to).
     bool rescale_update = true;
+    // ANCHOR SIDES FROM THE JACOBIAN PASS (S2, 2026-09-15): a refresh classifies each tracked band row from the residual values the
+    // engine's Jacobian pass already has (inverted as the tick's side_of does) instead of re-evaluating every model quote -- on desk_mixed
+    // that re-evaluation cost 192 us and 23 allocations per refresh. false = the model_rates reference the parity test compares to.
+    bool anchor_sides_from_jacobian = true;
     // ADAPTIVE STALL (E4.D, 2026-09-10): refresh M when the frozen iteration's REMAINING steps, predicted from
     // its observed contraction ρ = |dx_k|/|dx_{k-1}| as log(step_tol/|dx_k|)/log(ρ), would cost more than a
     // refresh. The break-even step count is MEASURED per calibrator at construction (one Jacobian +
@@ -801,7 +805,12 @@ class StreamingCalibrator {
   // Returns false (anchor UNCHANGED) if the Jacobian at (x, q) is not finite.
   bool set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     SWAPS_TRACE("  set_anchor\n");
-    engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)
+    bool sides_from_j = false;  // S2: the band sides below come from the Jacobian pass's residuals, when the engine returns them
+    if constexpr (requires(const Engine& e, const Eigen::VectorXd& v, Eigen::MatrixXd& m, Eigen::VectorXd* p) { e.jacobian_vs_into(v, v, m, p); }) {
+      sides_from_j = !bands_.empty() && opt_.anchor_sides_from_jacobian;
+      if (sides_from_j) engine_->jacobian_vs_into(x, q, J_ref_, &r_anchor_);
+    }
+    if (!sides_from_j) engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)
     if (!J_ref_.allFinite()) {
       if (have_J_) J_ref_ = J_cur_;  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
       return false;
@@ -809,12 +818,22 @@ class StreamingCalibrator {
     x_anchor_ = x;
     q_anchor_ = q;
     if (!bands_.empty()) {
-      const Eigen::VectorXd& mr = engine_->model_rates(x);
+      // Each tracked row's side at the anchor. From the Jacobian pass's residuals (S2): the Huber residual is monotone in the model quote,
+      // so r above the upper edge's residual decay·(upper − m) is above the band and below the lower edge's is below -- the tick's own
+      // side_of test, read at (x, q). The reference (anchor_sides_from_jacobian = false) re-prices every model quote.
+      const Eigen::VectorXd* mr = sides_from_j ? nullptr : &engine_->model_rates(x);
       for (std::size_t k = 0; k < bands_.size(); ++k) {
         const BandRow& b = bands_[k];
-        slope_ref_[k] = band_slope(mr[b.row], b.lower, b.upper, b.decay);  // > 0: tracked rows have decay > 0
+        int side = 0;
+        if (mr) {
+          side = ((*mr)[b.row] > b.upper) ? +1 : ((*mr)[b.row] < b.lower ? -1 : 0);
+        } else {
+          const double m = q[b.row], r = r_anchor_[b.row];
+          side = r > b.decay * (b.upper - m) ? +1 : (r < b.decay * (b.lower - m) ? -1 : 0);
+        }
+        slope_ref_[k] = side == 0 ? b.decay : 1.0;  // band_slope; > 0: tracked rows have decay > 0
         slope_cur_[k] = slope_ref_[k];
-        last_side_[k] = (mr[b.row] > b.upper) ? +1 : (mr[b.row] < b.lower ? -1 : +1);
+        last_side_[k] = side < 0 ? -1 : +1;
       }
       clear_pins();
     }
@@ -953,6 +972,7 @@ class StreamingCalibrator {
   Eigen::MatrixXd bg_M_;
   // Per-tick scratch so the exact frozen-Newton loop allocates nothing (sized on first use).
   Eigen::VectorXd x_, r_, dx_;
+  Eigen::VectorXd r_anchor_;  // set_anchor: the residuals at (x, q) the Jacobian pass returns, read for the band sides (S2)
   Eigen::VectorXd last_step_;     // the previous FULL step this tick (kink 2-cycle detection)
   bool have_last_step_ = false;
   // Two-threshold operator (see factor): the walk drops weak directions the anchor did not have; a tick that converged on a

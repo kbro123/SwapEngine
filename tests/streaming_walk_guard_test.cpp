@@ -238,7 +238,7 @@ TEST(StreamingWalkGuard, ARegularisedTickIsAllocationFree) {
 TEST(StreamingWalkGuard, TheStreamerLadderTickPins) {
   if (!swaps::testing::alloc_counting_available()) GTEST_SKIP() << "allocation counting needs libmalloc's logger (macOS)";
   struct Pin { const char* name; unsigned long ticks; };
-  static const Pin pins[] = {{"mixed_scheme", 520}, {"desk_mixed", 4530}};
+  static const Pin pins[] = {{"mixed_scheme", 520}, {"desk_mixed", 4070}};  // desk_mixed 4530 -> 4070 (S2, 2026-09-15)
   static const std::vector<Shape> L = swaps::shapes::ladder();
   for (const Shape& s : L) {
     const Eigen::VectorXd x = cal::calibrate(s.prob, s.x0).x;

@@ -214,6 +214,12 @@ class AadBlock {
   // Jacobian of residuals_vs_into via WIDTH-REDUCED AAD, into the touched columns of J.row(global_row).
   // Consistent with residuals_vs_into by construction: AAD differentiates the SAME instrument_residual
   // (so the band chain-rule term (q_model − q) and the FX 1/F_model factor fall out automatically).
+  // The same, and each row's residual value into (*r)[global_row] -- the dual's value part, computed by the sweep anyway (S2).
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) const {
+    if (rows_.empty()) return;
+    if (pooled_) jacobian_impl(pool_, x, J, &q, r);
+    else jacobian_impl(heap_, x, J, &q, r);
+  }
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
     if (rows_.empty()) return;
     if (pooled_) jacobian_impl(pool_, x, J, &q);
@@ -247,7 +253,7 @@ class AadBlock {
   // to the pre-template loops for D = ad::Dual.
   template <class D>
   void jacobian_impl(AadState<D>& s, const Eigen::VectorXd& x, Eigen::MatrixXd& J,
-                     const Eigen::VectorXd* q) const {
+                     const Eigen::VectorXd* q, Eigen::VectorXd* r = nullptr) const {
     for (int k = 0; k < n_knots_; ++k) s.xd[k].value() = x[k];  // reuse the seed: values only
     s.curves.update([&](int c, int i) { return s.xd[off_[c] + i]; });
     const auto curve_of = [&s](int i) -> const CurveHandle<D>& { return s.curves[i]; };
@@ -255,6 +261,7 @@ class AadBlock {
     for (int j = 0; j < size(); ++j) {
       const D rj = q ? instrument_residual<D>(sub_.instruments[j], curve_of, (*q)[rows_[j]])
                      : instrument_residual<D>(sub_.instruments[j], curve_of);
+      if (r) (*r)[rows_[j]] = rj.value();
       J.row(rows_[j]).setZero();
       const auto& g = rj.derivatives();
       if (g.size() == w)

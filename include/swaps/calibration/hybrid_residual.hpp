@@ -230,6 +230,23 @@ class HybridBundleResidual {
     jacobian_vs_into(x, q, J);
     return J;
   }
+  // The same Jacobian, and the residuals_vs(x, q) values into *r (S2, 2026-09-15): the AAD rows' from the sweep's dual values, the cacheable
+  // rows' from their own residuals_vs -- so a streamer refresh reads its band sides without re-evaluating every model quote (on desk_mixed
+  // that re-evaluation rebuilt every AAD curve: 192 us and 23 allocations per refresh).
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) const {
+    if (!r) { jacobian_vs_into(x, q, J); return; }
+    if (nc_.empty() && cacheable_) { cacheable_->jacobian_vs_into(x, q, J, r); return; }
+    r->resize(n_res_);
+    J.resize(n_res_, nknots(x));
+    if (cacheable_) {
+      gather_cache(q, qsub_);
+      cacheable_->jacobian_vs_into(x, qsub_, Jc_);
+      for (std::size_t j = 0; j < cache_rows_.size(); ++j) J.row(cache_rows_[j]) = Jc_.row(static_cast<int>(j));
+      const Eigen::VectorXd& rc = cacheable_->residuals_vs(x, qsub_);
+      for (std::size_t j = 0; j < cache_rows_.size(); ++j) (*r)[cache_rows_[j]] = rc[static_cast<int>(j)];
+    }
+    nc_.jacobian_vs_into(x, q, J, r);
+  }
   // Into a caller-owned J (C6, 2026-09-15): the cacheable half writes into a member scratch Jc_, so a warm call allocates no matrix.
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
     if (nc_.empty() && cacheable_) {
