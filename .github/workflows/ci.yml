@@ -34,7 +34,7 @@ jobs:
           python3 tools/gen_dispatch.py --stdout | diff -q - api/run_json_dispatch.gen.inc
           bash tools/check_oracle_tests.sh
           bash tools/selftest_guards.sh
-      - name: configure (non-gated: no QuantLib on the runner)
+      - name: "configure (non-gated: no QuantLib on the runner)"
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DSWAPS_ALLOW_NO_ORACLE=ON -DSWAPS_BUILD_BENCH=OFF
