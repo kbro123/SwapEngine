@@ -1,0 +1,291 @@
+[build guardtrace2 14:13:48 load { 6.20 5.61 5.32 }]
+[built guardtrace2]
+=== guardtrace2 (counts only) start 14:27:50 load { 3.19 3.91 4.47 }
+# desk_mixed: the ONLY value-dependent region is SOFR (curve 0) knots 6..11, MonotoneCubic over t = 10.02..30.03 (join at 7.02)
+  set_anchor
+#### warm: 6 ticks alternating q0 <-> V1 (untraced)
+  step 1 |dx|=2.49e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 2.49e-04 rho 0.525 steps_left 36.6 K 64.0 -> continue
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 144486.3 K 64.0 -> REFRESH
+  set_anchor
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=2.00e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 2.00e-04 rho 0.308 steps_left 18.7 K 64.0 -> continue
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 10 |dx|=2.24e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=2.49e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 2.49e-04 rho 0.525 steps_left 36.6 K 64.0 -> continue
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.1 K 64.0 -> REFRESH
+  set_anchor
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=2.00e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 2.00e-04 rho 0.308 steps_left 18.7 K 64.0 -> continue
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 10 |dx|=2.26e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=2.49e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 2.49e-04 rho 0.525 steps_left 36.6 K 64.0 -> continue
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.1 K 64.0 -> REFRESH
+  set_anchor
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=2.00e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 2.00e-04 rho 0.308 steps_left 18.7 K 64.0 -> continue
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 10 |dx|=2.26e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### TICK V1 from the committed state
+    [r eval 1: tape guards 94, changed vs previous eval 0]
+  step 1 |dx|=2.49e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 2: tape guards 94, changed vs previous eval 14]
+        FLIP SOFR node 2 (t=12.02, tangent spans [10.02,15.02]) min: |pu| < |pm|: true -> false  margin +1.987e-05 -> -3.464e-05
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false  margin +2.990e-20 -> -7.030e-09
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) pm*pu > 0: true -> (not evaluated)   margin +9.068e-09 -> +3.355e-09
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) -pm*(S_i - S_i-1) > 0: true -> (not evaluated)   margin +6.067e-09 -> +1.582e-08
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) min: |pu| < |pm|: true -> (not evaluated)   margin +3.346e-05 -> +1.048e-04
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) max: M < 1.5*min(|pm|,|pu|): false -> (not evaluated)   margin -1.199e-04 -> -1.255e-04
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |S_i| < |S_i-1|: true -> false  margin +5.590e-16 -> -5.799e-05
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false  margin +2.990e-20 -> -7.030e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pd > 0: true -> (not evaluated)   margin +3.718e-09 -> -1.767e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*(S_i-1 - S_i-2) > 0: false -> (not evaluated)   margin -4.278e-09 -> -1.015e-08
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false  margin +2.446e-23 -> -6.207e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pu > 0: true -> (not evaluated)   margin +6.395e-09 -> +1.391e-08
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) -pm*(S_i - S_i-1) > 0: true -> (not evaluated)   margin +4.469e-20 -> -4.853e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |pu| < |pm|: false -> (not evaluated)   margin -2.188e-08 -> -8.250e-05
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) max: M < 1.5*min(|pm|,|pu|): false -> (not evaluated)   margin -1.199e-04 -> -3.856e-05
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false  margin +2.446e-23 -> -6.207e-09
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*pd > 0: true -> (not evaluated)   margin +6.391e-09 -> +8.385e-09
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*(S_i-1 - S_i-2) > 0: false -> (not evaluated)   margin -4.468e-20 -> +3.432e-09
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: false -> true  margin -1.584e-04 -> +6.001e-05
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: true -> false  margin +6.330e-09 -> -1.694e-10
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: false -> (not evaluated)   margin -1.605e-04 -> +1.307e-05
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 2.49e-04 rho 0.525 steps_left 36.6 K 64.0 -> continue
+    [r eval 3: tape guards 94, changed vs previous eval 4]
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: true -> false  margin +6.001e-05 -> -2.194e-05
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: false -> true  margin -1.694e-10 -> +4.062e-10
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: (not evaluated)  -> false  margin +1.307e-05 -> -1.001e-04
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.0 K 64.0 -> REFRESH
+  set_anchor
+    [J eval 4: tape guards 94, changed vs previous eval 4]
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: false -> true  margin -2.194e-05 -> +1.903e-05
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: true -> false  margin +4.062e-10 -> -2.030e-10
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: false -> (not evaluated)   margin -1.001e-04 -> -5.451e-05
+    [r eval 5: tape guards 94, changed vs previous eval 0]
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 6: tape guards 94, changed vs previous eval 0]
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end V1: conv 1 steps 5 refreshes 1 rescales 0
+#### TICK q0 from the committed state
+    [r eval 7: tape guards 94, changed vs previous eval 0]
+  step 1 |dx|=2.00e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 8: tape guards 94, changed vs previous eval 6]
+        FLIP SOFR node 2 (t=12.02, tangent spans [10.02,15.02]) min: |pu| < |pm|: false -> true  margin -3.494e-05 -> +2.066e-05
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: true -> false  margin +2.536e-05 -> -6.695e-05
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: false -> true  margin -2.398e-10 -> +1.503e-09
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: (not evaluated)  -> false  margin -4.406e-05 -> -1.012e-04
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 2.00e-04 rho 0.308 steps_left 18.7 K 64.0 -> continue
+    [r eval 9: tape guards 94, changed vs previous eval 0]
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+    [r eval 10: tape guards 94, changed vs previous eval 0]
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+    [r eval 11: tape guards 94, changed vs previous eval 0]
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+    [r eval 12: tape guards 94, changed vs previous eval 0]
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+    [r eval 13: tape guards 94, changed vs previous eval 0]
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+    [r eval 14: tape guards 94, changed vs previous eval 0]
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+    [J eval 15: tape guards 94, changed vs previous eval 0]
+    [r eval 16: tape guards 94, changed vs previous eval 0]
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 17: tape guards 94, changed vs previous eval 8]
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: false -> true  margin -3.014e-12 -> +6.186e-18
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) pm*pu > 0: (not evaluated)  -> true  margin +9.070e-09 -> +9.068e-09
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) -pm*(S_i - S_i-1) > 0: (not evaluated)  -> true  margin +6.064e-09 -> +6.067e-09
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) min: |pu| < |pm|: (not evaluated)  -> true  margin +3.346e-05 -> +3.346e-05
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) max: M < 1.5*min(|pm|,|pu|): (not evaluated)  -> false  margin -1.200e-04 -> -1.199e-04
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |S_i| < |S_i-1|: false -> true  margin -5.638e-08 -> +1.156e-13
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: false -> true  margin -3.014e-12 -> +6.186e-18
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pd > 0: (not evaluated)  -> true  margin +3.726e-09 -> +3.718e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*(S_i-1 - S_i-2) > 0: (not evaluated)  -> false  margin -4.278e-09 -> -4.278e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: false -> true  margin -4.985e-14 -> +5.060e-21
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pu > 0: (not evaluated)  -> true  margin +6.441e-09 -> +6.395e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) -pm*(S_i - S_i-1) > 0: (not evaluated)  -> true  margin -4.512e-12 -> +9.246e-18
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |pu| < |pm|: (not evaluated)  -> false  margin -4.702e-07 -> -2.188e-08
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) max: M < 1.5*min(|pm|,|pu|): (not evaluated)  -> false  margin -1.199e-04 -> -1.199e-04
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: false -> true  margin -4.985e-14 -> +5.060e-21
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*pd > 0: (not evaluated)  -> true  margin +6.375e-09 -> +6.391e-09
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*(S_i-1 - S_i-2) > 0: (not evaluated)  -> false  margin +4.488e-12 -> -9.243e-18
+  step 10 |dx|=2.27e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end q0: conv 1 steps 10 refreshes 1 rescales 0
+#### TICK V4 from the committed state
+    [r eval 18: tape guards 94, changed vs previous eval 0]
+  step 1 |dx|=2.97e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 19: tape guards 94, changed vs previous eval 8]
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false  margin +1.773e-19 -> -7.350e-10
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) pm*pu > 0: true -> (not evaluated)   margin +9.068e-09 -> +8.024e-09
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) -pm*(S_i - S_i-1) > 0: true -> (not evaluated)   margin +6.067e-09 -> +7.498e-09
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) min: |pu| < |pm|: true -> (not evaluated)   margin +3.346e-05 -> +4.622e-05
+        FLIP SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) max: M < 1.5*min(|pm|,|pu|): false -> (not evaluated)   margin -1.199e-04 -> -1.211e-04
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |S_i| < |S_i-1|: true -> false  margin +3.314e-15 -> -1.133e-05
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false  margin +1.773e-19 -> -7.350e-10
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pd > 0: true -> (not evaluated)   margin +3.718e-09 -> +2.786e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*(S_i-1 - S_i-2) > 0: false -> (not evaluated)   margin -4.278e-09 -> -5.236e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false  margin +1.450e-22 -> -1.943e-10
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pu > 0: true -> (not evaluated)   margin +6.395e-09 -> +7.667e-09
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) -pm*(S_i - S_i-1) > 0: true -> (not evaluated)   margin +2.649e-19 -> -9.151e-10
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |pu| < |pm|: false -> (not evaluated)   margin -2.188e-08 -> -1.423e-05
+        FLIP SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) max: M < 1.5*min(|pm|,|pu|): false -> (not evaluated)   margin -1.199e-04 -> -1.041e-04
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false  margin +1.450e-22 -> -1.943e-10
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*pd > 0: true -> (not evaluated)   margin +6.391e-09 -> +7.166e-09
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*(S_i-1 - S_i-2) > 0: false -> (not evaluated)   margin -2.649e-19 -> +8.822e-10
+  step 2 |dx|=2.52e-09 alpha=1.000 pinned=0 rescales=0 refreshes=0
+#### end V4: conv 1 steps 2 refreshes 0 rescales 0
+#### TICK q0 from the committed state
+    [r eval 20: tape guards 94, changed vs previous eval 0]
+  step 1 |dx|=2.97e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 21: tape guards 94, changed vs previous eval 0]
+  step 2 |dx|=2.52e-09 alpha=1.000 pinned=0 rescales=0 refreshes=0
+#### end q0: conv 1 steps 2 refreshes 0 rescales 0
+#### TICK V1 (again) from the committed state
+    [r eval 22: tape guards 94, changed vs previous eval 0]
+  step 1 |dx|=2.49e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 23: tape guards 94, changed vs previous eval 6]
+        FLIP SOFR node 2 (t=12.02, tangent spans [10.02,15.02]) min: |pu| < |pm|: true -> false  margin +1.987e-05 -> -3.464e-05
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: false -> true  margin -1.584e-04 -> +6.001e-05
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: true -> false  margin +6.330e-09 -> -1.694e-10
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: false -> (not evaluated)   margin -1.605e-04 -> +1.307e-05
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 2.49e-04 rho 0.525 steps_left 36.6 K 64.0 -> continue
+    [r eval 24: tape guards 94, changed vs previous eval 4]
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: true -> false  margin +6.001e-05 -> -2.194e-05
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: false -> true  margin -1.694e-10 -> +4.062e-10
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: (not evaluated)  -> false  margin +1.307e-05 -> -1.001e-04
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.0 K 64.0 -> REFRESH
+  set_anchor
+    [J eval 25: tape guards 94, changed vs previous eval 4]
+        FLIP SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: false -> true  margin -2.194e-05 -> +1.903e-05
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: true -> false  margin +4.062e-10 -> -2.030e-10
+        FLIP SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: false -> (not evaluated)   margin -1.001e-04 -> -5.451e-05
+    [r eval 26: tape guards 94, changed vs previous eval 0]
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 27: tape guards 94, changed vs previous eval 0]
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end V1 (again): conv 1 steps 5 refreshes 1 rescales 0
+
+#### committed states: x(q0) vs x(V1): |dx|_inf 2.00e-04 at knot 54 (curve other);  x(q0) vs x(V4): |dx|_inf 2.97e-05 at knot 10 (curve SOFR)
+#### Hyman predicates, committed x(q0) -> x(V1):
+    q0->V1  SOFR node 2 (t=12.02, tangent spans [10.02,15.02]) min: |pu| < |pm|: true -> false   margin +1.987e-05 -> -3.494e-05
+    q0->V1  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false   margin +2.990e-20 -> -6.947e-09
+    q0->V1  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) pm*pu > 0: true -> (n/e)   margin +9.068e-09 -> +3.333e-09
+    q0->V1  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) -pm*(S_i - S_i-1) > 0: true -> (n/e)   margin +6.067e-09 -> +1.589e-08
+    q0->V1  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) min: |pu| < |pm|: true -> (n/e)   margin +3.346e-05 -> +1.047e-04
+    q0->V1  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) max: M < 1.5*min(|pm|,|pu|): false -> (n/e)   margin -1.199e-04 -> -1.238e-04
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |S_i| < |S_i-1|: true -> false   margin +5.590e-16 -> -5.698e-05
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false   margin +2.990e-20 -> -6.947e-09
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pd > 0: true -> (n/e)   margin +3.718e-09 -> -1.831e-09
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*(S_i-1 - S_i-2) > 0: false -> (n/e)   margin -4.278e-09 -> -1.007e-08
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false   margin +2.446e-23 -> -5.250e-09
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pu > 0: true -> (n/e)   margin +6.395e-09 -> +1.297e-08
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) -pm*(S_i - S_i-1) > 0: true -> (n/e)   margin +4.469e-20 -> -4.704e-09
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |pu| < |pm|: false -> (n/e)   margin -2.188e-08 -> -7.455e-05
+    q0->V1  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) max: M < 1.5*min(|pm|,|pu|): false -> (n/e)   margin -1.199e-04 -> -3.836e-05
+    q0->V1  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false   margin +2.446e-23 -> -5.250e-09
+    q0->V1  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*pd > 0: true -> (n/e)   margin +6.391e-09 -> +9.069e-09
+    q0->V1  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*(S_i-1 - S_i-2) > 0: false -> (n/e)   margin -4.468e-20 -> +3.703e-09
+    q0->V1  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) clamp: M < |m|: false -> true   margin -1.584e-04 -> +2.536e-05
+    q0->V1  SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: m*S > 0: true -> false   margin +6.330e-09 -> -2.398e-10
+    q0->V1  SOFR node 6 (t=30.03, tangent spans [25.03,30.03]) end: clamp |3S| < |m|: false -> (n/e)   margin -1.605e-04 -> -4.406e-05
+#### Hyman predicates, committed x(q0) -> x(V4):
+    q0->V4  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false   margin +2.990e-20 -> -7.351e-10
+    q0->V4  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) pm*pu > 0: true -> (n/e)   margin +9.068e-09 -> +8.024e-09
+    q0->V4  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) -pm*(S_i - S_i-1) > 0: true -> (n/e)   margin +6.067e-09 -> +7.498e-09
+    q0->V4  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) min: |pu| < |pm|: true -> (n/e)   margin +3.346e-05 -> +4.622e-05
+    q0->V4  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) max: M < 1.5*min(|pm|,|pu|): false -> (n/e)   margin -1.199e-04 -> -1.211e-04
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |S_i| < |S_i-1|: true -> false   margin +5.590e-16 -> -1.133e-05
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false   margin +2.990e-20 -> -7.351e-10
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pd > 0: true -> (n/e)   margin +3.718e-09 -> +2.786e-09
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*(S_i-1 - S_i-2) > 0: false -> (n/e)   margin -4.278e-09 -> -5.236e-09
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0: true -> false   margin +2.446e-23 -> -1.943e-10
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) pm*pu > 0: true -> (n/e)   margin +6.395e-09 -> +7.667e-09
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) -pm*(S_i - S_i-1) > 0: true -> (n/e)   margin +4.469e-20 -> -9.151e-10
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) min: |pu| < |pm|: false -> (n/e)   margin -2.188e-08 -> -1.423e-05
+    q0->V4  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) max: M < 1.5*min(|pm|,|pu|): false -> (n/e)   margin -1.199e-04 -> -1.041e-04
+    q0->V4  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0: true -> false   margin +2.446e-23 -> -1.943e-10
+    q0->V4  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*pd > 0: true -> (n/e)   margin +6.391e-09 -> +7.166e-09
+    q0->V4  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*(S_i-1 - S_i-2) > 0: false -> (n/e)   margin -4.468e-20 -> +8.822e-10
+#### tape guard vectors: |x(q0)| 94 guards, |x(V1)| 94, |x(V4)| 94
+#### smallest evaluated margins at x(q0):
+    2.446e-23  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0 (true)
+    2.446e-23  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0 (true)
+    2.990e-20  SOFR node 3 (t=15.02, tangent spans [12.02,20.02]) up-run (S_i - S_i-1)(S_i+1 - S_i) > 0 (true)
+    2.990e-20  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) down-run (S_i-1 - S_i-2)(S_i - S_i-1) > 0 (true)
+    4.468e-20  SOFR node 5 (t=25.03, tangent spans [20.02,30.03]) pm*(S_i-1 - S_i-2) > 0 (false)
+    4.469e-20  SOFR node 4 (t=20.02, tangent spans [15.02,25.03]) -pm*(S_i - S_i-1) > 0 (true)
+=== guardtrace2 end 14:27:51 exit 0
+PART3B DONE

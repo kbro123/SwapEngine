@@ -1,0 +1,32 @@
+shape              m rec_ms rec_ops    live   cse%  guard |  eng_res tmpl_res tape_res |    eng_J tapeJrev tapeJfwd     cone | maxdq_bit     maxdJ |  fl01  fl25 flBig | affine(rows/nnz/nonlin)
+ois_nolag         12    0.7    7468     815  89.1%      0 |     0.82    18.21     1.77 |      3.0     16.1      9.9     4271 |   7.3e-17   2.8e-16 |     0     0     0 | 30/280/220
+  record 0.7 ms + collapse 0.1 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed ois_nolag      rows   30 nnz    280 nonlinear    220 | res    1.34 us (interp    1.77, engine    0.82) | fwd+J     8.6 us (engine J     3.0) | maxdq 6.9e-17 maxdJ 2.2e-16 flips 0
+ibor_multicurve    24    3.1   26398    2787  89.4%      0 |     1.62    62.88     6.94 |     16.6     64.6     43.0    16817 |   6.9e-17   4.4e-16 |     0     0     0 | 152/1963/652
+  record 3.1 ms + collapse 1.0 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed ibor_multicurve rows  152 nnz   1963 nonlinear    652 | res    3.38 us (interp    6.94, engine    1.62) | fwd+J    20.7 us (engine J    16.6) | maxdq 2.8e-17 maxdJ 2.2e-16 flips 0
+averaged          29    3.7   27568    4072  85.2%      0 |     2.34    50.81    13.72 |     36.9     91.9     53.5    19515 |   2.5e-15   7.9e-15 |     0     0     0 | 217/1936/938
+  record 3.7 ms + collapse 0.8 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed averaged       rows  217 nnz   1936 nonlinear    938 | res    4.12 us (interp   13.72, engine    2.34) | fwd+J    21.6 us (engine J    36.9) | maxdq 2.5e-15 maxdJ 5.2e-15 flips 0
+all_schemes       18    1.9   18644    2036  89.0%      0 |     0.95    48.58     4.26 |      9.2     46.0     40.4    11519 |   1.4e-17   2.2e-16 |     0     0     0 | 81/1097/337
+  record 1.9 ms + collapse 0.6 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed all_schemes    rows   81 nnz   1097 nonlinear    337 | res    1.81 us (interp    4.26, engine    0.95) | fwd+J    11.3 us (engine J     9.2) | maxdq 2.1e-17 maxdJ 5.6e-17 flips 0
+mixed_scheme      29    3.5   27370    4154  84.8%     78 |    48.95    57.91    13.86 |    102.9     73.1     86.4    19803 |   2.5e-15   7.9e-15 |     0     0    21 | 239/2108/967
+  record 3.5 ms + collapse 1.2 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed mixed_scheme   rows  248 nnz   2127 nonlinear    967 | res    4.39 us (interp   13.86, engine   48.95) | fwd+J    33.3 us (engine J   102.9) | maxdq 2.5e-15 maxdJ 5.2e-15 flips 0
+  codegen -O1 mixed_scheme compile 1361 ms  eval 4.405 us  (interp 13.857 us)  flips 0  max|d| vs interp 0.0e+00
+  codegen -O2 mixed_scheme compile 1671 ms  eval 3.748 us  (interp 13.857 us)  flips 0  max|d| vs interp 0.0e+00
+turns             14    0.8    8614    1219  85.8%      0 |     0.65    19.14     3.85 |      9.5     31.5     23.9     6019 |   2.1e-17   7.8e-16 |     0     0     0 | 63/624/258
+  record 0.8 ms + collapse 0.4 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed turns          rows   63 nnz    624 nonlinear    258 | res    1.90 us (interp    3.85, engine    0.65) | fwd+J    10.0 us (engine J     9.5) | maxdq 2.1e-17 maxdJ 6.7e-16 flips 0
+fx_xccy           37   11.3   90451   10629  88.2%      0 |     9.53   221.24    32.63 |     74.1    161.4    197.5    43682 |   2.8e-17   1.4e-15 |     0     0     0 | 637/6422/3459
+  record 11.3 ms + collapse 3.2 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed fx_xccy        rows  637 nnz   6422 nonlinear   3459 | res   14.60 us (interp   32.63, engine    9.53) | fwd+J    70.1 us (engine J    74.1) | maxdq 9.5e-17 maxdJ 3.9e-16 flips 0
+desk              70   17.3  141813   15269  89.2%      0 |     9.78   327.30    43.81 |    264.0    387.7    549.1    71848 |   2.5e-15   8.7e-15 |     0     0     0 | 857/9195/4537
+  record 17.3 ms + collapse 7.5 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed desk           rows  857 nnz   9195 nonlinear   4537 | res   22.70 us (interp   43.81, engine    9.78) | fwd+J   110.5 us (engine J   264.0) | maxdq 2.5e-15 maxdJ 7.2e-15 flips 0
+desk_mixed        70   14.4  141516   15351  89.1%     78 |   163.30   302.09    45.48 |   1116.5    259.4    614.7    72286 |   2.5e-15   8.7e-15 |     0     0    21 | 879/9529/4566
+  record 14.4 ms + collapse 5.8 ms (a guard flip re-records); allocs over 50 fwd+J replays: interp 0, collapsed 0
+  collapsed desk_mixed     rows  888 nnz   9548 nonlinear   4566 | res   20.76 us (interp   45.48, engine  163.30) | fwd+J   167.5 us (engine J  1116.5) | maxdq 2.5e-15 maxdJ 7.2e-15 flips 0
+  codegen -O1 desk_mixed   compile 6135 ms  eval 18.117 us  (interp 45.477 us)  flips 0  max|d| vs interp 0.0e+00
+  codegen -O2 desk_mixed   compile 7045 ms  eval 14.767 us  (interp 45.477 us)  flips 0  max|d| vs interp 0.0e+00

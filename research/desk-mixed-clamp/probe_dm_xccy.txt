@@ -1,0 +1,13 @@
+== desk X1: |x(q_small)-x(q0)|_inf 4.692e-03  top: [54] 4.69e-03 [53] 1.61e-03 [52] 1.41e-03 [51] 1.13e-03 [50] 8.30e-04 [49] 7.91e-04
+   d x54 / d q (J+ row 54) top rows: r43 -83.2 r42 82.2 r44 77.3 r46 -57.0 r45 -55.8 r30 -55.5 r47 55.0 r31 54.0
+   X3 ||J(x_small)-J(x0)||/||J(x0)|| 1.580e-04  spectral radius of I - J0+ J1: 0.002
+== desk_mixed X1: |x(q_small)-x(q0)|_inf 4.692e-03  top: [54] 4.69e-03 [53] 1.61e-03 [52] 1.41e-03 [51] 1.13e-03 [50] 8.30e-04 [49] 7.91e-04
+   d x54 / d q (J+ row 54) top rows: r43 -83.2 r42 82.2 r44 77.3 r46 -57.0 r45 -55.8 r30 -55.5 r47 55.0 r31 54.0
+   X3 ||J(x_small)-J(x0)||/||J(x0)|| 4.352e-03  spectral radius of I - J0+ J1: 1.365
+== desk_mixed X2: bump only one group by its q_small move (10 ticks each way after 2 warm)
+   group all steps/tick 7.5 refreshes/tick 1.0 failed 0  max |dx54| 4.69e-03
+   group 0   steps/tick 7.5 refreshes/tick 1.0 failed 0  max |dx54| 1.25e-04
+   group 1   steps/tick 2.0 refreshes/tick 0.0 failed 0  max |dx54| 8.50e-14
+   group 2   steps/tick 2.0 refreshes/tick 0.0 failed 0  max |dx54| 1.55e-04
+   group 3   steps/tick 3.0 refreshes/tick 0.0 failed 0  max |dx54| 4.72e-03
+   group 4   steps/tick 2.0 refreshes/tick 0.0 failed 0  max |dx54| 8.02e-14

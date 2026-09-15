@@ -1,0 +1,17 @@
+== S1 sensitivity of the solution to the 0.1 bp tick
+  |x(q_small) - x(q0)|_inf 4.692e-03 ; |q_small - q0|_inf 1.069e-05
+  top knots: [54] 4.69e-03 [53] 1.61e-03 [52] 1.41e-03 [51] 1.13e-03 [50] 8.30e-04 [49] 7.91e-04
+  curve offsets: c0@0 c1@13 c2@30 c3@42 c4@55
+  J 70x67  sigma_max 3.673e+00  sigma_min 2.974e-03  cond 1.235e+03
+  smallest 5 sigma: 2.97e-03 3.39e-03 3.72e-03 4.29e-03 8.90e-03
+  weakest direction top knots: [11] 0.75 [10] 0.40 [9] 0.33 [5] 0.25 [8] 0.24 [7] 0.14
+== S2 the half step and the adaptive stall (10 ticks each way after 4 warm; break-even 64)
+  default                5/1 10/1 5/1 10/1 5/1 10/1 5/1 10/1 5/1 10/1  | steps 75 refreshes 10 failed 0
+  stall off              10/1 10/1 10/1 10/1 10/1 10/1 10/1 10/1 10/1 10/1  | steps 100 refreshes 10 failed 0
+  stall off, steps 400   10/1 10/1 10/1 10/1 10/1 10/1 10/1 10/1 10/1 10/1  | steps 100 refreshes 10 failed 0
+== S3 +-1 bp and +-3 bp hard-row walk sequence (20 ticks after 6 warm; break-even 64)
+  amp 1e-04 tick 7 FAILED diverged: steps 10 refreshes 0 rescales 15 pins 3 releases 0 drift 7.78e-05
+  amp 1e-04 tick 8 FAILED diverged: steps 8 refreshes 0 rescales 12 pins 3 releases 0 drift 1.43e-04
+  amp 1e-04 tick 9 FAILED diverged: steps 8 refreshes 0 rescales 12 pins 2 releases 0 drift 1.85e-04
+  amp 1e-04 tick 25 FAILED non-finite residual, state or Jacobian: steps 26 refreshes 4 rescales 22 pins 6 releases 0 drift 1.43e-04
+  amp 3e-04 tick 21 FAILED diverged: steps 14 refreshes 1 rescales 16 pins 4 releases 0 drift 2.33e-04

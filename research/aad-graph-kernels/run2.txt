@@ -1,0 +1,19 @@
+shape              m rec_ms rec_ops    live   cse%  guard |  eng_res tmpl_res tape_res |    eng_J tapeJrev tapeJfwd     cone | maxdq_bit     maxdJ |  fl01  fl25 flBig | affine(rows/nnz/nonlin)
+ois_nolag         12    1.0    7468     815  89.1%      0 |     0.80    18.56     3.18 |      5.2     20.8     15.0     4271 |   7.3e-17   2.8e-16 |     0     0     0 | 30/280/220
+  collapsed ois_nolag      rows   30 nnz    280 nonlinear    220 | res    0.79 us (interp    3.18, engine    0.80) | fwd+J     5.0 us (engine J     5.2) | maxdq 6.9e-17 maxdJ 2.2e-16 flips 0
+ibor_multicurve    24    3.6   26398    2787  89.4%      0 |     1.63    49.09     7.16 |     30.6     62.5     30.7    16817 |   6.9e-17   4.4e-16 |     0     0     0 | 152/1963/652
+  collapsed ibor_multicurve rows  152 nnz   1963 nonlinear    652 | res    3.86 us (interp    7.16, engine    1.63) | fwd+J    21.0 us (engine J    30.6) | maxdq 2.8e-17 maxdJ 2.2e-16 flips 0
+averaged          29    3.8   27568    4072  85.2%      0 |     2.29    55.39    12.06 |     27.6     95.5     87.7    19515 |   2.5e-15   7.9e-15 |     0     0     0 | 217/1936/938
+  collapsed averaged       rows  217 nnz   1936 nonlinear    938 | res    4.15 us (interp   12.06, engine    2.29) | fwd+J    23.1 us (engine J    27.6) | maxdq 2.5e-15 maxdJ 5.2e-15 flips 0
+all_schemes       18    1.7   18644    2036  89.0%      0 |     1.48    49.23     6.94 |      9.5     35.7     22.2    11519 |   1.4e-17   2.2e-16 |     0     0     0 | 81/1097/337
+  collapsed all_schemes    rows   81 nnz   1097 nonlinear    337 | res    1.69 us (interp    6.94, engine    1.48) | fwd+J    11.8 us (engine J     9.5) | maxdq 2.1e-17 maxdJ 5.6e-17 flips 0
+mixed_scheme      29    4.5   27370    4154  84.8%     78 |    44.03    77.73    16.21 |    131.5     65.7     93.2    19803 |   2.5e-15   7.9e-15 |     0     0    21 | 239/2108/967
+  collapsed mixed_scheme   rows  248 nnz   2127 nonlinear    967 | res    4.77 us (interp   16.21, engine   44.03) | fwd+J    35.3 us (engine J   131.5) | maxdq 2.5e-15 maxdJ 5.2e-15 flips 0
+turns             14    0.9    8614    1219  85.8%      0 |     0.65    17.44     2.97 |      9.2     29.8     23.3     6019 |   2.1e-17   7.8e-16 |     0     0     0 | 63/624/258
+  collapsed turns          rows   63 nnz    624 nonlinear    258 | res    1.33 us (interp    2.97, engine    0.65) | fwd+J     6.9 us (engine J     9.2) | maxdq 2.1e-17 maxdJ 6.7e-16 flips 0
+fx_xccy           37   11.1   90451   10629  88.2%      0 |     6.62   184.47    31.49 |     79.7    217.1    246.2    43682 |   2.8e-17   1.4e-15 |     0     0     0 | 637/6422/3459
+  collapsed fx_xccy        rows  637 nnz   6422 nonlinear   3459 | res   15.55 us (interp   31.49, engine    6.62) | fwd+J    72.5 us (engine J    79.7) | maxdq 9.5e-17 maxdJ 3.9e-16 flips 0
+desk              70   17.8  141813   15269  89.2%      0 |     9.66   349.46    41.03 |    248.2    312.8    647.7    71848 |   2.5e-15   8.7e-15 |     0     0     0 | 857/9195/4537
+  collapsed desk           rows  857 nnz   9195 nonlinear   4537 | res   20.35 us (interp   41.03, engine    9.66) | fwd+J   113.1 us (engine J   248.2) | maxdq 2.5e-15 maxdJ 7.2e-15 flips 0
+desk_mixed        70   20.3  141516   15351  89.1%     78 |   175.24   295.44    42.68 |    785.6    239.6    649.7    72286 |   2.5e-15   8.7e-15 |     0     0    21 | 879/9529/4566
+  collapsed desk_mixed     rows  888 nnz   9548 nonlinear   4566 | res   20.59 us (interp   42.68, engine  175.24) | fwd+J   110.9 us (engine J   785.6) | maxdq 2.5e-15 maxdJ 7.2e-15 flips 0

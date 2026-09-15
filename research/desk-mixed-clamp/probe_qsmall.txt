@@ -1,0 +1,30 @@
+  fx_xccy    V0 be 64       steps/tick 3.50 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 1.05e-02 @knot 36  frozen radius 0.005
+  fx_xccy    V0 be measured steps/tick 3.50 refreshes/tick 0.00 allocs/20 0 failed 0
+  fx_xccy    V1 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 3.90e-04 @knot 36  frozen radius 0.000
+  fx_xccy    V1 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  fx_xccy    V2 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 9.70e-05 @knot 36  frozen radius 0.000
+  fx_xccy    V2 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  fx_xccy    V3 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 6.01e-04 @knot 36  frozen radius 0.000
+  fx_xccy    V3 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  fx_xccy    V4 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 2.10e-05 @knot 35  frozen radius 0.000
+  fx_xccy    V4 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  desk       V0 be 64       steps/tick 3.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 4.69e-03 @knot 54  frozen radius 0.002
+  desk       V0 be measured steps/tick 3.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  desk       V1 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 2.75e-04 @knot 11  frozen radius 0.000
+  desk       V1 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  desk       V2 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 2.75e-04 @knot 11  frozen radius 0.000
+  desk       V2 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  desk       V3 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 4.62e-04 @knot 54  frozen radius 0.000
+  desk       V3 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  desk       V4 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0  | |dx|_inf 2.87e-05 @knot 10  frozen radius 0.000
+  desk       V4 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 0 failed 0
+  desk_mixed V0 be 64       steps/tick 7.50 refreshes/tick 1.00 allocs/20 4530 failed 0  | |dx|_inf 4.69e-03 @knot 54  frozen radius 1.365
+  desk_mixed V0 be measured steps/tick 5.00 refreshes/tick 1.00 allocs/20 3380 failed 0
+  desk_mixed V1 be 64       steps/tick 7.50 refreshes/tick 1.00 allocs/20 4530 failed 0  | |dx|_inf 2.00e-04 @knot 54  frozen radius 1.365
+  desk_mixed V1 be measured steps/tick 5.00 refreshes/tick 1.50 allocs/20 3920 failed 0
+  desk_mixed V2 be 64       steps/tick 7.50 refreshes/tick 1.00 allocs/20 4530 failed 0  | |dx|_inf 1.93e-04 @knot 11  frozen radius 1.365
+  desk_mixed V2 be measured steps/tick 5.00 refreshes/tick 1.50 allocs/20 3920 failed 0
+  desk_mixed V3 be 64       steps/tick 7.50 refreshes/tick 1.00 allocs/20 4530 failed 0  | |dx|_inf 4.62e-04 @knot 54  frozen radius 1.365
+  desk_mixed V3 be measured steps/tick 5.00 refreshes/tick 1.50 allocs/20 3920 failed 0
+  desk_mixed V4 be 64       steps/tick 2.00 refreshes/tick 0.00 allocs/20 920 failed 0  | |dx|_inf 2.97e-05 @knot 10  frozen radius 0.000
+  desk_mixed V4 be measured steps/tick 2.00 refreshes/tick 0.00 allocs/20 920 failed 0

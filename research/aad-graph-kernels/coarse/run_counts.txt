@@ -1,0 +1,84 @@
+[build guardtrace_coarse_counts_nofma 15:13:24 load { 12.07 9.64 7.34 }]
+[built guardtrace_coarse_counts_nofma]
+[build guardtrace_coarse_counts_fma 15:14:45 load { 11.23 10.00 7.68 }]
+[built guardtrace_coarse_counts_fma]
+[build guardtrace_ir_counts 15:16:05 load { 12.12 10.63 8.13 }]
+[built guardtrace_ir_counts]
+=== guardtrace_coarse_counts_nofma (counts only) start 15:17:54 load { 7.83 9.79 8.12 }
+# coarse kernels probe. engine = HybridBundleResidual; all times µs, median of 7 batches, same process
+
+== ois_nolag  m=12 n=12  build(record-free part: K+collapse+3 plans+adjoint) 1.2 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 815 | scalar collapsed 220 (+rows) | coarse exact 108 (108 groups over 778 elements) | coarse fast 43 | fast+inv 58
+   rows 30 in 11 span blocks | adjoint: 960 elements, 1038 owner-pairs, 47 groups
+   parity: exact-coarse vs templated 0.0e+00 (flips 0) | fast vs engine 6.9e-17 | fast+inv vs engine 6.9e-17 vs templated 2.8e-17 (flips 0/0) | J owner-rev vs engine 1.7e-16 | J fwd-vec vs engine 2.2e-16
+
+== mixed_scheme  m=29 n=29  build(record-free part: K+collapse+3 plans+adjoint) 4.3 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 4154 | scalar collapsed 967 (+rows) | coarse exact 238 (237 groups over 3848 elements) | coarse fast 82 | fast+inv 97
+   rows 248 in 34 span blocks | adjoint: 3482 elements, 3739 owner-pairs, 61 groups
+   parity: exact-coarse vs templated 0.0e+00 (flips 0) | fast vs engine 8.3e-15 | fast+inv vs engine 2.5e-15 vs templated 8.3e-15 (flips 0/5) | J owner-rev vs engine 1.8e-15 | J fwd-vec vs engine 2.9e-15
+
+== fx_xccy  m=37 n=37  build(record-free part: K+collapse+3 plans+adjoint) 10.9 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 10629 | scalar collapsed 3459 (+rows) | coarse exact 136 (136 groups over 9989 elements) | coarse fast 93 | fast+inv 101
+   rows 637 in 34 span blocks | adjoint: 10956 elements, 12354 owner-pairs, 67 groups
+   parity: exact-coarse vs templated 0.0e+00 (flips 0) | fast vs engine 4.5e-16 | fast+inv vs engine 2.2e-16 vs templated 4.5e-16 (flips 0/0) | J owner-rev vs engine 6.2e-16 | J fwd-vec vs engine 4.4e-16
+
+== desk  m=70 n=67  build(record-free part: K+collapse+3 plans+adjoint) 20.9 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 15269 | scalar collapsed 4537 (+rows) | coarse exact 184 (184 groups over 13928 elements) | coarse fast 122 | fast+inv 128
+   rows 857 in 53 span blocks | adjoint: 15599 elements, 17572 owner-pairs, 75 groups
+   parity: exact-coarse vs templated 0.0e+00 (flips 0) | fast vs engine 7.5e-15 | fast+inv vs engine 2.2e-16 vs templated 1.0e-14 (flips 0/0) | J owner-rev vs engine 1.9e-15 | J fwd-vec vs engine 2.0e-15
+
+== desk_mixed  m=70 n=67  build(record-free part: K+collapse+3 plans+adjoint) 21.1 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 15351 | scalar collapsed 4566 (+rows) | coarse exact 270 (269 groups over 14010 elements) | coarse fast 137 | fast+inv 142
+   rows 888 in 65 span blocks | adjoint: 15599 elements, 17572 owner-pairs, 75 groups
+   parity: exact-coarse vs templated 0.0e+00 (flips 0) | fast vs engine 7.5e-15 | fast+inv vs engine 2.2e-16 vs templated 1.0e-14 (flips 0/5) | J owner-rev vs engine 1.9e-15 | J fwd-vec vs engine 2.0e-15
+=== guardtrace_coarse_counts_nofma end 15:17:55 exit 0
+=== guardtrace_coarse_counts_fma (counts only) start 15:18:25 load { 6.74 9.34 8.02 }
+# coarse kernels probe. engine = HybridBundleResidual; all times µs, median of 7 batches, same process
+
+== ois_nolag  m=12 n=12  build(record-free part: K+collapse+3 plans+adjoint) 0.9 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 815 | scalar collapsed 220 (+rows) | coarse exact 108 (108 groups over 778 elements) | coarse fast 43 | fast+inv 58
+   rows 30 in 11 span blocks | adjoint: 960 elements, 1038 owner-pairs, 47 groups
+   parity: exact-coarse vs templated 7.3e-17 (flips 0) | fast vs engine 3.1e-17 | fast+inv vs engine 2.8e-17 vs templated 7.3e-17 (flips 0/0) | J owner-rev vs engine 2.2e-16 | J fwd-vec vs engine 1.7e-16
+
+== mixed_scheme  m=29 n=29  build(record-free part: K+collapse+3 plans+adjoint) 4.1 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 4154 | scalar collapsed 967 (+rows) | coarse exact 238 (237 groups over 3848 elements) | coarse fast 82 | fast+inv 97
+   rows 248 in 34 span blocks | adjoint: 3482 elements, 3739 owner-pairs, 61 groups
+   parity: exact-coarse vs templated 2.5e-15 (flips 0) | fast vs engine 5.6e-15 | fast+inv vs engine 4.2e-15 vs templated 8.3e-15 (flips 0/2) | J owner-rev vs engine 1.8e-15 | J fwd-vec vs engine 2.1e-15
+
+== fx_xccy  m=37 n=37  build(record-free part: K+collapse+3 plans+adjoint) 9.7 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 10629 | scalar collapsed 3459 (+rows) | coarse exact 136 (136 groups over 9989 elements) | coarse fast 93 | fast+inv 101
+   rows 637 in 34 span blocks | adjoint: 10956 elements, 12354 owner-pairs, 67 groups
+   parity: exact-coarse vs templated 2.8e-17 (flips 0) | fast vs engine 2.2e-16 | fast+inv vs engine 3.4e-16 vs templated 4.5e-16 (flips 0/0) | J owner-rev vs engine 5.0e-16 | J fwd-vec vs engine 4.4e-16
+
+== desk  m=70 n=67  build(record-free part: K+collapse+3 plans+adjoint) 19.8 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 15269 | scalar collapsed 4537 (+rows) | coarse exact 184 (184 groups over 13928 elements) | coarse fast 122 | fast+inv 128
+   rows 857 in 53 span blocks | adjoint: 15599 elements, 17572 owner-pairs, 75 groups
+   parity: exact-coarse vs templated 2.5e-15 (flips 0) | fast vs engine 6.6e-15 | fast+inv vs engine 5.6e-15 vs templated 7.5e-15 (flips 0/0) | J owner-rev vs engine 2.6e-15 | J fwd-vec vs engine 3.9e-15
+
+== desk_mixed  m=70 n=67  build(record-free part: K+collapse+3 plans+adjoint) 20.2 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 15351 | scalar collapsed 4566 (+rows) | coarse exact 270 (269 groups over 14010 elements) | coarse fast 137 | fast+inv 142
+   rows 888 in 65 span blocks | adjoint: 15599 elements, 17572 owner-pairs, 75 groups
+   parity: exact-coarse vs templated 2.5e-15 (flips 0) | fast vs engine 6.6e-15 | fast+inv vs engine 5.6e-15 vs templated 7.5e-15 (flips 0/2) | J owner-rev vs engine 2.6e-15 | J fwd-vec vs engine 3.9e-15
+=== guardtrace_coarse_counts_fma end 15:18:25 exit 0
+=== guardtrace_ir_counts (counts only) start 15:18:56 load { 5.21 8.72 7.84 }
+# cashflow-table IR probe
+shape                 rows IR ok  cmpld | exceptions / features                                        |  atoms   subs   cpns    mtm | d_vs_tmpl  d_vs_eng |   eng_mr     ir_W     load
+ois_nolag               12    12     12 | par 12 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |     31    134    134      0 |   0.0e+00   1.4e-17 |    -1.00    -1.00     5.21
+ois_lag                 12    12     12 | par 12 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |     61    134    134      0 |   0.0e+00   3.5e-17 |    -1.00    -1.00     5.21
+ibor_multicurve         24    24     24 | par 24 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |    152    402    402      0 |   0.0e+00   1.5e-16 |    -1.00    -1.00     5.21
+basis_spread            24    24     24 | par 12 spr 12 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |     92    402    402      0 |   0.0e+00   2.2e-16 |    -1.00    -1.00     5.21
+averaged                29    29     29 | par 12 spr 11 rate 6 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |    218    526    406      0 |   0.0e+00   1.0e-14 |    -1.00    -1.00     5.21
+averaged_leg            24    24     24 | par 24 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |   7581  33722    268      0 |   0.0e+00   4.1e-15 |    -1.00    -1.00     5.21
+averaged_leg_moment     24    12     24 | moment path (quadratic form in x, not DF-based) x12;         |      0      0      0      0 |  -1.0e+00  -1.0e+00 |    -1.00    -1.00     5.21
+all_schemes             18    18     18 | par 18 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |     81    243    243      0 |   0.0e+00   6.9e-18 |    -1.00    -1.00     5.21
+mixed_scheme            29    29     17 | par 12 spr 11 rate 6 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |    218    526    406      0 |   0.0e+00  -1.0e+00 |    -1.00    -1.00     5.21
+banded                  12    12     12 | par 12 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 0 |     61    134    134      0 |   0.0e+00   3.5e-17 |    -1.00    -1.00     5.21
+turns                   14    14     14 | par 12 spr 0 rate 1 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 0 pin 1 |     63    135    135      0 |   0.0e+00   2.6e-15 |    -1.00    -1.00     5.21
+portfolio               14    14     14 | par 18 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 0 pf 2 pin 0 |     61    196    196      0 |   0.0e+00   3.5e-17 |    -1.00    -1.00     5.21
+zero_coupon              7     7      7 | par 0 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 0 mtm 0 zc 7 pf 0 pin 0 |      8      7      7      0 |   0.0e+00   0.0e+00 |    -1.00    -1.00     5.21
+fx_xccy                 37    37     37 | par 24 spr 0 rate 0 cmpd-cpn 0 wtd-cpn 0 fx 5 mtm 8 zc 0 pf 0 pin 0 |    637   1372   1372    368 |   0.0e+00   4.5e-16 |    -1.00    -1.00     5.21
+desk                    70    70     70 | par 42 spr 11 rate 7 cmpd-cpn 0 wtd-cpn 0 fx 5 mtm 8 zc 0 pf 2 pin 1 |    857   2095   1975    368 |   0.0e+00   7.5e-15 |    -1.00    -1.00     5.21
+desk_mixed              70    70     52 | par 42 spr 11 rate 7 cmpd-cpn 0 wtd-cpn 0 fx 5 mtm 8 zc 0 pf 2 pin 1 |    857   2095   1975    368 |   0.0e+00  -1.0e+00 |    -1.00    -1.00     5.21
+TOTAL rows 420, IR ok 408 (97.1 %), compiled-table rows today 390 (92.9 %)
+=== guardtrace_ir_counts end 15:18:56 exit 0
+COUNTS DONE

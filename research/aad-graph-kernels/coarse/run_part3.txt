@@ -1,0 +1,214 @@
+[build guardtrace 13:46:52 load { 10.40 7.91 6.12 }]
+[built guardtrace]
+[build branchprobe 14:01:24 load { 3.81 4.57 5.26 }]
+[built branchprobe]
+=== guardtrace (counts only) start 14:02:43 load { 4.09 4.44 5.15 }
+  set_anchor
+#### warm-up (4 ticks, not traced for guards)
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 4.69e-03 rho 0.028 steps_left 6.6 K 64.0 -> continue
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 144486.3 K 64.0 -> REFRESH
+  set_anchor
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 4.69e-03 rho 0.013 steps_left 5.1 K 64.0 -> continue
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 10 |dx|=2.24e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 4.69e-03 rho 0.028 steps_left 6.6 K 64.0 -> continue
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.1 K 64.0 -> REFRESH
+  set_anchor
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 4.69e-03 rho 0.013 steps_left 5.1 K 64.0 -> continue
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+  step 10 |dx|=2.26e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### tape recorded at the committed state: 94 guards (all in SOFR's MonotoneCubic region)
+#### SMALL TICK 0 (q_small)
+    [r eval 1: guards != anchor 0, != previous eval 0; x[11]=0.0344000]
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 2: guards != anchor 14, != previous eval 14: g28[cmp](-1.99e-05->+3.46e-05) g43[cmp](+1.02e-19->-7.03e-09) g57[cmp](-1.90e-15->+5.80e-05) g59[cmp](+9.49e-16->-2.90e-05) g60[cmp](+1.02e-19->-7.03e-09) g61[cmp](+3.72e-09->-1.77e-09); x[11]=0.0341513]
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 4.69e-03 rho 0.028 steps_left 6.6 K 64.0 -> continue
+    [r eval 3: guards != anchor 10, != previous eval 4: g86[cmp](-6.00e-05->+2.19e-05) g88[cmp](-1.69e-10->+4.06e-10) g89[cmp](-3.00e-05->+1.10e-05) g90[cmp](-3.00e-05->+1.10e-05); x[11]=0.0342819]
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.1 K 64.0 -> REFRESH
+  set_anchor
+    [J eval 4: guards != anchor 14, != previous eval 4: g86[cmp](+2.19e-05->-1.90e-05) g88[cmp](+4.06e-10->-2.03e-10) g89[cmp](+1.10e-05->-9.51e-06) g90[cmp](+1.10e-05->-9.51e-06); x[11]=0.0342166]
+    [r eval 5: guards != anchor 14, != previous eval 0; x[11]=0.0342166]
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 6: guards != anchor 14, != previous eval 0; x[11]=0.0342065]
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end: conv 1 steps 5 refreshes 1 rescales 0
+#### SMALL TICK 1 (q0)
+    [r eval 7: guards != anchor 14, != previous eval 0; x[11]=0.0342065]
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 8: guards != anchor 8, != previous eval 6: g28[cmp](+3.49e-05->-2.07e-05) g61[cmp](-1.83e-09->+4.09e-09) g86[cmp](-2.54e-05->+6.70e-05) g88[cmp](-2.40e-10->+1.50e-09) g89[cmp](-1.27e-05->+3.35e-05) g90[cmp](-1.27e-05->+3.35e-05); x[11]=0.0342543]
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 4.69e-03 rho 0.013 steps_left 5.1 K 64.0 -> continue
+    [r eval 9: guards != anchor 8, != previous eval 0; x[11]=0.0343159]
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+    [r eval 10: guards != anchor 8, != previous eval 0; x[11]=0.0343514]
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+    [r eval 11: guards != anchor 8, != previous eval 0; x[11]=0.0343720]
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+    [r eval 12: guards != anchor 8, != previous eval 0; x[11]=0.0343838]
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+    [r eval 13: guards != anchor 8, != previous eval 0; x[11]=0.0343907]
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+    [r eval 14: guards != anchor 8, != previous eval 0; x[11]=0.0343946]
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+    [J eval 15: guards != anchor 8, != previous eval 0; x[11]=0.0343969]
+    [r eval 16: guards != anchor 8, != previous eval 0; x[11]=0.0343969]
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 17: guards != anchor 0, != previous eval 8: g43[cmp](-3.01e-12->+5.96e-18) g57[cmp](+5.64e-08->-1.11e-13) g59[cmp](-2.82e-08->+5.57e-14) g60[cmp](-3.01e-12->+5.96e-18) g63[cmp](-4.99e-14->+4.88e-21) g65[cmp](-4.51e-12->+8.91e-18); x[11]=0.0344000]
+  step 10 |dx|=2.26e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end: conv 1 steps 10 refreshes 1 rescales 0
+#### SMALL TICK 2 (q_small)
+    [r eval 18: guards != anchor 0, != previous eval 0; x[11]=0.0344000]
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 19: guards != anchor 14, != previous eval 14: g28[cmp](-1.99e-05->+3.46e-05) g43[cmp](+9.00e-20->-7.03e-09) g57[cmp](-1.68e-15->+5.80e-05) g59[cmp](+8.41e-16->-2.90e-05) g60[cmp](+9.00e-20->-7.03e-09) g61[cmp](+3.72e-09->-1.77e-09); x[11]=0.0341513]
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 4.69e-03 rho 0.028 steps_left 6.6 K 64.0 -> continue
+    [r eval 20: guards != anchor 10, != previous eval 4: g86[cmp](-6.00e-05->+2.19e-05) g88[cmp](-1.69e-10->+4.06e-10) g89[cmp](-3.00e-05->+1.10e-05) g90[cmp](-3.00e-05->+1.10e-05); x[11]=0.0342819]
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.1 K 64.0 -> REFRESH
+  set_anchor
+    [J eval 21: guards != anchor 14, != previous eval 4: g86[cmp](+2.19e-05->-1.90e-05) g88[cmp](+4.06e-10->-2.03e-10) g89[cmp](+1.10e-05->-9.51e-06) g90[cmp](+1.10e-05->-9.51e-06); x[11]=0.0342166]
+    [r eval 22: guards != anchor 14, != previous eval 0; x[11]=0.0342166]
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 23: guards != anchor 14, != previous eval 0; x[11]=0.0342065]
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end: conv 1 steps 5 refreshes 1 rescales 0
+#### SMALL TICK 3 (q0)
+    [r eval 24: guards != anchor 14, != previous eval 0; x[11]=0.0342065]
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 25: guards != anchor 8, != previous eval 6: g28[cmp](+3.49e-05->-2.07e-05) g61[cmp](-1.83e-09->+4.09e-09) g86[cmp](-2.54e-05->+6.70e-05) g88[cmp](-2.40e-10->+1.50e-09) g89[cmp](-1.27e-05->+3.35e-05) g90[cmp](-1.27e-05->+3.35e-05); x[11]=0.0342543]
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 4.69e-03 rho 0.013 steps_left 5.1 K 64.0 -> continue
+    [r eval 26: guards != anchor 8, != previous eval 0; x[11]=0.0343159]
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+    [r eval 27: guards != anchor 8, != previous eval 0; x[11]=0.0343514]
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+    [r eval 28: guards != anchor 8, != previous eval 0; x[11]=0.0343720]
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+    [r eval 29: guards != anchor 8, != previous eval 0; x[11]=0.0343838]
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+    [r eval 30: guards != anchor 8, != previous eval 0; x[11]=0.0343907]
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+    [r eval 31: guards != anchor 8, != previous eval 0; x[11]=0.0343946]
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+    [J eval 32: guards != anchor 8, != previous eval 0; x[11]=0.0343969]
+    [r eval 33: guards != anchor 8, != previous eval 0; x[11]=0.0343969]
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 34: guards != anchor 0, != previous eval 8: g43[cmp](-3.01e-12->+6.19e-18) g57[cmp](+5.64e-08->-1.16e-13) g59[cmp](-2.82e-08->+5.79e-14) g60[cmp](-3.01e-12->+6.19e-18) g63[cmp](-4.99e-14->+5.07e-21) g65[cmp](-4.51e-12->+9.25e-18); x[11]=0.0344000]
+  step 10 |dx|=2.27e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end: conv 1 steps 10 refreshes 1 rescales 0
+#### SMALL TICK 4 (q_small)
+    [r eval 35: guards != anchor 0, != previous eval 0; x[11]=0.0344000]
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 36: guards != anchor 14, != previous eval 14: g28[cmp](-1.99e-05->+3.46e-05) g43[cmp](+1.53e-19->-7.03e-09) g57[cmp](-2.86e-15->+5.80e-05) g59[cmp](+1.43e-15->-2.90e-05) g60[cmp](+1.53e-19->-7.03e-09) g61[cmp](+3.72e-09->-1.77e-09); x[11]=0.0341513]
+  step 2 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 4.69e-03 rho 0.028 steps_left 6.6 K 64.0 -> continue
+    [r eval 37: guards != anchor 10, != previous eval 4: g86[cmp](-6.00e-05->+2.19e-05) g88[cmp](-1.69e-10->+4.06e-10) g89[cmp](-3.00e-05->+1.10e-05) g90[cmp](-3.00e-05->+1.10e-05); x[11]=0.0342819]
+  kink 2-cycle: half step
+  step 3 |dx|=1.31e-04 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.31e-04 prev 1.31e-04 rho 1.000 steps_left 140401.2 K 64.0 -> REFRESH
+  set_anchor
+    [J eval 38: guards != anchor 14, != previous eval 4: g86[cmp](+2.19e-05->-1.90e-05) g88[cmp](+4.06e-10->-2.03e-10) g89[cmp](+1.10e-05->-9.51e-06) g90[cmp](+1.10e-05->-9.51e-06); x[11]=0.0342166]
+    [r eval 39: guards != anchor 14, != previous eval 0; x[11]=0.0342166]
+  step 4 |dx|=1.01e-05 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 40: guards != anchor 14, != previous eval 0; x[11]=0.0342065]
+  step 5 |dx|=4.89e-11 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end: conv 1 steps 5 refreshes 1 rescales 0
+#### SMALL TICK 5 (q0)
+    [r eval 41: guards != anchor 14, != previous eval 0; x[11]=0.0342065]
+  step 1 |dx|=4.69e-03 alpha=1.000 pinned=0 rescales=0 refreshes=0
+    [r eval 42: guards != anchor 8, != previous eval 6: g28[cmp](+3.49e-05->-2.07e-05) g61[cmp](-1.83e-09->+4.09e-09) g86[cmp](-2.54e-05->+6.70e-05) g88[cmp](-2.40e-10->+1.50e-09) g89[cmp](-1.27e-05->+3.35e-05) g90[cmp](-1.27e-05->+3.35e-05); x[11]=0.0342543]
+  step 2 |dx|=6.16e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.16e-05 prev 4.69e-03 rho 0.013 steps_left 5.1 K 64.0 -> continue
+    [r eval 43: guards != anchor 8, != previous eval 0; x[11]=0.0343159]
+  step 3 |dx|=3.56e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.56e-05 prev 6.16e-05 rho 0.577 steps_left 38.1 K 64.0 -> continue
+    [r eval 44: guards != anchor 8, != previous eval 0; x[11]=0.0343514]
+  step 4 |dx|=2.05e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.05e-05 prev 3.56e-05 rho 0.577 steps_left 36.1 K 64.0 -> continue
+    [r eval 45: guards != anchor 8, != previous eval 0; x[11]=0.0343720]
+  step 5 |dx|=1.18e-05 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 1.18e-05 prev 2.05e-05 rho 0.577 steps_left 34.1 K 64.0 -> continue
+    [r eval 46: guards != anchor 8, != previous eval 0; x[11]=0.0343838]
+  step 6 |dx|=6.84e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 6.84e-06 prev 1.18e-05 rho 0.577 steps_left 32.1 K 64.0 -> continue
+    [r eval 47: guards != anchor 8, != previous eval 0; x[11]=0.0343907]
+  step 7 |dx|=3.95e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 3.95e-06 prev 6.84e-06 rho 0.577 steps_left 30.1 K 64.0 -> continue
+    [r eval 48: guards != anchor 8, != previous eval 0; x[11]=0.0343946]
+  step 8 |dx|=2.28e-06 alpha=1.000 pinned=0 rescales=0 refreshes=0
+  adaptive: |dx| 2.28e-06 prev 3.95e-06 rho 0.577 steps_left 28.1 K 64.0 -> continue
+  set_anchor
+    [J eval 49: guards != anchor 8, != previous eval 0; x[11]=0.0343969]
+    [r eval 50: guards != anchor 8, != previous eval 0; x[11]=0.0343969]
+  step 9 |dx|=3.11e-06 alpha=1.000 pinned=0 rescales=0 refreshes=1
+    [r eval 51: guards != anchor 0, != previous eval 8: g43[cmp](-3.01e-12->+6.01e-18) g57[cmp](+5.64e-08->-1.12e-13) g59[cmp](-2.82e-08->+5.62e-14) g60[cmp](-3.01e-12->+6.01e-18) g63[cmp](-4.99e-14->+4.92e-21) g65[cmp](-4.51e-12->+8.99e-18); x[11]=0.0344000]
+  step 10 |dx|=2.27e-12 alpha=1.000 pinned=0 rescales=0 refreshes=1
+#### end: conv 1 steps 10 refreshes 1 rescales 0
+#### distinct guard patterns seen over 51 evaluations: 4
+#### smallest guard margins at the final committed state: g5 0.00e+00 g16 0.00e+00 g34 0.00e+00 g54 0.00e+00 g74 0.00e+00 g87 0.00e+00
+=== guardtrace end 14:02:44 exit 0
+=== branchprobe start 14:02:44 load { 4.09 4.44 5.15 }
+[hold: './coarse' running, load 4.09]
+part3.sh: line 38:  4688 Terminated: 15          AADJIT_EXTRA_HOLD="./coarse,./ir" ./branchprobe
+=== branchprobe end 16:13:35 exit 0
+PART3 DONE

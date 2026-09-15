@@ -1,0 +1,14 @@
+[build coarse 13:41:38 load { 4.42 4.90 4.79 }]
+[built coarse]
+[build coarse_nofma 13:43:16 load { 3.70 4.54 4.67 }]
+[built coarse_nofma]
+[build ir 13:45:05 load { 9.73 6.60 5.47 }]
+[built ir]
+=== coarse  start 13:45:45  load { 11.03 7.35 5.79 }
+# coarse kernels probe. engine = HybridBundleResidual; all times µs, median of 7 batches, same process
+
+== ois_nolag  m=12 n=12  build(record-free part: K+collapse+3 plans+adjoint) 1.4 ms  allocs/20 replays 0
+   dispatch/eval: scalar interp 815 | scalar collapsed 220 (+rows) | coarse exact 108 (108 groups over 778 elements) | coarse fast 43 | fast+inv 58
+   rows 30 in 11 span blocks | adjoint: 960 elements, 1038 owner-pairs, 47 groups
+   parity: exact-coarse vs templated 7.3e-17 (flips 0) | fast vs engine 3.1e-17 | fast+inv vs engine 2.8e-17 vs templated 7.3e-17 (flips 0/0) | J owner-rev vs engine 2.2e-16 | J fwd-vec vs engine 1.7e-16
+[hold: 'clang -cc1' running, load 11.03]
