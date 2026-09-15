@@ -226,15 +226,25 @@ class HybridBundleResidual {
     return res_;
   }
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
-    if (nc_.empty() && cacheable_) return cacheable_->jacobian_vs(x, q);
-    Eigen::MatrixXd J = Eigen::MatrixXd::Zero(n_res_, nknots(x));
+    Eigen::MatrixXd J;
+    jacobian_vs_into(x, q, J);
+    return J;
+  }
+  // Into a caller-owned J (C6, 2026-09-15): the cacheable half writes into a member scratch Jc_, so a warm call allocates no matrix.
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
+    if (nc_.empty() && cacheable_) {
+      cacheable_->jacobian_vs_into(x, q, J);
+      return;
+    }
+    // No zeroing: every row is overwritten -- a compiled row whole (below), an AAD row zeroed then written on its touched columns
+    // (AadBlock::jacobian_impl). The row partition is total (constructor), so a garbage-filled J comes back exact (JacobianIntoParity).
+    J.resize(n_res_, nknots(x));
     if (cacheable_) {
       gather_cache(q, qsub_);
-      const Eigen::MatrixXd Jc = cacheable_->jacobian_vs(x, qsub_);
-      for (std::size_t j = 0; j < cache_rows_.size(); ++j) J.row(cache_rows_[j]) = Jc.row(static_cast<int>(j));
+      cacheable_->jacobian_vs_into(x, qsub_, Jc_);
+      for (std::size_t j = 0; j < cache_rows_.size(); ++j) J.row(cache_rows_[j]) = Jc_.row(static_cast<int>(j));
     }
     nc_.jacobian_vs_into(x, q, J);  // scatters the non-cacheable rows (touched cols)
-    return J;
   }
 
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
@@ -271,6 +281,7 @@ class HybridBundleResidual {
   std::optional<CompiledBundleResidual> cacheable_;
   AadBlock nc_;
   mutable Eigen::VectorXd out_, res_, qsub_;
+  mutable Eigen::MatrixXd Jc_;  // jacobian_vs_into's cacheable-half scratch (single-thread, like res_)
 };
 
 }  // namespace swaps::calibration

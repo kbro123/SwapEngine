@@ -244,6 +244,13 @@ class CompiledBundleResidual {
   // Jacobian of residuals_vs(x, q): the band chain-rule term (q_model - q) uses the SAME market q as the
   // residual, so a frozen-Newton streamer's M is consistent with the residual it drives.
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
+    Eigen::MatrixXd J;
+    jacobian_vs_into(x, q, J);
+    return J;
+  }
+  // The same Jacobian written into a caller-owned J, resized only when its shape differs: the streamer keeps J in a member, so a
+  // refresh allocates no Jacobian (C6, 2026-09-15). Same operations in the same order as jacobian_vs: bit-identical.
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;
     if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); gen_mtm_.set_state(x); }
@@ -345,7 +352,8 @@ class CompiledBundleResidual {
         if (c != 0.0) Jt_.col(r).segment(lo, len).noalias() -= c * w;
       }
     }
-    Eigen::MatrixXd J = Jt_.transpose();
+    J.resize(Jt_.cols(), Jt_.rows());
+    J = Jt_.transpose();
     // MOMENT coupons: the ½·step·xᵀQx correction is a function of x, not of DF, so its derivative enters J
     // DIRECTLY (after the W product), through the same quotient / band / zc factors as the row's DF terms:
     //   quotient rows: ∂r/∂x_j += weight·scale·(∂num/∂x_j)/ann,  rate rows: ∂r/∂x_j += weight·scale·∂rate/∂x_j.
@@ -372,7 +380,6 @@ class CompiledBundleResidual {
         }
       J(t.row, t.state_index) += factor;
     }
-    return J;
   }
 
  private:

@@ -187,7 +187,12 @@ class StreamingCalibrator {
     }
     if (!x0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor state x0 contains a non-finite value");
     if (!q0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor market q0 contains a non-finite quote");
-    if (opt_.regularizer.size()) RtR_.noalias() = opt_.regularizer.transpose() * opt_.regularizer;
+    if (opt_.regularizer.size()) {
+      RtR_.noalias() = opt_.regularizer.transpose() * opt_.regularizer;
+      S_.resize(n_res_ + opt_.regularizer.rows(), x0.size());  // the stacked [J; R]: R rows written ONCE (factor writes J's)
+      S_.bottomRows(opt_.regularizer.rows()) = opt_.regularizer;
+    }
+    cod_ = Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>(n_res_ + opt_.regularizer.rows(), x0.size());  // sized once
     collect_bands(prob);
     // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0.
     drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || RtR_.size() > 0;
@@ -214,7 +219,7 @@ class StreamingCalibrator {
       }
       for (int rep = 0; rep < 2; ++rep) {
         const auto t1 = std::chrono::steady_clock::now();
-        J_cur_ = engine_->jacobian_vs(x0, q0);
+        engine_->jacobian_vs_into(x0, q0, J_cur_);
         factor(J_cur_);
         const auto t2 = std::chrono::steady_clock::now();
         refresh_ns = std::min(refresh_ns, std::chrono::duration<double, std::nano>(t2 - t1).count());
@@ -735,7 +740,7 @@ class StreamingCalibrator {
   // Returns false (anchor UNCHANGED) if the Jacobian at (x, q) is not finite.
   bool set_anchor(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     SWAPS_TRACE("  set_anchor\n");
-    J_ref_ = engine_->jacobian_vs(x, q);  // band term consistent with residuals_vs(·,q)
+    engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)
     if (!J_ref_.allFinite()) {
       if (have_J_) J_ref_ = J_cur_;  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
       return false;
@@ -775,13 +780,11 @@ class StreamingCalibrator {
   // operator drops them, and the commit rule (update_exact) re-converges at the shared threshold before the tick commits.
   double walk_threshold() const { return n_pinned_ > 0 ? kWalkRankThreshold / kPinWeight : kWalkRankThreshold; }
   void factor(const Eigen::MatrixXd& J) {
-    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-    Eigen::MatrixXd S;
-    if (RtR_.size()) {
-      S.resize(J.rows() + opt_.regularizer.rows(), J.cols());
-      S << J, opt_.regularizer;
-    }
-    const Eigen::MatrixXd& A = RtR_.size() ? S : J;
+    // ONE decomposition for the calibrator's life (C6, 2026-09-15): sized (rows, cols) at construction, so compute() on a same-shaped
+    // matrix writes into storage it already owns -- the same Eigen operations on the same data as a fresh local, bit-identical.
+    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;
+    if (RtR_.size()) S_.topRows(J.rows()) = J;
+    const Eigen::MatrixXd& A = RtR_.size() ? S_ : J;
     cod.setThreshold(kRankThreshold);
     cod.compute(A);
     const Eigen::Index full = cod.rank();
@@ -871,6 +874,8 @@ class StreamingCalibrator {
   std::vector<char> band_eligible_;          // per row: may carry a tracked band (FX forwards never do)
   int n_pinned_ = 0;
   Eigen::MatrixXd J_ref_, J_cur_;
+  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod_;  // factor()'s decomposition, sized once at construction (C6)
+  Eigen::MatrixXd S_;  // regularised only: the stacked [J; R] (R rows written at construction)
   bool have_J_ = false;
   bool need_full_ = false;
   bool drift_refresh_ = false;  // Options::refresh_drift applies (non-square / banded / regularised)

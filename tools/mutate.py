@@ -24,6 +24,19 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-15 C6a: a refresh writes J in place and reuses one decomposition.
+    ("refresh_jacobian_by_value", "include/swaps/calibration/streaming.hpp",
+     "    engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)\n",
+     "    J_ref_ = engine_->jacobian_vs(x, q);\n",
+     ["streaming_refresh_alloc_repro_test.cpp"], "*", "a refresh writing J in place is unpinned (C6)"),
+    ("decomposition_rebuilt_per_refresh", "include/swaps/calibration/streaming.hpp",
+     "    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
+     "    cod_ = Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>();\n    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
+     ["streaming_refresh_alloc_repro_test.cpp"], "*", "reusing the refresh's decomposition storage is unpinned (C6)"),
+    ("stacked_regulariser_rows_not_written", "include/swaps/calibration/streaming.hpp",
+     "      S_.bottomRows(opt_.regularizer.rows()) = opt_.regularizer;\n",
+     "",
+     ["jacobian_into_parity_test.cpp"], "*", "the regularised refresh's R rows are unpinned (C6)"),
     # 2026-09-15 C8: a tick reports the drift it refreshed on.
     ("tick_drift_zeroed_after_refresh", "include/swaps/calibration/streaming.hpp",
      "      if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);\n    }\n    int frozen = 0;\n",

@@ -32,6 +32,9 @@ class CompiledResidual {
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     return impl_.jacobian_vs(x, q);
   }
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
+    impl_.jacobian_vs_into(x, q, J);
+  }
 
  private:
   CompiledBundleResidual impl_;
