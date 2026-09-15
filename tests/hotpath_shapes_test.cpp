@@ -117,7 +117,7 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     }
     std::cout << "  [ladder] " << s.name << ": allocs over 20 small ticks = " << small << ", over 20 four-number requote ticks = " << requote << "\n";
     // THE CLIFF, made loud (2026-09-12). A block whose touched width exceeds ad::kPooledMaxW silently drops
-    // to heap duals and every operation allocates: desk_mixed at width 55 against a limit of 48 cost 19,182
+    // to heap duals and every operation allocates: desk_mixed at width 55 against the then limit of 48 (64 since) cost 19,182
     // allocations per tick where the same work at width 29 cost 26. Nothing reported that but the pin, and a
     // pin only catches it once someone has already paid for it.
     const cal::HybridBundleResidual probe(s.prob);
@@ -140,17 +140,9 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   pin in this list it may only DECREASE.
     static const Pin pins[] = {{"averaged_leg", 360}, {"banded", 0}, {"fx_xccy", 0}, {"desk", 0}, {"mixed_scheme", 560},
                                {"desk_mixed", 3700}};
-    //   desk_mixed's SMALL count is exact and stable (3600 over 20 ticks, three runs identical); its
-    //   CROSSING count varies 4523..4753 because a band-edge crossing triggers a variable number of
-    //   active-set re-scales -- the same slack the banded / desk crossing pins carry, for the same reason.
-    //   banded 1900 -> 150, desk 3000 -> 100 on 2026-09-10 (C7 fixed: a band re-scale is a rank-one operator update,
-    //   not a factor()); measured 123 / 54 -- the rest is the pin/release bookkeeping, next.
-    //   (banded / desk crossing pins carry a few % of slack: the count of refreshes 20 crossing ticks trigger moves with
-    //    rounding when the kernel's summation order changes — 1733 sparse, 1757 segment.)
-    //   banded 1800 -> 1900 on 2026-09-10 (C1/C2 active-set fix): the corrected walk (pins as stiff constraint rows
-    //   with a verified multiplier, budgeted releases) does 152 re-scales over the 20 crossing ticks where the old
-    //   walk did 145 -- every one a full factor() (C7, unchanged per call): 1860 allocs. The per-call cost is the
-    //   thing to fix (C7); when it is, this pin drops to 0.
+    //   The band-walk CROSSING pins that followed here went with K5' (a target can no longer leave its band, so the crossing ticks
+    //   they timed are refused). The walk is pinned on the streamer itself since 2026-09-15 -- allocations, factorisations, pins and
+    //   releases, break-even pinned -- in streaming_walk_guard_test.cpp (G1), where tools/mutate.py reaches it.
     Pin pin{s.name.c_str(), 0};
     bool pinned = false;
     for (const auto& q : pins) if (s.name == q.name) { pin = q; pinned = true; }

@@ -36,73 +36,77 @@ ROOT = os.path.dirname(HERE)
 
 # metric key -> (benchmark executable, OURS BM name, REFERENCE BM name or None)
 # The reference BM (QuantLib etc.) is informational only. Every metric is gated on self-baseline + target.
+# An entry is (executable, our benchmark, reference benchmark | None[, PREMISES]). PREMISES (G4, 2026-09-15) is a dict
+# {counter: condition} over the per-iteration counters the benchmark reports (shape_ladder_bench: refreshes / rescales / steps per
+# tick), e.g. {"refreshes": "==0"}: a metric whose ticks stopped doing what its name says FAILs as PREMISE, whatever its time.
+PREMISE_COUNTERS = ("refreshes", "rescales", "steps")
+
 METRICS = {
     # --- THE SHAPE LADDER (bench/fixtures/shape_ladder.hpp): every instrument shape, simplest -> most complex; real DB
     #     conventions and dates; stream tick (0.1 bp, frozen J) / refresh tick (25 bp: J + factorise) / hybrid Jacobian ---
-    "shape_ois_nolag_stream_tick": ("shape_ladder_bench", "BM_Shape_ois_nolag_StreamTick", None),
-    "shape_ois_nolag_refresh_25bp": ("shape_ladder_bench", "BM_Shape_ois_nolag_RefreshTick25bp", None),
+    "shape_ois_nolag_stream_tick": ("shape_ladder_bench", "BM_Shape_ois_nolag_StreamTick", None, {"refreshes": "==0"}),
+    "shape_ois_nolag_refresh_25bp": ("shape_ladder_bench", "BM_Shape_ois_nolag_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_ois_nolag_jacobian": ("shape_ladder_bench", "BM_Shape_ois_nolag_Jacobian", None),
-    "shape_ois_lag_stream_tick": ("shape_ladder_bench", "BM_Shape_ois_lag_StreamTick", None),
-    "shape_ois_lag_refresh_25bp": ("shape_ladder_bench", "BM_Shape_ois_lag_RefreshTick25bp", None),
+    "shape_ois_lag_stream_tick": ("shape_ladder_bench", "BM_Shape_ois_lag_StreamTick", None, {"refreshes": "==0"}),
+    "shape_ois_lag_refresh_25bp": ("shape_ladder_bench", "BM_Shape_ois_lag_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_ois_lag_jacobian": ("shape_ladder_bench", "BM_Shape_ois_lag_Jacobian", None),
-    "shape_ibor_multicurve_stream_tick": ("shape_ladder_bench", "BM_Shape_ibor_multicurve_StreamTick", None),
-    "shape_ibor_multicurve_refresh_25bp": ("shape_ladder_bench", "BM_Shape_ibor_multicurve_RefreshTick25bp", None),
+    "shape_ibor_multicurve_stream_tick": ("shape_ladder_bench", "BM_Shape_ibor_multicurve_StreamTick", None, {"refreshes": "==0"}),
+    "shape_ibor_multicurve_refresh_25bp": ("shape_ladder_bench", "BM_Shape_ibor_multicurve_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_ibor_multicurve_jacobian": ("shape_ladder_bench", "BM_Shape_ibor_multicurve_Jacobian", None),
-    "shape_basis_spread_stream_tick": ("shape_ladder_bench", "BM_Shape_basis_spread_StreamTick", None),
-    "shape_basis_spread_refresh_25bp": ("shape_ladder_bench", "BM_Shape_basis_spread_RefreshTick25bp", None),
+    "shape_basis_spread_stream_tick": ("shape_ladder_bench", "BM_Shape_basis_spread_StreamTick", None, {"refreshes": "==0"}),
+    "shape_basis_spread_refresh_25bp": ("shape_ladder_bench", "BM_Shape_basis_spread_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_basis_spread_jacobian": ("shape_ladder_bench", "BM_Shape_basis_spread_Jacobian", None),
-    "shape_averaged_stream_tick": ("shape_ladder_bench", "BM_Shape_averaged_StreamTick", None),
-    "shape_averaged_refresh_25bp": ("shape_ladder_bench", "BM_Shape_averaged_RefreshTick25bp", None),
+    "shape_averaged_stream_tick": ("shape_ladder_bench", "BM_Shape_averaged_StreamTick", None, {"refreshes": "==0"}),
+    "shape_averaged_refresh_25bp": ("shape_ladder_bench", "BM_Shape_averaged_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_averaged_jacobian": ("shape_ladder_bench", "BM_Shape_averaged_Jacobian", None),
-    "shape_averaged_leg_stream_tick": ("shape_ladder_bench", "BM_Shape_averaged_leg_StreamTick", None),
-    "shape_averaged_leg_refresh_25bp": ("shape_ladder_bench", "BM_Shape_averaged_leg_RefreshTick25bp", None),
+    "shape_averaged_leg_stream_tick": ("shape_ladder_bench", "BM_Shape_averaged_leg_StreamTick", None, {"refreshes": "==0"}),
+    "shape_averaged_leg_refresh_25bp": ("shape_ladder_bench", "BM_Shape_averaged_leg_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_averaged_leg_jacobian": ("shape_ladder_bench", "BM_Shape_averaged_leg_Jacobian", None),
-    "shape_averaged_leg_moment_stream_tick": ("shape_ladder_bench", "BM_Shape_averaged_leg_moment_StreamTick", None),
+    "shape_averaged_leg_moment_stream_tick": ("shape_ladder_bench", "BM_Shape_averaged_leg_moment_StreamTick", None, {"refreshes": "==0"}),
     "shape_averaged_leg_moment_refresh_25bp": ("shape_ladder_bench", "BM_Shape_averaged_leg_moment_RefreshTick25bp", None),
     "shape_averaged_leg_moment_jacobian": ("shape_ladder_bench", "BM_Shape_averaged_leg_moment_Jacobian", None),
     # all_schemes: one SOFR curve through all six W-cacheable schemes (Flat/Linear/NaturalCubic/Hermite/
     # BSpline/Tension). Until 2026-09-10 every rung was flat_hermite, so a scheme's build cost was measured
     # nowhere. mixed_scheme adds the seventh (MonotoneCubic) as a value-dependent BACK region, which is what
-    # exercises the router's per-row partition; it has no tick metrics because the session still refuses to
-    # stream a bundle with a non-linear region (Shape::streams).
-    "shape_all_schemes_stream_tick": ("shape_ladder_bench", "BM_Shape_all_schemes_StreamTick", None),
-    "shape_all_schemes_refresh_25bp": ("shape_ladder_bench", "BM_Shape_all_schemes_RefreshTick25bp", None),
+    # exercises the router's per-row partition; its tick metrics follow (it streams since 2026-09-12).
+    "shape_all_schemes_stream_tick": ("shape_ladder_bench", "BM_Shape_all_schemes_StreamTick", None, {"refreshes": "==0"}),
+    "shape_all_schemes_refresh_25bp": ("shape_ladder_bench", "BM_Shape_all_schemes_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_all_schemes_jacobian": ("shape_ladder_bench", "BM_Shape_all_schemes_Jacobian", None),
     "shape_mixed_scheme_jacobian": ("shape_ladder_bench", "BM_Shape_mixed_scheme_Jacobian", None),
     # The two mixed rungs STREAM since 2026-09-12 (BundleSession's last whole-bundle veto removed), so they
     # get tick metrics for the first time. Both are far slower than their all-linear twins -- the AAD block
     # re-evaluates a value-dependent Hyman region every tick -- but a tick replaces a COLD LM that measured
     # 3.3 ms / 214.7 ms, so these numbers are 38x and 43x better than the behaviour they replace.
-    "shape_mixed_scheme_stream_tick": ("shape_ladder_bench", "BM_Shape_mixed_scheme_StreamTick", None),
+    "shape_mixed_scheme_stream_tick": ("shape_ladder_bench", "BM_Shape_mixed_scheme_StreamTick", None, {"refreshes": "==0"}),
     "shape_mixed_scheme_refresh_25bp": ("shape_ladder_bench", "BM_Shape_mixed_scheme_RefreshTick25bp", None),
     "shape_desk_mixed_stream_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_StreamTick", None),
-    "shape_desk_mixed_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_mixed_RefreshTick25bp", None),
+    "shape_desk_mixed_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_mixed_RefreshTick25bp", None, {"refreshes": ">0", "rescales": ">0"}),
     "shape_desk_mixed_requote_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_RequoteTick", None),
     # desk_mixed: the FULL-COVERAGE rung (desk's 5 curves, bands, turn, butterflies, FX/xccy) with the SOFR
     # long end on MonotoneCubic -- identical to `desk` in every other respect, so the pair isolates what a
-    # value-dependent region costs on the shape a desk actually runs. No tick metrics (it cannot stream yet).
+    # value-dependent region costs on the shape a desk actually runs. Its tick metrics are above (it streams since 2026-09-12).
     "shape_desk_mixed_jacobian": ("shape_ladder_bench", "BM_Shape_desk_mixed_Jacobian", None),
-    "shape_banded_stream_tick": ("shape_ladder_bench", "BM_Shape_banded_StreamTick", None),
-    "shape_banded_refresh_25bp": ("shape_ladder_bench", "BM_Shape_banded_RefreshTick25bp", None),
+    "shape_banded_stream_tick": ("shape_ladder_bench", "BM_Shape_banded_StreamTick", None, {"refreshes": "==0"}),
+    "shape_banded_refresh_25bp": ("shape_ladder_bench", "BM_Shape_banded_RefreshTick25bp", None, {"refreshes": ">0", "rescales": ">0"}),
     "shape_banded_jacobian": ("shape_ladder_bench", "BM_Shape_banded_Jacobian", None),
-    "shape_banded_requote_tick": ("shape_ladder_bench", "BM_Shape_banded_RequoteTick", None),
-    "shape_turns_stream_tick": ("shape_ladder_bench", "BM_Shape_turns_StreamTick", None),
-    "shape_turns_refresh_25bp": ("shape_ladder_bench", "BM_Shape_turns_RefreshTick25bp", None),
+    "shape_banded_requote_tick": ("shape_ladder_bench", "BM_Shape_banded_RequoteTick", None, {"refreshes": "==0"}),
+    "shape_turns_stream_tick": ("shape_ladder_bench", "BM_Shape_turns_StreamTick", None, {"refreshes": "==0"}),
+    "shape_turns_refresh_25bp": ("shape_ladder_bench", "BM_Shape_turns_RefreshTick25bp", None, {"refreshes": ">0"}),
     "shape_turns_jacobian": ("shape_ladder_bench", "BM_Shape_turns_Jacobian", None),
-    "shape_turns_requote_tick": ("shape_ladder_bench", "BM_Shape_turns_RequoteTick", None),
-    "shape_portfolio_stream_tick": ("shape_ladder_bench", "BM_Shape_portfolio_StreamTick", None),
-    "shape_portfolio_refresh_25bp": ("shape_ladder_bench", "BM_Shape_portfolio_RefreshTick25bp", None),
+    "shape_turns_requote_tick": ("shape_ladder_bench", "BM_Shape_turns_RequoteTick", None, {"refreshes": "==0"}),
+    "shape_portfolio_stream_tick": ("shape_ladder_bench", "BM_Shape_portfolio_StreamTick", None, {"refreshes": "==0"}),
+    "shape_portfolio_refresh_25bp": ("shape_ladder_bench", "BM_Shape_portfolio_RefreshTick25bp", None, {"refreshes": ">0"}),
     "shape_portfolio_jacobian": ("shape_ladder_bench", "BM_Shape_portfolio_Jacobian", None),
-    "shape_zero_coupon_stream_tick": ("shape_ladder_bench", "BM_Shape_zero_coupon_StreamTick", None),
-    "shape_zero_coupon_refresh_25bp": ("shape_ladder_bench", "BM_Shape_zero_coupon_RefreshTick25bp", None),
+    "shape_zero_coupon_stream_tick": ("shape_ladder_bench", "BM_Shape_zero_coupon_StreamTick", None, {"refreshes": "==0"}),
+    "shape_zero_coupon_refresh_25bp": ("shape_ladder_bench", "BM_Shape_zero_coupon_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_zero_coupon_jacobian": ("shape_ladder_bench", "BM_Shape_zero_coupon_Jacobian", None),
-    "shape_fx_xccy_stream_tick": ("shape_ladder_bench", "BM_Shape_fx_xccy_StreamTick", None),
-    "shape_fx_xccy_refresh_25bp": ("shape_ladder_bench", "BM_Shape_fx_xccy_RefreshTick25bp", None),
+    "shape_fx_xccy_stream_tick": ("shape_ladder_bench", "BM_Shape_fx_xccy_StreamTick", None, {"refreshes": "==0"}),
+    "shape_fx_xccy_refresh_25bp": ("shape_ladder_bench", "BM_Shape_fx_xccy_RefreshTick25bp", None, {"refreshes": "==0"}),
     "shape_fx_xccy_jacobian": ("shape_ladder_bench", "BM_Shape_fx_xccy_Jacobian", None),
-    "shape_desk_stream_tick": ("shape_ladder_bench", "BM_Shape_desk_StreamTick", None),
-    "shape_desk_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_RefreshTick25bp", None),
+    "shape_desk_stream_tick": ("shape_ladder_bench", "BM_Shape_desk_StreamTick", None, {"refreshes": "==0"}),
+    "shape_desk_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_RefreshTick25bp", None, {"refreshes": ">0", "rescales": ">0"}),
     "shape_desk_jacobian": ("shape_ladder_bench", "BM_Shape_desk_Jacobian", None),
-    "shape_desk_requote_tick": ("shape_ladder_bench", "BM_Shape_desk_RequoteTick", None),
+    "shape_desk_requote_tick": ("shape_ladder_bench", "BM_Shape_desk_RequoteTick", None, {"refreshes": "==0"}),
     # --- calibration kernels (single curve, 23x23; QuantLib GlobalBootstrap is the reference) ---
     "sofr_23k_square_cold_calibrate": ("curve_build_bench",   "BM_CurveBuild_Ours",              "BM_CurveBuild_QuantLib"),
     # THE MULTI-CURVE QuantLib reference (2026-09-10). Every other QuantLib timing reference here is a SINGLE
@@ -185,27 +189,40 @@ def run_bench(build, exe, min_time, reps):
     cmd = [path, "--benchmark_format=json", f"--benchmark_min_time={min_time}s",
            f"--benchmark_repetitions={reps}", "--benchmark_report_aggregates_only=false"]
     data = json.loads(subprocess.check_output(cmd, text=True))
-    times = {}
+    times, counters = {}, {}
     for b in data["benchmarks"]:
         if b.get("run_type", "iteration") != "iteration":
             continue  # skip mean/median/stddev aggregates; we take the MIN over repetitions ourselves
         name = b["name"]
         ns = b["real_time"] * UNIT_NS[b["time_unit"]]
         times[name] = min(times.get(name, float("inf")), ns)
-    return times
+        counters.setdefault(name, {k: b[k] for k in PREMISE_COUNTERS if k in b})
+    return times, counters
 
 
-def measure(build, min_time, reps, only=None):
-    """Return {metric: {'ours_ns', 'reference_ns', 'speedup'}} running each executable ONCE."""
+def premise_ok(observed, condition):
+    """condition is '<op><number>' with op in == != <= >= < >."""
+    m = re.fullmatch(r"(==|!=|<=|>=|<|>)(-?[0-9.]+(?:e-?[0-9]+)?)", condition)
+    if not m:
+        raise ValueError(f"bad premise condition {condition!r}")
+    op, v = m.group(1), float(m.group(2))
+    return {"==": observed == v, "!=": observed != v, "<=": observed <= v, ">=": observed >= v, "<": observed < v, ">": observed > v}[op]
+
+
+def measure(build, min_time, reps, only=None, overrides=None):
+    """Return ({metric: {'ours_ns', 'reference_ns', 'speedup'}}, {metric: {'spec', 'observed'}}) running each executable ONCE."""
     by_exe = {}
-    for key, (exe, ours, ref) in METRICS.items():
+    for key, spec in METRICS.items():
         if only and key not in only:
             continue
-        by_exe.setdefault(exe, []).append((key, ours, ref))
-    result = {}
+        exe, ours, ref = spec[:3]
+        prem = dict(spec[3]) if len(spec) > 3 else {}
+        prem.update((overrides or {}).get(key, {}))
+        by_exe.setdefault(exe, []).append((key, ours, ref, prem))
+    result, premises = {}, {}
     for exe, items in by_exe.items():
-        t = run_bench(build, exe, min_time, reps)
-        for key, ours, ref in items:
+        t, counters = run_bench(build, exe, min_time, reps)
+        for key, ours, ref, prem in items:
             if ours not in t:
                 raise KeyError(f"{exe}: expected {ours}, got {sorted(t)}")
             o = t[ours]
@@ -214,7 +231,9 @@ def measure(build, min_time, reps, only=None):
                            "reference_ns": (round(r) if r is not None else None),
                            "reference_bm": ref,
                            "speedup": (round(r / o, 2) if r is not None else None)}
-    return result
+            if prem:
+                premises[key] = {"spec": prem, "observed": counters.get(ours, {})}
+    return result, premises
 
 
 def fmt_ns(ns):
@@ -242,6 +261,8 @@ def main():
     ap.add_argument("--force-load", action="store_true", help="run under load anyway (disables --update)")
     ap.add_argument("--only", nargs="*", help="metric keys to run (default: all)")
     ap.add_argument("--record", help="write the full measurement + verdicts to this JSON file")
+    ap.add_argument("--premise", action="append", default=[],
+                    help="override/add a premise, METRIC:COUNTER<op><value> (proves the premise check can fail)")
     ap.add_argument("--describe", action="store_true", help="print what each metric builds/measures (from baselines.json) and exit")
     args = ap.parse_args()
 
@@ -274,7 +295,12 @@ def main():
 
     print(f">> running benchmarks (min over {args.reps} reps x {args.min_time}s) ...")
     t0 = time.time()
-    meas = measure(args.build, args.min_time, args.reps, set(args.only) if args.only else None)
+    overrides = {}
+    for o in args.premise:
+        mk, cond = o.split(":", 1)
+        c = re.match(r"[a-z_]+", cond).group(0)
+        overrides.setdefault(mk, {})[c] = cond[len(c):]
+    meas, premises = measure(args.build, args.min_time, args.reps, set(args.only) if args.only else None, overrides)
     print(f">> done in {time.time()-t0:.0f}s")
 
     # ---- --update ----
@@ -334,7 +360,12 @@ def main():
             flags.append("NO-TARGET")
         elif ours > tgt:
             flags.append("ABOVE-TARGET")
-        row_ok = not any(f.startswith(("REGRESSED", "ABOVE")) for f in flags)
+        pm = premises.get(mk)
+        for c, cond in (pm["spec"].items() if pm else []):
+            obs = pm["observed"].get(c)
+            if obs is None or not premise_ok(obs, cond):
+                flags.append(f"PREMISE:{c}{cond}(got {obs if obs is None else round(obs, 2)})")
+        row_ok = not any(f.startswith(("REGRESSED", "ABOVE", "PREMISE")) for f in flags)
         ok = ok and row_ok
         verdicts[mk] = {"ok": row_ok, "flags": flags, "regr": regr, "target_ns": tgt}
         print(f"  {mk:<44}{fmt_ns(ours):>12}{fmt_ns(b):>12}"
@@ -354,7 +385,7 @@ def main():
         with open(args.record, "w") as f:
             json.dump({"fingerprint": fp, "load_avg": la, "cpu_busy_pct": busy, "quiesced": quiesced, "reps": args.reps,
                        "min_time_s": float(args.min_time), "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                       "metrics": meas, "verdicts": verdicts}, f, indent=2)
+                       "metrics": meas, "premises": premises, "verdicts": verdicts}, f, indent=2)
     print()
     print("PERF GATE: " + ("PASS" if ok else "FAIL") + ("" if quiesced else "  (under load — not authoritative)"))
     return 0 if ok else 1

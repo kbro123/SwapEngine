@@ -35,7 +35,7 @@ struct Shape {
   Eigen::VectorXd x0;       // a flat cold seed
   Eigen::VectorXd q0;       // the markets (prob.market())
   Eigen::VectorXd q_small;  // a ~0.1 bp tick (FX rows: relative)
-  Eigen::VectorXd q_big;    // a ~25 bp move (forces a Jacobian refresh)
+  Eigen::VectorXd q_big;    // a ~25 bp move (refreshes on non-square / banded rungs; a square rung converges on frozen steps, G2a)
   // FOUR-NUMBER REQUOTE (K5', owner 2026-09-14). A quote is {target, lower, upper, decay} and a band only gives the solve freedom
   // around its target -- a target is never outside its band. So on a banded shape a move carries its band: requote(q) is the
   // tick for the target vector q, every banded row's band shifted by q - q0 (decay unchanged; unbanded rows stay unbanded).
