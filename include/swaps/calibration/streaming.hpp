@@ -77,6 +77,38 @@ inline const char* to_string(StreamStatus s) {
   return "?";
 }
 
+// HOT-PATH CENSUS (2026-09-15). Every stage a streaming tick can pass through, stamped into StreamTick::stages as one bit (an
+// integer OR per event, no allocation). tests/hotpath_census_test.cpp drives a committed scenario per stage against
+// tests/hotpath_census.lock (with the scenario's allocation / factorisation pins), and tools/check_hotpath_census.py locks the
+// streamer's refresh / factorisation call sites: a new stage or site cannot land without a scenario and a pin.
+enum class StreamStage : unsigned {
+  DriftRefresh, TrackRescale, TrackRefresh, Breakpoint, Pin, Release, RescaleFallback, KinkDamp, Predicted, StallRefresh, FrozenCapRefresh, CommitReanchor, FinalRefresh, Truncated, PrefetchTake, Fail, FailRestore,
+  kCount
+};
+inline const char* to_string(StreamStage s) {
+  switch (s) {
+    case StreamStage::DriftRefresh: return "DriftRefresh";
+    case StreamStage::TrackRescale: return "TrackRescale";
+    case StreamStage::TrackRefresh: return "TrackRefresh";
+    case StreamStage::Breakpoint: return "Breakpoint";
+    case StreamStage::Pin: return "Pin";
+    case StreamStage::Release: return "Release";
+    case StreamStage::RescaleFallback: return "RescaleFallback";
+    case StreamStage::KinkDamp: return "KinkDamp";
+    case StreamStage::Predicted: return "Predicted";
+    case StreamStage::StallRefresh: return "StallRefresh";
+    case StreamStage::FrozenCapRefresh: return "FrozenCapRefresh";
+    case StreamStage::CommitReanchor: return "CommitReanchor";
+    case StreamStage::FinalRefresh: return "FinalRefresh";
+    case StreamStage::Truncated: return "Truncated";
+    case StreamStage::PrefetchTake: return "PrefetchTake";
+    case StreamStage::Fail: return "Fail";
+    case StreamStage::FailRestore: return "FailRestore";
+    case StreamStage::kCount: break;
+  }
+  return "?";
+}
+
 struct StreamTick {
   StreamStatus status = StreamStatus::StepCap;
   const char* reason() const { return to_string(status); }
@@ -89,6 +121,7 @@ struct StreamTick {
                            // tick zeroed it (C8)
   bool converged = false;  // ||dx||_inf < step_tol was reached (false: refresh cap hit; x NOT committed)
   int rescales = 0;        // band-edge crossings handled by re-scaling frozen J rows + re-factorising M
+  unsigned stages = 0;     // StreamStage bits this tick passed through (the hot-path census)
 };
 
 template <class Problem = CalibrationProblem>
@@ -336,9 +369,11 @@ class StreamingCalibrator {
   StreamTick update_exact(const Eigen::VectorXd& q_new) {
     StreamTick t;
     t.drift = (q_new - q_anchor_).cwiseAbs().maxCoeff();
+    tick_stages_ = 0;
     x_ = x_cur_;              // warm start from the last exact solution (tick-to-tick move is tiny)
     Eigen::VectorXd& x = x_;  // reused scratch: the frozen-Newton loop below allocates nothing
     if (drift_refresh_ && t.drift > opt_.refresh_drift) {  // accuracy refresh (see Options::refresh_drift)
+      stamp(StreamStage::DriftRefresh);
       if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);
     }
     int frozen = 0;
@@ -390,10 +425,12 @@ class StreamingCalibrator {
         apply_pins(q_new);
         if (track_bands(q_new)) {
           if (need_full_) {
+            stamp(StreamStage::TrackRefresh);
             if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
             t.refreshed = true;
             ++t.refreshes;
           } else {
+            stamp(StreamStage::TrackRescale);
             ++t.rescales;  // the operator was updated row by row inside track_bands (rescale_row)
             ++rescale_count_;
           }
@@ -419,6 +456,7 @@ class StreamingCalibrator {
           const double n2 = dx_.squaredNorm();
           if (dx_.dot(last_step_) < -0.9 * n2 && last_step_.squaredNorm() < 1.21 * n2) {
             damp = 0.5;
+            stamp(StreamStage::KinkDamp);
             SWAPS_TRACE("  kink 2-cycle: half step\n");
           }
         }
@@ -432,6 +470,7 @@ class StreamingCalibrator {
       if (!x.allFinite()) return fail(t, StreamStatus::NonFinite);
       SWAPS_TRACE("  step %d |dx|=%.2e alpha=%.3f pinned=%d rescales=%d refreshes=%d\n", t.newton_steps, dx_.cwiseAbs().maxCoeff(), alpha, n_pinned_, t.rescales, t.refreshes);
       if (alpha < 1.0) {  // stopped on a band edge: switch that row there and carry on
+        stamp(StreamStage::Breakpoint);
         switch_row(hit, hit_side);  // (updates the operator in place, rescale_row)
         ++t.rescales;
         ++rescale_count_;
@@ -446,6 +485,7 @@ class StreamingCalibrator {
       if (opt_.predict_convergence && dx_prev > 0.0 && dx_inf < dx_prev && dx_inf >= opt_.step_tol) {
         const double ratio = dx_inf / dx_prev;
         predicted = ratio < 0.5 && ratio * dx_inf < 0.05 * opt_.step_tol;  // 2x margin on the bound
+        if (predicted) stamp(StreamStage::Predicted);
       }
       // Adaptive stall: with two full steps under one operator, would the steps still to come cost more than a
       // refresh? (ρ ≥ 1: the frozen iteration is not contracting at all.)
@@ -476,6 +516,7 @@ class StreamingCalibrator {
           // TWO-THRESHOLD COMMIT RULE: this point is a fixed point of a TRUNCATED operator -- exact only in the directions it
           // kept. Re-anchor here at the shared threshold and re-converge (the rest of the tick stays at full rank).
           full_rank_ = true;
+          stamp(StreamStage::CommitReanchor);
           if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
           t.refreshed = true;
           ++t.refreshes;
@@ -486,6 +527,7 @@ class StreamingCalibrator {
         }
         if (drift_refreshed && !final_refresh_done && !bg_ && t.refreshes < opt_.max_refresh) {
           final_refresh_done = true;
+          stamp(StreamStage::FinalRefresh);
           if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
           ++t.refreshes;
           frozen = 0;
@@ -498,6 +540,7 @@ class StreamingCalibrator {
       }
       if (t.newton_steps >= opt_.max_steps) return fail(t, StreamStatus::StepCap);
       if (++frozen >= opt_.max_frozen || slow) {  // M stale as a preconditioner -> refresh
+        stamp(slow ? StreamStage::StallRefresh : StreamStage::FrozenCapRefresh);
         if (t.refreshes >= opt_.max_refresh) return fail(t, StreamStatus::RefreshCap);
         if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);
         frozen = 0;
@@ -510,6 +553,7 @@ class StreamingCalibrator {
     // near -- so the worker is done (on a spare core) before the envelope is hit. Coalesces: a request
     // while one is in flight just updates the target x.
     if (bg_ && !bg_->computing() && t.drift > opt_.prefetch_drift) bg_->request(x_cur_);
+    t.stages = tick_stages_;
     return t;
   }
 
@@ -521,8 +565,11 @@ class StreamingCalibrator {
   StreamTick fail(StreamTick& t, StreamStatus why) {
     t.converged = false;
     t.status = why;
+    stamp(StreamStage::Fail);
     SWAPS_TRACE("  tick FAILED: %s (steps %d refreshes %d rescales %d)\n", to_string(why), t.newton_steps, t.refreshes, t.rescales);
+    if (t.refreshes > 0 || t.rescales > 0) stamp(StreamStage::FailRestore);
     if (t.refreshes > 0 || t.rescales > 0) (void)set_anchor(x_cur_, q_cur_);
+    t.stages = tick_stages_;
     return t;
   }
 
@@ -616,6 +663,7 @@ class StreamingCalibrator {
       state_[k] = edge_side > 0 ? +1 : -1;
       ++n_pinned_;
       ++pin_count_;
+      stamp(StreamStage::Pin);
       s_pin_[k] = 0.0;  // the multiplier slope is known only at convergence (verify_pins)
       rescale_row(k, kPinWeight);
       return;
@@ -700,6 +748,7 @@ class StreamingCalibrator {
         state_[k] = 0;
         --n_pinned_;
         ++release_count_;
+        stamp(StreamStage::Release);
         ++releases_[k];  // one release per row per tick; a re-pin after it is final (termination)
         rescale_row(k, slope);
         changed = true;
@@ -735,6 +784,7 @@ class StreamingCalibrator {
       ++refresh_count_;
       ++t.prefetched;
       ++prefetch_hits_;
+      stamp(StreamStage::PrefetchTake);
     } else {
       if (!set_anchor(x, q)) return false;  // inline compute (the spike the prefetch exists to hide)
     }
@@ -805,6 +855,7 @@ class StreamingCalibrator {
       anchor_weak_ = weak;
     } else if (weak > anchor_weak_) {
       truncated_ = true;
+      stamp(StreamStage::Truncated);
       cod.setThreshold(walk_threshold());
       cod.compute(A);
     }
@@ -853,6 +904,7 @@ class StreamingCalibrator {
     }
     J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
     slope_cur_[k] = new_slope;
+    if (have_J_) stamp(StreamStage::RescaleFallback);
     if (have_J_) factor(J_cur_);  // degenerate update: fall back to a full factorisation
   }
 
@@ -870,6 +922,8 @@ class StreamingCalibrator {
   int prefetch_hits_ = 0;
   int rescale_count_ = 0;
   int factor_count_ = 0, pin_count_ = 0, release_count_ = 0;  // guard counters (factor_count() ...)
+  unsigned tick_stages_ = 0;  // StreamStage bits of the tick in progress (copied into StreamTick::stages on return)
+  void stamp(StreamStage s) { tick_stages_ |= 1u << static_cast<unsigned>(s); }
   // Band-edge tracking: the frozen anchor Jacobian, its current re-scaled copy, and per banded row the
   // slope at the anchor / now. have_J_ is false when M was adopted from the background worker.
   std::vector<BandRow> bands_;  // tracked banded rows (decay > 0; a decay-0 band is left to the stall refresh)

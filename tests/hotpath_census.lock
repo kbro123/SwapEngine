@@ -1,0 +1,45 @@
+# tests/hotpath_census.lock -- the hot-path census (2026-09-15). Generated from tests/hotpath_census_test.cpp's print mode
+# (SWAPS_CENSUS_PRINT=1) and then owned by hand: a stage row names the scenario that reaches it; [pins] are measured allocations
+# and factorisations over the scenario's counted ticks (they may only DECREASE; '-' = not counted, threads); [callsites] is checked
+# by tools/check_hotpath_census.py (a new refresh / factorisation site needs a stage, a scenario and a pin).
+# stage             scenario
+DriftRefresh        intick_portfolio_rd0
+TrackRescale        walk_desk_3bp
+TrackRefresh        unreachable  # need_full_ needs a background-worker M without J, and the prefetch never arms on a banded problem (streaming.hpp ctor)
+Breakpoint          weak_direction_strip
+Pin                 walk_desk_3bp
+Release             walk_desk_3bp
+RescaleFallback     weak_direction_strip
+KinkDamp            desk_mixed_small
+Predicted           square_big_ois
+StallRefresh        desk_mixed_small
+FrozenCapRefresh    frozen_cap_ois
+CommitReanchor      weak_direction_strip
+FinalRefresh        intick_portfolio_rd0
+Truncated           weak_direction_strip
+PrefetchTake        prefetch_ois
+Fail                failed_portfolio_cap2
+FailRestore         failed_portfolio_cap2
+
+[pins]
+# scenario              allocs  factorisations
+square_big_ois                0       0
+frozen_cap_ois               90      30
+intick_portfolio_rd0         60      20
+failed_portfolio_cap2         8       2
+weak_direction_strip         14       3
+reg_desk_small                0       0
+walk_desk_3bp               224      28
+desk_mixed_small           4530      20
+desk_mixed_big             4284      18
+prefetch_ois                  -       -
+
+[callsites]
+set_anchor         8
+factor             4
+rescale_row        5
+residuals_vs       3
+jacobian_vs_into   2
+model_rates        1
+request            1
+update_exact       2

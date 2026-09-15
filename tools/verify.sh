@@ -160,6 +160,17 @@ else
   pass_density="FAIL"; rc=1
 fi
 
+# ---- Hot-path census guard (2026-09-15) ---------------------------------------
+# The streamer's refresh / factorisation / residual call sites are locked in tests/hotpath_census.lock, and every StreamStage must be
+# stamped: a new site FAILs until it has a stage, a census scenario and pins (tests/hotpath_census_test.cpp). The selftest proves an
+# injected site and a dropped stamp both fail. Cheap.
+echo ">> hot-path census guard"
+if python3 "${ROOT}/tools/check_hotpath_census.py" && python3 "${ROOT}/tools/check_hotpath_census.py" --selftest; then
+  pass_census="PASS"
+else
+  pass_census="FAIL"; rc=1
+fi
+
 # ---- Correctness gate -------------------------------------------------------
 if [ "${BENCH_ONLY}" -eq 0 ]; then
   echo ">> correctness gate (ctest)"
@@ -200,6 +211,7 @@ printf "  %-20s %s\n" "conventions schema:" "${pass_schema}"
 printf "  %-20s %s\n" "no-literal guard:" "${pass_lit}"
 printf "  %-20s %s\n" "api-dispatch sync:" "${pass_disp}"
 printf "  %-20s %s\n" "verb-density guard:" "${pass_density}"
+printf "  %-20s %s\n" "census guard:" "${pass_census}"
 printf "  %-20s %s\n" "correctness gate:" "${pass_correctness}"
 printf "  %-20s %s\n" "performance gate:" "${pass_perf}"
 echo "===================================="

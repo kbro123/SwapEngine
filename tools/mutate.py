@@ -28,6 +28,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 # (name, header (repo-relative: include/..., tests/research/... or api/*.cpp), old, new, [api/*.cpp source, ..., test TU, ...],
 #  gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-15 census: every StreamStage is reached by its committed scenario.
+    ("stage_not_stamped", "include/swaps/calibration/streaming.hpp",
+     "        stamp(StreamStage::Release);\n",
+     "",
+     ["hotpath_census_test.cpp"], "*", "a stage the census cannot see is unpinned (census)"),
     # 2026-09-15 G1-G3: the streamer's hot-path stages each carry an allocation / factorisation / refresh-count pin.
     ("rescale_always_refactorises", "include/swaps/calibration/streaming.hpp",
      "      if (std::isfinite(d) && std::abs(d) > 1e-3) {\n",
