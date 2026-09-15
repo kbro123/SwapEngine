@@ -13,11 +13,18 @@
 // shocked curves, so its golden sees that one-ULP change (shown by hand, 2026-09-14); the grid emits only NPVs, where
 // it can vanish, and its golden was shown catching the shift_curve axis turned from add to override. Beside each
 // golden, a few properties show the request exercises what it claims.
+// THE REFERENCE TOOLCHAIN (owner decision 2026-09-15): the goldens are byte-for-byte freezes recorded with Apple clang on macOS, and are
+// compared byte for byte there. Another compiler / libm reaches the same converged answers only to rounding (GCC 13 + glibc: the base LM
+// stops after 9 iterations instead of 7, rms 4.74e-17 vs 4.69e-17 -- different FMA contraction and exp/log rounding), so off the reference
+// toolchain the comparison is STRUCTURAL + TOLERANT: same keys, array lengths, strings and booleans, every number within 1e-9 relative
+// (1e-12 absolute), and the solver diagnostics (iterations, rms_residual, stationarity, status) not compared.
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -163,6 +170,49 @@ std::string without_timing(std::string s) {
   return s;
 }
 
+#if defined(__APPLE__) && defined(__clang__)
+constexpr bool kReferenceToolchain = true;
+#else
+constexpr bool kReferenceToolchain = false;
+#endif
+
+bool diagnostic_key(std::string_view k) { return k == "iterations" || k == "rms_residual" || k == "stationarity" || k == "status"; }
+
+// The first difference between two parsed responses beyond the tolerance, as "<json path>: got vs want" (empty: equal).
+std::string tolerant_mismatch(const json::value& got, const json::value& want, const std::string& path) {
+  if (got.is_number() && want.is_number()) {
+    const double a = got.to_number<double>(), b = want.to_number<double>();
+    const double tol = std::max(1e-12, 1e-9 * std::max(std::abs(a), std::abs(b)));
+    return std::abs(a - b) <= tol ? "" : path + ": " + json::serialize(got) + " vs " + json::serialize(want);
+  }
+  if (got.kind() != want.kind()) return path + ": " + json::serialize(got) + " vs " + json::serialize(want);
+  if (got.is_object()) {
+    const json::object& go = got.as_object();
+    const json::object& wo = want.as_object();
+    if (go.size() != wo.size()) return path + ": " + std::to_string(go.size()) + " keys vs " + std::to_string(wo.size());
+    for (const auto& kv : wo) {
+      const std::string sub = path + "." + std::string(kv.key());
+      const auto it = go.find(kv.key());
+      if (it == go.end()) return sub + ": missing";
+      if (diagnostic_key(kv.key())) continue;
+      const std::string m = tolerant_mismatch(it->value(), kv.value(), sub);
+      if (!m.empty()) return m;
+    }
+    return "";
+  }
+  if (got.is_array()) {
+    const json::array& ga = got.as_array();
+    const json::array& wa = want.as_array();
+    if (ga.size() != wa.size()) return path + ": " + std::to_string(ga.size()) + " elements vs " + std::to_string(wa.size());
+    for (std::size_t i = 0; i < wa.size(); ++i) {
+      const std::string m = tolerant_mismatch(ga[i], wa[i], path + "[" + std::to_string(i) + "]");
+      if (!m.empty()) return m;
+    }
+    return "";
+  }
+  return got == want ? "" : path + ": " + json::serialize(got) + " vs " + json::serialize(want);
+}
+
 void expect_golden(const std::string& name, const std::string& response) {
   const std::string got = without_timing(response);
   const std::string path = std::string(SWAPS_GOLDEN_DIR) + "/scenario/" + name + ".json";
@@ -176,6 +226,11 @@ void expect_golden(const std::string& name, const std::string& response) {
   ss << in.rdbuf();
   std::string want = ss.str();
   if (!want.empty() && want.back() == '\n') want.pop_back();
+  if (!kReferenceToolchain) {
+    const std::string m = tolerant_mismatch(json::parse(got), json::parse(want), name);
+    if (!m.empty()) ADD_FAILURE() << "(non-reference toolchain: structural + 1e-9 relative) first mismatch at " << m;
+    return;
+  }
   if (got == want) return;
   std::size_t k = 0;
   while (k < got.size() && k < want.size() && got[k] == want[k]) ++k;

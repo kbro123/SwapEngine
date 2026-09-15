@@ -6,6 +6,9 @@ add_library(swaps_api STATIC bundle_api.cpp codec.cpp compile.cpp generate_risk.
 target_link_libraries(swaps_api PUBLIC swaps)
 target_include_directories(swaps_api PUBLIC ${SWAPS_THIRD_PARTY}/boost)
 target_compile_features(swaps_api PUBLIC cxx_std_20)
+# The C-ABI SHARED library below links this static archive, so its objects must be position-independent. macOS always is; on Linux
+# GCC/Clang default to non-PIC objects and the shared link fails (R_X86_64_PC32 ... recompile with -fPIC).
+set_target_properties(swaps_api PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # CLI driver (file/stdin -> JSON response).
 add_executable(swaps_api_cli swaps_api_cli.cpp)
