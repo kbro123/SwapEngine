@@ -96,18 +96,26 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     sess.start_streaming();
     bool flip = false;
     for (int i = 0; i < 6; ++i) { flip = !flip; sess.stream_update(flip ? s.q_small : s.q0); }
-    unsigned long small = 0, cross = 0;
+    unsigned long small = 0, requote = 0;
     {
       AllocScope a;
       for (int i = 0; i < 20; ++i) { flip = !flip; sess.stream_update(flip ? s.q_small : s.q0); }
       small = a.allocs();
     }
+    // K5': the FOUR-NUMBER requote tick (every row's target and band move together) -- a band move must cost no allocation
+    // beyond the target-only tick's.
+    const Shape::Requote small_q = s.requote(s.q_small), base_q = s.requote(s.q0);
     {
       AllocScope a;
-      for (int i = 0; i < 20; ++i) { flip = !flip; sess.stream_update(flip ? s.q_cross : s.q0); }
-      cross = a.allocs();
+      for (int i = 0; i < 20; ++i) {
+        flip = !flip;
+        const Shape::Requote& r = flip ? small_q : base_q;
+        if (s.has_bands) sess.stream_update(r.target, r.lower, r.upper, r.decay);
+        else sess.stream_update(r.target);
+      }
+      requote = a.allocs();
     }
-    std::cout << "  [ladder] " << s.name << ": allocs over 20 small ticks = " << small << ", over 20 band-crossing ticks = " << cross << "\n";
+    std::cout << "  [ladder] " << s.name << ": allocs over 20 small ticks = " << small << ", over 20 four-number requote ticks = " << requote << "\n";
     // THE CLIFF, made loud (2026-09-12). A block whose touched width exceeds ad::kPooledMaxW silently drops
     // to heap duals and every operation allocates: desk_mixed at width 55 against a limit of 48 cost 19,182
     // allocations per tick where the same work at width 29 cost 26. Nothing reported that but the pin, and a
@@ -119,7 +127,7 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     // PINS measured 2026-09-09 on engine 540abaf (20 ticks each). A compiled shape's small tick is 0 — that is the
     // invariant. The rest are the CURRENT costs of known E3 findings (B3 hybrid Hermite::build locals; C7 a band
     // re-scale is a full factor()); they may only DECREASE — lower a pin when you fix the cause, never raise one.
-    struct Pin { const char* name; unsigned long small, cross; };
+    struct Pin { const char* name; unsigned long small; };
     //   averaged_leg (compiled, 18/tick = 6 per residual x 3 Newton steps): E3-A3, Eigen IndexedView copies on
     //   pv()'s general branch — the one compiled shape that is NOT allocation-free today.
     //   fx_xccy / desk small ticks: 0 since the MtM leg compiles (2026-09-09); desk crossings are the C7 rescale cost.
@@ -130,8 +138,8 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   the way a constant W is). ~26 allocations/tick on mixed_scheme's 12 AAD rows, ~19,000 on
     //   desk_mixed's 18. That is the next thing to attack here, in the same family as C7/C6 — and like every
     //   pin in this list it may only DECREASE.
-    static const Pin pins[] = {{"averaged_leg", 360, 360}, {"banded", 0, 150}, {"fx_xccy", 0, 0}, {"desk", 0, 100},
-                               {"mixed_scheme", 560, 560}, {"desk_mixed", 3700, 4900}};
+    static const Pin pins[] = {{"averaged_leg", 360}, {"banded", 0}, {"fx_xccy", 0}, {"desk", 0}, {"mixed_scheme", 560},
+                               {"desk_mixed", 3700}};
     //   desk_mixed's SMALL count is exact and stable (3600 over 20 ticks, three runs identical); its
     //   CROSSING count varies 4523..4753 because a band-edge crossing triggers a variable number of
     //   active-set re-scales -- the same slack the banded / desk crossing pins carry, for the same reason.
@@ -143,12 +151,12 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   with a verified multiplier, budgeted releases) does 152 re-scales over the 20 crossing ticks where the old
     //   walk did 145 -- every one a full factor() (C7, unchanged per call): 1860 allocs. The per-call cost is the
     //   thing to fix (C7); when it is, this pin drops to 0.
-    Pin pin{s.name.c_str(), 0, 0};
+    Pin pin{s.name.c_str(), 0};
     bool pinned = false;
     for (const auto& q : pins) if (s.name == q.name) { pin = q; pinned = true; }
     if (s.expect_compiled && !pinned) EXPECT_EQ(small, 0u) << s.name << ": the compiled tick must not allocate";
     else EXPECT_LE(small, pin.small) << s.name << ": tick allocations grew past the pinned count";
-    EXPECT_LE(cross, pin.cross) << s.name << ": band-crossing / hybrid tick allocations grew past the pinned count";
+    EXPECT_LE(requote, pin.small) << s.name << ": a four-number requote allocates more than the target-only tick's pin";
   }
 }
 
@@ -168,16 +176,25 @@ TEST(ShapeLadder, AMixedBundleStreamsToTheSameAnswerAsAColdSolve) {
     sess.calibrate(s.x0);
     EXPECT_FALSE(sess.needs_recalibrate()) << s.name << ": nothing forces a cold solve any more";
     ASSERT_NO_THROW(sess.start_streaming()) << s.name;
-    const cal::HybridBundleResidual eng(s.prob);
     for (int rep = 0; rep < 3; ++rep)
-      for (const Eigen::VectorXd* q : {&s.q_big, &s.q0, &s.q_small, &s.q0, &s.q_cross, &s.q0}) {
-        const Eigen::VectorXd& x = sess.stream_update(*q);
+      for (const Eigen::VectorXd* qv : {&s.q_big, &s.q0, &s.q_small, &s.q0}) {
+        // K5': a banded shape's move carries its bands (a target is never outside its band); pq is that requote.
+        const Shape::Requote rq = s.requote(*qv);
+        const Eigen::VectorXd* q = &rq.target;
+        cal::BundleProblem pq = s.prob;
+        for (int i = 0; i < pq.n_residuals(); ++i) {
+          auto& in = pq.instruments[static_cast<std::size_t>(i)];
+          in.market = rq.target[i];
+          in.band_lower = rq.lower[i];
+          in.band_upper = rq.upper[i];
+          in.band_decay = rq.decay[i];
+        }
+        const cal::HybridBundleResidual eng(pq);
+        const Eigen::VectorXd& x = s.has_bands ? sess.stream_update(rq.target, rq.lower, rq.upper, rq.decay) : sess.stream_update(rq.target);
         ASSERT_TRUE(sess.last_converged()) << s.name << ": " << sess.last_reason();
         ASSERT_TRUE(x.allFinite()) << s.name;
         // The streamed state must be no worse than a cold LM on the same market -- the fixed point of the
         // frozen iteration is the least-squares optimum, whatever the filter did on the way there.
-        cal::BundleProblem pq = s.prob;
-        for (int i = 0; i < pq.n_residuals(); ++i) pq.instruments[static_cast<std::size_t>(i)].market = (*q)[i];
         const Eigen::VectorXd xc = cal::calibrate(pq, s.x0).x;
         const double f_s = eng.residuals_vs(x, *q).squaredNorm(), f_c = eng.residuals_vs(xc, *q).squaredNorm();
         EXPECT_LE(f_s, f_c * (1.0 + 1e-6) + 1e-20)
@@ -208,10 +225,21 @@ TEST(ShapeLadder, EveryRungConvergesOnTheGateTicks) {
     api::BundleSession sess(s.prob);
     sess.calibrate(s.x0);
     sess.start_streaming();
-    const cal::HybridBundleResidual eng(s.prob);
     for (int rep = 0; rep < 3; ++rep)
-      for (const Eigen::VectorXd* q : {&s.q_big, &s.q0, &s.q_small, &s.q0, &s.q_cross, &s.q0}) {
-        const Eigen::VectorXd& x = sess.stream_update(*q);
+      for (const Eigen::VectorXd* qv : {&s.q_big, &s.q0, &s.q_small, &s.q0}) {
+        // K5': a banded shape's move carries its bands (a target is never outside its band); pq is that requote.
+        const Shape::Requote rq = s.requote(*qv);
+        const Eigen::VectorXd* q = &rq.target;
+        cal::BundleProblem pq = s.prob;
+        for (int i = 0; i < pq.n_residuals(); ++i) {
+          auto& in = pq.instruments[static_cast<std::size_t>(i)];
+          in.market = rq.target[i];
+          in.band_lower = rq.lower[i];
+          in.band_upper = rq.upper[i];
+          in.band_decay = rq.decay[i];
+        }
+        const cal::HybridBundleResidual eng(pq);
+        const Eigen::VectorXd& x = s.has_bands ? sess.stream_update(rq.target, rq.lower, rq.upper, rq.decay) : sess.stream_update(rq.target);
         EXPECT_TRUE(sess.last_converged()) << s.name << ": " << sess.last_reason() << " after " << sess.last_newton_steps() << " steps";
         EXPECT_TRUE(x.allFinite()) << s.name;
         const Eigen::VectorXd r = eng.residuals_vs(x, *q);
@@ -220,8 +248,6 @@ TEST(ShapeLadder, EveryRungConvergesOnTheGateTicks) {
           EXPECT_LT(r.cwiseAbs().maxCoeff(), 1e-8) << s.name;
         } else if (rep == 0) {
           // over-determined / banded: a least-squares fit -- the streamed objective is no worse than a cold LM's
-          cal::BundleProblem pq = s.prob;
-          for (int i = 0; i < pq.n_residuals(); ++i) pq.instruments[i].market = (*q)[i];
           const Eigen::VectorXd xc = cal::calibrate(pq, s.x0).x;
           const double f_s = eng.residuals_vs(x, *q).squaredNorm(), f_c = eng.residuals_vs(xc, *q).squaredNorm();
           EXPECT_LE(f_s, f_c * (1.0 + 1e-6) + 1e-20) << s.name << ": streamed objective " << f_s << " vs cold " << f_c;

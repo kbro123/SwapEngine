@@ -13,6 +13,8 @@
 
 #include <cmath>
 #include <limits>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -33,6 +35,24 @@ struct CalibrationTarget {
   bool is_soft_band() const { return band_upper > band_lower; }
   bool is_hard_pin() const { return !is_soft_band(); }
 };
+
+// A WIRE QUOTE's four numbers -> the hand-off (K5', 2026-09-14; the API compiler's quote). A real band (upper > lower) must
+// contain its target and carry a decay in [0, 1] (absent: 1, parity with server/compile.py); upper == lower is a HARD PIN and
+// must equal the target; an inverted band is refused. Every refusal is std::invalid_argument. The calibration layer re-checks
+// the same rule (validate_quote) -- this is the wire's own reading of a pin, which the engine's band fields cannot express.
+inline CalibrationTarget band_target(double target, double lower, double upper, std::optional<double> decay) {
+  if (!(upper >= lower))
+    throw std::invalid_argument("quote: inverted band (upper < lower) -- a band must contain its target");
+  if (upper == lower) {
+    if (target != upper) throw std::invalid_argument("quote: a hard pin (upper == lower) must equal its target");
+    return CalibrationTarget{target, 0.0, 0.0, 1.0};
+  }
+  const double d = decay.value_or(1.0);
+  if (target < lower || target > upper)
+    throw std::invalid_argument("quote: target outside its band [lower, upper] -- a band gives the solve freedom around its target");
+  if (!(d >= 0.0 && d <= 1.0)) throw std::invalid_argument("quote: band decay outside [0, 1]");
+  return CalibrationTarget{target, lower, upper, d};
+}
 
 // A market quote: a mid, optionally a two-sided bid/ask, and optional provenance (source + timestamp).
 // Build one with the named constructors Quote::mid(...) or Quote::bid_ask(...). The default band decay

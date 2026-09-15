@@ -230,6 +230,15 @@ class StreamingCalibrator {
   // zone) band is not tracked; it still works through the stall-triggered refresh.
   void collect_bands(const Problem& prob) {
     bands_.clear();
+    quote_lo_.assign(n_res_, 0.0);
+    quote_up_.assign(n_res_, 0.0);
+    band_eligible_.assign(n_res_, 0);
+    for (int i = 0; i < n_res_; ++i) {
+      const Instrument& ins = prob.instruments[i];
+      quote_lo_[i] = ins.band_lower;
+      quote_up_[i] = ins.band_upper;
+      band_eligible_[i] = ins.quote != QuoteKind::FxForward;
+    }
     for (int i = 0; i < n_res_; ++i) {
       const Instrument& ins = prob.instruments[i];
       if (ins.band_upper > ins.band_lower && ins.quote != QuoteKind::FxForward && ins.band_decay > 0.0)
@@ -247,6 +256,45 @@ class StreamingCalibrator {
   }
 
  public:
+  // FOUR-NUMBER REQUOTE (K5', 2026-09-14): move every row's band in place for the next update(). The engine this streamer
+  // prices on must already carry the new bands (BundleSession writes both). A tracked row whose band only MOVES, or changes a
+  // non-zero decay, keeps its frozen Jacobian row: the next tick's side reconciliation (track_bands) re-scales the row if its
+  // slope changed -- the rank-one operator update, no Jacobian. A pinned row whose band moved is released first (its edge is no
+  // longer where it was pinned). Returns false and changes NOTHING when the set of tracked rows would change (a band appears or
+  // disappears, or a decay crosses 0): the caller re-anchors (resync). Inputs are the caller's validated quotes.
+  bool set_bands(const Eigen::VectorXd& lower, const Eigen::VectorXd& upper, const Eigen::VectorXd& decay) {
+    if (lower.size() != n_res_ || upper.size() != n_res_ || decay.size() != n_res_)
+      throw std::invalid_argument("StreamingCalibrator::set_bands: lengths must equal the instrument count");
+    std::size_t k = 0;
+    for (int i = 0; i < n_res_; ++i) {
+      const bool banded = upper[i] > lower[i];
+      const bool tracked = banded && band_eligible_[i] && decay[i] > 0.0;
+      const bool was_tracked = k < bands_.size() && bands_[k].row == i;
+      if (tracked != was_tracked || banded != (quote_up_[i] > quote_lo_[i])) return false;
+      if (was_tracked) ++k;
+    }
+    k = 0;
+    for (int i = 0; i < n_res_; ++i) {
+      quote_lo_[i] = lower[i];
+      quote_up_[i] = upper[i];
+      if (k < bands_.size() && bands_[k].row == i) {
+        BandRow& b = bands_[k];
+        if (b.lower != lower[i] || b.upper != upper[i] || b.decay != decay[i]) {
+          b.lower = lower[i];
+          b.upper = upper[i];
+          b.decay = decay[i];
+          if (state_[k] != 0) {  // pinned on an edge that has moved: release (track_bands re-scales it off the pin weight)
+            state_[k] = 0;
+            --n_pinned_;
+          }
+          onedge_[k] = 0;
+        }
+        ++k;
+      }
+    }
+    return true;
+  }
+
   const Eigen::VectorXd& current() const { return x_cur_; }
   const Eigen::VectorXd& anchor_market() const { return q_anchor_; }
   const Eigen::MatrixXd& sensitivity() const { return M_; }
@@ -258,6 +306,10 @@ class StreamingCalibrator {
   StreamTick update(const Eigen::VectorXd& q_new) {
     if (q_new.size() != n_res_) throw std::invalid_argument("StreamingCalibrator::update: market length does not match the instrument count");
     if (!q_new.allFinite()) throw std::invalid_argument("StreamingCalibrator::update: market contains a non-finite quote");
+    // K5': a banded row's target must lie inside its band (validate_quote) -- refused before the tick touches any state.
+    for (int i = 0; i < n_res_; ++i)
+      if (quote_up_[i] > quote_lo_[i] && (q_new[i] < quote_lo_[i] || q_new[i] > quote_up_[i]))
+        validate_quote(q_new[i], quote_lo_[i], quote_up_[i], 1.0, "StreamingCalibrator::update", i);
     return update_exact(q_new);
   }
 
@@ -814,6 +866,8 @@ class StreamingCalibrator {
   std::vector<int> last_side_;  // last OUTSIDE side seen (+1 above / -1 below): which edge a flip crosses
   std::vector<int> releases_;   // pin releases by the KKT check this tick (budget 1: a re-pin is final)
   std::vector<char> onedge_;    // row was walked onto its edge by the breakpoint step (side = installed slope)
+  std::vector<double> quote_lo_, quote_up_;  // per row: the band every tick's target must lie in (upper <= lower: none)
+  std::vector<char> band_eligible_;          // per row: may carry a tracked band (FX forwards never do)
   int n_pinned_ = 0;
   Eigen::MatrixXd J_ref_, J_cur_;
   bool have_J_ = false;
@@ -836,5 +890,48 @@ class StreamingCalibrator {
   bool in_walk_ = false;     // inside update_exact (a factorisation here is not an anchor)
   int anchor_weak_ = 0;      // weak directions at the last anchor factorisation
 };
+
+// ---- K5' quote hand-off helpers (2026-09-15; PRINCIPLES.md P14: the session verbs call these, the behaviour lives here) -----------
+
+// Every banded row's TARGET against its band -- refused before anything changes. The bands themselves were validated when they were
+// set (validate_instrument / validate_quote), so only a target that left its band is re-checked (the cheap test first).
+inline void validate_targets(const std::vector<Instrument>& ins, const Eigen::VectorXd& target, const char* where) {
+  for (int i = 0; i < target.size(); ++i) {
+    const Instrument& in = ins[static_cast<std::size_t>(i)];
+    if (in.band_upper > in.band_lower && (target[i] < in.band_lower || target[i] > in.band_upper))
+      validate_quote(target[i], in.band_lower, in.band_upper, in.band_decay, where, i);
+  }
+}
+
+// A FOUR-NUMBER requote, validated whole before any of it lands: every row's (target, lower, upper, decay).
+inline void validate_quotes(const Eigen::VectorXd& target, const Eigen::VectorXd& lower, const Eigen::VectorXd& upper,
+                            const Eigen::VectorXd& decay, int n, const char* where) {
+  if (target.size() != n || lower.size() != n || upper.size() != n || decay.size() != n)
+    throw std::runtime_error(std::string(where) + ": target / lower / upper / decay lengths must equal the instrument count");
+  for (int i = 0; i < n; ++i) validate_quote(target[i], lower[i], upper[i], decay[i], where, i);
+}
+
+// Lands a VALIDATED requote's bands: on the instruments, on the compiled engine (set_quote, row by row, only where a band moved) and
+// on the streamer IN PLACE (set_bands). `has_band` is refreshed when any band moved. Returns true when the streamer must re-anchor
+// instead -- WHICH rows are banded changed (one Jacobian before the next tick).
+template <class Engine, class Streamer>
+bool requote_bands(std::vector<Instrument>& ins, Engine* engine, Streamer* stream, const Eigen::VectorXd& lower,
+                   const Eigen::VectorXd& upper, const Eigen::VectorXd& decay, bool& has_band) {
+  bool moved = false;
+  for (std::size_t i = 0; i < ins.size(); ++i) {
+    Instrument& in = ins[i];
+    const Eigen::Index r = static_cast<Eigen::Index>(i);
+    if (in.band_lower == lower[r] && in.band_upper == upper[r] && in.band_decay == decay[r]) continue;
+    moved = true;
+    in.band_lower = lower[r];
+    in.band_upper = upper[r];
+    in.band_decay = decay[r];
+    if (engine) engine->set_quote(static_cast<int>(i), in.market, lower[r], upper[r], decay[r]);  // the tick passes the targets
+  }
+  if (!moved) return false;
+  has_band = false;
+  for (const Instrument& in : ins) has_band = has_band || in.band_upper > in.band_lower;
+  return stream != nullptr && !stream->set_bands(lower, upper, decay);
+}
 
 }  // namespace swaps::calibration

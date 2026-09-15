@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdio>  // validate_quote's failure message
 // The calibration problem: free variables x = knot forwards, residual vector r(x) in RATE units.
 //
 // QuantLib-free and templated on Scalar (CLAUDE.md §1): the schedules are extracted from QuantLib
@@ -267,7 +268,37 @@ inline double zero_coupon_tau(const Instrument& ins) {
 // and the par rate divides by it). Called once at engine construction (HybridBundleResidual) and at the
 // session seam; `where` names the caller in the message. Only SHAPE is checked here -- curve-index ranges
 // need the bundle and are checked by validate_problem (bundle_problem.hpp).
+// A QUOTE is four numbers {target, lower, upper, decay} (owner, 2026-09-14). A band (upper > lower) exists only to give the solve
+// freedom around its target, so the target must lie INSIDE it: a target outside [lower, upper] leaves the band residual negative
+// (or positive) at the edge it lies beyond, where the squared residual turns concave -- the streamed and the cold solve can then
+// settle on different fits. Such a quote is REFUSED before any solve, as are an inverted band (upper < lower), a decay outside
+// [0, 1] on a real band, and a non-finite number. upper == lower is no band (the plain residual q - target). `where` / `row`
+// name the rejected quote; the message is built only on failure, because this runs on every streamed tick.
+inline void validate_quote(double target, double lower, double upper, double decay, const char* where, int row) {
+  // (An inverted band, upper < lower, fails the target test: no target lies in it. The branch below names it.)
+  if (std::isfinite(target) && std::isfinite(lower) && std::isfinite(upper) && std::isfinite(decay) &&
+      (upper == lower || (target >= lower && target <= upper && decay >= 0.0 && decay <= 1.0)))
+    return;
+  const auto num = [](double v) {
+    char buf[40];
+    std::snprintf(buf, sizeof buf, "%.12g", v);
+    return std::string(buf);
+  };
+  std::string what;
+  if (!std::isfinite(target) || !std::isfinite(lower) || !std::isfinite(upper) || !std::isfinite(decay))
+    what = "a non-finite quote (target, lower, upper, decay)";
+  else if (upper < lower)
+    what = "an inverted band: upper " + num(upper) + " < lower " + num(lower);
+  else if (target < lower || target > upper)
+    what = "target " + num(target) + " outside its band [" + num(lower) + ", " + num(upper) +
+           "] -- a band gives the solve freedom around its target, so the target must lie inside it";
+  else
+    what = "band decay " + num(decay) + " outside [0, 1]";
+  throw std::invalid_argument(std::string(where) + (row >= 0 ? " row " + std::to_string(row) : std::string()) + ": " + what);
+}
+
 inline void validate_instrument(const Instrument& ins, const std::string& where) {
+  validate_quote(ins.market, ins.band_lower, ins.band_upper, ins.band_decay, where.c_str(), -1);
   const auto fail = [&](const std::string& what) { throw std::invalid_argument(where + ": " + what); };
   const auto leg = [&](const FloatLeg& l, const char* name) {
     if (l.coupons.empty()) fail(std::string("the ") + name + " leg has no coupons");

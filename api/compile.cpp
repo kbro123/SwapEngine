@@ -154,14 +154,8 @@ QuoteBand quote_band(const json::object& ins) {
 void apply_band(cal::Instrument& obj, const json::object& ins, const std::string& unit) {
   const QuoteBand q = quote_band(ins);
   swaps::market::CalibrationTarget t{obj.market, 0.0, 0.0, 1.0};  // the already-set target, hard pin
-  if (q.lower && q.upper) {
-    const double lo = to_decimal(*q.lower, unit), hi = to_decimal(*q.upper, unit);
-    if (hi > lo) {
-      t.band_lower = lo;
-      t.band_upper = hi;
-      t.band_decay = q.decay ? *q.decay : 1.0;
-    }
-  }
+  // K5': the four numbers are checked by the library (a band must contain its target; a pin must equal it; no inverted band).
+  if (q.lower && q.upper) t = swaps::market::band_target(obj.market, to_decimal(*q.lower, unit), to_decimal(*q.upper, unit), q.decay);
   obj.set_target(t);
 }
 

@@ -58,9 +58,9 @@ TEST(ApiStatus, NonFiniteQuotesAreRefusedAtEverySeam) {
   s.start_streaming();
   EXPECT_THROW(s.stream_update(q), std::runtime_error);
   EXPECT_EQ((s.x() - x).cwiseAbs().maxCoeff(), 0.0);
-  // a session BUILT on a NaN quote cannot calibrate at all
-  api::BundleSession sbad(pbad);
-  EXPECT_THROW(sbad.calibrate(Eigen::VectorXd::Constant(6, 0.03)), std::invalid_argument);
+  // a session cannot even be BUILT on a non-finite quote (K5', 2026-09-14: validate_quote at construction; it used to build and
+  // refuse at calibrate)
+  EXPECT_THROW(api::BundleSession{pbad}, std::invalid_argument);
 }
 
 TEST(ApiStatus, AFailedStreamTickIsVisibleAndFallsBackLikeRecalibrate) {

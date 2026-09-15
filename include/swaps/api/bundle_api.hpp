@@ -349,6 +349,12 @@ class BundleSession {
   // knob for a live viewer — while still refreshing the Jacobian on staleness (so it stays robust).
   void start_streaming(const RegSpec& reg = {}, double step_tol = 0.0);
   const Eigen::VectorXd& stream_update(const Eigen::VectorXd& new_market);
+  // A FOUR-NUMBER requote tick (K5', 2026-09-14): every row's target AND band. Every quote is validated first (a target outside
+  // its band, an inverted band or a decay outside [0, 1] is refused and nothing changes); moved bands land on the shared engine
+  // and on the streamer in place -- a band that only moves is a row re-scale on the tick, not a Jacobian refresh. A change in
+  // WHICH rows are banded re-anchors the streamer (one Jacobian).
+  const Eigen::VectorXd& stream_update(const Eigen::VectorXd& target, const Eigen::VectorXd& lower,
+                                      const Eigen::VectorXd& upper, const Eigen::VectorXd& decay);
   // True once start_streaming() (or a resolve/recalibrate/rebind, which stream) has armed the session. A
   // fixings / evaluation-date change recompiles the engine and rebuilds the streamer lazily on the next
   // tick (anchored at the current x), so the flag stays true across it.

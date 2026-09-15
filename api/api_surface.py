@@ -120,7 +120,14 @@ METHODS = [
     {"name": "set_band", "cpp": None, "args": [("row", "INT"), ("lower", "SCALAR"), ("upper", "SCALAR"), ("decay", "SCALAR")],
      "ret": "VOID", "verb": None,
      "body": "sess_.set_band(row, lower, upper, decay);",
-     "doc": "Overwrite one instrument's soft band (no solve); upper <= lower removes it. Follow with resolve()."},
+     "doc": "Overwrite one instrument's soft band (no solve); upper == lower removes it. A band that excludes the target, an "
+            "inverted band or a decay outside [0, 1] is refused. Follow with resolve()."},
+    {"name": "update_quotes", "cpp": None, "args": [("target", "VEC"), ("lower", "VEC"), ("upper", "VEC"), ("decay", "VEC")],
+     "ret": "VEC", "verb": None,
+     "body": "return to_list(sess_.stream_update(to_vec(target), to_vec(lower), to_vec(upper), to_vec(decay)));",
+     "doc": "One streaming tick to a FULL requote -- every row's target, lower, upper and decay -> the new x. Every quote is "
+            "validated first (a target outside its band is refused, nothing changes); a band that only moves is a row "
+            "re-scale on the tick, not a Jacobian refresh."},
     {"name": "resolve", "cpp": None, "args": [("reg", "REG")], "ret": "VEC", "verb": None,
      "body": "sess_.resolve(reg_from(reg)); return to_list(sess_.x());",
      "doc": "Re-solve to the current quotes/bands: one frozen-Newton tick on the shared compiled engine seeded from x "

@@ -53,8 +53,9 @@
     "usd_eur_xccy_3c8k_aad_block_jacobian": "The AadBlock forward-AAD sweep of the same bundle in isolation, pooled duals (touched width 24 \u2264 kPooledMaxW=48). Reference row: the force-heap Dual fallback (the before/after of the DualPooled retype).",
     "usd_eur_xccy_3c8k_stream_tick": "One StreamingCalibrator tick on the same USD/EUR/xccy hybrid bundle.",
     "shape_<name>_stream_tick": "THE SHAPE LADDER (bench/fixtures/shape_ladder.hpp): one 0.1 bp streaming tick (frozen Jacobian) on the named instrument shape, real DB conventions and dates: ois_nolag (GBP SONIA), ois_lag (USD SOFR), ibor_multicurve (EUR ESTR + 6M EURIBOR spread), basis_spread (SOFR + FF ParSpread), averaged (+ monthly averaged FF futures), averaged_leg (FF OIS with daily-averaged float coupons), banded (+-1bp Huber bands), turns (year-end turn pin + bracketing future), portfolio (butterflies), zero_coupon (BRL DI x Pre), fx_xccy (SOFR + ESTR + EUR-in-USD FX forwards & MtM xccy; hybrid route), desk (all of it, 5 curves).",
-    "shape_<name>_refresh_25bp": "Same shape, a realistic 25 bp move each tick (rate rows +25 bp with a smooth maturity tilt, basis rows a tenth, FX forwards / butterflies / turn jumps unchanged): Jacobian refresh + factorisation on every tick. Until 2026-09-15 each row moved 25 bp x sin(0.7 i + 0.3).",
-    "shape_<name>_jacobian": "Same shape, one HybridBundleResidual::jacobian at x_true."
+    "shape_<name>_refresh_25bp": "Same shape, a 25 bp move each tick: Jacobian refresh + factorisation on every tick. On a banded shape the move is a FOUR-NUMBER requote -- every band moves with its target (K5', 2026-09-15: a target is never outside its band).",
+    "shape_<name>_jacobian": "Same shape, one HybridBundleResidual::jacobian at x_true.",
+    "shape_<name>_requote_tick": "Banded shapes only: a 0.1 bp FOUR-NUMBER requote tick -- every row's target AND band move together through BundleSession::stream_update(target, lower, upper, decay); the band move rides the streamer in place (a row re-scale), never a re-anchor. Replaced shape_<name>_edge_osc_tick (K5', 2026-09-15), which timed a banded target oscillating outside its band."
   },
   "machines": {
     "52e94be82bc4": {
@@ -232,7 +233,7 @@
       "load_avg_at_capture": 3.72,
       "reps": 5,
       "min_time_s": 0.5,
-      "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate). 2026-09-15 C2: every shape_*_refresh_25bp re-measured with --only (quiesced, min-of-reps) -- the ladder's 25 bp move became a realistic parallel-plus-tilt move (the sine-pattern move it replaced implied a negative 30y SOFR rate).",
+      "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate). 2026-09-15 C2: every shape_*_refresh_25bp re-measured with --only (quiesced, min-of-reps) -- the ladder's 25 bp move became a realistic parallel-plus-tilt move (the sine-pattern move it replaced implied a negative 30y SOFR rate). 2026-09-15 K5': shape_*_refresh_25bp (a 25 bp move now carries its bands on a banded shape) and the new shape_*_requote_tick re-measured with --only (quiesced, min-of-reps); shape_*_edge_osc_tick retired on every fingerprint (it timed a target outside its band, which the engine now refuses).",
       "metrics": {
         "shape_ois_nolag_stream_tick": {
           "ours_ns": 1229,
@@ -403,13 +404,7 @@
           "speedup": null
         },
         "shape_desk_mixed_refresh_25bp": {
-          "ours_ns": 11033390,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_desk_mixed_edge_osc_tick": {
-          "ours_ns": 411329,
+          "ours_ns": 9578395,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -427,19 +422,13 @@
           "speedup": null
         },
         "shape_banded_refresh_25bp": {
-          "ours_ns": 50391,
+          "ours_ns": 49090,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_jacobian": {
           "ours_ns": 4595,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_banded_edge_osc_tick": {
-          "ours_ns": 10687,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -451,19 +440,13 @@
           "speedup": null
         },
         "shape_turns_refresh_25bp": {
-          "ours_ns": 34405,
+          "ours_ns": 35092,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_jacobian": {
           "ours_ns": 5436,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_turns_edge_osc_tick": {
-          "ours_ns": 1693,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -529,19 +512,13 @@
           "speedup": null
         },
         "shape_desk_refresh_25bp": {
-          "ours_ns": 1554541,
+          "ours_ns": 1541003,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_jacobian": {
           "ours_ns": 178779,
-          "reference_ns": null,
-          "reference_bm": null,
-          "speedup": null
-        },
-        "shape_desk_edge_osc_tick": {
-          "ours_ns": 94468,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -680,6 +657,30 @@
         },
         "usd_eur_xccy_3c8k_stream_tick": {
           "ours_ns": 53038,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_banded_requote_tick": {
+          "ours_ns": 2358,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_turns_requote_tick": {
+          "ours_ns": 2015,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_requote_tick": {
+          "ours_ns": 34066,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_mixed_requote_tick": {
+          "ours_ns": 2010233,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null

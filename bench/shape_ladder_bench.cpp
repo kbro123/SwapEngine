@@ -1,6 +1,7 @@
 // shape_ladder_bench — the per-SHAPE perf-gate metrics (bench/fixtures/shape_ladder.hpp): for every instrument shape
 // the hot path accepts, the streaming tick (0.1 bp, frozen Jacobian), the refresh tick (25 bp move: Jacobian +
-// factorisation), and the hybrid engine's analytic Jacobian. A kernel change is gated on EVERY rung, simplest to
+// factorisation; on a banded shape a FOUR-NUMBER requote whose bands move with their targets, K5'), the requote tick (banded
+// shapes: every row's target AND band, 0.1 bp), and the hybrid engine's analytic Jacobian. A kernel change is gated on EVERY rung, simplest to
 // most complex, so an optimisation cannot be measured on annual OIS alone. Ours-only, QuantLib-free.
 #include <benchmark/benchmark.h>
 
@@ -35,33 +36,40 @@ void stream_tick(benchmark::State& state, const Shape& s) {
     if (!sess.last_converged()) throw std::runtime_error(s.name + " stream tick did not converge: " + sess.last_reason());
   }
 }
+// One tick to `r`: a banded shape moves every row's target and band (K5'), an unbanded one its targets.
+const Eigen::VectorXd& tick(api::BundleSession& sess, const Shape& s, const Shape::Requote& r) {
+  return s.has_bands ? sess.stream_update(r.target, r.lower, r.upper, r.decay) : sess.stream_update(r.target);
+}
 void refresh_tick(benchmark::State& state, const Shape& s) {  // a 25 bp move each way: every tick refreshes J
   api::BundleSession sess(s.prob);
   sess.calibrate(s.x0);
   sess.start_streaming();
+  const Shape::Requote big = s.requote(s.q_big), base = s.requote(s.q0);
   bool flip = false;
-  for (int i = 0; i < 2; ++i) { flip = !flip; sess.stream_update(flip ? s.q_big : s.q0); }
+  for (int i = 0; i < 2; ++i) { flip = !flip; tick(sess, s, flip ? big : base); }
   for (auto _ : state) {
     flip = !flip;
-    const Eigen::VectorXd& x = sess.stream_update(flip ? s.q_big : s.q0);
+    const Eigen::VectorXd& x = tick(sess, s, flip ? big : base);
     benchmark::DoNotOptimize(x.data());
     // A metric must never time a FAILING tick (the fx_xccy refresh was 17 us of non-finite ticks until 2026-09-10).
     if (!sess.last_converged()) throw std::runtime_error(s.name + " refresh tick did not converge: " + sess.last_reason());
   }
 }
-// The active-set stress (C2, 2026-09-10): the banded rows' market oscillates 0.05 bp either side of their
-// upper edge, so every tick the optimum sits ON a kink -- pins, multiplier checks and re-scales each tick.
-void edge_osc_tick(benchmark::State& state, const Shape& s) {
+// The FOUR-NUMBER requote tick (K5', owner 2026-09-14): every row's target AND band move 0.1 bp together each tick. The band
+// update rides the streamer in place (a row re-scale if a slope changes), never a re-anchor. Replaces EdgeOscTick, which timed
+// a banded target oscillating OUTSIDE its band -- a quote the engine now refuses.
+void requote_tick(benchmark::State& state, const Shape& s) {
   api::BundleSession sess(s.prob);
   sess.calibrate(s.x0);
   sess.start_streaming();
+  const Shape::Requote small = s.requote(s.q_small), base = s.requote(s.q0);
   bool flip = false;
-  for (int i = 0; i < 4; ++i) { flip = !flip; sess.stream_update(flip ? s.q_edge_hi : s.q_edge_lo); }
+  for (int i = 0; i < 4; ++i) { flip = !flip; tick(sess, s, flip ? small : base); }
   for (auto _ : state) {
     flip = !flip;
-    const Eigen::VectorXd& x = sess.stream_update(flip ? s.q_edge_hi : s.q_edge_lo);
+    const Eigen::VectorXd& x = tick(sess, s, flip ? small : base);
     benchmark::DoNotOptimize(x.data());
-    if (!sess.last_converged()) throw std::runtime_error(s.name + " edge tick did not converge: " + sess.last_reason());
+    if (!sess.last_converged()) throw std::runtime_error(s.name + " requote tick did not converge: " + sess.last_reason());
   }
 }
 void jacobian(benchmark::State& state, const Shape& s) {
@@ -79,7 +87,7 @@ int main(int argc, char** argv) {
     benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_RefreshTick25bp").c_str(), [&s](benchmark::State& st) { refresh_tick(st, s); });
     benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_Jacobian").c_str(), [&s](benchmark::State& st) { jacobian(st, s); });
     if (s.has_bands)
-      benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_EdgeOscTick").c_str(), [&s](benchmark::State& st) { edge_osc_tick(st, s); });
+      benchmark::RegisterBenchmark(("BM_Shape_" + s.name + "_RequoteTick").c_str(), [&s](benchmark::State& st) { requote_tick(st, s); });
   }
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();

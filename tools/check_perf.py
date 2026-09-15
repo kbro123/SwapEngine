@@ -77,7 +77,7 @@ METRICS = {
     "shape_mixed_scheme_refresh_25bp": ("shape_ladder_bench", "BM_Shape_mixed_scheme_RefreshTick25bp", None),
     "shape_desk_mixed_stream_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_StreamTick", None),
     "shape_desk_mixed_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_mixed_RefreshTick25bp", None),
-    "shape_desk_mixed_edge_osc_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_EdgeOscTick", None),
+    "shape_desk_mixed_requote_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_RequoteTick", None),
     # desk_mixed: the FULL-COVERAGE rung (desk's 5 curves, bands, turn, butterflies, FX/xccy) with the SOFR
     # long end on MonotoneCubic -- identical to `desk` in every other respect, so the pair isolates what a
     # value-dependent region costs on the shape a desk actually runs. No tick metrics (it cannot stream yet).
@@ -85,11 +85,11 @@ METRICS = {
     "shape_banded_stream_tick": ("shape_ladder_bench", "BM_Shape_banded_StreamTick", None),
     "shape_banded_refresh_25bp": ("shape_ladder_bench", "BM_Shape_banded_RefreshTick25bp", None),
     "shape_banded_jacobian": ("shape_ladder_bench", "BM_Shape_banded_Jacobian", None),
-    "shape_banded_edge_osc_tick": ("shape_ladder_bench", "BM_Shape_banded_EdgeOscTick", None),
+    "shape_banded_requote_tick": ("shape_ladder_bench", "BM_Shape_banded_RequoteTick", None),
     "shape_turns_stream_tick": ("shape_ladder_bench", "BM_Shape_turns_StreamTick", None),
     "shape_turns_refresh_25bp": ("shape_ladder_bench", "BM_Shape_turns_RefreshTick25bp", None),
     "shape_turns_jacobian": ("shape_ladder_bench", "BM_Shape_turns_Jacobian", None),
-    "shape_turns_edge_osc_tick": ("shape_ladder_bench", "BM_Shape_turns_EdgeOscTick", None),
+    "shape_turns_requote_tick": ("shape_ladder_bench", "BM_Shape_turns_RequoteTick", None),
     "shape_portfolio_stream_tick": ("shape_ladder_bench", "BM_Shape_portfolio_StreamTick", None),
     "shape_portfolio_refresh_25bp": ("shape_ladder_bench", "BM_Shape_portfolio_RefreshTick25bp", None),
     "shape_portfolio_jacobian": ("shape_ladder_bench", "BM_Shape_portfolio_Jacobian", None),
@@ -102,7 +102,7 @@ METRICS = {
     "shape_desk_stream_tick": ("shape_ladder_bench", "BM_Shape_desk_StreamTick", None),
     "shape_desk_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_RefreshTick25bp", None),
     "shape_desk_jacobian": ("shape_ladder_bench", "BM_Shape_desk_Jacobian", None),
-    "shape_desk_edge_osc_tick": ("shape_ladder_bench", "BM_Shape_desk_EdgeOscTick", None),
+    "shape_desk_requote_tick": ("shape_ladder_bench", "BM_Shape_desk_RequoteTick", None),
     # --- calibration kernels (single curve, 23x23; QuantLib GlobalBootstrap is the reference) ---
     "sofr_23k_square_cold_calibrate": ("curve_build_bench",   "BM_CurveBuild_Ours",              "BM_CurveBuild_QuantLib"),
     # THE MULTI-CURVE QuantLib reference (2026-09-10). Every other QuantLib timing reference here is a SINGLE

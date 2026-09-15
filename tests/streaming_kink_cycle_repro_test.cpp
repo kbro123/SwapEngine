@@ -6,11 +6,13 @@
 // reproduces it, so the tick burns max_refresh (6) and FAILS. Whether the tick lands on the cycle depends on WHEN the adaptive
 // stall refreshes, i.e. on StreamingCalibrator::breakeven_steps_, a construction-time WALL-CLOCK ratio: desk_mixed failed at a
 // break-even <= 6.5 and converged at >= 6.75, and measured ~7.1 on a quiet machine -- load pushed it under the line.
+// (2026-09-14, K5': the ladder's moves became four-number requotes -- bands move with their targets.)
 // This pins the break-even (Options::breakeven_steps) so the failure is deterministic, replays the ladder test's tick sequence on
 // the desk_mixed rung with the session's streamer recipe (hybrid engine, anchored at the mids, default Options), and requires
 // every tick to converge at any break-even and to the same state.
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 #include <Eigen/Core>
 #include <gtest/gtest.h>
@@ -60,15 +62,19 @@ const Eigen::VectorXd& calibrated() {
 
 StreamRun stream(double breakeven) {
   const swaps::shapes::Shape& s = desk_mixed();
-  const cal::HybridBundleResidual eng(s.prob);
+  cal::HybridBundleResidual eng(s.prob);  // non-const: a requote writes its bands
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
   opt.breakeven_steps = breakeven;
   cal::StreamingCalibrator<cal::BundleProblem> st(eng, s.prob, calibrated(), s.prob.market(), opt);
   StreamRun r;
   r.breakeven = st.breakeven_steps();
   for (int rep = 0; rep < 3; ++rep)
-    for (const Eigen::VectorXd* q : {&legacy_big(), &s.q0, &s.q_small, &s.q0, &s.q_cross, &s.q0}) {
-      const cal::StreamTick t = st.update(*q);
+    for (const Eigen::VectorXd* qv : {&legacy_big(), &s.q0, &s.q_small, &s.q0}) {
+      // K5': each move is a four-number requote -- the bands move with their targets, on the engine and the streamer.
+      const swaps::shapes::Shape::Requote rq = s.requote(*qv);
+      for (int i = 0; i < s.prob.n_residuals(); ++i) eng.set_quote(i, rq.target[i], rq.lower[i], rq.upper[i], rq.decay[i]);
+      if (!st.set_bands(rq.lower, rq.upper, rq.decay)) throw std::logic_error("a requote of the ladder never changes which rows are banded");
+      const cal::StreamTick t = st.update(rq.target);
       if (!t.converged) ++r.failed;
       r.max_refreshes = std::max(r.max_refreshes, t.refreshes);
     }

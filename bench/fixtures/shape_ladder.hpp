@@ -35,12 +35,27 @@ struct Shape {
   Eigen::VectorXd x0;       // a flat cold seed
   Eigen::VectorXd q0;       // the markets (prob.market())
   Eigen::VectorXd q_small;  // a ~0.1 bp tick (FX rows: relative)
-  Eigen::VectorXd q_cross;  // banded shapes: a 1.5 bp tick that crosses the band edge on odd rows; else == q_small
   Eigen::VectorXd q_big;    // a ~25 bp move (forces a Jacobian refresh)
-  // banded shapes: the odd banded rows' market alternating 0.05 bp ABOVE / BELOW their upper band edge (the
-  // active-set stress: the model quote sits on a kink every tick); else both == q0. has_bands says whether
-  // the pair means anything (the EdgeOscTick benchmark / metric exists only for banded rungs).
-  Eigen::VectorXd q_edge_hi, q_edge_lo;
+  // FOUR-NUMBER REQUOTE (K5', owner 2026-09-14). A quote is {target, lower, upper, decay} and a band only gives the solve freedom
+  // around its target -- a target is never outside its band. So on a banded shape a move carries its band: requote(q) is the
+  // tick for the target vector q, every banded row's band shifted by q - q0 (decay unchanged; unbanded rows stay unbanded).
+  // Banded shapes stream it through BundleSession::stream_update(target, lower, upper, decay). (The q_cross / q_edge_hi /
+  // q_edge_lo ticks put a banded target outside its band -- removed with the EdgeOscTick metric.)
+  struct Requote {
+    Eigen::VectorXd target, lower, upper, decay;
+  };
+  Requote requote(const Eigen::VectorXd& q) const {
+    const int m = prob.n_residuals();
+    Requote r{q, Eigen::VectorXd(m), Eigen::VectorXd(m), Eigen::VectorXd(m)};
+    for (int i = 0; i < m; ++i) {
+      const auto& ins = prob.instruments[static_cast<std::size_t>(i)];
+      const double d = ins.band_upper > ins.band_lower ? q[i] - q0[i] : 0.0;
+      r.lower[i] = ins.band_lower + d;
+      r.upper[i] = ins.band_upper + d;
+      r.decay[i] = ins.band_decay;
+    }
+    return r;
+  }
   bool has_bands = false;
   bool expect_compiled = true;  // every row is W-cacheable => the tick must be allocation-free (T4)
 };
@@ -173,8 +188,7 @@ inline double row_maturity(const cal::Instrument& ins) {
 inline void finish(Shape& s) {
   auto& p = s.prob;
   const int m = p.n_residuals();
-  s.q0.resize(m); s.q_small.resize(m); s.q_cross.resize(m); s.q_big.resize(m);
-  s.q_edge_hi.resize(m); s.q_edge_lo.resize(m);
+  s.q0.resize(m); s.q_small.resize(m); s.q_big.resize(m);
   s.has_bands = false;
   for (int i = 0; i < m; ++i) {
     const auto& ins = p.instruments[i];
@@ -193,9 +207,6 @@ inline void finish(Shape& s) {
     const bool basis = ins.quote == cal::QuoteKind::XccyMtmBasis || ins.quote == cal::QuoteKind::ParSpread;
     s.q_big[i] = (fx || spread_quote) ? ins.market : ins.market + (basis ? 2.5e-4 : 25e-4) * tilt;
     const bool banded = ins.band_upper > ins.band_lower;
-    s.q_cross[i] = (banded && (i % 2)) ? ins.market + 1.5e-4 : s.q_small[i];
-    s.q_edge_hi[i] = (banded && (i % 2)) ? ins.band_upper + 0.05e-4 : ins.market;
-    s.q_edge_lo[i] = (banded && (i % 2)) ? ins.band_upper - 0.05e-4 : ins.market;
     if (banded) s.has_bands = true;
   }
 }
@@ -326,7 +337,7 @@ inline Shape mixed_scheme() {
                       "(front rows W-cached, long rows on the AAD block)",
                       std::move(p), false);
 }
-inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row; q_cross crosses the upper edge on odd rows
+inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
   p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
   return detail::make("banded", "USD SOFR OIS, +-1bp bands decay 0.5 on every row", std::move(p), true,

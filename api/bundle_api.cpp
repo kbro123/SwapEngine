@@ -178,6 +178,7 @@ void BundleSession::set_market(const Eigen::VectorXd& market) {
   if (market.size() != prob_.n_residuals())
     throw std::runtime_error("set_market: market length does not match the instrument count");
   if (!market.allFinite()) throw std::runtime_error("set_market: market contains a non-finite quote");
+  cal::validate_targets(prob_.instruments, market, "set_market");  // K5': a target outside its band, before anything changes
   for (int i = 0; i < prob_.n_residuals(); ++i) prob_.instruments[i].market = market[i];
   if (engine_) engine_->set_market(market);  // scalar row data on the ONE compiled engine; no copy, no recompile
 }
@@ -187,6 +188,7 @@ void BundleSession::set_band(int row, double lower, double upper, double decay) 
   if (!std::isfinite(lower) || !std::isfinite(upper) || !std::isfinite(decay))
     throw std::runtime_error("set_band: non-finite band");
   cal::Instrument& ins = prob_.instruments[row];
+  cal::validate_quote(ins.market, lower, upper, decay, "set_band", row);  // K5': the band must contain the row's target
   ins.band_lower = lower;
   ins.band_upper = upper;
   ins.band_decay = decay;
@@ -221,6 +223,7 @@ const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p,
     const cal::Instrument& src = p.instruments[i];
     if (!std::isfinite(src.market) || !std::isfinite(src.band_lower) || !std::isfinite(src.band_upper) || !std::isfinite(src.band_decay))
       throw std::runtime_error("rebind: instrument " + std::to_string(i) + " carries a non-finite quote or band");
+    cal::validate_quote(src.market, src.band_lower, src.band_upper, src.band_decay, "rebind", i);  // K5'
   }
   bool bands_changed = false;
   for (int i = 0; i < prob_.n_residuals(); ++i) {  // the FULL quote RHS: target AND soft-quote band
@@ -598,6 +601,7 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
     throw std::runtime_error("stream_update: market length does not match the instrument count");
   if (!new_market.allFinite())
     throw std::runtime_error("stream_update: market contains a non-finite quote");
+  cal::validate_targets(prob_.instruments, new_market, "stream_update");  // K5': before a re-anchor could commit an out-of-band market
   if (bands_changed_) {  // a set_band since the last anchor: re-read the active-set table first
     stream_->resync(prob_, x_, new_market);
     bands_changed_ = false;
@@ -625,6 +629,14 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
     x_ = result_.x;
   }
   return x_;
+}
+
+const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& target, const Eigen::VectorXd& lower,
+                                                   const Eigen::VectorXd& upper, const Eigen::VectorXd& decay) {
+  cal::validate_quotes(target, lower, upper, decay, prob_.n_residuals(), "stream_update");  // refused whole: nothing changes
+  // In place when only band VALUES moved; a change in which rows are banded re-anchors (one Jacobian) before the tick.
+  bands_changed_ = cal::requote_bands(prob_.instruments, engine_.get(), stream_.get(), lower, upper, decay, has_band_) || bands_changed_;
+  return stream_update(target);
 }
 
 // =================================================================================================
