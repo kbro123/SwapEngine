@@ -308,6 +308,12 @@ class StreamingCalibrator {
   int refresh_count() const { return refresh_count_; }
   int prefetch_hits() const { return prefetch_hits_; }  // refreshes served from the background worker
   int rescale_count() const { return rescale_count_; }  // band-edge re-scales (cheap M refactors) so far
+  // GUARD COUNTERS (2026-09-15, G1): cumulative and allocation-free; the guard tests read deltas. factor_count is every factorisation
+  // of M (construction, an anchor or refresh, and rescale_row's degenerate-update fallback); pin_count / release_count are the band
+  // walk's kink pins and their KKT releases.
+  int factor_count() const { return factor_count_; }
+  int pin_count() const { return pin_count_; }
+  int release_count() const { return release_count_; }
   double breakeven_steps() const { return breakeven_steps_; }  // the adaptive stall's refresh-vs-step ratio
 
   StreamTick update(const Eigen::VectorXd& q_new) {
@@ -609,6 +615,7 @@ class StreamingCalibrator {
       const int edge_side = (side != 0) ? side : last_side_[k];
       state_[k] = edge_side > 0 ? +1 : -1;
       ++n_pinned_;
+      ++pin_count_;
       s_pin_[k] = 0.0;  // the multiplier slope is known only at convergence (verify_pins)
       rescale_row(k, kPinWeight);
       return;
@@ -692,6 +699,7 @@ class StreamingCalibrator {
         const double slope = (sj < b.decay) ? b.decay : 1.0;
         state_[k] = 0;
         --n_pinned_;
+        ++release_count_;
         ++releases_[k];  // one release per row per tick; a re-pin after it is final (termination)
         rescale_row(k, slope);
         changed = true;
@@ -780,6 +788,7 @@ class StreamingCalibrator {
   // operator drops them, and the commit rule (update_exact) re-converges at the shared threshold before the tick commits.
   double walk_threshold() const { return n_pinned_ > 0 ? kWalkRankThreshold / kPinWeight : kWalkRankThreshold; }
   void factor(const Eigen::MatrixXd& J) {
+    ++factor_count_;
     // ONE decomposition for the calibrator's life (C6, 2026-09-15): sized (rows, cols) at construction, so compute() on a same-shaped
     // matrix writes into storage it already owns -- the same Eigen operations on the same data as a fresh local, bit-identical.
     Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;
@@ -860,6 +869,7 @@ class StreamingCalibrator {
   int refresh_count_ = 0;
   int prefetch_hits_ = 0;
   int rescale_count_ = 0;
+  int factor_count_ = 0, pin_count_ = 0, release_count_ = 0;  // guard counters (factor_count() ...)
   // Band-edge tracking: the frozen anchor Jacobian, its current re-scaled copy, and per banded row the
   // slope at the anchor / now. have_J_ is false when M was adopted from the background worker.
   std::vector<BandRow> bands_;  // tracked banded rows (decay > 0; a decay-0 band is left to the stall refresh)
