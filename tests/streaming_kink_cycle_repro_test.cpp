@@ -36,6 +36,23 @@ const swaps::shapes::Shape& desk_mixed() {
   return s;
 }
 
+// The ladder's ORIGINAL 25 bp move (each row 25 bp x sin(0.7 i + 0.3), xccy basis rows a tenth, FX forwards unchanged): the tick
+// sequence FLK2 was found on. The fixture's q_big became a realistic parallel-plus-tilt move on 2026-09-15; the 2-cycle stays pinned
+// on the move that produced it.
+const Eigen::VectorXd& legacy_big() {
+  static const Eigen::VectorXd q = [] {
+    const swaps::shapes::Shape& s = desk_mixed();
+    Eigen::VectorXd v = s.q0;
+    for (int i = 0; i < v.size(); ++i) {
+      const auto k = s.prob.instruments[static_cast<std::size_t>(i)].quote;
+      if (k == cal::QuoteKind::FxForward) continue;
+      v[i] += (k == cal::QuoteKind::XccyMtmBasis ? 2.5e-4 : 25e-4) * std::sin(0.7 * i + 0.3);
+    }
+    return v;
+  }();
+  return q;
+}
+
 const Eigen::VectorXd& calibrated() {
   static const Eigen::VectorXd x = cal::calibrate(desk_mixed().prob, desk_mixed().x0).x;
   return x;
@@ -50,7 +67,7 @@ StreamRun stream(double breakeven) {
   StreamRun r;
   r.breakeven = st.breakeven_steps();
   for (int rep = 0; rep < 3; ++rep)
-    for (const Eigen::VectorXd* q : {&s.q_big, &s.q0, &s.q_small, &s.q0, &s.q_cross, &s.q0}) {
+    for (const Eigen::VectorXd* q : {&legacy_big(), &s.q0, &s.q_small, &s.q0, &s.q_cross, &s.q0}) {
       const cal::StreamTick t = st.update(*q);
       if (!t.converged) ++r.failed;
       r.max_refreshes = std::max(r.max_refreshes, t.refreshes);

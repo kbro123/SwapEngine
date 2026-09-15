@@ -299,8 +299,8 @@
       "note": "ratcheted DOWN 2026-09-12 after ad::kPooledMaxW 48 -> 64: desk_mixed's AAD block touches 55 knots and was falling off the pooled dual onto the heap, allocating per operation. 4.49 ms -> 1.98 ms; ratchets DOWN only"
     },
     "shape_desk_mixed_refresh_25bp": {
-      "target_ns": 10607000,
-      "note": "ratcheted DOWN 2026-09-12 after ad::kPooledMaxW 48 -> 64: desk_mixed's AAD block touches 55 knots and was falling off the pooled dual onto the heap, allocating per operation. 17.9 ms -> 8.16 ms; ratchets DOWN only"
+      "target_ns": 14343000,
+      "note": "RE-BASED 2026-09-15 (C2, owner decision): the ladder's 25 bp move became a realistic parallel-plus-tilt move -- a new workload, every rate row +22.5..27.5 bp together, 4-6 Jacobian refreshes per desk_mixed tick where the sine pattern cost 3-4. 11.03 ms x1.3; the previous 10.61 ms timed the sine-pattern market. ratchets DOWN only"
     },
     "shape_desk_mixed_edge_osc_tick": {
       "target_ns": 528000,

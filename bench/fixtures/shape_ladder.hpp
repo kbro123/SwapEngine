@@ -5,6 +5,7 @@
 // bench/shape_ladder_bench.cpp (per-shape perf-gate metrics). A kernel change is measured on every rung, so it
 // cannot be right on annual OIS and wrong (or slow) on averaged futures, bands, turns, portfolios, ZC or xccy.
 // QuantLib-free: markets are the model quotes at a known x_true (a stationary point), never hand-typed.
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -160,6 +161,15 @@ inline void set_markets(Shape& s) {
   for (int i = 0; i < p.n_residuals(); ++i)
     if (p.instruments[i].quote != cal::QuoteKind::FxForward) p.instruments[i].market += r[i];
 }
+// A row's maturity in curve time, for the realistic 25 bp move's maturity tilt: the last fixed payment of a leg-based quote, the
+// observation end of a future, the delivery of an FX forward; 0 for a quote without one (it is not moved).
+inline double row_maturity(const cal::Instrument& ins) {
+  switch (ins.quote) {
+    case cal::QuoteKind::FxForward: return ins.fx_time;
+    case cal::QuoteKind::Rate: return ins.obs.sub_end.empty() ? 0.0 : ins.obs.sub_end.back();
+    default: return ins.fixed.coupons.empty() ? 0.0 : ins.fixed.coupons.back().pay;
+  }
+}
 inline void finish(Shape& s) {
   auto& p = s.prob;
   const int m = p.n_residuals();
@@ -172,11 +182,16 @@ inline void finish(Shape& s) {
     const double bump = std::sin(0.7 * i + 0.3);
     s.q0[i] = ins.market;
     s.q_small[i] = fx ? ins.market * (1.0 + 1e-5 * bump) : ins.market + 1e-5 * bump;
-    // A ~25 bp PARALLEL rate move leaves an FX forward where it is (covered interest parity: both curves move
-    // together); scaling the forwards by 0.25 % on top contradicted the rate rows and drove the xccy basis
-    // curve to an absurd state whose next tick diverged (found 2026-09-10 -- the gate had been timing a
-    // FAILING fx_xccy refresh tick at 17 us). Basis rows move a tenth of the rate move.
-    s.q_big[i] = fx ? ins.market : (ins.quote == cal::QuoteKind::XccyMtmBasis ? ins.market + 2.5e-4 * bump : ins.market + 25e-4 * bump);
+    // A REALISTIC ~25 bp move (2026-09-15): +25 bp on the rate rows with a smooth maturity tilt (22.5 bp short -> 27.5 bp at
+    // 30y), a tenth of that on basis rows; an FX forward stays where it is (covered interest parity: both curves move together --
+    // scaling the forwards on top drove the xccy basis curve absurd, 2026-09-10); butterflies and turn jumps are spread quotes
+    // and stay. Until 2026-09-15 each row moved 25 bp x sin(0.7 i + 0.3): neighbouring swaps, basis swaps and butterflies
+    // contradicted each other, and the best fit put SOFR's 30y knot negative (tests/streaming_near_singular_repro_test.cpp keeps
+    // that pathological market as a stress, the FLK2 reproduction keeps it as its 2-cycle trigger).
+    const double tilt = 0.9 + 0.2 * std::min(row_maturity(ins), 30.0) / 30.0;
+    const bool spread_quote = ins.quote == cal::QuoteKind::Portfolio || ins.quote == cal::QuoteKind::TurnJump;
+    const bool basis = ins.quote == cal::QuoteKind::XccyMtmBasis || ins.quote == cal::QuoteKind::ParSpread;
+    s.q_big[i] = (fx || spread_quote) ? ins.market : ins.market + (basis ? 2.5e-4 : 25e-4) * tilt;
     const bool banded = ins.band_upper > ins.band_lower;
     s.q_cross[i] = (banded && (i % 2)) ? ins.market + 1.5e-4 : s.q_small[i];
     s.q_edge_hi[i] = (banded && (i % 2)) ? ins.band_upper + 0.05e-4 : ins.market;

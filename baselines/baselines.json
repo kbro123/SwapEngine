@@ -53,7 +53,7 @@
     "usd_eur_xccy_3c8k_aad_block_jacobian": "The AadBlock forward-AAD sweep of the same bundle in isolation, pooled duals (touched width 24 \u2264 kPooledMaxW=48). Reference row: the force-heap Dual fallback (the before/after of the DualPooled retype).",
     "usd_eur_xccy_3c8k_stream_tick": "One StreamingCalibrator tick on the same USD/EUR/xccy hybrid bundle.",
     "shape_<name>_stream_tick": "THE SHAPE LADDER (bench/fixtures/shape_ladder.hpp): one 0.1 bp streaming tick (frozen Jacobian) on the named instrument shape, real DB conventions and dates: ois_nolag (GBP SONIA), ois_lag (USD SOFR), ibor_multicurve (EUR ESTR + 6M EURIBOR spread), basis_spread (SOFR + FF ParSpread), averaged (+ monthly averaged FF futures), averaged_leg (FF OIS with daily-averaged float coupons), banded (+-1bp Huber bands), turns (year-end turn pin + bracketing future), portfolio (butterflies), zero_coupon (BRL DI x Pre), fx_xccy (SOFR + ESTR + EUR-in-USD FX forwards & MtM xccy; hybrid route), desk (all of it, 5 curves).",
-    "shape_<name>_refresh_25bp": "Same shape, a 25 bp move each tick: Jacobian refresh + factorisation on every tick.",
+    "shape_<name>_refresh_25bp": "Same shape, a realistic 25 bp move each tick (rate rows +25 bp with a smooth maturity tilt, basis rows a tenth, FX forwards / butterflies / turn jumps unchanged): Jacobian refresh + factorisation on every tick. Until 2026-09-15 each row moved 25 bp x sin(0.7 i + 0.3).",
     "shape_<name>_jacobian": "Same shape, one HybridBundleResidual::jacobian at x_true."
   },
   "machines": {
@@ -232,7 +232,7 @@
       "load_avg_at_capture": 3.72,
       "reps": 5,
       "min_time_s": 0.5,
-      "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate).",
+      "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate). 2026-09-15 C2: every shape_*_refresh_25bp re-measured with --only (quiesced, min-of-reps) -- the ladder's 25 bp move became a realistic parallel-plus-tilt move (the sine-pattern move it replaced implied a negative 30y SOFR rate).",
       "metrics": {
         "shape_ois_nolag_stream_tick": {
           "ours_ns": 1229,
@@ -241,7 +241,7 @@
           "speedup": null
         },
         "shape_ois_nolag_refresh_25bp": {
-          "ours_ns": 3491,
+          "ours_ns": 2659,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -259,7 +259,7 @@
           "speedup": null
         },
         "shape_ois_lag_refresh_25bp": {
-          "ours_ns": 4130,
+          "ours_ns": 3122,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -277,7 +277,7 @@
           "speedup": null
         },
         "shape_ibor_multicurve_refresh_25bp": {
-          "ours_ns": 51640,
+          "ours_ns": 7941,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -295,7 +295,7 @@
           "speedup": null
         },
         "shape_basis_spread_refresh_25bp": {
-          "ours_ns": 8207,
+          "ours_ns": 6218,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -313,7 +313,7 @@
           "speedup": null
         },
         "shape_averaged_refresh_25bp": {
-          "ours_ns": 76206,
+          "ours_ns": 11203,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -331,7 +331,7 @@
           "speedup": null
         },
         "shape_averaged_leg_refresh_25bp": {
-          "ours_ns": 1430178,
+          "ours_ns": 548837,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -349,7 +349,7 @@
           "speedup": null
         },
         "shape_averaged_leg_moment_refresh_25bp": {
-          "ours_ns": 102711,
+          "ours_ns": 102716,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -367,7 +367,7 @@
           "speedup": null
         },
         "shape_all_schemes_refresh_25bp": {
-          "ours_ns": 31165,
+          "ours_ns": 4870,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -391,7 +391,7 @@
           "speedup": null
         },
         "shape_mixed_scheme_refresh_25bp": {
-          "ours_ns": 442671,
+          "ours_ns": 298988,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -403,7 +403,7 @@
           "speedup": null
         },
         "shape_desk_mixed_refresh_25bp": {
-          "ours_ns": 8158864,
+          "ours_ns": 11033390,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -427,7 +427,7 @@
           "speedup": null
         },
         "shape_banded_refresh_25bp": {
-          "ours_ns": 50668,
+          "ours_ns": 50391,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -451,7 +451,7 @@
           "speedup": null
         },
         "shape_turns_refresh_25bp": {
-          "ours_ns": 39160,
+          "ours_ns": 34405,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -475,7 +475,7 @@
           "speedup": null
         },
         "shape_portfolio_refresh_25bp": {
-          "ours_ns": 39773,
+          "ours_ns": 32683,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -493,7 +493,7 @@
           "speedup": null
         },
         "shape_zero_coupon_refresh_25bp": {
-          "ours_ns": 1342,
+          "ours_ns": 1218,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -511,7 +511,7 @@
           "speedup": null
         },
         "shape_fx_xccy_refresh_25bp": {
-          "ours_ns": 40301,
+          "ours_ns": 30321,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -529,7 +529,7 @@
           "speedup": null
         },
         "shape_desk_refresh_25bp": {
-          "ours_ns": 1695250,
+          "ours_ns": 1554541,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
