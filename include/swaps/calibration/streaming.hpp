@@ -287,6 +287,9 @@ class StreamingCalibrator {
     double r0_inf = -1.0;  // the tick's first residual size: the divergence yardstick
     double dx_prev = -1.0;  // |dx| of the previous FULL step under the same operator (-1: none)
     have_last_step_ = false;  // kink 2-cycle detection: no previous full step yet this tick
+    full_rank_ = false;       // two-threshold operator: walk at the walk threshold, commit at the shared one
+    in_walk_ = true;
+    struct WalkEnd { bool& w; ~WalkEnd() { w = false; } } walk_end{in_walk_};
     for (;;) {
       // The residual is engine-defined against the live market q_new: model_rates - q_new for hard
       // instruments, the Huber band residual for soft (banded) ones. Driving THIS (not the raw reprice)
@@ -405,6 +408,18 @@ class StreamingCalibrator {
         // Newton step with the fresh J) removes that term -- two Jacobians per refresh_drift of drift.
         // Not with the background prefetch on: there tail latency is the contract, and the second inline
         // Jacobian would be exactly the spike the worker exists to hide.
+        if (truncated_ && !full_rank_) {
+          // TWO-THRESHOLD COMMIT RULE: this point is a fixed point of a TRUNCATED operator -- exact only in the directions it
+          // kept. Re-anchor here at the shared threshold and re-converge (the rest of the tick stays at full rank).
+          full_rank_ = true;
+          if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
+          t.refreshed = true;
+          ++t.refreshes;
+          frozen = 0;
+          dx_prev = -1.0;
+          have_last_step_ = false;
+          continue;
+        }
         if (drift_refreshed && !final_refresh_done && !bg_ && t.refreshes < opt_.max_refresh) {
           final_refresh_done = true;
           if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
@@ -699,19 +714,41 @@ class StreamingCalibrator {
   // a curve has knots but no level-pinning row: a tolerance-free LDLT of that singular normal matrix used
   // to send every tick to the refresh cap and walk the unpinned curve to negative forwards. The COD
   // zeroes the null directions instead, so an unpinned state never moves off its anchor.
+  // TWO-THRESHOLD OPERATOR (2026-09-15). A direction below the walk threshold -- kWalkRankThreshold x sigma_max, measured against the
+  // UNPINNED scale (a pinned row carries kPinWeight and would set sigma_max) -- is WEAK. An anchor factorisation (construction, resync, an
+  // external set_anchor, the commit re-anchor) records how many weak directions the committed state has: those are STRUCTURAL (a
+  // near-collinear pair of knots, an xccy bundle's weakly identified basis knots) and the walk keeps them. A factorisation met while
+  // walking with MORE weak directions than the anchor is transiently near-singular (desk_mixed's MonotoneCubic long end mid-walk): its
+  // operator drops them, and the commit rule (update_exact) re-converges at the shared threshold before the tick commits.
+  double walk_threshold() const { return n_pinned_ > 0 ? kWalkRankThreshold / kPinWeight : kWalkRankThreshold; }
   void factor(const Eigen::MatrixXd& J) {
     Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-    cod.setThreshold(kRankThreshold);
+    Eigen::MatrixXd S;
     if (RtR_.size()) {
-      Eigen::MatrixXd S(J.rows() + opt_.regularizer.rows(), J.cols());
+      S.resize(J.rows() + opt_.regularizer.rows(), J.cols());
       S << J, opt_.regularizer;
-      cod.compute(S);
+    }
+    const Eigen::MatrixXd& A = RtR_.size() ? S : J;
+    cod.setThreshold(kRankThreshold);
+    cod.compute(A);
+    const Eigen::Index full = cod.rank();
+    cod.setThreshold(walk_threshold());
+    const int weak = static_cast<int>(full - cod.rank());
+    cod.setThreshold(kRankThreshold);
+    truncated_ = false;
+    if (!in_walk_ || full_rank_) {
+      anchor_weak_ = weak;
+    } else if (weak > anchor_weak_) {
+      truncated_ = true;
+      cod.setThreshold(walk_threshold());
+      cod.compute(A);
+    }
+    if (RtR_.size()) {
       const Eigen::MatrixXd P = cod.pseudoInverse();  // n_knots x (n_res + n_reg)
       M_ = P.leftCols(J.rows());
       G_.noalias() = P * P.transpose();  // (JᵀJ + RᵀR)⁺ -- kept for the O(n·m) band re-scale updates
       B_.noalias() = G_ * RtR_;
     } else {
-      cod.compute(J);
       M_ = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
       G_.noalias() = M_ * M_.transpose();  // (JᵀJ)⁺ = J⁺ J⁺ᵀ
     }
@@ -791,6 +828,13 @@ class StreamingCalibrator {
   Eigen::VectorXd x_, r_, dx_;
   Eigen::VectorXd last_step_;     // the previous FULL step this tick (kink 2-cycle detection)
   bool have_last_step_ = false;
+  // Two-threshold operator (see factor): the walk drops weak directions the anchor did not have; a tick that converged on a
+  // truncated operator re-converges at the shared threshold before committing (update_exact).
+  static constexpr double kWalkRankThreshold = 1e-4;
+  bool full_rank_ = false;   // this tick has re-anchored at the shared threshold
+  bool truncated_ = false;   // the current operator dropped a weak direction
+  bool in_walk_ = false;     // inside update_exact (a factorisation here is not an anchor)
+  int anchor_weak_ = 0;      // weak directions at the last anchor factorisation
 };
 
 }  // namespace swaps::calibration

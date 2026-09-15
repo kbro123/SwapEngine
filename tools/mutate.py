@@ -24,6 +24,31 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-15 two-threshold streamer operator (anchor-relative): walk drops NEW weak directions, commit re-converges at full rank.
+    ('walk_threshold_is_the_shared_one', "include/swaps/calibration/streaming.hpp",
+     'return n_pinned_ > 0 ? kWalkRankThreshold / kPinWeight : kWalkRankThreshold; }\n',
+     'return kRankThreshold; }\n',
+     ["streaming_near_singular_repro_test.cpp"], "*", 'the walk threshold that stops a near-singular runaway is unpinned'),
+    ('walk_threshold_ignores_pin_scale', "include/swaps/calibration/streaming.hpp",
+     'return n_pinned_ > 0 ? kWalkRankThreshold / kPinWeight : kWalkRankThreshold; }\n',
+     'return kWalkRankThreshold; }\n',
+     ["streaming_near_singular_repro_test.cpp"], "*", "measuring the walk cut against a pinned row's 1e3 weight (a spurious full-rank re-anchor) is unpinned"),
+    ('commit_rule_skips_the_full_rank_reconvergence', "include/swaps/calibration/streaming.hpp",
+     '        if (truncated_ && !full_rank_) {\n',
+     '        if (false) {\n',
+     ["streaming_near_singular_repro_test.cpp"], "*", "committing a truncated operator's fixed point (silently wrong on a weak direction that appears mid-walk) is unpinned"),
+    ('truncated_operator_not_flagged', "include/swaps/calibration/streaming.hpp",
+     '      truncated_ = true;\n',
+     '      truncated_ = false;\n',
+     ["streaming_near_singular_repro_test.cpp"], "*", 'flagging a truncated operator for the commit rule is unpinned'),
+    ('structural_weak_directions_truncated', "include/swaps/calibration/streaming.hpp",
+     '    } else if (weak > anchor_weak_) {\n',
+     '    } else if (weak > 0) {\n',
+     ["streaming_near_singular_repro_test.cpp"], "*", "keeping the anchor's structural weak directions (the xccy stream tick's extra re-anchor) is unpinned"),
+    ('walk_never_marked', "include/swaps/calibration/streaming.hpp",
+     '    in_walk_ = true;\n',
+     '    in_walk_ = false;\n',
+     ["streaming_near_singular_repro_test.cpp"], "*", 'telling a walk factorisation from an anchor one is unpinned'),
     # 2026-09-14 FLK2: a full step reversing the previous one (a kink 2-cycle) is halved; the break-even can be pinned.
     ("kink_cycle_step_not_halved", "include/swaps/calibration/streaming.hpp",
      "            damp = 0.5;\n",
