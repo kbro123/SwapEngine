@@ -517,6 +517,9 @@ class StreamingCalibrator {
           // kept. Re-anchor here at the shared threshold and re-converge (the rest of the tick stays at full rank).
           full_rank_ = true;
           stamp(StreamStage::CommitReanchor);
+          // ...and it IS this tick's final refresh: a Jacobian at a converged point of this market, which is all the final refresh
+          // below guarantees. Taking both re-anchored twice one re-convergence apart (S3, 2026-09-15).
+          final_refresh_done = true;
           if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
           t.refreshed = true;
           ++t.refreshes;

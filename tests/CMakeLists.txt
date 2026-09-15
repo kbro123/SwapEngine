@@ -43,6 +43,7 @@ add_executable(swaps_tests
   streaming_refresh_alloc_repro_test.cpp
   streaming_walk_guard_test.cpp
   hotpath_census_test.cpp
+  streaming_commit_reanchor_repro_test.cpp
   jacobian_into_parity_test.cpp
   asset_swap_bus252_repro_test.cpp
   xccy_carr_example_repro_test.cpp

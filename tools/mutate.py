@@ -28,6 +28,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 # (name, header (repo-relative: include/..., tests/research/... or api/*.cpp), old, new, [api/*.cpp source, ..., test TU, ...],
 #  gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-15 step 4 / S3: the commit re-anchor is the tick's final refresh.
+    ("commit_reanchor_then_final_refresh", "include/swaps/calibration/streaming.hpp",
+     "          final_refresh_done = true;\n",
+     "",
+     ["streaming_commit_reanchor_repro_test.cpp"], "*", "a truncating drift tick re-anchoring twice is unpinned (S3)"),
     # 2026-09-15 census: every StreamStage is reached by its committed scenario.
     ("stage_not_stamped", "include/swaps/calibration/streaming.hpp",
      "        stamp(StreamStage::Release);\n",
