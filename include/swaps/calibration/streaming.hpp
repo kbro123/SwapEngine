@@ -84,7 +84,9 @@ struct StreamTick {
   int newton_steps = 0;    // total frozen Gauss-Newton steps taken this tick
   int refreshes = 0;       // analytic Jacobian recomputations this tick (0 on the pure fast path)
   int prefetched = 0;      // refreshes served from the BACKGROUND worker (no inline Jacobian this tick)
-  double drift = 0;        // ||q_new - q_ref||_inf: market move since J was last computed
+  double drift = 0;        // ||q_new - q_anchor||_inf: the market move since the anchor this tick started from -- reported
+                           // also when that move triggered the accuracy refresh (`refreshed`); until 2026-09-15 such a
+                           // tick zeroed it (C8)
   bool converged = false;  // ||dx||_inf < step_tol was reached (false: refresh cap hit; x NOT committed)
   int rescales = 0;        // band-edge crossings handled by re-scaling frozen J rows + re-factorising M
 };
@@ -327,7 +329,6 @@ class StreamingCalibrator {
     Eigen::VectorXd& x = x_;  // reused scratch: the frozen-Newton loop below allocates nothing
     if (drift_refresh_ && t.drift > opt_.refresh_drift) {  // accuracy refresh (see Options::refresh_drift)
       if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);
-      t.drift = 0.0;
     }
     int frozen = 0;
     const bool drift_refreshed = t.refreshes > 0;

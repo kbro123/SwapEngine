@@ -39,6 +39,7 @@ add_executable(swaps_tests
   streaming_kink_cycle_repro_test.cpp
   quote_band_contract_test.cpp
   streaming_near_singular_repro_test.cpp
+  streaming_drift_report_repro_test.cpp
   asset_swap_bus252_repro_test.cpp
   xccy_carr_example_repro_test.cpp
   fx_spot_time_repro_test.cpp

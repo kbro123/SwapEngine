@@ -24,6 +24,11 @@ FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
 # (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-15 C8: a tick reports the drift it refreshed on.
+    ("tick_drift_zeroed_after_refresh", "include/swaps/calibration/streaming.hpp",
+     "      if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);\n    }\n    int frozen = 0;\n",
+     "      if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);\n      t.drift = 0.0;\n    }\n    int frozen = 0;\n",
+     ["streaming_drift_report_repro_test.cpp"], "*", "reporting the drift of a tick that refreshed on it is unpinned (C8)"),
     # 2026-09-14 K5': a quote is {target, lower, upper, decay}; a target outside its band, an inverted band or a decay outside [0, 1]
     # is refused; a four-number requote moves the streamer's bands in place.
     ("quote_target_outside_band_accepted", "include/swaps/calibration/problem.hpp",
