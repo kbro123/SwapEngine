@@ -917,6 +917,15 @@ inline void validate_quotes(const Eigen::VectorXd& target, const Eigen::VectorXd
   for (int i = 0; i < n; ++i) validate_quote(target[i], lower[i], upper[i], decay[i], where, i);
 }
 
+// P3 (2026-09-15): lands a VALIDATED target vector on the session's quotes -- the instruments AND the shared compiled engine -- so
+// whatever reads the session's market after a tick (resolve, residual, quote_diagnostics, result().rms_residual) reads the market the
+// curve was solved to. The tick itself prices the q it is handed; this is the session's record of it.
+template <class Engine>
+void commit_targets(std::vector<Instrument>& ins, Engine* engine, const Eigen::VectorXd& target) {
+  for (std::size_t i = 0; i < ins.size(); ++i) ins[i].market = target[static_cast<Eigen::Index>(i)];
+  if (engine) engine->set_market(target);
+}
+
 // Lands a VALIDATED requote's bands: on the instruments, on the compiled engine (set_quote, row by row, only where a band moved) and
 // on the streamer IN PLACE (set_bands). `has_band` is refreshed when any band moved. Returns true when the streamer must re-anchor
 // instead -- WHICH rows are banded changed (one Jacobian before the next tick).

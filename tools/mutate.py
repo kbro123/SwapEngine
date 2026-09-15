@@ -10,11 +10,14 @@ tool exits 1 and names the survivors -- each survivor is a test that does not pi
 
   python3 tools/mutate.py [--jobs 4] [--only NAME[,NAME]] [--min-kill 0.9] [--keep]
 
-Only swaps_tests TUs (header-only, gtest) are used: compiling them standalone takes ~30-90 s each, so the
-whole set is a few minutes with --jobs 4. Add a mutation when you fix a bug that a test should have caught:
+Test TUs are compiled standalone (header-only, gtest): ~30-90 s each, so the whole set is a few minutes with
+--jobs 4. THE SESSION LAYER (2026-09-15, P3): a mutation whose TU list also names api/*.cpp sources rebuilds those
+sources against the mutant (an api/*.cpp mutated directly, or a header they instantiate) and links them AHEAD of the
+built build/api/libswaps_api.a -- the linker takes their symbols from the mutant and only untouched members from the
+archive -- so a BundleSession behaviour is mutation-gated like a kernel. Add a mutation when you fix a bug that a test should have caught:
 the harness is the executable form of "each test shown to fail on the reverted bug".
 """
-import argparse, concurrent.futures, os, shutil, subprocess, sys, tempfile, time
+import argparse, concurrent.futures, json, os, shlex, shutil, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GTEST_INC = "third_party/gtest/src/googletest/include"
@@ -22,8 +25,18 @@ GTEST_LIBS = ["third_party/gtest/build/lib/libgtest.a", "third_party/gtest/insta
 CXX = ["xcrun", "-sdk", "macosx", "clang++"] if sys.platform == "darwin" else ["c++"]
 FLAGS = ["-std=c++20", "-O2", "-DNDEBUG", "-fno-math-errno", "-w"]
 
-# (name, header (repo-relative: include/... or tests/research/...), old, new, [test TU, ...], gtest filter, what a survivor would mean)
+# (name, header (repo-relative: include/..., tests/research/... or api/*.cpp), old, new, [api/*.cpp source, ..., test TU, ...],
+#  gtest filter, what a survivor would mean)
 MUTATIONS = [
+    # 2026-09-15 P3: a streamed tick commits its targets to the session (the instruments and the shared engine).
+    ("session_tick_quotes_not_committed", "api/bundle_api.cpp",
+     "  cal::commit_targets(prob_.instruments, engine_.get(), new_market);\n",
+     "",
+     ["api/bundle_api.cpp", "session_stream_commit_repro_test.cpp"], "*", "a streamed tick leaving the session's quotes at the old market is unpinned (P3)"),
+    ("commit_targets_skips_engine", "include/swaps/calibration/streaming.hpp",
+     "  if (engine) engine->set_market(target);\n",
+     "",
+     ["api/bundle_api.cpp", "session_stream_commit_repro_test.cpp"], "*", "the shared engine keeping the old targets after a tick is unpinned (P3)"),
     # 2026-09-15 C6a: a refresh writes J in place and reuses one decomposition.
     ("refresh_jacobian_by_value", "include/swaps/calibration/streaming.hpp",
      "    engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)\n",
@@ -769,6 +782,19 @@ MUTATIONS = [
 ]
 
 
+def build_codegen_flags():
+    """The optimisation / architecture flags the build compiled libswaps_api with (build/compile_commands.json). An object
+    linked into that archive must agree on them: Eigen's heap alignment follows -march, and a mismatch corrupts the heap."""
+    try:
+        for e in json.load(open(os.path.join(ROOT, "build/compile_commands.json"))):
+            if e["file"].endswith("api/bundle_api.cpp"):
+                toks = e["arguments"] if "arguments" in e else shlex.split(e["command"])
+                return [t for t in toks if t.startswith(("-march=", "-mcpu=", "-O"))]
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
 def compile_and_run(name, header, old, new, tus, flt, keep_dir, jobs_note=""):
     """Returns (name, caught: bool|None, detail)."""
     work = os.path.join(keep_dir, name)
@@ -786,12 +812,29 @@ def compile_and_run(name, header, old, new, tus, flt, keep_dir, jobs_note=""):
     tst = os.path.join(work, "tests")
     fix = os.path.join(work, "bench", "fixtures")
     os.makedirs(inc, exist_ok=True); os.makedirs(tst, exist_ok=True); os.makedirs(fix, exist_ok=True)
-    for tu in tus:
+    incs = ["-I", inc, "-I", tst, "-I", fix, "-I", os.path.join(ROOT, "include"), "-I", os.path.join(ROOT, "third_party/eigen"),
+            "-I", os.path.join(ROOT, "third_party/boost"), "-I", os.path.join(ROOT, "build/generated"),
+            "-I", os.path.join(ROOT, "tests"), "-I", os.path.join(ROOT, "bench/fixtures"), "-I", os.path.join(ROOT, GTEST_INC)]
+    flags, link = FLAGS, []
+    lib_srcs = [t for t in tus if t.startswith("api/")]
+    if lib_srcs:  # the session layer: rebuild the named api sources against the mutant, link them ahead of the archive
+        archive = os.path.join(ROOT, "build/api/libswaps_api.a")
+        codegen = build_codegen_flags()
+        if not os.path.exists(archive) or codegen is None:
+            return name, None, "build/api/libswaps_api.a or build/compile_commands.json missing (build the engine first)"
+        flags = FLAGS + codegen
+        incs = incs + ["-I", os.path.join(ROOT, "api")]  # an api source's quoted includes, from its mirrored copy
+        for s in lib_srcs:
+            obj = os.path.join(work, os.path.basename(s).replace(".cpp", ".o"))
+            cc = subprocess.run(CXX + flags + incs + ["-c", mut if s == header else os.path.join(ROOT, s), "-o", obj],
+                                capture_output=True, text=True)
+            if cc.returncode != 0:
+                return name, None, f"{s} did not compile against the mutant:\n" + cc.stderr[-800:]
+            link.append(obj)
+        link.append(archive)
+    for tu in [t for t in tus if not t.startswith("api/")]:
         exe = os.path.join(work, tu.replace(".cpp", ""))
-        cmd = CXX + FLAGS + ["-I", inc, "-I", tst, "-I", fix, "-I", os.path.join(ROOT, "include"), "-I", os.path.join(ROOT, "third_party/eigen"),
-                             "-I", os.path.join(ROOT, "third_party/boost"), "-I", os.path.join(ROOT, "build/generated"),
-                             "-I", os.path.join(ROOT, "tests"), "-I", os.path.join(ROOT, "bench/fixtures"), "-I", os.path.join(ROOT, GTEST_INC),
-                             os.path.join(ROOT, "tests", tu)] + [os.path.join(ROOT, l) for l in GTEST_LIBS] + ["-o", exe]
+        cmd = CXX + flags + incs + [os.path.join(ROOT, "tests", tu)] + link + [os.path.join(ROOT, l) for l in GTEST_LIBS] + ["-o", exe]
         cc = subprocess.run(cmd, capture_output=True, text=True)
         if cc.returncode != 0:
             # a mutation that no longer compiles is a "caught at compile time" only if it is deliberate; report it

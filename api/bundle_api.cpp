@@ -602,6 +602,9 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
   if (!new_market.allFinite())
     throw std::runtime_error("stream_update: market contains a non-finite quote");
   cal::validate_targets(prob_.instruments, new_market, "stream_update");  // K5': before a re-anchor could commit an out-of-band market
+  // P3: the session's quotes ARE the market this tick solves to -- on the instruments and the shared engine, converged or not -- so
+  // resolve / residual / quote_diagnostics afterwards read it. Until 2026-09-15 only a FAILED tick committed (in its fallback).
+  cal::commit_targets(prob_.instruments, engine_.get(), new_market);
   if (bands_changed_) {  // a set_band since the last anchor: re-read the active-set table first
     stream_->resync(prob_, x_, new_market);
     bands_changed_ = false;
@@ -623,8 +626,7 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
     // result().converged reports the SOLVE (was the market incorporated). A fallback tick is false and true
     // respectively. A caller watching streaming health still sees every failure; a caller pricing off the
     // curve gets the new market either way.
-    set_market(new_market);         // commit the quotes the frozen path could not reach
-    calibrate(x_, stream_reg_);     // warm from the last good x, exactly as warm_solve does
+    calibrate(x_, stream_reg_);     // warm from the last good x (the quotes were committed before the tick), as warm_solve does
     stream_->resync(prob_, x_, new_market);
     x_ = result_.x;
   }
