@@ -211,8 +211,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 0.7 us x1.3; ratchets DOWN only"
     },
     "shape_fx_xccy_stream_tick": {
-      "target_ns": 157300,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 121.0 us x1.3; ratchets DOWN only"
+      "target_ns": 18200,
+      "note": "RATCHETED DOWN 2026-09-15 (step 3a): the 0.1 bp tick no longer swings the xccy 30Y knot; 14.0 us x1.3 (was 157.3 us)"
     },
     "shape_fx_xccy_refresh_25bp": {
       "target_ns": 62000,
@@ -223,8 +223,8 @@
       "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 354.2 us x1.3; ratchets DOWN only"
     },
     "shape_desk_stream_tick": {
-      "target_ns": 208700,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 160.5 us x1.3; ratchets DOWN only"
+      "target_ns": 29000,
+      "note": "RATCHETED DOWN 2026-09-15 (step 3a): the 0.1 bp tick no longer swings the xccy 30Y knot; 22.3 us x1.3 (was 208.7 us)"
     },
     "shape_desk_refresh_25bp": {
       "target_ns": 11641400,
@@ -283,8 +283,8 @@
       "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only"
     },
     "shape_desk_mixed_stream_tick": {
-      "target_ns": 2570000,
-      "note": "ratcheted DOWN 2026-09-12 after ad::kPooledMaxW 48 -> 64: desk_mixed's AAD block touches 55 knots and was falling off the pooled dual onto the heap, allocating per operation. 4.49 ms -> 1.98 ms; ratchets DOWN only"
+      "target_ns": 3270100,
+      "note": "RE-BASED 2026-09-15 (step 3a, owner decision 'fixture first'): q_small leaves FX forwards at their market; the honest tick flips a MonotoneCubic clamp (1.5 refreshes/tick at the measured break-even). 2.52 ms x1.3; was 2.57 ms. ratchets DOWN only"
     },
     "shape_desk_mixed_refresh_25bp": {
       "target_ns": 14343000,
@@ -299,12 +299,12 @@
       "note": "set 2026-09-15 (K5'): four-number requote tick, 2,015 ns x1.3; ratchets DOWN only"
     },
     "shape_desk_requote_tick": {
-      "target_ns": 44286,
-      "note": "set 2026-09-15 (K5'): four-number requote tick, 34,066 ns x1.3; ratchets DOWN only"
+      "target_ns": 30600,
+      "note": "RATCHETED DOWN 2026-09-15 (step 3a): the 0.1 bp tick no longer swings the xccy 30Y knot; 23.5 us x1.3 (was 44.3 us)"
     },
     "shape_desk_mixed_requote_tick": {
-      "target_ns": 2613303,
-      "note": "set 2026-09-15 (K5'): four-number requote tick, 2,010,233 ns x1.3; ratchets DOWN only"
+      "target_ns": 3274900,
+      "note": "RE-BASED 2026-09-15 (step 3a, owner decision 'fixture first'): q_small leaves FX forwards at their market; the honest tick flips a MonotoneCubic clamp (1.5 refreshes/tick at the measured break-even). 2.52 ms x1.3; was 2.61 ms. ratchets DOWN only"
     }
   }
 }

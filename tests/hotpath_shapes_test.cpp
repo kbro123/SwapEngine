@@ -139,7 +139,9 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   desk_mixed's 18. That is the next thing to attack here, in the same family as C7/C6 — and like every
     //   pin in this list it may only DECREASE.
     static const Pin pins[] = {{"averaged_leg", 360}, {"banded", 0}, {"fx_xccy", 0}, {"desk", 0}, {"mixed_scheme", 560},
-                               {"desk_mixed", 3700}};
+                               {"desk_mixed", 4300}};
+    //   desk_mixed 3700 -> 4300 on 2026-09-15 (step 3a): q_small no longer swings the xccy 30Y knot, and the honest tick flips a
+    //   MonotoneCubic clamp -- 3920 over 20 ticks at the session's MEASURED break-even (1.5 refreshes per tick), ~10 % slack as before.
     //   The band-walk CROSSING pins that followed here went with K5' (a target can no longer leave its band, so the crossing ticks
     //   they timed are refused). The walk is pinned on the streamer itself since 2026-09-15 -- allocations, factorisations, pins and
     //   releases, break-even pinned -- in streaming_walk_guard_test.cpp (G1), where tools/mutate.py reaches it.

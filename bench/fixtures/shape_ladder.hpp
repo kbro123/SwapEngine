@@ -34,7 +34,7 @@ struct Shape {
   Eigen::VectorXd x_true;   // the state the markets were generated at (residual == 0 there)
   Eigen::VectorXd x0;       // a flat cold seed
   Eigen::VectorXd q0;       // the markets (prob.market())
-  Eigen::VectorXd q_small;  // a ~0.1 bp tick (FX rows: relative)
+  Eigen::VectorXd q_small;  // a ~0.1 bp tick on every rate row (FX forwards unchanged: covered interest parity, as q_big)
   Eigen::VectorXd q_big;    // a ~25 bp move (refreshes on non-square / banded rungs; a square rung converges on frozen steps, G2a)
   // FOUR-NUMBER REQUOTE (K5', owner 2026-09-14). A quote is {target, lower, upper, decay} and a band only gives the solve freedom
   // around its target -- a target is never outside its band. So on a banded shape a move carries its band: requote(q) is the
@@ -195,7 +195,11 @@ inline void finish(Shape& s) {
     const bool fx = ins.quote == cal::QuoteKind::FxForward;
     const double bump = std::sin(0.7 * i + 0.3);
     s.q0[i] = ins.market;
-    s.q_small[i] = fx ? ins.market * (1.0 + 1e-5 * bump) : ins.market + 1e-5 * bump;
+    // THE SMALL TICK (2026-09-15, step 3a): every rate row moves 1e-5 x sin(0.7 i + 0.3) -- per-row noise, like a live feed -- and an FX
+    // forward stays at its market (covered interest parity: its curves' moves are the tick). Until 2026-09-15 an FX forward moved
+    // RELATIVELY by 1e-5 x sin, which on a 1W forward is a ~5 bp move of the rate differential, alternating in sign across the 1W..1Y
+    // tenors: the EUR-in-USD 30Y knot swung 4.69e-3 per '0.1 bp' tick on desk and desk_mixed (scratchpad/dm/STEP3-findings.md).
+    s.q_small[i] = fx ? ins.market : ins.market + 1e-5 * bump;
     // A REALISTIC ~25 bp move (2026-09-15): +25 bp on the rate rows with a smooth maturity tilt (22.5 bp short -> 27.5 bp at
     // 30y), a tenth of that on basis rows; an FX forward stays where it is (covered interest parity: both curves move together --
     // scaling the forwards on top drove the xccy basis curve absurd, 2026-09-10); butterflies and turn jumps are spread quotes

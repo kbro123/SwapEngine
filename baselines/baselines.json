@@ -233,7 +233,7 @@
       "load_avg_at_capture": 3.72,
       "reps": 5,
       "min_time_s": 0.5,
-      "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate). 2026-09-15 C2: every shape_*_refresh_25bp re-measured with --only (quiesced, min-of-reps) -- the ladder's 25 bp move became a realistic parallel-plus-tilt move (the sine-pattern move it replaced implied a negative 30y SOFR rate). 2026-09-15 K5': shape_*_refresh_25bp (a 25 bp move now carries its bands on a banded shape) and the new shape_*_requote_tick re-measured with --only (quiesced, min-of-reps); shape_*_edge_osc_tick retired on every fingerprint (it timed a target outside its band, which the engine now refuses).",
+      "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate). 2026-09-15 C2: every shape_*_refresh_25bp re-measured with --only (quiesced, min-of-reps) -- the ladder's 25 bp move became a realistic parallel-plus-tilt move (the sine-pattern move it replaced implied a negative 30y SOFR rate). 2026-09-15 K5': shape_*_refresh_25bp (a 25 bp move now carries its bands on a banded shape) and the new shape_*_requote_tick re-measured with --only (quiesced, min-of-reps); shape_*_edge_osc_tick retired on every fingerprint (it timed a target outside its band, which the engine now refuses). 2026-09-15 step 3a: fx_xccy / desk / desk_mixed stream and requote ticks re-measured with --only (quiesced) -- q_small leaves FX forwards at their market.",
       "metrics": {
         "shape_ois_nolag_stream_tick": {
           "ours_ns": 1229,
@@ -398,7 +398,7 @@
           "speedup": null
         },
         "shape_desk_mixed_stream_tick": {
-          "ours_ns": 1977141,
+          "ours_ns": 2515455,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -488,7 +488,7 @@
           "speedup": null
         },
         "shape_fx_xccy_stream_tick": {
-          "ours_ns": 23633,
+          "ours_ns": 13971,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -506,7 +506,7 @@
           "speedup": null
         },
         "shape_desk_stream_tick": {
-          "ours_ns": 32640,
+          "ours_ns": 22282,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -674,13 +674,13 @@
           "speedup": null
         },
         "shape_desk_requote_tick": {
-          "ours_ns": 34066,
+          "ours_ns": 23536,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_mixed_requote_tick": {
-          "ours_ns": 2010233,
+          "ours_ns": 2519143,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
