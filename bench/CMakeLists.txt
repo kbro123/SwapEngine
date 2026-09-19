@@ -160,3 +160,8 @@ target_include_directories(exp_pwl_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fix
 add_executable(exp_session_repro exp_session_repro.cpp)
 target_link_libraries(exp_session_repro PRIVATE swaps swaps_api)
 target_include_directories(exp_session_repro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+
+# EXPERIMENT (exp/piecewise-linear-w): the desk_mixed convergence-gap diagnostic.
+add_executable(exp_gap exp_gap.cpp)
+target_link_libraries(exp_gap PRIVATE swaps swaps_api)
+target_include_directories(exp_gap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
