@@ -132,7 +132,28 @@ class CompiledBundleResidual {
     cs_.set_eval_state(x);
     cs_.finalize();
     build_wt();
-    df_x_.resize(0);  // the memo keyed on x alone is stale: the same x now maps through a new W
+    df_stale_ = true;  // the memo keyed on x alone is stale: the same x now maps through a new W
+  }
+  // EXPERIMENT (analytic re-take): prepare the rank-k structure for curve c (-1 = unsupported), and apply
+  // one update -- W, its ancestry blocks (CompiledCurveSet), W^T and the per-time spans. Allocation-free.
+  int pwl_prepare(int c) { return cs_.pwl_prepare(c); }
+  void pwl_rank_update(int pc, const std::vector<int>& nodes, const Eigen::Ref<const Eigen::MatrixXd>& dM) {
+    cs_.pwl_rank_update(pc, nodes, dM);
+    mirror_delta(pc);
+  }
+  void pwl_set(int pc, const Eigen::Ref<const Eigen::MatrixXd>& M) {
+    cs_.pwl_set(pc, M);
+    mirror_delta(pc);
+  }
+  void mirror_delta(int pc) {  // the last CompiledCurveSet delta into W^T and the spans
+    const auto& P = cs_.pwl_curve(pc);
+    for (int r = 0; r < static_cast<int>(P.rows.size()); ++r) {
+      const int g = P.rows[r].g;
+      Wt_.col(g).segment(P.off, P.ni) += P.D.row(r).transpose();
+      wlo_[g] = std::min(wlo_[g], P.off);  // a zero entry may have become nonzero: widen (a superset is exact)
+      whi_[g] = std::max(whi_[g], P.off + P.ni);
+    }
+    df_stale_ = true;
   }
   const pricing::CompiledCurveSet& curve_set() const { return cs_; }
 
@@ -412,7 +433,8 @@ class CompiledBundleResidual {
   }
 
   const Eigen::VectorXd& df_at(const Eigen::VectorXd& x) const {
-    if (x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {
+    if (df_stale_ || x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {
+      df_stale_ = false;
       cs_.df_into(x, df_);  // allocation-free recompute into the df_ scratch
       inv_ = df_.cwiseInverse();  // the shared reciprocals: n_times divides ONCE, none per coupon
       df_x_ = x;
@@ -566,6 +588,7 @@ class CompiledBundleResidual {
   // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.
   mutable Eigen::VectorXd df_, df_x_, inv_;
+  mutable bool df_stale_ = false;  // EXPERIMENT: W changed under an unchanged x (pwl re-take)
   bool has_moment_ = false;                    // any batch carries moment-path coupons (set_state + direct terms)
   mutable Eigen::VectorXd row_scale_, ann_keep_, num_keep_;  // jacobian_vs scratch for the moment direct terms
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)

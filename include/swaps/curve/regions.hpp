@@ -478,6 +478,11 @@ class MonotoneCubic {
     // Hyman monotonicity filter (bit-for-bit QuantLib): clamp each tangent so no segment overshoots.
     // The `!= ` comparisons + min/max/sign are exactly the value-dependent branches that break linearity.
     hyman_filter(h, S, m, pattern_);
+    // EXPERIMENT (analytic re-take): replace the filtered tangents by caller-supplied scalars. Seeded as
+    // INDEPENDENT duals, one AAD pass then splits d integral(t) into [dx | dm] = [L_t | B_t] -- the curve is
+    // linear in (x, m) jointly once m is freed from the filter. Values are irrelevant to those derivatives.
+    if (m_override_)
+      for (int j = 0; j < N; ++j) m[j] = m_override_[j];
 
     // Per-segment cubic f(u) = a + b u + c u^2 + d u^3, u = t - xs_[i]  (identical form to Hermite).
     a_.resize(nseg); b_.resize(nseg); c_.resize(nseg); d_.resize(nseg);
@@ -568,7 +573,6 @@ class MonotoneCubic {
     const auto cabs = [](const T& v, int id) { return C{abs(v), static_cast<unsigned char>(2 * id + (v < 0.0 ? 1 : 0))}; };
     const auto cmin = [](const C& a, const C& b) { return b.v < a.v ? b : a; };
     const auto cmax = [](const C& a, const C& b) { return a.v < b.v ? b : a; };
-    enum : int { kS0 = 1, kS1 = 2, kPm3 = 3, kPm15 = 4, kPd = 5, kPu = 6, kEnd = 7 };
     pattern.clear();
     const int N = static_cast<int>(m.size());
     for (int i = 0; i < N; ++i) {
@@ -629,6 +633,47 @@ class MonotoneCubic {
   const std::vector<Scalar>& prefilter() const { return pre_; }
   // The branch pattern for inputs z (a slice of G·x), WITHOUT rebuilding: the same recorder on doubles.
   // Requires one prior build (h_ is the node spacing, fixed by the knots and the join time).
+  // EXPERIMENT (analytic re-take).
+  void set_tangent_override(const Scalar* m) { m_override_ = m; }  // nullptr restores the filter
+  int n_nodes() const { return static_cast<int>(xs_.size()); }       // tangents N (valid after a build)
+  const std::vector<double>& node_spacing() const { return h_; }
+  // DECODE a node's canonical code into its formula over the filter inputs z = [S (N-1); m_raw (N)]:
+  // m_j = phi · z, written into phi[0 .. 2N-2]. The exact inverse of the encoding in hyman_filter:
+  //   kind 0 -> 0;  kind 1 -> m_raw_j;  kind 2/3 -> sign(m) * factor * sign(cand) * cand,
+  // with cand one of S[i-1], S[i], pm, pd, pu (interior) or S_end (ends), factor 3 or 1.5.
+  static void tangent_formula(unsigned char kind, unsigned char code, int i, const std::vector<double>& h, int N,
+                              double* phi) {
+    const int nz = 2 * N - 1, nS = N - 1;
+    for (int k = 0; k < nz; ++k) phi[k] = 0.0;
+    if (kind == 0) return;
+    if (kind == 1) { phi[nS + i] = 1.0; return; }
+    const double f = (kind == 3 ? -1.0 : 1.0) * ((code & 1) ? -1.0 : 1.0);
+    const auto pm = [&](double c) {
+      const double w = h[i - 1] + h[i];
+      phi[i - 1] += c * h[i] / w;
+      phi[i] += c * h[i - 1] / w;
+    };
+    switch (code >> 1) {
+      case kS0: phi[i - 1] += 3.0 * f; break;
+      case kS1: phi[i] += 3.0 * f; break;
+      case kPm3: pm(3.0 * f); break;
+      case kPm15: pm(1.5 * f); break;
+      case kPd: {
+        const double w = h[i - 2] + h[i - 1];
+        phi[i - 1] += 1.5 * f * (2.0 * h[i - 1] + h[i - 2]) / w;
+        phi[i - 2] -= 1.5 * f * h[i - 1] / w;
+        break;
+      }
+      case kPu: {
+        const double w = h[i] + h[i + 1];
+        phi[i] += 1.5 * f * (2.0 * h[i] + h[i + 1]) / w;
+        phi[i + 1] -= 1.5 * f * h[i] / w;
+        break;
+      }
+      case kEnd: phi[i == 0 ? 0 : N - 2] += 3.0 * f; break;
+      default: break;
+    }
+  }
   void pattern_from_prefilter(const double* z, std::vector<unsigned char>& out) const {
     const int nseg = static_cast<int>(h_.size());
     std::vector<double>& S = scratch_S_;
@@ -639,6 +684,9 @@ class MonotoneCubic {
   }
 
  private:
+  // Canonical candidate ids of the filter's clamp formula (encoder: hyman_filter; decoder: tangent_formula).
+  enum : int { kS0 = 1, kS1 = 2, kPm3 = 3, kPm15 = 4, kPd = 5, kPu = 6, kEnd = 7 };
+  const Scalar* m_override_ = nullptr;
   std::vector<unsigned char> pattern_;
   std::vector<double> h_;
   std::vector<Scalar> pre_;

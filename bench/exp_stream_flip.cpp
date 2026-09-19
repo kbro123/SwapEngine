@@ -59,14 +59,20 @@ std::vector<Eigen::VectorXd> make_path(const Shape& s, const Scenario& sc, int t
 
 struct Result {
   double us_per_tick = 0, worst_us = 0;
-  int converged = 0, refreshes = 0, steps = 0, rebuilds = 0, distinct = 0;
+  int converged = 0, refreshes = 0, steps = 0, rebuilds = 0, distinct = 0, analytic = 0;
+  double w_err = 0;  // max |r_pwl(x) - r_shipped(x)| over every committed x: validates the rank-k W
   std::vector<Eigen::VectorXd> xs;
   std::vector<char> conv;
 };
 
-Result stream(const Shape& s, bool pwl, const std::vector<Eigen::VectorXd>& path) {
-  std::vector<cal::Instrument> ins = s.prob.instruments;
+Result stream(const Shape& s, bool pwl, const std::vector<Eigen::VectorXd>& path, bool check = false) {
+  std::vector<cal::Instrument> ins = s.prob.instruments, ins_j = s.prob.instruments;
   cal::HybridBundleResidual eng(s.prob, pwl);
+  // The W check's judge: a SHIPPED engine that receives the SAME band requotes (a banded row's residual reads
+  // its band, so a judge with stale bands would disagree on every banded row regardless of W).
+  cal::HybridBundleResidual judge_eng(s.prob, false);
+  const cal::HybridBundleResidual* judge = check ? &judge_eng : nullptr;
+  bool has_band_j = s.has_bands;
   using SC = cal::StreamingCalibrator<cal::BundleProblem>;
   SC sc(eng, s.prob, s.x_true, s.q0, SC::Options{});
   bool has_band = s.has_bands;
@@ -78,6 +84,8 @@ Result stream(const Shape& s, bool pwl, const std::vector<Eigen::VectorXd>& path
       const auto rq = s.requote(q);
       if (cal::requote_bands(ins, &eng, &sc, rq.lower, rq.upper, rq.decay, has_band))
         std::fprintf(stderr, "  (re-anchor requested -- not expected on a band shift)\n");
+      if (check)
+        cal::requote_bands(ins_j, &judge_eng, static_cast<SC*>(nullptr), rq.lower, rq.upper, rq.decay, has_band_j);
     }
     const auto t0 = Clock::now();
     const cal::StreamTick tk = sc.update(q);
@@ -88,11 +96,14 @@ Result stream(const Shape& s, bool pwl, const std::vector<Eigen::VectorXd>& path
     r.refreshes += tk.refreshes;
     r.steps += tk.newton_steps;
     r.xs.push_back(sc.current());
+    if (judge)  // OUTSIDE the timed region: the engine's residual at its own x vs the shipped engine's
+      r.w_err = std::max(r.w_err, (eng.residuals_vs(sc.current(), q) - judge->residuals_vs(sc.current(), q)).cwiseAbs().maxCoeff());
     r.conv.push_back(tk.converged ? 1 : 0);
   }
   r.us_per_tick = total / static_cast<double>(path.size());
   r.rebuilds = eng.pwl_rebuilds() - rb0;
   r.distinct = eng.pwl_distinct();
+  r.analytic = eng.pwl_analytic();
   return r;
 }
 
@@ -144,7 +155,7 @@ int main() {
     const cal::HybridBundleResidual judge(s.prob, false);  // the SHIPPED residual, used to grade both engines' x
     for (const auto& sc : scenarios) {
       const auto path = make_path(s, sc, ticks, 12345);
-      const Result b = stream(s, false, path), p = stream(s, true, path);
+      const Result b = stream(s, false, path), p = stream(s, true, path, /*check=*/true);
       // |dx| only over ticks where BOTH converged (an unconverged tick keeps the old x: the paths legitimately differ).
       // max|r(x)|: the shipped engine's residual at each engine's committed x, against that tick's market, on
       // SQUARE rungs only (an over-determined fit has r != 0 by design; there we report n/a).
@@ -167,7 +178,9 @@ int main() {
                   b.converged, b.refreshes, b.steps, "-", "-", rbs);
       std::printf("  %-38s %6s %9.2f %9.1f %7d %7d %7d %9d %11.1e %11s   (both conv: %d)\n", "", "pwl", p.us_per_tick,
                   p.worst_us, p.converged, p.refreshes, p.steps, p.rebuilds, dx, rps, both);
-      if (p.rebuilds) std::printf("  %-38s %6s distinct cells visited: %d over %d re-takes\n", "", "", p.distinct, p.rebuilds);
+      std::printf("  %-38s %6s re-takes: %d analytic + %d AAD; W check max|r_pwl - r_shipped| = %.1e%s\n", "", "",
+                  p.analytic, p.rebuilds - p.analytic, p.w_err,
+                  p.distinct ? (" ; distinct cells " + std::to_string(p.distinct)).c_str() : "");
     }
   }
   return 0;

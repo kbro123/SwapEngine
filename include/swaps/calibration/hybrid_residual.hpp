@@ -170,7 +170,8 @@ class HybridBundleResidual {
   // EXPERIMENT observability: is the piecewise-linear tier engaged, and how many W re-takes has it done.
   bool pwl_active() const { return pwl_; }
   int pwl_rebuilds() const { return pwl_rebuilds_; }
-  int pwl_distinct() const { return static_cast<int>(pwl_seen_.size()); }  // distinct patterns visited
+  int pwl_distinct() const { return static_cast<int>(pwl_seen_.size()); }  // distinct patterns (SWAPS_EXP_PWL_STATS=1)
+  int pwl_analytic() const { return pwl_analytic_; }
   int n_times() const { return cacheable_ ? cacheable_->n_times() : 0; }
   // The ROW PARTITION, observable (item 5, 2026-09-10): which engine took a given global row. >=0 is the
   // row's index in the compiled W-cache sub-problem, -1 means it went to the AAD block. Exposed so a test
@@ -302,6 +303,21 @@ class HybridBundleResidual {
  private:
   static int nknots(const Eigen::VectorXd& x) { return static_cast<int>(x.size()); }
 
+  struct PatternTracker {
+    int off = 0, ni = 0;
+    curve::ModularCurve<double> crv;
+    std::vector<unsigned char> cur, cached;
+    Eigen::MatrixXd G;   // d(filter inputs)/dx: structure-only (phase 2)
+    Eigen::VectorXd z;   // G·x scratch
+    // analytic re-take
+    int pc = -1, N = 0;
+    std::vector<double> h, phi;
+    Eigen::MatrixXd M, dM;  // current formula rows Φ_P·G (N x ni); the change scratch
+    Eigen::RowVectorXd row;
+    std::vector<int> nodes;
+    bool dirty = false;
+  };
+
   // EXPERIMENT: engage the piecewise-linear tier. Only the SHAPE question routes a row to AAD (can the batch
   // express it at all?); the horizon question disappears. Refused (-> the shipped routing) if nothing would
   // stay compiled or the compiled engine rejects the bundle (e.g. moment-path coupons on a value-dependent
@@ -331,11 +347,12 @@ class HybridBundleResidual {
     cache_rows_ = std::move(rows);
     cache_pos_ = std::move(pos);
     nc_.init(p.curves, std::move(nc), std::move(nc_rows), p.n_knots());
-    const auto& cs = cacheable_->curve_set();
+    auto& eng = *cacheable_;
+    const auto& cs = eng.curve_set();
     for (int k = 0; k < static_cast<int>(p.curves.size()); ++k)
       if (cs.value_dependent(k)) {
         const int ni = p.curves[k].n_interp_knots();
-        PatternTracker t{cs.knot_offset(k), ni, curve::make_modular_curve<double>(p.curves[k].modules()), {}, {}, {}, {}};
+        PatternTracker t{cs.knot_offset(k), ni, curve::make_modular_curve<double>(p.curves[k].modules())};
         // G = d(prefilter)/dx, ONE AAD pass: the filter inputs precede the filter, so this is exact at any x.
         auto cd = curve::make_modular_curve<ad::Dual>(p.curves[k].modules());
         cd.set_forwards(ad::seed(Eigen::VectorXd::Constant(ni, 0.03)));
@@ -348,43 +365,90 @@ class HybridBundleResidual {
                            : Eigen::RowVectorXd::Zero(ni);
         t.z.resize(t.G.rows());
         t.crv.set_forwards(Eigen::VectorXd::Constant(ni, 0.03));  // fixes each region's node spacing once
+        // Analytic re-take structure (-1: this curve re-takes W by AAD).
+        t.pc = eng.pwl_prepare(k);
+        if (t.pc >= 0) {
+          t.N = t.crv.pwl_nodes();
+          t.h = *t.crv.pwl_spacing();
+          t.M.setZero(t.N, ni);
+          t.dM.resize(t.N, ni);
+          t.phi.assign(static_cast<std::size_t>(2 * t.N - 1), 0.0);
+          t.row.resize(ni);
+          t.nodes.reserve(static_cast<std::size_t>(t.N));
+        }
         trk_.push_back(std::move(t));
       }
     pwl_ = true;
     return true;
   }
 
-  // EXPERIMENT: keep the compiled W in step with x's branch pattern. Per call: one double rebuild of each
-  // value-dependent curve + its pattern trace; a W re-take (one AAD pass per such curve) ONLY on a change.
+  // M = Φ_P·G for the tracker's CACHED pattern, rows `j` (node j's filtered-tangent formula over x_c).
+  static void formula_row(PatternTracker& t, const std::vector<unsigned char>& pat, int j) {
+    curve::MonotoneCubic<double>::tangent_formula(pat[2 * j], pat[2 * j + 1], j, t.h, t.N, t.phi.data());
+    t.row.noalias() = Eigen::Map<const Eigen::RowVectorXd>(t.phi.data(), 2 * t.N - 1) * t.G;
+  }
+
+  // EXPERIMENT: keep the compiled W in step with x's branch pattern. Per call: z = G·x and the filter's
+  // branch logic on doubles (phase 2). On a change: the ANALYTIC rank-k update (nodes whose formula changed)
+  // when every changed curve supports it, else the full AAD re-take. The first sync is always a full re-take.
   void sync(const Eigen::VectorXd& x) const {
     if (!pwl_) return;
-    bool changed = !pwl_synced_;
+    bool changed = false, analytic = pwl_synced_;
     for (auto& t : trk_) {
       t.z.noalias() = t.G * x.segment(t.off, t.ni);  // the one-pass linear map to the filter inputs
       t.crv.pattern_from_prefilter(t.z, t.cur);
-      if (t.cur != t.cached) changed = true;
+      t.dirty = (t.cur != t.cached);
+      if (t.dirty) {
+        changed = true;
+        if (t.pc < 0 || t.cur.size() != t.cached.size()) analytic = false;
+      }
     }
-    if (!changed) return;
-    for (auto& t : trk_) t.cached.swap(t.cur);
-    {
+    if (pwl_synced_ && !changed) return;
+    auto& eng = const_cast<CompiledBundleResidual&>(*cacheable_);  // const API caches a pure fn of x
+    if (analytic) {
+      for (auto& t : trk_) {
+        if (!t.dirty) continue;
+        t.nodes.clear();
+        for (int j = 0; j < t.N; ++j)
+          if (t.cur[2 * j] != t.cached[2 * j] || t.cur[2 * j + 1] != t.cached[2 * j + 1]) {
+            formula_row(t, t.cur, j);
+            t.dM.row(static_cast<int>(t.nodes.size())) = t.row - t.M.row(j);
+            t.M.row(j) = t.row;
+            t.nodes.push_back(j);
+          }
+        eng.pwl_rank_update(t.pc, t.nodes, t.dM.topRows(static_cast<int>(t.nodes.size())));
+        t.cached = t.cur;  // same size: no allocation
+      }
+      ++pwl_analytic_;
+    } else {
+      // Full reset. An AAD re-take only for curves the analytic path does not cover; every analytic-capable
+      // curve is then SET to its recorded pattern's W (L + B·M), which stays exact at degenerate states.
+      bool need_aad = false;
+      for (const auto& t : trk_) need_aad = need_aad || t.pc < 0;
+      if (need_aad) eng.rebuild_W(x);
+      for (auto& t : trk_) {
+        t.cached = t.cur;
+        if (t.pc < 0) continue;
+        for (int j = 0; j < t.N; ++j) { formula_row(t, t.cached, j); t.M.row(j) = t.row; }
+        eng.pwl_set(t.pc, t.M);
+      }
+      pwl_synced_ = true;
+    }
+    ++pwl_rebuilds_;
+    if (pwl_stats()) {  // opt-in diagnostics: a std::set insert allocates, so it is OFF on the measured path
       std::vector<unsigned char> key;
       for (const auto& t : trk_) key.insert(key.end(), t.cached.begin(), t.cached.end());
       pwl_seen_.insert(std::move(key));
     }
-    const_cast<CompiledBundleResidual&>(*cacheable_).rebuild_W(x);  // const API caches a pure fn of x
-    pwl_synced_ = true;
-    ++pwl_rebuilds_;
   }
-  struct PatternTracker {
-    int off, ni;
-    curve::ModularCurve<double> crv;
-    std::vector<unsigned char> cur, cached;
-    Eigen::MatrixXd G;   // d(filter inputs)/dx: structure-only (phase 2)
-    Eigen::VectorXd z;   // G·x scratch
-  };
+  static bool pwl_stats() {
+    static const bool on = [] { const char* e = std::getenv("SWAPS_EXP_PWL_STATS"); return e && e[0] == '1'; }();
+    return on;
+  }
   bool pwl_ = false;
   mutable bool pwl_synced_ = false;
   mutable int pwl_rebuilds_ = 0;
+  mutable int pwl_analytic_ = 0;  // of which: rank-k analytic updates (the rest are full AAD re-takes)
   mutable std::set<std::vector<unsigned char>> pwl_seen_;  // EXPERIMENT diagnostics: distinct cells visited
   mutable std::vector<PatternTracker> trk_;
 
