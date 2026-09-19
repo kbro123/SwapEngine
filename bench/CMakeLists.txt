@@ -141,3 +141,12 @@ target_include_directories(shape_ladder_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 add_executable(routing_bench routing_bench.cpp)
 target_link_libraries(routing_bench PRIVATE swaps swaps_api benchmark::benchmark)
 target_include_directories(routing_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+
+# EXPERIMENT (exp/piecewise-linear-w): one-pass coefficient map vs region-by-region set_forwards.
+add_executable(exp_onepass_bench exp_onepass_bench.cpp)
+target_link_libraries(exp_onepass_bench PRIVATE swaps benchmark::benchmark)
+
+# EXPERIMENT (exp/piecewise-linear-w): pattern-flip frequency + per-tick cost of the PWL tier under a streaming feed.
+add_executable(exp_stream_flip exp_stream_flip.cpp)
+target_link_libraries(exp_stream_flip PRIVATE swaps swaps_api)
+target_include_directories(exp_stream_flip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)

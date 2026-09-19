@@ -74,7 +74,27 @@ class CompiledCurveSet {
       o += specs[c].n_knots();
     }
     n_knots_ = o;
+    eval_x_.assign(specs.size(), Eigen::VectorXd());
   }
+
+  // EXPERIMENT (exp/piecewise-linear-w): PIECEWISE-LINEAR mode. A curve with a value-dependent region takes
+  // its W at a STATE (integral_weight_matrix_at) instead of refusing times past its linear horizon; the W is
+  // then exact throughout that state's branch-pattern cell. The owner re-points the state and re-runs
+  // finalize() when the pattern changes. Call before finalize(). Fully linear curves are unaffected.
+  void enable_pwl() { pwl_ = true; }
+  bool pwl() const { return pwl_; }
+  bool value_dependent(int c) const {
+    for (const auto& r : specs_[c].regions)
+      if (!curve::scheme_is_linear(r.scheme)) return true;
+    return false;
+  }
+  // The state a value-dependent curve's W is taken at (its interp-knot segment of the stacked x).
+  void set_eval_state(const Eigen::VectorXd& x) {
+    for (int c = 0; c < static_cast<int>(specs_.size()); ++c)
+      if (value_dependent(c)) eval_x_[c] = x.segment(knot_offset_[c], specs_[c].n_interp_knots());
+  }
+  int knot_offset(int c) const { return knot_offset_[c]; }
+  const std::vector<CurveStructure>& specs() const { return specs_; }
 
   int reg(int curve, double t) {
     const auto key = std::make_pair(curve, t);
@@ -240,8 +260,13 @@ class CompiledCurveSet {
   Eigen::MatrixXd logdf_weight(int c, const std::vector<double>& times) const {
     const int ni = specs_[c].n_interp_knots();
     Eigen::MatrixXd W = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
-    W.middleCols(knot_offset_[c], ni) =
-        integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
+    if (pwl_ && value_dependent(c)) {  // EXPERIMENT: W of the state's branch-pattern cell
+      const Eigen::VectorXd xs = eval_x_[c].size() == ni ? eval_x_[c] : Eigen::VectorXd::Constant(ni, 0.03);
+      W.middleCols(knot_offset_[c], ni) = integral_weight_matrix_at(specs_[c].modules(), times, xs);
+    } else {
+      W.middleCols(knot_offset_[c], ni) =
+          integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
+    }
     for (int j = 0; j < static_cast<int>(specs_[c].turns.size()); ++j) {
       const int col = knot_offset_[c] + ni + j;  // δⱼ sits after the interp knots in c's block
       for (int i = 0; i < static_cast<int>(times.size()); ++i)
@@ -254,6 +279,8 @@ class CompiledCurveSet {
   std::vector<CurveStructure> specs_;
   std::vector<int> knot_offset_;
   int n_knots_ = 0;
+  bool pwl_ = false;                     // EXPERIMENT: value-dependent curves take W at eval_x_
+  std::vector<Eigen::VectorXd> eval_x_;  // EXPERIMENT: per-curve W evaluation state (empty = default seed)
   std::map<std::pair<int, double>, int> idx_;
   std::vector<std::pair<int, double>> pts_;  // global index -> (curve, time)
   Eigen::MatrixXd W_;
