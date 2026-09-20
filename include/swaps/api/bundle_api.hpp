@@ -175,12 +175,13 @@ class BundleSession {
   // requote costs a tick, not an LM. `reg` selects the regulariser the streamer runs under.
   const cal::CalibrationResult& recalibrate(const Eigen::VectorXd& new_market, const RegSpec& reg = {});
 
-  // The FULL quote RHS from a structurally-identical problem `p` (targets AND bands), then resolve(). `p`
-  // must be the SAME structure (an O(n) structural equality, no hash -- calibration::structure_equal):
-  // a different residual count, knot, scheme, role, schedule or instrument throws -- compile a new
-  // session for that. A band edit is a quote change and re-anchors the streamer's active set in place.
+  // COMPATIBILITY path: the same requote from a bare BundleProblem, whose structure is proved by an O(n)
+  // structure_equal walk of every coupon (~192 us of a ~290 us rebind on the 8x26 chain). Prefer the stamped
+  // overload below: a caller that keeps its document alive stamps it ONCE at build and requotes for two
+  // integers. This overload does NOT stamp `p` for you on purpose -- hashing a document costs MORE than
+  // walking it (204 us vs 192 us measured); the stamp only pays when it is computed once and reused.
   const cal::CalibrationResult& rebind(const cal::BundleProblem& p, const RegSpec& reg = {});
-  // STAMPED rebind (E8 prototype): the same requote, but the caller hands over a bundle that carries the
+  // THE REQUOTE PATH (adopted 2026-09-20): the caller hands over a bundle that carries the
   // structural stamp it was BUILT with (cal::make_stamped), so the check is two integers instead of an O(n)
   // walk of every coupon (192 us of a 320 us rebind on the 8x26 chain). The stamp is resolution-insensitive,
   // so a client's unresolved document still matches a session carrying resolved fixing schedules. A stale or

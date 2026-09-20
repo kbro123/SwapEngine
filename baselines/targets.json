@@ -259,12 +259,12 @@
       "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only"
     },
     "shape_mixed_scheme_jacobian": {
-      "target_ns": 127977,
-      "note": "initial = 2026-09-10 baseline x1.3 (new ladder rung); ratchets DOWN only -- MonotoneCubic back end; the router's per-row partition (17 of 29 rows compiled)"
+      "target_ns": 25381,
+      "note": "ratcheted 2026-09-20 when the piecewise-linear W tier became the DEFAULT routing (rows reading a MonotoneCubic region stay on the compiled W-cache): 127977 -> 25381 ns, the tool's own 1.3x proposal off the re-captured baseline; ratchets DOWN only"
     },
     "shape_desk_mixed_jacobian": {
-      "target_ns": 927000,
-      "note": "ratcheted DOWN 2026-09-12 after ad::kPooledMaxW 48 -> 64: desk_mixed's AAD block touches 55 knots and was falling off the pooled dual onto the heap, allocating per operation. 3.17 ms -> 0.71 ms, a 4.3x gain; ratchets DOWN only"
+      "target_ns": 233099,
+      "note": "ratcheted 2026-09-20 when the piecewise-linear W tier became the DEFAULT routing (rows reading a MonotoneCubic region stay on the compiled W-cache): 927000 -> 233099 ns, the tool's own 1.3x proposal off the re-captured baseline; ratchets DOWN only"
     },
     "multicurve4_cold_calibrate": {
       "target_ns": 960000,
@@ -275,20 +275,20 @@
       "note": "initial = 2026-09-10 baseline x1.3 (4.3 us vs a QuantLib re-bootstrap at 2.87 ms, 663x); ratchets DOWN only"
     },
     "shape_mixed_scheme_stream_tick": {
-      "target_ns": 102000,
-      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only -- this rung STREAMS for the first time (BundleSession's last whole-bundle veto removed); the tick it replaces was a COLD LM at 3.3 ms, so this is 38x better. The AAD block re-evaluates a Hyman-filtered region every tick and allocates doing it (pinned in hotpath_shapes_test); ratchet this down when that is fixed."
+      "target_ns": 7229,
+      "note": "ratcheted 2026-09-20 when the piecewise-linear W tier became the DEFAULT routing (rows reading a MonotoneCubic region stay on the compiled W-cache): 102000 -> 7229 ns, the tool's own 1.3x proposal off the re-captured baseline; ratchets DOWN only"
     },
     "shape_mixed_scheme_refresh_25bp": {
-      "target_ns": 578000,
-      "note": "initial = 2026-09-12 baseline x1.3; ratchets DOWN only"
+      "target_ns": 15880,
+      "note": "ratcheted 2026-09-20 when the piecewise-linear W tier became the DEFAULT routing (rows reading a MonotoneCubic region stay on the compiled W-cache): 578000 -> 15880 ns, the tool's own 1.3x proposal off the re-captured baseline; ratchets DOWN only"
     },
     "shape_desk_mixed_stream_tick": {
-      "target_ns": 3270100,
-      "note": "RE-BASED 2026-09-15 (step 3a, owner decision 'fixture first'): q_small leaves FX forwards at their market; the honest tick flips a MonotoneCubic clamp (1.5 refreshes/tick at the measured break-even). 2.52 ms x1.3; was 2.57 ms. ratchets DOWN only"
+      "target_ns": 707907,
+      "note": "ratcheted 2026-09-20 when the piecewise-linear W tier became the DEFAULT routing (rows reading a MonotoneCubic region stay on the compiled W-cache): 3270100 -> 707907 ns, the tool's own 1.3x proposal off the re-captured baseline; ratchets DOWN only"
     },
     "shape_desk_mixed_refresh_25bp": {
-      "target_ns": 14343000,
-      "note": "RE-BASED 2026-09-15 (C2, owner decision): the ladder's 25 bp move became a realistic parallel-plus-tilt move -- a new workload, every rate row +22.5..27.5 bp together, 4-6 Jacobian refreshes per desk_mixed tick where the sine pattern cost 3-4. 11.03 ms x1.3; the previous 10.61 ms timed the sine-pattern market. ratchets DOWN only"
+      "target_ns": 3337432,
+      "note": "ratcheted 2026-09-20 when the piecewise-linear W tier became the DEFAULT routing (rows reading a MonotoneCubic region stay on the compiled W-cache): 14343000 -> 3337432 ns, the tool's own 1.3x proposal off the re-captured baseline; ratchets DOWN only"
     },
     "shape_banded_requote_tick": {
       "target_ns": 3066,
@@ -303,8 +303,8 @@
       "note": "RATCHETED DOWN 2026-09-15 (step 3a): the 0.1 bp tick no longer swings the xccy 30Y knot; 23.5 us x1.3 (was 44.3 us)"
     },
     "shape_desk_mixed_requote_tick": {
-      "target_ns": 3274900,
-      "note": "RE-BASED 2026-09-15 (step 3a, owner decision 'fixture first'): q_small leaves FX forwards at their market; the honest tick flips a MonotoneCubic clamp (1.5 refreshes/tick at the measured break-even). 2.52 ms x1.3; was 2.61 ms. ratchets DOWN only"
+      "target_ns": 712038,
+      "note": "ratcheted 2026-09-20 when the piecewise-linear W tier became the DEFAULT routing (rows reading a MonotoneCubic region stay on the compiled W-cache): 3274900 -> 712038 ns, the tool's own 1.3x proposal off the re-captured baseline; ratchets DOWN only"
     },
     "chain8x26_session_rebind_stamped": {
       "target_ns": 125000,

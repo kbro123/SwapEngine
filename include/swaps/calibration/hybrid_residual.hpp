@@ -116,11 +116,17 @@ inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<
   return false;
 }
 
-// EXPERIMENT (exp/piecewise-linear-w): the default for the piecewise-linear W tier. OFF unless the process sets
-// SWAPS_EXP_PWL=1, so the shipped engine and every gate are byte-unchanged; the env switch lets the WHOLE
-// correctness suite run on the new tier without editing a test.
+// The piecewise-linear W tier is ON by default (adopted 2026-09-20). A MonotoneCubic curve is piecewise-linear
+// in its knots, so rows reading the value-dependent region ride the compiled W-cache -- W exact inside a Hyman
+// branch cell, re-taken analytically (rank-k) when x crosses one -- instead of dropping to the AAD block:
+// desk_mixed residual 133 -> 4.6 us, Jacobian 747 -> 181 us, streamed tick 3.7-4.8x, parity ~1e-16 vs the
+// pre-adoption router. SWAPS_EXP_PWL=0 is the opt-OUT: it restores the horizon partition (value-dependent rows
+// to AAD) for a bisect or an A/B, and is what tests/router_partition_test.cpp pins the old routing with.
 inline bool exp_pwl_default() {
-  static const bool on = [] { const char* e = std::getenv("SWAPS_EXP_PWL"); return e && e[0] == '1'; }();
+  static const bool on = [] {
+    const char* e = std::getenv("SWAPS_EXP_PWL");
+    return !(e && e[0] == '0');
+  }();
   return on;
 }
 

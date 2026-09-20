@@ -89,18 +89,36 @@ Eigen::VectorXd generic_rates(const cal::BundleProblem& p, const Eigen::VectorXd
 
 }  // namespace
 
-// The partition itself: the rows that stay within their curve's horizon ride the W-cache, the rows that
-// reach past it do not -- even though `curves_are_noncacheable` (the OLD, whole-bundle question) is true.
-TEST(RouterPartition, OnlyRowsReachingTheNonLinearRegionLeaveTheWCache) {
+// THE PARTITION, both routings. Since 2026-09-20 the piecewise-linear W tier is the DEFAULT: a MonotoneCubic
+// region is piecewise-linear in its knots, so a row reading it still rides the compiled W-cache (W exact in
+// the current Hyman branch cell, re-taken analytically when x crosses one) and NOTHING is pushed to the AAD
+// block for interpolation reasons. The horizon partition below it -- rows within their curve's linear prefix
+// compiled, rows past it on AAD -- is what SWAPS_EXP_PWL=0 restores, and it is still the fallback whenever a
+// curve is not piecewise-linear-capable, so both are pinned here.
+TEST(RouterPartition, ThePiecewiseLinearTierKeepsEveryRowOnTheWCache) {
   const cal::BundleProblem p = mixed_bundle();
-  ASSERT_TRUE(cal::curves_are_noncacheable(p.curves)) << "pre-fix this alone sent all 15 rows to AAD";
+  ASSERT_TRUE(cal::curves_are_noncacheable(p.curves)) << "pre-2026-09-10 this alone sent all 15 rows to AAD";
 
+  const cal::HybridBundleResidual eng(p);  // default: the tier
+  ASSERT_TRUE(eng.pwl_active()) << "the tier is the default routing for a piecewise-linear curve";
+  for (int row = 0; row < 15; ++row)
+    EXPECT_GE(eng.compiled_row(row), 0) << "row " << row << " should ride the W-cache under the tier";
+  EXPECT_EQ(eng.n_compiled_rows(), 15);
+}
+
+// The FALLBACK routing (SWAPS_EXP_PWL=0, and any curve the tier cannot cover): per row, against each curve's
+// LINEAR HORIZON -- the end of its maximal linear prefix, recursively capped by its base's. Before 2026-09-10
+// one value-dependent region anywhere sent EVERY row to the AAD block, including short par swaps that never
+// read past the linear front and rows on a completely different curve.
+TEST(RouterPartition, WithoutTheTierOnlyRowsReachingTheNonLinearRegionLeaveTheWCache) {
+  const cal::BundleProblem p = mixed_bundle();
   const std::vector<double> h = px::curve_linear_horizons(p.curves);
   EXPECT_DOUBLE_EQ(h[0], 3.0) << "curve 0's linear prefix ends at the last Linear knot";
   EXPECT_DOUBLE_EQ(h[1], 3.0) << "a linear SPREAD inherits its base's horizon, not +inf";
   EXPECT_EQ(h[2], std::numeric_limits<double>::infinity()) << "an unrelated linear curve is unrestricted";
 
-  const cal::HybridBundleResidual eng(p);
+  const cal::HybridBundleResidual eng(p, /*pwl=*/false);
+  ASSERT_FALSE(eng.pwl_active());
   // curves 0 and 1: the 1y/2y/3y rows read nothing past 3.0 and stay compiled; 5y/10y do not.
   for (int c = 0; c < 2; ++c)
     for (int k = 0; k < 5; ++k) {
@@ -111,6 +129,17 @@ TEST(RouterPartition, OnlyRowsReachingTheNonLinearRegionLeaveTheWCache) {
   for (int k = 0; k < 5; ++k)
     EXPECT_GE(eng.compiled_row(10 + k), 0) << "curve 2 is fully linear; row " << k << " must stay compiled";
   EXPECT_EQ(eng.n_compiled_rows(), 11);
+}
+
+// And the two routings agree: same residuals, same Jacobian, to rounding. (Parity against the generic
+// templated kernel is the test below; this one is tier-vs-fallback directly.)
+TEST(RouterPartition, TheTwoRoutingsAgree) {
+  const cal::BundleProblem p = mixed_bundle();
+  const cal::HybridBundleResidual tier(p, true), fallback(p, false);
+  const Eigen::VectorXd x = tilted_state(p, 0.0);
+  EXPECT_LT((tier.residuals(x) - fallback.residuals(x)).cwiseAbs().maxCoeff(), 1e-14);
+  const Eigen::MatrixXd Jf = fallback.jacobian(x);
+  EXPECT_LT((tier.jacobian(x) - Jf).cwiseAbs().maxCoeff(), 1e-12 * Jf.cwiseAbs().maxCoeff());
 }
 
 // Parity: on that same mixed bundle both halves reproduce the generic templated kernel exactly, and the
