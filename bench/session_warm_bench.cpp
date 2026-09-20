@@ -116,6 +116,23 @@ const Fixture& fx() {
 // The GATED warm quote-RHS re-solve: session.rebind on a calibrated session, alternating between two
 // nearby markets so every call genuinely re-solves. The engine must be REUSED across calls (set_quotes +
 // warm LM); a regression to per-call engine construction shows up here as milliseconds, not microseconds.
+// E8 prototype: the SAME requote through the stamped overload -- the structural check is two integers
+// instead of an O(n) walk of every coupon. The stamped bundle is built ONCE (as a client's document is),
+// exactly as the design intends; only its quotes change per tick.
+static void BM_Session_RebindStamped(benchmark::State& state) {
+  const auto& f = fx();
+  api::BundleSession sess(f.prob);
+  sess.calibrate(f.x0);
+  const cal::StampedBundle a = cal::make_stamped(f.prob), b = cal::make_stamped(f.pert);
+  bool flip = false;
+  for (auto _ : state) {
+    const auto& r = sess.rebind(flip ? a : b);
+    flip = !flip;
+    benchmark::DoNotOptimize(r.x.data());
+  }
+}
+BENCHMARK(BM_Session_RebindStamped);
+
 static void BM_Session_RebindWarm(benchmark::State& state) {
   const auto& f = fx();
   api::BundleSession sess(f.prob);

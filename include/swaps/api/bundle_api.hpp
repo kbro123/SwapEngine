@@ -33,6 +33,7 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/regularize.hpp"  // RegSpec, smoothing_preset
 #include "swaps/calibration/streaming.hpp"
+#include "swaps/calibration/structure_fingerprint.hpp"  // StampedBundle / structural_stamp (E8)
 #include "swaps/portfolio/portfolio.hpp"  // MultiCurveBook — the batched reprice kernel
 #include "swaps/portfolio/compiled_multi.hpp"  // CompiledMultiCurveBook — the cached streaming reprice twin
 #include "swaps/pricing/fixings.hpp"
@@ -179,6 +180,16 @@ class BundleSession {
   // a different residual count, knot, scheme, role, schedule or instrument throws -- compile a new
   // session for that. A band edit is a quote change and re-anchors the streamer's active set in place.
   const cal::CalibrationResult& rebind(const cal::BundleProblem& p, const RegSpec& reg = {});
+  // STAMPED rebind (E8 prototype): the same requote, but the caller hands over a bundle that carries the
+  // structural stamp it was BUILT with (cal::make_stamped), so the check is two integers instead of an O(n)
+  // walk of every coupon (192 us of a 320 us rebind on the 8x26 chain). The stamp is resolution-insensitive,
+  // so a client's unresolved document still matches a session carrying resolved fixing schedules. A stale or
+  // mismatched stamp throws exactly as a structural difference does; the instrument-count and per-row quote
+  // validation are unchanged, so a wrong-sized or non-finite payload is still refused before anything moves.
+  const cal::CalibrationResult& rebind(const cal::StampedBundle& b, const RegSpec& reg = {});
+  // This session's STRUCTURAL stamp (cal::structural_stamp) -- the value a caller's stamped bundle must
+  // carry to rebind. Unlike structure_fingerprint() it does not change when fixings resolve.
+  std::uint64_t structural_stamp() const { return stamp_; }
 
   const cal::CalibrationResult& result() const { return result_; }
   const Eigen::VectorXd& x() const { return x_; }
@@ -463,6 +474,10 @@ class BundleSession {
   bool bands_changed_ = false;  // a set_band/rebind changed a band since the streamer last anchored
   Eigen::VectorXd q_scratch_;   // the live market gathered from prob_ (reused; no per-solve allocation)
   // The cached hybrid engine + tension-block cache (see ensure_engine/ensure_reg_R above).
+  std::uint64_t stamp_ = 0;  // E8: the structural stamp of the compiled document (resolution-insensitive)
+  // The quote-RHS half of a rebind (targets + bands + resolve), shared by both rebind overloads once the
+  // caller's structural check -- O(n) equality or the stamp -- has passed.
+  const cal::CalibrationResult& rebind_quotes(const cal::BundleProblem& p, const RegSpec& reg);
   mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
   mutable Eigen::MatrixXd reg_R_;
   mutable bool reg_R_valid_ = false;

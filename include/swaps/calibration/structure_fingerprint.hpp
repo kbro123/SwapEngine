@@ -10,6 +10,7 @@
 // stays put; the optimised hot path is regenerated only when the structure genuinely changes.
 
 #include <cstdint>
+#include <stdexcept>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -138,7 +139,11 @@ inline bool float_equal(const FloatLeg& a, const FloatLeg& b) {
     // resent without explicit accrual fields is the same structure as the builder's coupon.
     const auto eff_s = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_start : (x.obs.sub_start.empty() ? -1.0 : x.obs.sub_start.front()); };
     const auto eff_e = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_end : (x.obs.sub_end.empty() ? -1.0 : x.obs.sub_end.back()); };
-    if (eff_s(c) != eff_s(d) || eff_e(c) != eff_e(d) || c.reset_fx != d.reset_fx) return false;
+    // Only when it adds information: with no carried accrual period and no fixing schedule the effective dates ARE
+    // sub_start.front()/sub_end.back(), which obs_equal below compares (whole vectors) anyway.
+    const bool eff_needed = c.accrual_set || d.accrual_set || !c.obs.fixing_schedule.empty();
+    if (eff_needed && (eff_s(c) != eff_s(d) || eff_e(c) != eff_e(d))) return false;
+    if (c.reset_fx != d.reset_fx) return false;
     if (c.fx_fixing_set != d.fx_fixing_set || (c.fx_fixing_set && c.fx_fixing_time != d.fx_fixing_time)) return false;
     if (!obs_equal(c.obs, d.obs)) return false;
   }
@@ -232,6 +237,176 @@ inline std::uint64_t structure_fingerprint(const BundleProblem& p) {
 }
 
 // The structural-equality check (no hash): see fp_detail::curve_equal / instrument_equal.
+// ---- STRUCTURAL STAMP (E8 prototype) ---------------------------------------------------------------
+// A 64-bit hash that is the HASH TWIN of structure_equal below: equal structures stamp equal, and any edit
+// structure_equal would reject changes the stamp. It exists so a rebind can compare two integers instead of
+// walking every coupon (measured: structure_equal is 192 us of a 320 us rebind on the 8x26 chain).
+//
+// Two differences from structure_fingerprint above, both REQUIRED to be the twin of the equality check:
+//  1. RESOLUTION-INSENSITIVE. A coupon carrying a fixing schedule stamps its SCHEDULE endpoints, never the
+//     resolved realized / realized_factor / forecast sub-periods -- exactly what obs_equal compares. So a
+//     client's unresolved document and the session's resolved copy stamp the SAME, which is what makes
+//     "hash once when the structure is built" hold across set_fixings / set_evaluation_date. (The older
+//     fingerprint is resolution-SENSITIVE on purpose -- it is an identity stamp for client caching -- so
+//     the two hashes answer different questions and both are kept.)
+//  2. It covers the mtm leg and hashes WHOLE edge vectors (the fingerprint summarises them by endpoints and
+//     omits mtm entirely), so it cannot accept a structure the equality check would reject.
+namespace fp_detail {
+
+inline void stamp_obs(FnvHasher& H, const pricing::RateObservation& o) {
+  H.i(static_cast<long long>(o.fixing_schedule.size()));
+  H.s(o.fixing_index);
+  H.d(o.tau_index);
+  H.d(o.fixing_step);
+  H.d(o.fixing_step3);
+  H.i(o.compounded);
+  if (!o.fixing_schedule.empty()) {  // resolution-insensitive: the schedule, not what it resolved to
+    const auto& a = o.fixing_schedule.front();
+    const auto& z = o.fixing_schedule.back();
+    H.i(a.fixing_date);
+    H.d(a.t_start);
+    H.i(z.fixing_date);
+    H.d(z.t_end);
+    return;
+  }
+  H.vd(o.sub_start);
+  H.vd(o.sub_end);
+  H.vd(o.weight);
+  H.d(o.realized);
+  H.d(o.realized_factor);
+}
+
+inline void stamp_float(FnvHasher& H, const FloatLeg& lg) {
+  H.i(lg.forecast);
+  H.i(lg.discount);
+  H.i(lg.reset_num);
+  H.i(lg.reset_den);
+  H.d(lg.fx_spot);
+  H.d(lg.fx_spot_time);
+  H.i(static_cast<long long>(lg.coupons.size()));
+  for (const auto& c : lg.coupons) {
+    H.d(c.pay);
+    H.d(c.tau_pay);
+    H.d(c.spread);
+    H.d(c.scale);
+    H.d(c.reset_time);
+    // the EFFECTIVE exchange dates float_equal compares (the accrual period when carried, else the window)
+    H.d(c.accrual_set ? c.accrual_start : (c.obs.sub_start.empty() ? -1.0 : c.obs.sub_start.front()));
+    H.d(c.accrual_set ? c.accrual_end : (c.obs.sub_end.empty() ? -1.0 : c.obs.sub_end.back()));
+    H.d(c.reset_fx);
+    H.i(c.fx_fixing_set);
+    if (c.fx_fixing_set) H.d(c.fx_fixing_time);
+    stamp_obs(H, c.obs);
+  }
+}
+
+inline void stamp_fixed(FnvHasher& H, const FixedLeg& lg) {
+  H.i(lg.discount);
+  H.i(static_cast<long long>(lg.coupons.size()));
+  for (const auto& c : lg.coupons) {
+    H.d(c.pay);
+    H.d(c.tau);
+    H.d(c.scale);
+  }
+}
+
+inline void stamp_instrument(FnvHasher& H, const Instrument& ins) {
+  H.i(static_cast<long long>(ins.quote));
+  H.i(ins.forecast);
+  H.i(ins.pv_currency);
+  H.i(ins.fx_num);
+  H.i(ins.fx_den);
+  H.d(ins.fx_spot);
+  H.d(ins.fx_time);
+  H.d(ins.fx_spot_time);
+  H.i(ins.turn_curve);
+  H.i(ins.turn_index);
+  H.d(ins.convexity);
+  stamp_obs(H, ins.obs);
+  stamp_float(H, ins.fwd);
+  stamp_float(H, ins.bench);
+  stamp_float(H, ins.mtm);  // instrument_equal compares it; the older fingerprint omits it
+  stamp_fixed(H, ins.fixed);
+  // EXCLUDED, exactly as structure_equal excludes them: market, band_lower, band_upper, band_decay.
+  H.i(static_cast<long long>(ins.combination.size()));
+  for (const auto& w : ins.combination) {
+    H.d(w.weight);
+    stamp_instrument(H, w.instrument);
+  }
+}
+
+}  // namespace fp_detail
+
+// Bump when any field above changes, so two engine versions can never silently agree on a stale stamp.
+inline constexpr std::uint64_t kStructuralStampVersion = 1;
+
+inline std::uint64_t structural_stamp(const BundleProblem& p) {
+  fp_detail::FnvHasher H;
+  H.i(static_cast<long long>(kStructuralStampVersion));
+  H.i(static_cast<long long>(p.curves.size()));
+  for (const auto& c : p.curves) {
+    H.i(c.base);
+    H.i(c.currency);
+    H.i(static_cast<long long>(c.regions.size()));
+    for (const auto& m : c.regions) {
+      H.i(static_cast<long long>(m.scheme));
+      H.vd(m.knots);
+      H.d(m.sigma);
+      H.d(m.reg_lambda);
+      H.d(m.reg_sigma);
+    }
+    H.i(static_cast<long long>(c.turns.size()));
+    for (const auto& t : c.turns) {
+      H.d(t.start);
+      H.d(t.end);
+    }
+  }
+  H.i(static_cast<long long>(p.instruments.size()));
+  for (const auto& ins : p.instruments) fp_detail::stamp_instrument(H, ins);
+  return H.h;
+}
+
+// The rebind-time check itself (P14: behaviour lives in include/swaps/**, the verb layer only calls it).
+// Throws unless `have` is a real stamp of the same structure as `want`.
+inline void require_stamp_match(std::uint64_t have, std::uint64_t want, const char* where) {
+  if (have != 0 && have == want) return;
+  throw std::runtime_error(std::string(where) +
+                           ": the structural stamp differs (a knot, scheme, role, schedule or instrument changed, or "
+                           "the bundle was not built by cal::make_stamped) — compile a new session; rebind carries "
+                           "market targets and bands only");
+}
+
+// A bundle that CARRIES the structural stamp of ITS OWN contents. IMMUTABLE by construction: make_stamped
+// takes the problem BY VALUE and moves it in, so the stamp is computed from the exact bytes this object
+// owns -- a caller mutating its own copy afterwards cannot invalidate it -- and the members are private, so
+// the structure cannot be edited out from under the stamp once built. That is what lets a session trust two
+// integers instead of walking every coupon: anything that reaches rebind was stamped from what it carries.
+//
+// Quotes are NOT hashed (structure_equal ignores them too), so a requote is free: mutate targets and bands
+// through quotes()/instrument(), and the stamp stays valid by construction. That is the whole design --
+// hash the structure once when it is built, requote as often as you like.
+class StampedBundle {
+ public:
+  StampedBundle() = default;
+  const BundleProblem& problem() const { return problem_; }
+  std::uint64_t stamp() const { return stamp_; }
+  // The quote RHS, mutable: targets and bands are not structure (see above).
+  Instrument& quotes(std::size_t i) { return problem_.instruments[i]; }
+  std::size_t size() const { return problem_.instruments.size(); }
+
+ private:
+  friend StampedBundle make_stamped(BundleProblem);
+  BundleProblem problem_;
+  std::uint64_t stamp_ = 0;
+};
+
+inline StampedBundle make_stamped(BundleProblem p) {
+  StampedBundle b;
+  b.stamp_ = structural_stamp(p);
+  b.problem_ = std::move(p);
+  return b;
+}
+
 inline bool structure_equal(const BundleProblem& a, const BundleProblem& b) {
   if (a.curves.size() != b.curves.size() || a.instruments.size() != b.instruments.size()) return false;
   for (std::size_t c = 0; c < a.curves.size(); ++c)
