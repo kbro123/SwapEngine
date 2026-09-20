@@ -108,6 +108,7 @@ int BundleSession::resolve_fixings() {
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   cal::validate_problem(prob_, "BundleSession");  // E1/E2/B12: a malformed bundle is an error, not a crash/NaN
   fingerprint_ = cal::structure_fingerprint(prob_);  // an identity stamp of the compiled document (not a gate)
+  stamp_ = cal::structural_stamp(prob_);  // E8: computed ONCE here; a stamped rebind compares against it
   parallel_dir_ = swaps::pricing::parallel_direction(prob_.curves);
   for (const auto& ins : prob_.instruments) {
     // `has_fx_` reports the ENGINE's partition (E6.1c: the API used to keep a second, disagreeing definition
@@ -210,6 +211,13 @@ const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& 
   return warm_solve(reg);
 }
 
+const cal::CalibrationResult& BundleSession::rebind(const cal::StampedBundle& b, const RegSpec& reg) {
+  // The structural check is the stamp (see the header). Everything else a rebind refuses -- a different
+  // instrument count, a non-finite or out-of-band quote -- is still refused by the O(n) body below.
+  cal::require_stamp_match(b.stamp, stamp_, "rebind");
+  return rebind_quotes(b.problem, reg);
+}
+
 const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p, const RegSpec& reg) {
   if (p.n_residuals() != prob_.n_residuals())
     throw std::runtime_error("rebind: instrument count differs — the structure changed (compile a new session)");
@@ -219,6 +227,12 @@ const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p,
   if (!same_structure(p))
     throw std::runtime_error("rebind: the structure differs (a knot, scheme, role, schedule or instrument changed) — "
                              "compile a new session; rebind carries market targets and bands only");
+  return rebind_quotes(p, reg);
+}
+
+// The quote-RHS half of a rebind, shared by both overloads: the structural check is the caller's (an O(n)
+// equality, or the stamp). Everything here is per-row quote data -- no structure is read.
+const cal::CalibrationResult& BundleSession::rebind_quotes(const cal::BundleProblem& p, const RegSpec& reg) {
   for (int i = 0; i < prob_.n_residuals(); ++i) {
     const cal::Instrument& src = p.instruments[i];
     if (!std::isfinite(src.market) || !std::isfinite(src.band_lower) || !std::isfinite(src.band_upper) || !std::isfinite(src.band_decay))
