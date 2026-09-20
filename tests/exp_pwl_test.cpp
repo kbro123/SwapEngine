@@ -1,3 +1,4 @@
+// E5 taxonomy: T3 cross-path parity (the piecewise-linear W tier vs a fresh engine and vs the shipped router)
 // EXPERIMENT (exp/piecewise-linear-w): the piecewise-linear W tier with its ANALYTIC re-take.
 //
 // The tier keeps rows that read a MonotoneCubic region on the compiled W-cache: W is exact per Hyman branch
