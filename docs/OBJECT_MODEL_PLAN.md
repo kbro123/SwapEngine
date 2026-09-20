@@ -147,3 +147,48 @@ and hold these numbers** (a new `bench_spec_compile` may be added to guard the c
 `tools/verify.sh` (both gates) after every phase. Perf-sensitive phases (0, 1) additionally re-run the
 `curve_build`/`warm_recalibration`/`risk_full_jacobian` benches on a quiesced box and record before/after in
 this file's changelog. Never route a perf check through JSON — native google-benchmark only.
+
+---
+
+## WORK ITEM (open, 2026-09-20) — streamline the object model around the definition/quote split
+
+Raised out of a rebind-performance investigation (session 2026-09-19/20). The measurements below are the
+evidence; the point of the work item is the MODEL, not the microseconds.
+
+**What the investigation found.**
+- `BundleSession::rebind` checks "same structure, new quotes" with `structure_equal` — an O(n) walk of every
+  coupon. On the 8x26 chain (240 instruments, 6,975 float coupons) that walk is **192 us of a 316 us rebind**
+  (`bench/exp_structeq_bench.cpp`, branch `exp/structural-stamp`).
+- A structural STAMP hashed ONCE when the structure is built reduces the same rebind to **92 us (3.4x)**
+  (prototype `0a64e46`, gates green). The saving is larger than the walk itself: the walk also evicted the
+  solver's working set.
+- The type invites the problem: `BundleProblem` is a plain aggregate whose structural fields
+  (`curves`, `instruments`, their legs and coupons) and its QUOTE fields (`market`, `band_*`) sit in one
+  mutable struct, so "the structure is static, only quotes move" is a convention the type does not express.
+  Measured mutation sites of the structural fields: engine 9, api 10, tests 425, bench 81.
+
+**Why this is an object-model item, not a perf patch.** The settled model above already separates
+definitions (immutable, hashable, compiled once) from market quotes (the only thing that moves tick to tick).
+`BundleProblem` predates that split and carries both. Every consequence below follows from that one fact:
+- a requote has to prove structural identity at all, instead of being unable to change structure;
+- two hashes exist with different blindness (`structure_fingerprint` is resolution-SENSITIVE for client
+  caching; `structural_stamp` must be resolution-INSENSITIVE to be the twin of `structure_equal`) and both
+  must be maintained beside the equality check — three definitions of "same structure" in one header;
+- the equality check and the fingerprint had already drifted: the fingerprint omits the `mtm` leg entirely
+  and summarises edge vectors by endpoints, so it could accept a structure the equality check rejects;
+- a redundant per-coupon comparison went unnoticed inside the walk (~22 us of the 192 us; patch measured,
+  `scratchpad/structure_equal_fix.patch`, unapplied).
+
+**Questions to answer when this is picked up.**
+1. Should the compiled seam take `(structure, quotes)` as two objects, so a requote cannot carry a structure
+   and `rebind` degenerates to `set_market`? The session already has quote-only entry points
+   (`set_market` / `recalibrate` / `stream_update`); `rebind(document)` exists for the document-shaped flows.
+2. If they stay one object: does `BundleProblem` become a class that can only be built by a factory (the
+   ~500 test/bench sites are the cost), or is the boundary wrapper (`StampedBundle`, immutable, owns what it
+   hashed) enough? The prototype argues the wrapper is enough for anything that reaches a session.
+3. Can the three "same structure" definitions collapse to one — a single hash with a declared resolution
+   policy, with equality kept only for diagnostics ("what differs") and tests?
+4. Does the JSON/binding seam carry the stamp, so a web client stamps once at build and requotes for free?
+
+**Related, still open:** `pnl_explain` also calls `structure_equal`; the ~22 us redundant-comparison patch;
+and the unmerged experiment branches `exp/structural-stamp` and `exp/piecewise-linear-w`.
