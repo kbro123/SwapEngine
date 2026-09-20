@@ -139,7 +139,11 @@ inline bool float_equal(const FloatLeg& a, const FloatLeg& b) {
     // resent without explicit accrual fields is the same structure as the builder's coupon.
     const auto eff_s = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_start : (x.obs.sub_start.empty() ? -1.0 : x.obs.sub_start.front()); };
     const auto eff_e = [](const pricing::FloatCoupon& x) { return x.accrual_set ? x.accrual_end : (x.obs.sub_end.empty() ? -1.0 : x.obs.sub_end.back()); };
-    if (eff_s(c) != eff_s(d) || eff_e(c) != eff_e(d) || c.reset_fx != d.reset_fx) return false;
+    // Only when it adds information: with no carried accrual period and no fixing schedule the effective dates ARE
+    // sub_start.front()/sub_end.back(), which obs_equal below compares (whole vectors) anyway.
+    const bool eff_needed = c.accrual_set || d.accrual_set || !c.obs.fixing_schedule.empty();
+    if (eff_needed && (eff_s(c) != eff_s(d) || eff_e(c) != eff_e(d))) return false;
+    if (c.reset_fx != d.reset_fx) return false;
     if (c.fx_fixing_set != d.fx_fixing_set || (c.fx_fixing_set && c.fx_fixing_time != d.fx_fixing_time)) return false;
     if (!obs_equal(c.obs, d.obs)) return false;
   }
