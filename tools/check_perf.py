@@ -107,6 +107,15 @@ METRICS = {
     "shape_desk_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_RefreshTick25bp", None, {"refreshes": ">0", "rescales": ">0"}),
     "shape_desk_jacobian": ("shape_ladder_bench", "BM_Shape_desk_Jacobian", None),
     "shape_desk_requote_tick": ("shape_ladder_bench", "BM_Shape_desk_RequoteTick", None, {"refreshes": "==0"}),
+    # --- the PIECEWISE-LINEAR W tier (exp/piecewise-linear-w): rows that read a MonotoneCubic region stay on
+    # the compiled W-cache, W re-taken (analytic, rank-k) only when x crosses a Hyman branch cell. The tier is
+    # OPT-IN, so the shape_* metrics above measure the SHIPPED router and are unaffected; these four measure
+    # the tier itself on the two mixed rungs -- without them the gate protects everything except the code the
+    # branch exists for. routing_bench builds both arms from one fixture, so the routed/pwl pair is comparable.
+    "shape_mixed_scheme_residual_pwl": ("routing_bench", "BM_Route_mixed_scheme_Residual_pwl", None),
+    "shape_mixed_scheme_jacobian_pwl": ("routing_bench", "BM_Route_mixed_scheme_Jacobian_pwl", None),
+    "shape_desk_mixed_residual_pwl": ("routing_bench", "BM_Route_desk_mixed_Residual_pwl", None),
+    "shape_desk_mixed_jacobian_pwl": ("routing_bench", "BM_Route_desk_mixed_Jacobian_pwl", None),
     # --- calibration kernels (single curve, 23x23; QuantLib GlobalBootstrap is the reference) ---
     "sofr_23k_square_cold_calibrate": ("curve_build_bench",   "BM_CurveBuild_Ours",              "BM_CurveBuild_QuantLib"),
     # THE MULTI-CURVE QuantLib reference (2026-09-10). Every other QuantLib timing reference here is a SINGLE
