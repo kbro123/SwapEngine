@@ -141,3 +141,27 @@ target_include_directories(shape_ladder_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 add_executable(routing_bench routing_bench.cpp)
 target_link_libraries(routing_bench PRIVATE swaps swaps_api benchmark::benchmark)
 target_include_directories(routing_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+
+# EXPERIMENT (exp/piecewise-linear-w): one-pass coefficient map vs region-by-region set_forwards.
+add_executable(exp_onepass_bench exp_onepass_bench.cpp)
+target_link_libraries(exp_onepass_bench PRIVATE swaps benchmark::benchmark)
+
+# EXPERIMENT (exp/piecewise-linear-w): pattern-flip frequency + per-tick cost of the PWL tier under a streaming feed.
+add_executable(exp_stream_flip exp_stream_flip.cpp)
+target_link_libraries(exp_stream_flip PRIVATE swaps swaps_api)
+target_include_directories(exp_stream_flip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+
+# EXPERIMENT (exp/piecewise-linear-w): differential check of the analytic re-take against a fresh engine.
+add_executable(exp_pwl_check exp_pwl_check.cpp)
+target_link_libraries(exp_pwl_check PRIVATE swaps swaps_api)
+target_include_directories(exp_pwl_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+
+# EXPERIMENT (exp/piecewise-linear-w): step-by-step repro of the gate-tick convergence test on mixed_scheme.
+add_executable(exp_session_repro exp_session_repro.cpp)
+target_link_libraries(exp_session_repro PRIVATE swaps swaps_api)
+target_include_directories(exp_session_repro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+
+# EXPERIMENT (exp/piecewise-linear-w): the desk_mixed convergence-gap diagnostic.
+add_executable(exp_gap exp_gap.cpp)
+target_link_libraries(exp_gap PRIVATE swaps swaps_api)
+target_include_directories(exp_gap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)

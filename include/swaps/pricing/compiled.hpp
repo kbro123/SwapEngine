@@ -66,6 +66,29 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<curve::CurveModu
   return W;
 }
 
+// EXPERIMENT (exp/piecewise-linear-w): the W of a PIECEWISE-linear curve at state x. Every shipped scheme is
+// piecewise-linear in its knot values (the linear ones trivially; MonotoneCubic because its Hyman filter is
+// built from abs/min/max/sign -- see MonotoneCubic::hyman_filter), so integral(t) = W_P·x exactly throughout
+// the branch-pattern cell P containing x, and the AAD gradient AT x is that W_P. No horizon refusal: the
+// caller owns keeping W in step with the pattern (ModularCurve::pattern_into). NB the constant seed the
+// linear builder uses would be WRONG here -- a flat state zeroes every secant, which sits on a cell boundary.
+inline Eigen::MatrixXd integral_weight_matrix_at(const std::vector<curve::CurveModule>& regions,
+                                                 const std::vector<double>& times, const Eigen::VectorXd& x) {
+  auto c = curve::make_modular_curve<ad::Dual>(regions);
+  const int m = c.n_knots();
+  if (x.size() != m) throw std::invalid_argument("integral_weight_matrix_at: state size != curve knot count");
+  Eigen::MatrixXd W(static_cast<int>(times.size()), m);
+  c.set_forwards(ad::seed(x));
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const ad::Dual I = c.integral(times[i]);
+    if (I.derivatives().size() == m)
+      W.row(static_cast<int>(i)) = I.derivatives().transpose();
+    else
+      W.row(static_cast<int>(i)).setZero();
+  }
+  return W;
+}
+
 // FORWARD weight rows: psi(i,:) such that forward(times[i]) = psi(i,:)·x, for the same linear region layouts as
 // integral_weight_matrix (the forward is linear in x whenever the integral is). One Dual pass, setup only. Used by
 // the compiled MOMENT path (BundleFloatBatch): ∫f² over a window becomes the quadratic form xᵀ(Σ_k w_k psi_k psi_kᵀ)x

@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include <Eigen/Core>
+
 #include "swaps/curve/regions.hpp"
 
 namespace swaps::curve {
@@ -41,6 +43,17 @@ struct RegionIface {
   virtual std::vector<double> pieces() const = 0;     // breakpoints between which f is ONE analytic piece
   virtual double tension_sigma() const = 0;           // Scheme::Tension's σ (0 for every other scheme)
   virtual Boundary<S> out() const = 0;
+  // EXPERIMENT (exp/piecewise-linear-w): append this region's value-dependent branch trace (empty for every
+  // LINEAR scheme -- it has no decisions). Equal traces over the whole curve => the same linear map of x.
+  virtual void pattern_into(std::vector<unsigned char>&) const {}
+  // Phase 2: the filter inputs (linear in x) and the pattern computed from them. Empty / no-op when linear.
+  virtual void prefilter_into(std::vector<S>&) const {}
+  virtual int prefilter_size() const { return 0; }
+  virtual void pattern_from_prefilter(const double*, std::vector<unsigned char>&) const {}
+  // Analytic re-take (EXPERIMENT): tangent override + the node structure the decoder needs. No-ops if linear.
+  virtual void set_tangent_override(const S*) {}
+  virtual int n_nodes() const { return 0; }
+  virtual const std::vector<double>* node_spacing() const { return nullptr; }
 };
 
 template <class S, template <class> class Policy>
@@ -59,6 +72,34 @@ struct RegionHolder final : RegionIface<S> {
   std::vector<double> pieces() const override { return p.pieces(); }
   double tension_sigma() const override { return 0.0; }
   Boundary<S> out() const override { return p.out(); }
+  void pattern_into(std::vector<unsigned char>& out) const override {
+    if constexpr (requires { p.pattern(); }) out.insert(out.end(), p.pattern().begin(), p.pattern().end());
+  }
+  void prefilter_into(std::vector<S>& out) const override {
+    if constexpr (requires { p.prefilter(); }) out.insert(out.end(), p.prefilter().begin(), p.prefilter().end());
+  }
+  int prefilter_size() const override {
+    if constexpr (requires { p.prefilter(); }) return static_cast<int>(p.prefilter().size());
+    return 0;
+  }
+  void set_tangent_override(const S* m) override {
+    if constexpr (requires { p.set_tangent_override(m); }) p.set_tangent_override(m);
+  }
+  int n_nodes() const override {
+    if constexpr (requires { p.n_nodes(); }) return p.n_nodes();
+    return 0;
+  }
+  const std::vector<double>* node_spacing() const override {
+    if constexpr (requires { p.node_spacing(); }) return &p.node_spacing();
+    return nullptr;
+  }
+  void pattern_from_prefilter(const double* z, std::vector<unsigned char>& out) const override {
+    if constexpr (requires { p.pattern_from_prefilter(z, out); }) {
+      thread_local std::vector<unsigned char> part;
+      p.pattern_from_prefilter(z, part);
+      out.insert(out.end(), part.begin(), part.end());
+    }
+  }
 };
 
 // Tension needs a second construction argument (σ), so it gets its own holder rather than the generic
@@ -210,6 +251,46 @@ class ModularCurve {
   S discount(double t) const {
     using std::exp;
     return exp(-integral(t));
+  }
+  // EXPERIMENT: the curve's branch pattern at the last set_forwards (concatenated region traces; empty for a
+  // fully linear curve). A piecewise-linear curve is ONE linear map of x throughout each pattern's cell.
+  void pattern_into(std::vector<unsigned char>& out) const {
+    out.clear();
+    for (const auto& r : regions_) r->pattern_into(out);
+  }
+  // Phase 2 (one-pass linear map): every region's filter inputs, concatenated -- linear in x, so a caller
+  // takes G = d(prefilter)/dx ONCE (AAD) and afterwards reads patterns off z = G·x (pattern_from_prefilter).
+  void prefilter_into(std::vector<S>& out) const {
+    out.clear();
+    for (const auto& r : regions_) r->prefilter_into(out);
+  }
+  // Analytic re-take (EXPERIMENT): supported for a curve with EXACTLY ONE value-dependent region (the one
+  // whose tangents are overridden / decoded); otherwise the caller falls back to the AAD re-take.
+  int n_value_dependent_regions() const {
+    int k = 0;
+    for (const auto& r : regions_) k += r->linear() ? 0 : 1;
+    return k;
+  }
+  void set_tangent_override(const S* m) {
+    for (auto& r : regions_) if (!r->linear()) r->set_tangent_override(m);
+  }
+  int pwl_nodes() const {  // after a set_forwards
+    for (const auto& r : regions_) if (!r->linear()) return r->n_nodes();
+    return 0;
+  }
+  const std::vector<double>* pwl_spacing() const {
+    for (const auto& r : regions_) if (!r->linear()) return r->node_spacing();
+    return nullptr;
+  }
+  // Requires one prior set_forwards (a region's node spacing includes its join time).
+  void pattern_from_prefilter(const Eigen::VectorXd& z, std::vector<unsigned char>& out) const {
+    out.clear();
+    int o = 0;
+    for (const auto& r : regions_) {
+      const int k = r->prefilter_size();
+      if (k) r->pattern_from_prefilter(z.data() + o, out);
+      o += k;
+    }
   }
   S zero(double t) const { return t <= 0.0 ? forward(0.0) : integral(t) / t; }
 

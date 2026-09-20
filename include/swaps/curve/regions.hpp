@@ -469,9 +469,20 @@ class MonotoneCubic {
     std::vector<Scalar> m(N);
     thomas_solve(lower, diag, upper, rhs, m);
 
+    // EXPERIMENT: keep the filter's INPUTS (linear in x) so a caller can precompute z = G·x once and read the
+    // branch pattern without rebuilding the curve (pattern_from_prefilter).
+    h_ = h;
+    pre_.assign(S.begin(), S.end());
+    pre_.insert(pre_.end(), m.begin(), m.end());
+
     // Hyman monotonicity filter (bit-for-bit QuantLib): clamp each tangent so no segment overshoots.
     // The `!= ` comparisons + min/max/sign are exactly the value-dependent branches that break linearity.
-    hyman_filter(h, S, m);
+    hyman_filter(h, S, m, pattern_);
+    // EXPERIMENT (analytic re-take): replace the filtered tangents by caller-supplied scalars. Seeded as
+    // INDEPENDENT duals, one AAD pass then splits d integral(t) into [dx | dm] = [L_t | B_t] -- the curve is
+    // linear in (x, m) jointly once m is freed from the filter. Values are irrelevant to those derivatives.
+    if (m_override_)
+      for (int j = 0; j < N; ++j) m[j] = m_override_[j];
 
     // Per-segment cubic f(u) = a + b u + c u^2 + d u^3, u = t - xs_[i]  (identical form to Hermite).
     a_.resize(nseg); b_.resize(nseg); c_.resize(nseg); d_.resize(nseg);
@@ -544,50 +555,142 @@ class MonotoneCubic {
   static Scalar smin(const Scalar& a, const Scalar& b) { return b < a ? b : a; }
   static Scalar smax(const Scalar& a, const Scalar& b) { return a < b ? b : a; }
   // QuantLib's Hyman monotonicity filter on the node tangents m, given segment lengths h and secants S.
-  static void hyman_filter(const std::vector<double>& h, const std::vector<Scalar>& S,
-                           std::vector<Scalar>& m) {
+  // QuantLib's Hyman monotonicity filter on the node tangents m, given segment lengths h and secants S.
+  //
+  // EXPERIMENT (exp/piecewise-linear-w): the filter's VALUES are built only from abs/min/max/sign and fixed
+  // h-ratios (products appear only inside conditions), so each node ends as ONE of three linear formulas:
+  //   0,   m_raw,   or   sign(m_raw) * c * |candidate|   (candidate one of S[i-1], S[i], pm, pd, pu, 3·S_end)
+  // `pattern` records exactly that CANONICAL outcome per node -- two bytes {kind, candidate id + sign} -- NOT
+  // the decision path. (A path trace over-reports: e.g. the pd/pu guard flips with the sign of a long-end
+  // second difference even when the widened candidate then loses the max, which is the same formula. That
+  // made the first version re-take W on almost every streaming tick.) Equal patterns <=> the same linear map
+  // of x. Values are computed with exactly the original operations in the original order (bit-identical).
+  template <class T>
+  static void hyman_filter(const std::vector<double>& h, const std::vector<T>& S, std::vector<T>& m,
+                           std::vector<unsigned char>& pattern) {
     using std::abs;
+    struct C { T v; unsigned char code; };  // a value + the canonical formula it came from
+    const auto cabs = [](const T& v, int id) { return C{abs(v), static_cast<unsigned char>(2 * id + (v < 0.0 ? 1 : 0))}; };
+    const auto cmin = [](const C& a, const C& b) { return b.v < a.v ? b : a; };
+    const auto cmax = [](const C& a, const C& b) { return a.v < b.v ? b : a; };
+    pattern.clear();
     const int N = static_cast<int>(m.size());
     for (int i = 0; i < N; ++i) {
-      Scalar correction, pm, pu, pd, M;
-      if (i == 0) {
-        if (m[i] * S[0] > 0.0)
-          correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[0]));
-        else
-          correction = m[i] * 0.0;  // PATCH: width-preserving zero (Scalar(0.0) is an EMPTY dual -> size mismatch)
-        if (correction != m[i]) m[i] = correction;
-      } else if (i == N - 1) {
-        if (m[i] * S[N - 2] > 0.0)
-          correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[N - 2]));
-        else
-          correction = m[i] * 0.0;  // PATCH: width-preserving zero (Scalar(0.0) is an EMPTY dual -> size mismatch)
-        if (correction != m[i]) m[i] = correction;
+      T correction, pm, pu, pd;
+      C M;
+      bool gate;  // the outer sign test: false -> the node's tangent is zeroed
+      if (i == 0 || i == N - 1) {
+        const T& Se = (i == 0) ? S[0] : S[N - 2];
+        gate = m[i] * Se > 0.0;
+        M = cabs(3.0 * Se, kEnd);
       } else {
         pm = (S[i - 1] * h[i] + S[i] * h[i - 1]) / (h[i - 1] + h[i]);
-        M = 3.0 * smin(smin(abs(S[i - 1]), abs(S[i])), abs(pm));
+        M = cmin(cmin(cabs(S[i - 1], kS0), cabs(S[i], kS1)), cabs(pm, kPm3));
+        M.v = 3.0 * M.v;
         if (i > 1) {
           if ((S[i - 1] - S[i - 2]) * (S[i] - S[i - 1]) > 0.0) {
             pd = (S[i - 1] * (2.0 * h[i - 1] + h[i - 2]) - S[i - 2] * h[i - 1]) / (h[i - 2] + h[i - 1]);
-            if (pm * pd > 0.0 && pm * (S[i - 1] - S[i - 2]) > 0.0)
-              M = smax(M, Scalar(1.5) * smin(abs(pm), abs(pd)));
+            if (pm * pd > 0.0 && pm * (S[i - 1] - S[i - 2]) > 0.0) {
+              C w = cmin(cabs(pm, kPm15), cabs(pd, kPd));
+              w.v = T(1.5) * w.v;
+              M = cmax(M, w);
+            }
           }
         }
         if (i < N - 2) {
           if ((S[i] - S[i - 1]) * (S[i + 1] - S[i]) > 0.0) {
             pu = (S[i] * (2.0 * h[i] + h[i + 1]) - S[i + 1] * h[i]) / (h[i] + h[i + 1]);
-            if (pm * pu > 0.0 && -pm * (S[i] - S[i - 1]) > 0.0)
-              M = smax(M, Scalar(1.5) * smin(abs(pm), abs(pu)));
+            if (pm * pu > 0.0 && -pm * (S[i] - S[i - 1]) > 0.0) {
+              C w = cmin(cabs(pm, kPm15), cabs(pu, kPu));
+              w.v = T(1.5) * w.v;
+              M = cmax(M, w);
+            }
           }
         }
-        if (m[i] * pm > 0.0)
-          correction = m[i] / abs(m[i]) * smin(abs(m[i]), M);
-        else
-          correction = m[i] * 0.0;  // PATCH: width-preserving zero (Scalar(0.0) is an EMPTY dual -> size mismatch)
-        if (correction != m[i]) m[i] = correction;
+        gate = m[i] * pm > 0.0;
       }
+      unsigned char kind, code = 0;
+      if (gate) {
+        const T am = abs(m[i]);
+        const bool clamp = M.v < am;  // == smin(|m|, M) picking M
+        correction = m[i] / am * (clamp ? M.v : am);
+        kind = clamp ? static_cast<unsigned char>(m[i] < 0.0 ? 3 : 2) : 1;  // clamp keeps sign(m): part of the formula
+        if (clamp) code = M.code;
+      } else {
+        correction = m[i] * 0.0;  // PATCH: width-preserving zero (Scalar(0.0) is an EMPTY dual -> size mismatch)
+        kind = 0;
+      }
+      if (correction != m[i]) m[i] = correction;
+      pattern.push_back(kind);
+      pattern.push_back(code);
     }
   }
 
+ public:
+  // The branch pattern of the last build (see hyman_filter). Equal patterns => identical linear map of x.
+  const std::vector<unsigned char>& pattern() const { return pattern_; }
+  // The filter's inputs z = [S (N-1); m_raw (N)] at the last build -- LINEAR in x (they precede the filter).
+  const std::vector<Scalar>& prefilter() const { return pre_; }
+  // The branch pattern for inputs z (a slice of G·x), WITHOUT rebuilding: the same recorder on doubles.
+  // Requires one prior build (h_ is the node spacing, fixed by the knots and the join time).
+  // EXPERIMENT (analytic re-take).
+  void set_tangent_override(const Scalar* m) { m_override_ = m; }  // nullptr restores the filter
+  int n_nodes() const { return static_cast<int>(xs_.size()); }       // tangents N (valid after a build)
+  const std::vector<double>& node_spacing() const { return h_; }
+  // DECODE a node's canonical code into its formula over the filter inputs z = [S (N-1); m_raw (N)]:
+  // m_j = phi · z, written into phi[0 .. 2N-2]. The exact inverse of the encoding in hyman_filter:
+  //   kind 0 -> 0;  kind 1 -> m_raw_j;  kind 2/3 -> sign(m) * factor * sign(cand) * cand,
+  // with cand one of S[i-1], S[i], pm, pd, pu (interior) or S_end (ends), factor 3 or 1.5.
+  static void tangent_formula(unsigned char kind, unsigned char code, int i, const std::vector<double>& h, int N,
+                              double* phi) {
+    const int nz = 2 * N - 1, nS = N - 1;
+    for (int k = 0; k < nz; ++k) phi[k] = 0.0;
+    if (kind == 0) return;
+    if (kind == 1) { phi[nS + i] = 1.0; return; }
+    const double f = (kind == 3 ? -1.0 : 1.0) * ((code & 1) ? -1.0 : 1.0);
+    const auto pm = [&](double c) {
+      const double w = h[i - 1] + h[i];
+      phi[i - 1] += c * h[i] / w;
+      phi[i] += c * h[i - 1] / w;
+    };
+    switch (code >> 1) {
+      case kS0: phi[i - 1] += 3.0 * f; break;
+      case kS1: phi[i] += 3.0 * f; break;
+      case kPm3: pm(3.0 * f); break;
+      case kPm15: pm(1.5 * f); break;
+      case kPd: {
+        const double w = h[i - 2] + h[i - 1];
+        phi[i - 1] += 1.5 * f * (2.0 * h[i - 1] + h[i - 2]) / w;
+        phi[i - 2] -= 1.5 * f * h[i - 1] / w;
+        break;
+      }
+      case kPu: {
+        const double w = h[i] + h[i + 1];
+        phi[i] += 1.5 * f * (2.0 * h[i] + h[i + 1]) / w;
+        phi[i + 1] -= 1.5 * f * h[i] / w;
+        break;
+      }
+      case kEnd: phi[i == 0 ? 0 : N - 2] += 3.0 * f; break;
+      default: break;
+    }
+  }
+  void pattern_from_prefilter(const double* z, std::vector<unsigned char>& out) const {
+    const int nseg = static_cast<int>(h_.size());
+    std::vector<double>& S = scratch_S_;
+    std::vector<double>& m = scratch_m_;
+    S.assign(z, z + nseg);
+    m.assign(z + nseg, z + 2 * nseg + 1);
+    hyman_filter(h_, S, m, out);
+  }
+
+ private:
+  // Canonical candidate ids of the filter's clamp formula (encoder: hyman_filter; decoder: tangent_formula).
+  enum : int { kS0 = 1, kS1 = 2, kPm3 = 3, kPm15 = 4, kPd = 5, kPu = 6, kEnd = 7 };
+  const Scalar* m_override_ = nullptr;
+  std::vector<unsigned char> pattern_;
+  std::vector<double> h_;
+  std::vector<Scalar> pre_;
+  mutable std::vector<double> scratch_S_, scratch_m_;
   std::vector<double> s_, xs_;
   std::vector<Scalar> ys_, a_, b_, c_, d_, Is_;
   Scalar end_slope_{0.0};

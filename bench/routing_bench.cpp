@@ -51,6 +51,17 @@ void routed_jacobian(benchmark::State& st, const Shape& s) {
   Arms a(s);
   for (auto _ : st) benchmark::DoNotOptimize(a.routed.jacobian(s.x_true).sum());
 }
+// EXPERIMENT (exp/piecewise-linear-w): the piecewise-linear W tier -- every compilable row on the W-cache,
+// W re-taken only when x's branch pattern changes. Fixed x here, so after the first call each iteration pays
+// the pattern check (a double rebuild of the value-dependent curve) but no re-take.
+void pwl_residual(benchmark::State& st, const Shape& s) {
+  const cal::HybridBundleResidual e(s.prob, /*pwl=*/true);
+  for (auto _ : st) benchmark::DoNotOptimize(e.residuals(s.x_true).sum());
+}
+void pwl_jacobian(benchmark::State& st, const Shape& s) {
+  const cal::HybridBundleResidual e(s.prob, /*pwl=*/true);
+  for (auto _ : st) benchmark::DoNotOptimize(e.jacobian(s.x_true).sum());
+}
 void aad_jacobian(benchmark::State& st, const Shape& s) {
   Arms a(s);
   Eigen::MatrixXd J(s.prob.n_residuals(), s.prob.n_knots());
@@ -66,6 +77,15 @@ int main(int argc, char** argv) {
     const Arms a(s);
     std::fprintf(stderr, "%-22s %5d %9d %9d\n", s.name.c_str(), a.n, a.compiled, a.n - a.compiled);
   }
+  // EXPERIMENT parity: the PWL engine must agree with the shipped router before any timing is quoted.
+  std::fprintf(stderr, "\n%-22s %6s %9s %12s %12s\n", "rung", "pwl?", "compiled", "|dr|max", "|dJ|max rel");
+  for (const Shape& s : rungs) {
+    const cal::HybridBundleResidual base(s.prob, false), pwl(s.prob, true);
+    const Eigen::VectorXd dr = pwl.residuals(s.x_true) - base.residuals(s.x_true);
+    const Eigen::MatrixXd Jb = base.jacobian(s.x_true), dJ = pwl.jacobian(s.x_true) - Jb;
+    std::fprintf(stderr, "%-22s %6s %9d %12.2e %12.2e\n", s.name.c_str(), pwl.pwl_active() ? "yes" : "no",
+                 pwl.n_compiled_rows(), dr.cwiseAbs().maxCoeff(), dJ.cwiseAbs().maxCoeff() / std::max(1e-300, Jb.cwiseAbs().maxCoeff()));
+  }
   for (const Shape& s : rungs) {
     benchmark::RegisterBenchmark(("BM_Route_" + s.name + "_Residual_routed").c_str(),
                                  [&s](benchmark::State& st) { routed_residual(st, s); });
@@ -75,6 +95,10 @@ int main(int argc, char** argv) {
                                  [&s](benchmark::State& st) { routed_jacobian(st, s); });
     benchmark::RegisterBenchmark(("BM_Route_" + s.name + "_Jacobian_allAad").c_str(),
                                  [&s](benchmark::State& st) { aad_jacobian(st, s); });
+    benchmark::RegisterBenchmark(("BM_Route_" + s.name + "_Residual_pwl").c_str(),
+                                 [&s](benchmark::State& st) { pwl_residual(st, s); });
+    benchmark::RegisterBenchmark(("BM_Route_" + s.name + "_Jacobian_pwl").c_str(),
+                                 [&s](benchmark::State& st) { pwl_jacobian(st, s); });
   }
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();

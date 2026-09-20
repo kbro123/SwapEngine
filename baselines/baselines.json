@@ -10,7 +10,7 @@
     "2x gross self-slowdown; the 1.25x self-regression band was advisory. Machines 52e94be82bc4 / a8c9a844826e /",
     "86d5211c2c03 below were captured under that regime (mean-of-3, some under load) and are kept as history.",
     "86d5211c2c03 paired a clang-21 engine with a clang-16 / AVX-512 QuantLib (fingerprint did not see the",
-    "QuantLib build) \u2014 its reference speedups are NOT like-for-like.",
+    "QuantLib build) — its reference speedups are NOT like-for-like.",
     "2026-09-08: metric keys renamed to say WHAT is built (market_size_operation); tools/check_perf.py --describe prints the full descriptions."
   ],
   "policy": {
@@ -34,29 +34,33 @@
     "sofr_23k_square_cold_calibrate": "USD SOFR single curve, 23 knots (6 FOMC meeting dates flat-forward + 17 spline knots), SQUARE: 23 instruments (1M averaging + 3M compounded SOFR futures, OIS to 30y) at the knot pillars, eval 2026-07-08. Cold global LM from a flat 3.5% start. Reference: QuantLib GlobalBootstrap (same algorithm class), never IterativeBootstrap.",
     "sofr_23k_risk_ladder_23q_book9": "Same SOFR 23-knot curve, already calibrated: full bucketed delta ladder over all 23 market quotes for a 9-swap OIS book. Ours = one AAD gradient + calibration Jacobian + one solve (rank-safe COD since 2026-09-07). Reference: QuantLib bump each quote / re-bootstrap (IterativeBootstrap, one-sided) / reprice.",
     "sofr_23k_book1000_ois_reprice": "1000 OIS swaps off the SOFR 23-knot curve: par rate + NPV + PV01 as batched DF=exp(-Wx) algebra (W prebuilt). Reference: QuantLib per-swap NPV() loop, handle relinked each iteration so it must reprice.",
-    "sofr_23k_warm_recal_0p3bp": "SOFR 23-knot curve: STREAMED re-calibration (StreamingCalibrator, exact frozen-Newton tick -- the path BundleSession::recalibrate runs) after a \u00b10.3 bp move on EVERY quote (alternating sign). Reference: QuantLib IterativeBootstrap re-bootstrap after the IDENTICAL move. Re-pointed 2026-09-10 (E6.1b): until then it timed the deleted cached-Jacobian WarmCalibrator.",
-    "sofr_23k_warm_recal_10bp": "As above at \u00b110 bp -- a move large enough that the streamer may refresh its Jacobian. The honest big-move number. Re-pointed 2026-09-10 (E6.1b) from the deleted WarmCalibrator to the streamed tick.",
-    "ust_5000_clean_to_yield_sweep": "5000 seasoned semiannual US Treasuries, clean price \u2192 yield: ours = one batched Newton (Horner over the coupon polynomial) vs QuantLib BondFunctions::yield bond-for-bond (its default path is inflated by a solver artifact; the tuned baseline is also reported in the bench).",
+    "sofr_23k_warm_recal_0p3bp": "SOFR 23-knot curve: STREAMED re-calibration (StreamingCalibrator, exact frozen-Newton tick -- the path BundleSession::recalibrate runs) after a ±0.3 bp move on EVERY quote (alternating sign). Reference: QuantLib IterativeBootstrap re-bootstrap after the IDENTICAL move. Re-pointed 2026-09-10 (E6.1b): until then it timed the deleted cached-Jacobian WarmCalibrator.",
+    "sofr_23k_warm_recal_10bp": "As above at ±10 bp -- a move large enough that the streamer may refresh its Jacobian. The honest big-move number. Re-pointed 2026-09-10 (E6.1b) from the deleted WarmCalibrator to the streamed tick.",
+    "ust_5000_clean_to_yield_sweep": "5000 seasoned semiannual US Treasuries, clean price → yield: ours = one batched Newton (Horner over the coupon polynomial) vs QuantLib BondFunctions::yield bond-for-bond (its default path is inflated by a solver artifact; the tuned baseline is also reported in the bench).",
     "ust_5000_curve_book_dirty_price": "The same 5000 UST book dirty-priced off a calibrated curve: ours = DF=exp(-Wx) + gathered flows + sparse per-bond reduction vs a per-bond QuantLib DiscountingBondEngine on the SAME discount factors.",
-    "sofr_swaption_cube17_sabr_reprice_warm": "SOFR bundle (bench/fixtures/sofr_bundle.json, mid-2026, 1 curve, 9 instruments) already calibrated: reprice a 17-cell SABR swaption surface (a \u00b1150 bp 1Y\u00d75Y smile with 21 strikes + a 4\u00d74 ATM expiry\u00d7tenor grid) with NO recalibration \u2014 one curve sample + a Bachelier/SABR pass. The live vol-surface number.",
-    "sofr_swaption_cube17_cold_calibrate_price": "Same 17-cell cube, but construct the session from JSON, calibrate the SOFR bundle, then price \u2014 the one-shot verb cost (Excel / fresh run_json).",
-    "chain8x26_session_cold_build_calibrate": "DESK-SCALE SYNTHETIC SPREAD CHAIN: 8 curves (curve 0 outright + 7 spread curves each over the previous), 26 knots per curve (1 front + 25 back), annual par/basis pillars to 30y (annual coupons, ACT/ACT-style year fractions, no calendars) \u2014 208 knots, 208 rows. BundleSession built from JSON + cold joint LM.",
-    "chain8x26_session_rebind": "Same 8\u00d726 chain: BundleSession::rebind (new quotes, same structure) \u2014 TODAY a full LM re-solve (13.6 ms), not a warm path; E6.2 target \u2264 1 ms.",
+    "sofr_swaption_cube17_sabr_reprice_warm": "SOFR bundle (bench/fixtures/sofr_bundle.json, mid-2026, 1 curve, 9 instruments) already calibrated: reprice a 17-cell SABR swaption surface (a ±150 bp 1Y×5Y smile with 21 strikes + a 4×4 ATM expiry×tenor grid) with NO recalibration — one curve sample + a Bachelier/SABR pass. The live vol-surface number.",
+    "sofr_swaption_cube17_cold_calibrate_price": "Same 17-cell cube, but construct the session from JSON, calibrate the SOFR bundle, then price — the one-shot verb cost (Excel / fresh run_json).",
+    "chain8x26_session_cold_build_calibrate": "DESK-SCALE SYNTHETIC SPREAD CHAIN: 8 curves (curve 0 outright + 7 spread curves each over the previous), 26 knots per curve (1 front + 25 back), annual par/basis pillars to 30y (annual coupons, ACT/ACT-style year fractions, no calendars) — 208 knots, 208 rows. BundleSession built from JSON + cold joint LM.",
+    "chain8x26_session_rebind": "Same 8×26 chain: BundleSession::rebind (new quotes, same structure) — TODAY a full LM re-solve (13.6 ms), not a warm path; E6.2 target ≤ 1 ms.",
     "chain8x26_session_rebind_tension_reg": "Same rebind with the tension-energy regulariser on (the SDK default): cached RegularizedEngine path.",
-    "chain8x26_session_stream_tick": "Same 8\u00d726 chain: one BundleSession::stream_update tick (frozen-Jacobian Newton to convergence on the compiled W-cache engine) after a small quote move.",
-    "chain8x26_book200_price_portfolio_oneshot": "200-swap multi-curve book spread across all 8 forecast curves of the chain, ONE-SHOT price_portfolio (templated virtual-handle path, no bind) \u2014 NPV + AAD PV01.",
+    "chain8x26_session_stream_tick": "Same 8×26 chain: one BundleSession::stream_update tick (frozen-Jacobian Newton to convergence on the compiled W-cache engine) after a small quote move.",
+    "chain8x26_book200_price_portfolio_oneshot": "200-swap multi-curve book spread across all 8 forecast curves of the chain, ONE-SHOT price_portfolio (templated virtual-handle path, no bind) — NPV + AAD PV01.",
     "chain8x26_book200_compiled_reprice": "The same 200-swap book on the CompiledMultiCurveBook twin (what reprice_bound uses per tick): one DF=exp(-W_all x) matvec + gathered reduce, flipping between two curve states. Reference row: the templated virtual-handle path.",
-    "chain8x26_kernel_cold_joint_lm": "Kernel-level (no session/JSON) cold joint LM on the 8\u00d726 chain via the HybridBundleResidual.",
-    "chain8x26_kernel_one_residual": "One residual evaluation of the 8\u00d726 chain on the compiled W-cache engine (208 rows).",
-    "chain8x26_kernel_one_jacobian": "One analytic support-blocked Jacobian of the 8\u00d726 chain (208\u00d7208) \u2014 the per-LM-iteration cost.",
-    "usd_eur_xccy_3c8k_hybrid_jacobian": "USD + EUR + EURUSD-xccy bundle, 3 curves \u00d7 8 knots, with genuinely NON-W-cacheable rows: FX forwards nested inside Portfolio instruments and MtM xccy basis swaps with a 2-day funding-leg payment lag (fx spot 1.10). HybridBundleResidual::jacobian (AAD block dominates).",
-    "usd_eur_xccy_3c8k_aad_block_jacobian": "The AadBlock forward-AAD sweep of the same bundle in isolation, pooled duals (touched width 24 \u2264 kPooledMaxW=48). Reference row: the force-heap Dual fallback (the before/after of the DualPooled retype).",
+    "chain8x26_kernel_cold_joint_lm": "Kernel-level (no session/JSON) cold joint LM on the 8×26 chain via the HybridBundleResidual.",
+    "chain8x26_kernel_one_residual": "One residual evaluation of the 8×26 chain on the compiled W-cache engine (208 rows).",
+    "chain8x26_kernel_one_jacobian": "One analytic support-blocked Jacobian of the 8×26 chain (208×208) — the per-LM-iteration cost.",
+    "usd_eur_xccy_3c8k_hybrid_jacobian": "USD + EUR + EURUSD-xccy bundle, 3 curves × 8 knots, with genuinely NON-W-cacheable rows: FX forwards nested inside Portfolio instruments and MtM xccy basis swaps with a 2-day funding-leg payment lag (fx spot 1.10). HybridBundleResidual::jacobian (AAD block dominates).",
+    "usd_eur_xccy_3c8k_aad_block_jacobian": "The AadBlock forward-AAD sweep of the same bundle in isolation, pooled duals (touched width 24 ≤ kPooledMaxW=48). Reference row: the force-heap Dual fallback (the before/after of the DualPooled retype).",
     "usd_eur_xccy_3c8k_stream_tick": "One StreamingCalibrator tick on the same USD/EUR/xccy hybrid bundle.",
     "shape_<name>_stream_tick": "THE SHAPE LADDER (bench/fixtures/shape_ladder.hpp): one 0.1 bp streaming tick (frozen Jacobian) on the named instrument shape, real DB conventions and dates: ois_nolag (GBP SONIA), ois_lag (USD SOFR), ibor_multicurve (EUR ESTR + 6M EURIBOR spread), basis_spread (SOFR + FF ParSpread), averaged (+ monthly averaged FF futures), averaged_leg (FF OIS with daily-averaged float coupons), banded (+-1bp Huber bands), turns (year-end turn pin + bracketing future), portfolio (butterflies), zero_coupon (BRL DI x Pre), fx_xccy (SOFR + ESTR + EUR-in-USD FX forwards & MtM xccy; hybrid route), desk (all of it, 5 curves).",
     "shape_<name>_refresh_25bp": "Same shape, a 25 bp move each tick: Jacobian refresh + factorisation on every tick. On a banded shape the move is a FOUR-NUMBER requote -- every band moves with its target (K5', 2026-09-15: a target is never outside its band).",
     "shape_<name>_jacobian": "Same shape, one HybridBundleResidual::jacobian at x_true.",
     "shape_<name>_requote_tick": "Banded shapes only: a 0.1 bp FOUR-NUMBER requote tick -- every row's target AND band move together through BundleSession::stream_update(target, lower, upper, decay); the band move rides the streamer in place (a row re-scale), never a re-anchor. Replaced shape_<name>_edge_osc_tick (K5', 2026-09-15), which timed a banded target oscillating outside its band.",
-    "chain8x26_session_rebind_stamped": "Desk-scale 8-curve spread chain (8x26 knots, 240 instruments, 6,975 float coupons): BundleSession::rebind with new quotes through the STAMPED overload -- the caller hands a cal::StampedBundle carrying the structural stamp hashed once when the structure was built, so the 'same structure' check is two integers instead of structure_equal's O(n) walk (measured 192 us of the unstamped 316 us). Same solve, same quote/band validation; only the structural check differs from chain8x26_session_rebind."
+    "chain8x26_session_rebind_stamped": "Desk-scale 8-curve spread chain (8x26 knots, 240 instruments, 6,975 float coupons): BundleSession::rebind with new quotes through the STAMPED overload -- the caller hands a cal::StampedBundle carrying the structural stamp hashed once when the structure was built, so the 'same structure' check is two integers instead of structure_equal's O(n) walk (measured 192 us of the unstamped 316 us). Same solve, same quote/band validation; only the structural check differs from chain8x26_session_rebind.",
+    "shape_mixed_scheme_residual_pwl": "Shape ladder rung 'mixed_scheme' (29 rows, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_mixed_scheme_Residual_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE residual evaluation.",
+    "shape_mixed_scheme_jacobian_pwl": "Shape ladder rung 'mixed_scheme' (29 rows, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_mixed_scheme_Jacobian_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE full Jacobian.",
+    "shape_desk_mixed_residual_pwl": "Shape ladder rung 'desk_mixed' (70 rows, 5 curves, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_desk_mixed_Residual_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE residual evaluation.",
+    "shape_desk_mixed_jacobian_pwl": "Shape ladder rung 'desk_mixed' (70 rows, 5 curves, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_desk_mixed_Jacobian_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE full Jacobian."
   },
   "machines": {
     "52e94be82bc4": {
@@ -688,6 +692,30 @@
         },
         "usd_eur_xccy_3c8k_stream_tick": {
           "ours_ns": 64159,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_mixed_scheme_residual_pwl": {
+          "ours_ns": 1071,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_mixed_scheme_jacobian_pwl": {
+          "ours_ns": 19741,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_mixed_residual_pwl": {
+          "ours_ns": 4649,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_desk_mixed_jacobian_pwl": {
+          "ours_ns": 181283,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null

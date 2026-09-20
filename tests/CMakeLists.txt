@@ -94,6 +94,7 @@ add_executable(swaps_tests
   calibration_status_test.cpp
   kernel_edges_test.cpp
   router_partition_test.cpp
+  exp_pwl_test.cpp
   structural_stamp_test.cpp
   moment_quadrature_test.cpp
   rank_safety_test.cpp

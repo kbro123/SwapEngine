@@ -74,7 +74,119 @@ class CompiledCurveSet {
       o += specs[c].n_knots();
     }
     n_knots_ = o;
+    eval_x_.assign(specs.size(), Eigen::VectorXd());
   }
+
+  // EXPERIMENT (exp/piecewise-linear-w): PIECEWISE-LINEAR mode. A curve with a value-dependent region takes
+  // its W at a STATE (integral_weight_matrix_at) instead of refusing times past its linear horizon; the W is
+  // then exact throughout that state's branch-pattern cell. The owner re-points the state and re-runs
+  // finalize() when the pattern changes. Call before finalize(). Fully linear curves are unaffected.
+  void enable_pwl() { pwl_ = true; }
+  bool pwl() const { return pwl_; }
+  bool value_dependent(int c) const {
+    for (const auto& r : specs_[c].regions)
+      if (!curve::scheme_is_linear(r.scheme)) return true;
+    return false;
+  }
+  // The state a value-dependent curve's W is taken at (its interp-knot segment of the stacked x).
+  void set_eval_state(const Eigen::VectorXd& x) {
+    for (int c = 0; c < static_cast<int>(specs_.size()); ++c)
+      if (value_dependent(c)) eval_x_[c] = x.segment(knot_offset_[c], specs_[c].n_interp_knots());
+  }
+  int knot_offset(int c) const { return knot_offset_[c]; }
+  const std::vector<CurveStructure>& specs() const { return specs_; }
+
+  // ---- ANALYTIC RE-TAKE (EXPERIMENT, exp/piecewise-linear-w) ------------------------------------------
+  // For a curve c with exactly one value-dependent (MonotoneCubic) region, every registered time t obeys
+  //     integral_c(t) = L_t·x_c + B_t·m        (m = the region's N FILTERED tangents)
+  // with L_t, B_t structure-only, and m = Φ_P·G·x_c (Φ_P decoded from the branch pattern). So when nodes
+  // j1..jk change formula, W's c-block changes by exactly ΔW = B[:, j]·ΔM[j, :] -- rank k, only on rows
+  // whose curve's ANCESTRY includes c (a spread curve's row carries its base's row at the same time) and
+  // whose B row is nonzero (t past the region start). Applied in place to W_ and the ancestry blocks.
+  struct PwlRow { int g, d, blk, blk_row, blk_col; };
+  struct PwlCurve {
+    int c = -1, off = 0, ni = 0, N = 0;
+    std::vector<PwlRow> rows;
+    Eigen::MatrixXd B;  // rows x N
+    Eigen::MatrixXd L;  // rows x ni: d integral / d x_c holding the filtered tangents fixed
+    Eigen::MatrixXd D;  // rows x ni: the last applied delta (scratch, sized once; the owner mirrors it into W^T)
+  };
+  // Structure-only; call after finalize(). Returns the pwl index, or -1 if c is not analytic-capable.
+  int pwl_prepare(int c) {
+    if (!pwl_ || !value_dependent(c)) return -1;
+    const auto mods = specs_[c].modules();
+    const int ni = specs_[c].n_interp_knots();
+    auto crv = curve::make_modular_curve<double>(mods);
+    if (crv.n_value_dependent_regions() != 1) return -1;
+    crv.set_forwards(Eigen::VectorXd::Constant(ni, 0.03));
+    const int N = crv.pwl_nodes();
+    PwlCurve P;
+    P.c = c; P.off = knot_offset_[c]; P.ni = ni; P.N = N;
+    // One AAD pass over [x_c (ni) | m (N)] with the filtered tangents replaced by independent duals.
+    using D = ad::Dual;
+    const int w = ni + N;
+    std::vector<D> xd(ni), md(N);
+    for (int k = 0; k < ni; ++k) xd[k] = D(0.03, w, k);
+    for (int j = 0; j < N; ++j) md[j] = D(0.0, w, ni + j);
+    auto cd = curve::make_modular_curve<D>(mods);
+    cd.set_tangent_override(md.data());
+    cd.set_forwards(xd);
+    std::vector<Eigen::RowVectorXd> Brows, Lrows;
+    for (int g = 0; g < static_cast<int>(pts_.size()); ++g) {
+      const int d = pts_[g].first;
+      bool anc = false;
+      for (int a = d; a >= 0 && !anc; a = specs_[a].base) anc = (a == c);
+      if (!anc) continue;
+      const D I = cd.integral(pts_[g].second);
+      if (I.derivatives().size() != w) continue;
+      const Eigen::RowVectorXd b = I.derivatives().tail(N).transpose();
+      if (b.cwiseAbs().maxCoeff() == 0.0) continue;  // before the region: pattern-independent row
+      PwlRow r{g, d, -1, -1, -1};
+      for (int k = 0; k < static_cast<int>(blk_rows_[d].size()); ++k)
+        if (blk_rows_[d][k] == g) { r.blk_row = k; break; }
+      for (int b2 = 0; b2 < static_cast<int>(blk_[d].size()); ++b2)
+        if (blk_[d][b2].off <= P.off && P.off + ni <= blk_[d][b2].off + blk_[d][b2].nk) {
+          r.blk = b2;
+          r.blk_col = P.off - blk_[d][b2].off;
+          break;
+        }
+      if (r.blk < 0 || r.blk_row < 0) return -1;  // layout not understood: stay on the AAD re-take
+      P.rows.push_back(r);
+      Brows.push_back(b);
+      Lrows.push_back(I.derivatives().head(ni).transpose());
+    }
+    P.B.resize(static_cast<int>(Brows.size()), N);
+    P.L.resize(static_cast<int>(Brows.size()), ni);
+    for (int r = 0; r < static_cast<int>(Brows.size()); ++r) { P.B.row(r) = Brows[r]; P.L.row(r) = Lrows[r]; }
+    P.D.setZero(static_cast<int>(Brows.size()), ni);
+    pwlc_.push_back(std::move(P));
+    return static_cast<int>(pwlc_.size()) - 1;
+  }
+  // FULL reset of c's affected rows to the cell of formula rows M (N x ni): W = L + B·M, exactly the recorded
+  // pattern's map. Used instead of an AAD re-take through the filter, which at a DEGENERATE state (a flat curve:
+  // S == m_raw == 0) follows the `correction != m` VALUE test and silently takes the neighbouring cell's
+  // derivative -- a W that disagrees with the recorded pattern (found: a flat cold seed broke every later update).
+  void pwl_set(int pc, const Eigen::Ref<const Eigen::MatrixXd>& M) {
+    PwlCurve& P = pwlc_[pc];
+    for (int r = 0; r < static_cast<int>(P.rows.size()); ++r)
+      P.D.row(r) = P.L.row(r) + P.B.row(r) * M - W_.row(P.rows[r].g).segment(P.off, P.ni);
+    apply_delta(P);
+  }
+  // ΔW = B[:, nodes]·dM (dM: k x ni, row q the change of node nodes[q]'s formula·G). Allocation-free.
+  void pwl_rank_update(int pc, const std::vector<int>& nodes, const Eigen::Ref<const Eigen::MatrixXd>& dM) {
+    PwlCurve& P = pwlc_[pc];
+    P.D.setZero();
+    for (int q = 0; q < static_cast<int>(nodes.size()); ++q) P.D.noalias() += P.B.col(nodes[q]) * dM.row(q);
+    apply_delta(P);
+  }
+  void apply_delta(PwlCurve& P) {
+    for (int r = 0; r < static_cast<int>(P.rows.size()); ++r) {
+      const PwlRow& pr = P.rows[r];
+      W_.row(pr.g).segment(P.off, P.ni) += P.D.row(r);
+      blk_[pr.d][pr.blk].W.row(pr.blk_row).segment(pr.blk_col, P.ni) += P.D.row(r);
+    }
+  }
+  const PwlCurve& pwl_curve(int pc) const { return pwlc_[pc]; }
 
   int reg(int curve, double t) {
     const auto key = std::make_pair(curve, t);
@@ -240,8 +352,13 @@ class CompiledCurveSet {
   Eigen::MatrixXd logdf_weight(int c, const std::vector<double>& times) const {
     const int ni = specs_[c].n_interp_knots();
     Eigen::MatrixXd W = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
-    W.middleCols(knot_offset_[c], ni) =
-        integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
+    if (pwl_ && value_dependent(c)) {  // EXPERIMENT: W of the state's branch-pattern cell
+      const Eigen::VectorXd xs = eval_x_[c].size() == ni ? eval_x_[c] : Eigen::VectorXd::Constant(ni, 0.03);
+      W.middleCols(knot_offset_[c], ni) = integral_weight_matrix_at(specs_[c].modules(), times, xs);
+    } else {
+      W.middleCols(knot_offset_[c], ni) =
+          integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
+    }
     for (int j = 0; j < static_cast<int>(specs_[c].turns.size()); ++j) {
       const int col = knot_offset_[c] + ni + j;  // δⱼ sits after the interp knots in c's block
       for (int i = 0; i < static_cast<int>(times.size()); ++i)
@@ -254,6 +371,9 @@ class CompiledCurveSet {
   std::vector<CurveStructure> specs_;
   std::vector<int> knot_offset_;
   int n_knots_ = 0;
+  bool pwl_ = false;                     // EXPERIMENT: value-dependent curves take W at eval_x_
+  std::vector<Eigen::VectorXd> eval_x_;  // EXPERIMENT: per-curve W evaluation state (empty = default seed)
+  std::vector<PwlCurve> pwlc_;           // EXPERIMENT: analytic re-take structure per value-dependent curve
   std::map<std::pair<int, double>, int> idx_;
   std::vector<std::pair<int, double>> pts_;  // global index -> (curve, time)
   Eigen::MatrixXd W_;

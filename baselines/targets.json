@@ -309,6 +309,22 @@
     "chain8x26_session_rebind_stamped": {
       "target_ns": 125000,
       "note": "set 2026-09-20 with the metric (E8 stamped rebind): 96.2 us x1.3. The unstamped chain8x26_session_rebind keeps its own 344.5 us target -- both paths stay gated; ratchets DOWN only"
+    },
+    "shape_mixed_scheme_residual_pwl": {
+      "target_ns": 1450,
+      "note": "set 2026-09-20 with the metric (exp/piecewise-linear-w): 1.1 us x1.3. Gates the PWL tier itself -- the shipped-router arm of the same rung is chain-free of this target; ratchets DOWN only"
+    },
+    "shape_mixed_scheme_jacobian_pwl": {
+      "target_ns": 25600,
+      "note": "set 2026-09-20 with the metric (exp/piecewise-linear-w): 19.7 us x1.3. Gates the PWL tier itself -- the shipped-router arm of the same rung is chain-free of this target; ratchets DOWN only"
+    },
+    "shape_desk_mixed_residual_pwl": {
+      "target_ns": 6000,
+      "note": "set 2026-09-20 with the metric (exp/piecewise-linear-w): 4.6 us x1.3. Gates the PWL tier itself -- the shipped-router arm of the same rung is chain-free of this target; ratchets DOWN only"
+    },
+    "shape_desk_mixed_jacobian_pwl": {
+      "target_ns": 235700,
+      "note": "set 2026-09-20 with the metric (exp/piecewise-linear-w): 181.3 us x1.3. Gates the PWL tier itself -- the shipped-router arm of the same rung is chain-free of this target; ratchets DOWN only"
     }
   }
 }
