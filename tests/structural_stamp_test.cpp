@@ -153,6 +153,22 @@ TEST(StructuralStamp, WithoutACarriedAccrualPeriodResolutionIsAStructuralChangeF
 
 TEST(StructuralStamp, MakeStampedCarriesTheStampOfItsOwnProblem) {
   const cal::StampedBundle b = cal::make_stamped(make_bundle());
-  EXPECT_EQ(b.stamp, cal::structural_stamp(b.problem));
-  EXPECT_NE(b.stamp, 0u);
+  EXPECT_EQ(b.stamp(), cal::structural_stamp(b.problem()));
+  EXPECT_NE(b.stamp(), 0u);
+}
+
+// The wrapper is immutable where it matters: the stamp is computed from the bytes it OWNS, so a caller
+// mutating its own copy of the problem afterwards cannot invalidate it, and requoting through the mutable
+// quote accessor leaves the stamp correct (quotes are not structure).
+TEST(StructuralStamp, TheStampCannotBeSeparatedFromWhatItStamped) {
+  cal::BundleProblem mine = make_bundle();
+  cal::StampedBundle b = cal::make_stamped(mine);
+  mine.instruments.pop_back();  // a structural edit to the CALLER's copy
+  EXPECT_EQ(b.stamp(), cal::structural_stamp(b.problem())) << "the stamped bundle owns its structure";
+  for (std::size_t i = 0; i < b.size(); ++i) {  // a requote through the mutable quote accessor
+    b.quotes(i).market += 5e-4;
+    b.quotes(i).band_lower = b.quotes(i).market - 1e-4;
+    b.quotes(i).band_upper = b.quotes(i).market + 1e-4;
+  }
+  EXPECT_EQ(b.stamp(), cal::structural_stamp(b.problem())) << "a requote does not invalidate the stamp";
 }

@@ -372,16 +372,35 @@ inline void require_stamp_match(std::uint64_t have, std::uint64_t want, const ch
                            "market targets and bands only");
 }
 
-// A bundle that CARRIES its structural stamp: the prototype of "every structure is built by one call that
-// returns it with its hash". A session's rebind takes this, so no caller can arrive unstamped, and the
-// stamp is computed ONCE when the structure is built -- never per requote (quotes are not hashed).
-struct StampedBundle {
-  BundleProblem problem;
-  std::uint64_t stamp = 0;
+// A bundle that CARRIES the structural stamp of ITS OWN contents. IMMUTABLE by construction: make_stamped
+// takes the problem BY VALUE and moves it in, so the stamp is computed from the exact bytes this object
+// owns -- a caller mutating its own copy afterwards cannot invalidate it -- and the members are private, so
+// the structure cannot be edited out from under the stamp once built. That is what lets a session trust two
+// integers instead of walking every coupon: anything that reaches rebind was stamped from what it carries.
+//
+// Quotes are NOT hashed (structure_equal ignores them too), so a requote is free: mutate targets and bands
+// through quotes()/instrument(), and the stamp stays valid by construction. That is the whole design --
+// hash the structure once when it is built, requote as often as you like.
+class StampedBundle {
+ public:
+  StampedBundle() = default;
+  const BundleProblem& problem() const { return problem_; }
+  std::uint64_t stamp() const { return stamp_; }
+  // The quote RHS, mutable: targets and bands are not structure (see above).
+  Instrument& quotes(std::size_t i) { return problem_.instruments[i]; }
+  std::size_t size() const { return problem_.instruments.size(); }
+
+ private:
+  friend StampedBundle make_stamped(BundleProblem);
+  BundleProblem problem_;
+  std::uint64_t stamp_ = 0;
 };
+
 inline StampedBundle make_stamped(BundleProblem p) {
-  const std::uint64_t s = structural_stamp(p);
-  return StampedBundle{std::move(p), s};
+  StampedBundle b;
+  b.stamp_ = structural_stamp(p);
+  b.problem_ = std::move(p);
+  return b;
 }
 
 inline bool structure_equal(const BundleProblem& a, const BundleProblem& b) {

@@ -214,8 +214,8 @@ const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& 
 const cal::CalibrationResult& BundleSession::rebind(const cal::StampedBundle& b, const RegSpec& reg) {
   // The structural check is the stamp (see the header). Everything else a rebind refuses -- a different
   // instrument count, a non-finite or out-of-band quote -- is still refused by the O(n) body below.
-  cal::require_stamp_match(b.stamp, stamp_, "rebind");
-  return rebind_quotes(b.problem, reg);
+  cal::require_stamp_match(b.stamp(), stamp_, "rebind");
+  return rebind_quotes(b.problem(), reg);
 }
 
 const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p, const RegSpec& reg) {
