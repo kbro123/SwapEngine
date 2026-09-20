@@ -56,7 +56,7 @@
     },
     "sofr_23k_warm_recal_10bp": {
       "target_ns": 13079,
-      "note": "re-pointed 2026-09-10 (E6.1b): the streamed tick at \u00b110 bp; 10.1 us x1.3; was 56200 ns; ratchets DOWN only"
+      "note": "re-pointed 2026-09-10 (E6.1b): the streamed tick at ±10 bp; 10.1 us x1.3; was 56200 ns; ratchets DOWN only"
     },
     "chain8x26_session_cold_build_calibrate": {
       "target_ns": 27161300,
@@ -305,6 +305,10 @@
     "shape_desk_mixed_requote_tick": {
       "target_ns": 3274900,
       "note": "RE-BASED 2026-09-15 (step 3a, owner decision 'fixture first'): q_small leaves FX forwards at their market; the honest tick flips a MonotoneCubic clamp (1.5 refreshes/tick at the measured break-even). 2.52 ms x1.3; was 2.61 ms. ratchets DOWN only"
+    },
+    "chain8x26_session_rebind_stamped": {
+      "target_ns": 125000,
+      "note": "set 2026-09-20 with the metric (E8 stamped rebind): 96.2 us x1.3. The unstamped chain8x26_session_rebind keeps its own 344.5 us target -- both paths stay gated; ratchets DOWN only"
     }
   }
 }
