@@ -13,6 +13,18 @@
 // Conventions come from the conventions DB on BOTH sides (spot lag per currency: GBP 0, CAD/AUD 1, else 2;
 // the index carries its own calendar and day count), so neither arm is handicapped by a hand-typed date rule.
 //
+// WHICH QUANTLIB CONFIGURATION IS THE REFERENCE, and why it is the one that flatters us least. QuantLib's
+// interpolator is a template argument, and the choice moves BOTH shape and speed:
+//   LogLinear on discounts  -- local, fast, and piecewise-CONSTANT instantaneous forwards (a step of up to
+//                              26 bp at a pillar; ours is C1, max daily move 0.12 bp)
+//   MonotonicLogCubic       -- the comparable SHAPE to ours (max daily move 0.09 bp; the two smooth curves
+//                              differ by 6.8 bp of forward between pillars, vs 18.8 bp for log-linear), but
+//                              GLOBAL, so the bootstrap iterates: measured 41.0 ms cold / 44.4 ms per tick
+//                              on this desk against log-linear's 13.1 / 14.8 ms -- 3.1x slower.
+// Both are timed here (BM_G10_*_QuantLib_Smooth is the smooth arm). The GATED reference is LogLinear, the
+// FASTER one, so the multiple we quote (4.2x cold, ~1,300x tick) is the conservative number; the
+// like-for-like-on-shape comparison would be 13.0x and ~3,900x. Shape evidence: scratchpad/curve_shape.cpp.
+//
 // WHAT IS AND IS NOT LIKE FOR LIKE, stated rather than implied (as multicurve_ql_bench states it):
 // QuantLib bootstraps curve by curve in dependency order, each exactly determined by its own helpers; we
 // solve the whole set JOINTLY as one least-squares system. That difference is the point of the engine, not a
@@ -290,14 +302,25 @@ struct QlCurve : cal::CurveHandle<double> {
 };
 
 // QuantLib: one bootstrap per curve, in dependency order (EUR 3M discounts on ESTR, so ESTR goes first).
-void ql_bootstrap(Fixture& f) {
+//
+// TWO CONFIGURATIONS, because "like for like" cuts both ways. LogLinear on discounts is QuantLib's fast,
+// LOCAL choice -- and it makes the instantaneous forward piecewise CONSTANT, stepping up to 26 bp at a
+// pillar, where ours is C1 (scratchpad/curve_shape.cpp measured it). MonotonicLogCubic is the comparable
+// SHAPE to ours (max daily move 0.09 bp vs our 0.12; the two smooth curves differ by 6.8 bp of forward
+// between pillars, against 18.8 bp for log-linear) but it is GLOBAL, so its bootstrap iterates. Both are
+// timed; the GATED reference is the FASTER one, so the multiple we quote is the conservative one.
+template <class Interp>
+void ql_bootstrap_with(Fixture& f, Interp interp) {
   for (const Leg& lg : f.legs) {
-    auto curve = ext::make_shared<PWC>(f.today, f.helpers[lg.role], f.dc);
+    auto curve = ext::make_shared<PiecewiseYieldCurve<Discount, Interp, IterativeBootstrap>>(
+        f.today, f.helpers[lg.role], f.dc, interp);
     curve->enableExtrapolation();
     f.h[static_cast<std::size_t>(lg.role)].linkTo(curve);
     benchmark::DoNotOptimize(curve->discount(30.0));  // forces the bootstrap
   }
 }
+void ql_bootstrap(Fixture& f) { ql_bootstrap_with(f, LogLinear()); }
+void ql_bootstrap_smooth(Fixture& f) { ql_bootstrap_with(f, MonotonicLogCubic()); }
 
 // ---- 1. COLD CALIBRATION -------------------------------------------------------------------------
 void BM_G10_Cold_QuantLib(benchmark::State& state) {
@@ -315,6 +338,13 @@ void BM_G10_Cold_Ours(benchmark::State& state) {
 }
 BENCHMARK(BM_G10_Cold_Ours);
 
+// The same cold solve against QuantLib's SMOOTH configuration -- the like-for-like curve shape.
+void BM_G10_Cold_QuantLib_Smooth(benchmark::State& state) {
+  Fixture& f = fx();
+  for (auto _ : state) ql_bootstrap_smooth(f);
+}
+BENCHMARK(BM_G10_Cold_QuantLib_Smooth);
+
 // ---- 2. THE TICK ---------------------------------------------------------------------------------
 // A cold solve happens once a day; a desk re-curves on every move. QuantLib must re-bootstrap every curve
 // whose helper quotes changed; the engine re-solves off a frozen Jacobian. +-0.3 bp on EVERY quote,
@@ -330,6 +360,18 @@ void BM_G10_Tick_QuantLib(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_G10_Tick_QuantLib);
+
+void BM_G10_Tick_QuantLib_Smooth(benchmark::State& state) {
+  Fixture& f = fx();
+  bool up = false;
+  for (auto _ : state) {
+    up = !up;
+    const double d = up ? 3e-5 : -3e-5;
+    for (std::size_t i = 0; i < f.ql_quotes.size(); ++i) f.ql_quotes[i]->setValue(f.quotes[i] + d);
+    ql_bootstrap_smooth(f);
+  }
+}
+BENCHMARK(BM_G10_Tick_QuantLib_Smooth);
 
 void BM_G10_Tick_Ours(benchmark::State& state) {
   Fixture& f = fx();
