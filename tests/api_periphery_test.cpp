@@ -219,3 +219,40 @@ TEST(ApiPeriphery, GenerateRiskNullCompletionUsesTheSharedRankThreshold) {
   EXPECT_NEAR(lad1[0], 1.0, 1e-12);
   EXPECT_NEAR(std::abs(lad1[1]), 2.0, 1e-12);  // the synthetic pillar carries the unseen knot's gradient
 }
+
+// REVIEW REGRESSION (2026-09-21, findings 1 & 4): the C ABI's error path must return JSON, and a failed
+// session_create must leave a diagnostic behind. Exception messages quote CALLER strings back, so the test
+// deliberately sends a position kind CONTAINING A DOUBLE QUOTE -- the exact byte that used to escape the
+// hand-built error literal and hand the host un-parseable bytes.
+TEST(ApiPeriphery, TheCAbiErrorPathReturnsParseableJsonEvenWhenTheMessageQuotesTheCaller) {
+  const char* spec = R"({"value_date":"2026-07-08","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
+    "regions":[{"id":"r0","name":"Hermite","policy":"Hermite","sigma":0.0}],
+    "instruments":[
+      {"type":"swap","end":"1Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0415},
+      {"type":"swap","end":"5Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0389}]}]})";
+  void* h = swaps_session_create(spec, "2026-07-08");
+  ASSERT_NE(h, nullptr) << "diagnostic: " << swaps_last_error();
+  swaps_string_free(swaps_session_calibrate(h));
+
+  const char* bad = swaps_session_price(h, R"({"positions":[{"kind":"sw\"ap","notional":1.0}]})");
+  ASSERT_NE(bad, nullptr);
+  const std::string raw(bad);
+  swaps_string_free(bad);
+  swaps_session_free(h);
+  json::error_code ec;
+  const json::value v = json::parse(raw, ec);
+  ASSERT_FALSE(ec) << "the error is not JSON: " << raw;   // the bug: parse failed at the embedded quote
+  ASSERT_TRUE(v.is_object());
+  ASSERT_TRUE(v.as_object().contains("error"));
+  const std::string msg(v.as_object().at("error").as_string());
+  EXPECT_NE(msg.find("sw\"ap"), std::string::npos) << "the message must still carry the offending kind: " << msg;
+  EXPECT_NE(raw.find("sw\\\"ap"), std::string::npos) << "and it must be ESCAPED on the wire: " << raw;
+}
+
+// FINDING 4's other half: a spec that cannot compile answers NULL *and* records why.
+TEST(ApiPeriphery, AFailedSessionCreateRecordsItsDiagnostic) {
+  EXPECT_EQ(swaps_session_create(R"({"curves":[)", "2026-07-08"), nullptr);
+  const std::string diag = swaps_last_error();
+  EXPECT_FALSE(diag.empty()) << "a NULL handle used to be the whole story";
+  EXPECT_EQ(swaps_session_create(nullptr, "2026-07-08"), nullptr);
+}

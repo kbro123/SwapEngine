@@ -139,6 +139,15 @@ enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline,
 // in hybrid_residual.hpp and api/bundle_api.cpp.
 inline constexpr bool scheme_is_linear(Scheme s) { return s != Scheme::MonotoneCubic; }
 
+// The tripwire for adding a scheme (REVIEW FINDING 3, 2026-09-21): appending one moves Tension and breaks
+// this assert, which names what must learn about it. scheme_is_linear above is the subtlest of them -- it
+// answers "does this ride the W-cache" by EXCLUSION, so a new value-dependent scheme would be called
+// linear by default and silently reach the compiled path.
+inline constexpr int kSchemeCount = 7;
+static_assert(static_cast<int>(Scheme::Tension) + 1 == kSchemeCount,
+              "a Scheme was added or reordered: update scheme_is_linear (is it a linear map of the knot "
+              "values?), ModularCurve::add, the codec's to/from string (api/codec.cpp) and kSchemeCount");
+
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
   std::vector<double> knots;  // knot times (year fractions), ascending, within this region

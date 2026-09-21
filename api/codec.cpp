@@ -100,7 +100,9 @@ const char* quote_to_str(cal::QuoteKind q) {
     case cal::QuoteKind::TurnJump: return "TurnJump";
     case cal::QuoteKind::ZeroCouponRate: return "ZeroCouponRate";
   }
-  return "ParRate";
+  // REVIEW FINDING 3 (2026-09-21): this fell back to "ParRate", so a new kind SERIALISED as a par rate --
+  // a silently wrong document rather than a loud failure. The switch is exhaustive (kQuoteKindCount).
+  throw std::logic_error("quote_to_str: unhandled QuoteKind (add it here and to kQuoteKindCount)");
 }
 cal::QuoteKind quote_from_str(const std::string& s) {
   if (s == "ParSpread") return cal::QuoteKind::ParSpread;
@@ -133,7 +135,9 @@ const char* scheme_to_str(curve::Scheme s) {
     case curve::Scheme::BSpline: return "BSpline";
     case curve::Scheme::Tension: return "Tension";
   }
-  return "Hermite";
+  // REVIEW FINDING 3: as above -- a new Scheme used to serialise as "Hermite", silently changing a curve's
+  // interpolation in any document that round-trips through the codec.
+  throw std::logic_error("scheme_to_str: unhandled Scheme (add it here and to kSchemeCount)");
 }
 pf::MultiCurveBook::Kind position_kind_from_str(const std::string& s) {
   if (s == "swap") return pf::MultiCurveBook::Kind::Swap;

@@ -90,6 +90,15 @@ enum class QuoteKind {
                   // It IS W-cacheable (linear, no DF), but its Jacobian entry is direct (∂δ/∂x), not via DF.
 };
 
+// The tripwire for adding a quote kind: appending one moves TurnJump and breaks this assert, which names
+// every place that must learn about it. A -Wswitch warning alone is not enough -- this build has no
+// -Werror, so a warning scrolls past (REVIEW FINDING 3, 2026-09-21).
+inline constexpr int kQuoteKindCount = 8;
+static_assert(static_cast<int>(QuoteKind::TurnJump) + 1 == kQuoteKindCount,
+              "a QuoteKind was added or reordered: update instrument_model_quote / instrument_residual "
+              "(problem.hpp), the compiled batches (compiled_bundle.hpp), the codec's to/from string "
+              "(api/codec.cpp) and kQuoteKindCount itself");
+
 // Forward declarations for the recursive Portfolio components (each component is itself an Instrument).
 struct Instrument;
 struct WeightedInstrument;
@@ -405,10 +414,13 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
                                     C(ins.fwd.discount), C(ins.fixed.discount)),
           zero_coupon_tau(ins));
     case QuoteKind::ParRate:  // E6.1c: the ONE ParRate formula lives in cashflows.hpp
-    default:
       return pricing::par_rate<Scalar>(ins.fwd.coupons, ins.fixed.coupons, C(ins.fwd.forecast),
                                        C(ins.fwd.discount), C(ins.fixed.discount));
   }
+  // REVIEW FINDING 3 (2026-09-21): this used to be `case ParRate: default:`, so a NEW QuoteKind priced
+  // silently as a par rate. The switch is exhaustive now -- a new kind trips -Wswitch here, the
+  // kQuoteKindCount assert below, and this throw if both are somehow ignored.
+  throw std::logic_error("instrument_model_quote: unhandled QuoteKind (add it to the switch)");
 }
 
 // residual = model_quote - market, in RATE units.

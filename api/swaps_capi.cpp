@@ -42,7 +42,25 @@ const char* dup_str(const std::string& s) {
   if (buf) std::memcpy(buf, s.c_str(), s.size() + 1);
   return buf;
 }
-const char* err_json(const std::string& what) { return dup_str("{\"error\":\"" + what + "\"}"); }
+// REVIEW FINDING 1 (2026-09-21): this used to concatenate the message straight into a JSON string
+// literal. Exception messages embed CALLER strings -- codec.cpp throws "book: unknown position kind '" + s
+// + "'" and friends -- so a bad enum value carrying a double quote returned bytes that are not JSON:
+//   {"error":"book: unknown position kind 'sw"ap' (swap | xccy)"}   <- a host's parser rejects this
+// Serialising through Boost.JSON escapes the message instead. (swaps_run_json was never affected: it
+// delegates to run_json, which builds its error object the same way.)
+const char* err_json(const std::string& what) {
+  json::object o;
+  o["error"] = what;
+  return dup_str(json::serialize(o));
+}
+
+// REVIEW FINDING 4: swaps_session_create can only answer with a pointer, so a failed compile used to
+// discard the one informative thing it had -- the compiler's diagnostic. It is recorded here and read back
+// with swaps_last_error(); thread_local so two hosts' threads cannot overwrite each other's message.
+std::string& last_error() {
+  static thread_local std::string e;
+  return e;
+}
 
 }  // namespace
 
@@ -60,9 +78,17 @@ extern "C" void* swaps_session_create(const char* spec_json, const char* today) 
     auto cr = swaps::api::compile_spec(json::parse(spec_json), today ? today : "");
     const swaps::api::RegSpec reg = swaps::api::compile_reg_spec(cr);
     return static_cast<void*>(new CapiSession{BundleSession(std::move(cr.bundle)), reg});
+  } catch (const std::exception& e) {
+    last_error() = e.what();       // FINDING 4: keep the diagnostic; the caller reads swaps_last_error()
+    return nullptr;
   } catch (...) {
+    last_error() = "swaps_session_create: unknown exception";
     return nullptr;
   }
+}
+
+extern "C" const char* swaps_last_error(void) {
+  return last_error().empty() ? "" : last_error().c_str();
 }
 
 extern "C" const char* swaps_session_calibrate(void* session) {

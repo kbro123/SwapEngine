@@ -32,8 +32,14 @@ void swaps_string_free(const char* s);
 
 /* Compile a COMPOSER SPEC (the {"compile": <spec>} JSON shape) into a persistent session. `today` supplies
  * the value date when the spec omits one (pass NULL/"" to require it). Returns an opaque handle, or NULL on a
- * parse/compile error. Release it with swaps_session_free. */
+ * parse/compile error -- in which case swaps_last_error() carries the compiler's diagnostic. Release it
+ * with swaps_session_free. */
 void* swaps_session_create(const char* spec_json, const char* today);
+
+/* The diagnostic of the last failed swaps_session_create ON THIS THREAD, or "" if none. The pointer is
+ * owned by the library (thread_local) and stays valid until this thread's next failing create -- copy it
+ * rather than holding it. Do NOT free it. Added 2026-09-21: a NULL handle used to be the whole story. */
+const char* swaps_last_error(void);
 
 /* Cold-calibrate the session (and anchor its warm path). Returns a newly-allocated JSON string
  * {"rms_residual","rank_deficiency","iterations"} (caller frees with swaps_string_free); {"error":...} on failure. */
