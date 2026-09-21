@@ -182,3 +182,28 @@ TEST(StreamingContract, PredictiveConvergenceMatchesTheFullyIteratedReference) {
   EXPECT_LT(worst_rt, 1e-9);  // the reprice stays at the step_tol contract
   EXPECT_LT(steps_pred, steps_ref) << "the prediction must actually skip steps";
 }
+
+// REVIEW FINDING 2 / ASSUMPTIONS C9 (2026-09-21): the adaptive stall's break-even used to be a WALL-CLOCK
+// ratio measured in this constructor, so identical inputs gave different refresh SCHEDULES depending on what
+// else the machine was doing -- under load the ratio fell to its floor of 2 and desk_mixed ticks failed
+// RefreshCap. It is a deterministic constant now (the old cap), and the timing is opt-in. The converged
+// ANSWER never depended on it (frozen-Newton's fixed point is the same for any invertible M); the control
+// flow did, and that is what this pins.
+TEST(StreamingContract, TheAdaptiveStallsBreakEvenIsDeterministicUnlessTheCallerAsksForTheTiming) {
+  const Chain f;
+  const Eigen::VectorXd xc = cal::calibrate(f.prob, f.x0).x;
+  using SC = cal::StreamingCalibrator<cal::BundleProblem>;
+  SC a(f.prob, xc, f.q0, {}), b(f.prob, xc, f.q0, {});
+  EXPECT_EQ(a.breakeven_steps(), b.breakeven_steps()) << "two identical constructions, one schedule";
+  EXPECT_EQ(a.breakeven_steps(), cal::kBreakevenCap);
+
+  SC::Options pinned;                       // an explicit pin still wins
+  pinned.breakeven_steps = 7.0;
+  EXPECT_EQ(SC(f.prob, xc, f.q0, pinned).breakeven_steps(), 7.0);
+
+  SC::Options timed;                        // ... and the measurement is still available, opt-in
+  timed.measure_breakeven = true;
+  const double m = SC(f.prob, xc, f.q0, timed).breakeven_steps();
+  EXPECT_GE(m, 2.0);
+  EXPECT_LE(m, cal::kBreakevenCap);
+}

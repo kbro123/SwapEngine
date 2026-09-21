@@ -54,6 +54,10 @@
 
 namespace swaps::calibration {
 
+// The adaptive stall's refresh-vs-step break-even ceiling, and (since review finding 2, 2026-09-21) its
+// DEFAULT: past this many frozen steps a refresh is worth its cost on any shape measured here.
+inline constexpr double kBreakevenCap = 64.0;
+
 // Why a tick ended. Anything but Converged is a FAILED tick: reported, never committed (current() keeps
 // the last converged solution) and the anchor is restored to that solution, so the next tick starts from a
 // valid state and cannot report a stale curve as converged (probe C-divergent-repeat, 2026-09-09).
@@ -157,10 +161,18 @@ class StreamingCalibrator {
     // count (the old max_frozen = 4) refreshed a converging OIS tick for nothing and let the desk's slow frozen
     // rate run; max_frozen is now only the hard cap. false = count-based stalls only.
     bool adaptive_stall = true;
-    // > 0: the adaptive stall's refresh-vs-step break-even, FIXED (steps) instead of measured at construction. The
-    // measurement is a wall-clock ratio, so the refresh schedule -- not the converged answer -- varies with machine load;
-    // tests and callers that need run-to-run identical schedules pin it here. 0 = measured.
-    double breakeven_steps = 0.0;
+    // The adaptive stall's refresh-vs-step break-even, in steps. DETERMINISTIC BY DEFAULT (review finding 2,
+    // 2026-09-21): this used to be a construction-time WALL-CLOCK ratio, so the refresh schedule -- not the
+    // converged answer, which is exact for any invertible M -- moved with machine load, and eight tests already
+    // had to pin it to get a reproducible schedule. Measured on the desk shapes, that ratio SATURATED at the cap
+    // (8 curves x 26 knots: 64.00 on every repeat; 3 x 12: 64.00; a single 26-knot curve: 30.6-33.4, a 1.09x
+    // spread on a QUIESCED box), so the timing mostly bought non-determinism plus ~2 Jacobian refreshes of
+    // construction cost. The default is now that cap; set measure_breakeven to time it instead, or pin any other
+    // value here.
+    double breakeven_steps = kBreakevenCap;
+    // true: measure the break-even at construction (one Jacobian + factorisation against one residual evaluation)
+    // and use it in place of breakeven_steps. Opt-in: it makes the refresh schedule load-dependent.
+    bool measure_breakeven = false;
     // ACCURACY refresh for problems whose fixed point is NOT r = 0 (over-determined, banded, regularised):
     // there the frozen operator's answer is exact only to second order in the drift, and along a weakly
     // determined direction (a decay-weighted band) that second-order term is amplified -- measured 0.4 bp
@@ -241,28 +253,34 @@ class StreamingCalibrator {
     if (opt_.prefetch && !drift_refresh_) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (!set_anchor(x0, q0))
       throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
+    breakeven_steps_ = opt_.breakeven_steps > 0.0 ? opt_.breakeven_steps : kBreakevenCap;
     {
-      // The refresh-vs-step break-even for the adaptive stall: ONE (warm) Jacobian + factorisation against ONE
-      // residual evaluation at a NEW state (the engines memoise DF on x, so the anchor state would time a cache
-      // hit). A construction-time cost only; nothing on the tick.
-      // MIN of a few repetitions on each side: single-shot timings of a 100 us residual varied 3x (caches).
+      // WARM the per-tick scratch: one residual evaluation at a NEW state (the engines memoise DF on x, so the
+      // anchor state would be a cache hit and size nothing) and one Jacobian + factorisation. This sizes every
+      // buffer the tick uses, which is what makes the tick allocation-free (tests/hotpath_census_test.cpp pins
+      // the counts). A construction-time cost only; nothing on the tick.
+      //
+      // OPT-IN (Options::measure_breakeven): the same passes, repeated and TIMED, give the adaptive stall's
+      // refresh-vs-step break-even. MIN of a few repetitions on each side -- single-shot timings of a 100 us
+      // residual varied 3x (caches). Off by default since review finding 2 (2026-09-21): a wall-clock ratio in
+      // a constructor makes the refresh SCHEDULE depend on machine load (ASSUMPTIONS C9).
+      const bool measure = opt_.measure_breakeven;
       double step_ns = 1e300, refresh_ns = 1e300;
-      for (int rep = 0; rep < 4; ++rep) {
+      for (int rep = 0; rep < (measure ? 4 : 1); ++rep) {
         const Eigen::VectorXd xp = x0.array() + 1e-9 * (rep + 1);  // a NEW state each time (no memo hit)
         const auto t0 = std::chrono::steady_clock::now();
         r_ = engine_->residuals_vs(xp, q0);
         const auto t1 = std::chrono::steady_clock::now();
         step_ns = std::min(step_ns, std::chrono::duration<double, std::nano>(t1 - t0).count());
       }
-      for (int rep = 0; rep < 2; ++rep) {
+      for (int rep = 0; rep < (measure ? 2 : 1); ++rep) {
         const auto t1 = std::chrono::steady_clock::now();
         engine_->jacobian_vs_into(x0, q0, J_cur_);
         factor(J_cur_);
         const auto t2 = std::chrono::steady_clock::now();
         refresh_ns = std::min(refresh_ns, std::chrono::duration<double, std::nano>(t2 - t1).count());
       }
-      breakeven_steps_ = std::min(64.0, std::max(2.0, refresh_ns / std::max(1.0, step_ns)));
-      if (opt_.breakeven_steps > 0.0) breakeven_steps_ = opt_.breakeven_steps;  // pinned (Options::breakeven_steps)
+      if (measure) breakeven_steps_ = std::min(kBreakevenCap, std::max(2.0, refresh_ns / std::max(1.0, step_ns)));
     }
     x_cur_ = x0;
     q_cur_ = q0;
@@ -965,7 +983,7 @@ class StreamingCalibrator {
   bool have_J_ = false;
   bool need_full_ = false;
   bool drift_refresh_ = false;  // Options::refresh_drift applies (non-square / banded / regularised)
-  double breakeven_steps_ = 8.0;  // adaptive stall: measured refresh cost in residual-evaluation units
+  double breakeven_steps_ = kBreakevenCap;  // adaptive stall: refresh cost in residual-evaluation units
   // Speculative background Jacobian (null unless opt_.prefetch): a dedicated thread computes the next M.
   std::unique_ptr<BackgroundJacobian<Problem>> bg_;
   Eigen::VectorXd bg_x_;  // scratch for a taken background result
