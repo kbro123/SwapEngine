@@ -126,6 +126,15 @@ METRICS = {
     # The cold arms are algorithmically different on purpose (QuantLib: four sequential exactly-determined
     # bootstraps; ours: one joint least-squares solve), which is why the cold multiple is small and the TICK
     # multiple is not: a quote change forces QuantLib to re-bootstrap and costs us a frozen-Jacobian re-solve.
+    # THE G10 DESK (2026-09-21): 8 curves over 7 currencies (USD SOFR, EUR ESTR + EURIBOR 3M, GBP SONIA,
+    # JPY TONA, CHF SARON, CAD CORRA, AUD AONIA), both arms on the SAME conventions DB. The bench refuses to
+    # time anything until QuantLib's curves reprice our instruments (2e-13) and both arms agree on the book
+    # NPV (8e-16). The BOOK arms share OUR calibrated curves on purpose -- a book's coupons fall between the
+    # pillars, where log-linear discounts and Hermite forwards legitimately differ, so timing it off two
+    # different curve sets would time two different books.
+    "g10_8curve_cold_calibrate": ("g10_desk_ql_bench", "BM_G10_Cold_Ours", "BM_G10_Cold_QuantLib"),
+    "g10_8curve_tick_0p3bp": ("g10_desk_ql_bench", "BM_G10_Tick_Ours", "BM_G10_Tick_QuantLib"),
+    "g10_book2000_reprice": ("g10_desk_ql_bench", "BM_G10_Book_Ours", "BM_G10_Book_QuantLib"),
     "multicurve4_cold_calibrate": ("multicurve_ql_bench", "BM_MultiCurve4_Ours", "BM_MultiCurve4_QuantLib"),
     "multicurve4_tick_0p3bp": ("multicurve_ql_bench", "BM_MultiCurve4_Ours_Tick", "BM_MultiCurve4_QuantLib_Tick"),
     "sofr_23k_risk_ladder_23q_book9": ("risk_bench",          "BM_Risk_Ours_Analytic",           "BM_Risk_QuantLib_Bump"),

@@ -84,6 +84,10 @@ if(TARGET quantlib_oracle)
   # arms agree at the pillars before timing them, so `benchmark` not `benchmark_main`.)
   add_executable(multicurve_ql_bench multicurve_ql_bench.cpp)
   target_link_libraries(multicurve_ql_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark)
+
+  # THE G10 DESK: ~8 curves over 7 currencies, cold calibration + tick + a 2,000-swap book, both ways.
+  add_executable(g10_desk_ql_bench g10_desk_ql_bench.cpp)
+  target_link_libraries(g10_desk_ql_bench PRIVATE swaps swaps_api quantlib_oracle benchmark::benchmark)
   target_include_directories(curve_build_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 
   # The risk-ladder baseline: our AAD + IFT vs QuantLib bump-and-reprice.

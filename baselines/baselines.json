@@ -60,7 +60,10 @@
     "shape_mixed_scheme_residual_pwl": "Shape ladder rung 'mixed_scheme' (29 rows, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_mixed_scheme_Residual_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE residual evaluation.",
     "shape_mixed_scheme_jacobian_pwl": "Shape ladder rung 'mixed_scheme' (29 rows, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_mixed_scheme_Jacobian_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE full Jacobian.",
     "shape_desk_mixed_residual_pwl": "Shape ladder rung 'desk_mixed' (70 rows, 5 curves, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_desk_mixed_Residual_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE residual evaluation.",
-    "shape_desk_mixed_jacobian_pwl": "Shape ladder rung 'desk_mixed' (70 rows, 5 curves, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_desk_mixed_Jacobian_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE full Jacobian."
+    "shape_desk_mixed_jacobian_pwl": "Shape ladder rung 'desk_mixed' (70 rows, 5 curves, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_desk_mixed_Jacobian_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE full Jacobian.",
+    "g10_8curve_cold_calibrate": "G10 rates desk: 8 curves over 7 currencies (USD SOFR; EUR ESTR + EURIBOR 3M discounted on ESTR; GBP SONIA; JPY TONA; CHF SARON; CAD CORRA; AUD AONIA), 72 par instruments 1Y-30Y, conventions from the DB on both sides. Cold solve from a flat seed. Reference: QuantLib bootstrapping the same market curve by curve in dependency order (a DIFFERENT algorithm -- sequential exactly-determined bootstraps vs our one joint least-squares solve -- which is the point of the engine, not a handicap; both arms are held to the same answer by the bench's parity gate).",
+    "g10_8curve_tick_0p3bp": "The same G10 desk re-curved on a market move: +-0.3 bp on EVERY one of the 72 quotes, alternating so neither arm can cache a no-op. Ours is a streamed frozen-Newton tick on the shared engine; QuantLib must re-bootstrap every curve whose helper quotes changed. This is the desk's real workload -- a cold solve happens once a day.",
+    "g10_book2000_reprice": "2,000 swaps spread across the G10 desk's eight curves (2Y/5Y/10Y/30Y, off-market fixed rates, mixed notionals), repriced off the calibrated curves. Ours is the bound compiled book (DF = exp(-Wx) + batched coupon algebra); the reference is QuantLib's per-swap NPV() walk. BOTH arms price off OUR calibrated curves (fresh term structures per iteration, so no cached NPV survives), so this times the repricing kernels, not two interpolations."
   },
   "machines": {
     "52e94be82bc4": {
@@ -234,332 +237,332 @@
         "arch_flag": "-march=x86-64-v3",
         "quantlib_toolchain": "1.35|Apple clang version 21.0.0 (clang-2100.1.1.101)|-O3 -DNDEBUG -fno-math-errno -march=x86-64-v3"
       },
-      "captured_utc": "2026-09-20T17:37:31Z",
-      "load_avg_at_capture": 2.08,
+      "captured_utc": "2026-09-21T07:17:16Z",
+      "load_avg_at_capture": 2.02,
       "reps": 5,
       "min_time_s": 0.5,
       "notes": "Re-captured 2026-09-09 after E4.D steps 1-2 (compiled moment path; segment-sum reduce) by tools/check_perf.py --update (min-of-reps, quiesced). Previous capture 2026-09-08 (E1 honest gate). 2026-09-15 C2: every shape_*_refresh_25bp re-measured with --only (quiesced, min-of-reps) -- the ladder's 25 bp move became a realistic parallel-plus-tilt move (the sine-pattern move it replaced implied a negative 30y SOFR rate). 2026-09-15 K5': shape_*_refresh_25bp (a 25 bp move now carries its bands on a banded shape) and the new shape_*_requote_tick re-measured with --only (quiesced, min-of-reps); shape_*_edge_osc_tick retired on every fingerprint (it timed a target outside its band, which the engine now refuses). 2026-09-15 step 3a: fx_xccy / desk / desk_mixed stream and requote ticks re-measured with --only (quiesced) -- q_small leaves FX forwards at their market.",
       "metrics": {
         "shape_ois_nolag_stream_tick": {
-          "ours_ns": 1329,
+          "ours_ns": 1327,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_nolag_refresh_25bp": {
-          "ours_ns": 2809,
+          "ours_ns": 2800,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_nolag_jacobian": {
-          "ours_ns": 2581,
+          "ours_ns": 2565,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_lag_stream_tick": {
-          "ours_ns": 1549,
+          "ours_ns": 1544,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_lag_refresh_25bp": {
-          "ours_ns": 3308,
+          "ours_ns": 3302,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ois_lag_jacobian": {
-          "ours_ns": 4079,
+          "ours_ns": 4089,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_stream_tick": {
-          "ours_ns": 3786,
+          "ours_ns": 3768,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_refresh_25bp": {
-          "ours_ns": 8216,
+          "ours_ns": 8211,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_ibor_multicurve_jacobian": {
-          "ours_ns": 14700,
+          "ours_ns": 14975,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_stream_tick": {
-          "ours_ns": 2962,
+          "ours_ns": 2974,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_refresh_25bp": {
-          "ours_ns": 6413,
+          "ours_ns": 6439,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_basis_spread_jacobian": {
-          "ours_ns": 11182,
+          "ours_ns": 11256,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_stream_tick": {
-          "ours_ns": 5234,
+          "ours_ns": 5251,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_refresh_25bp": {
-          "ours_ns": 11519,
+          "ours_ns": 11493,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_jacobian": {
-          "ours_ns": 19220,
+          "ours_ns": 19318,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_stream_tick": {
-          "ours_ns": 245129,
+          "ours_ns": 241177,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_refresh_25bp": {
-          "ours_ns": 549430,
+          "ours_ns": 552203,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_jacobian": {
-          "ours_ns": 859500,
+          "ours_ns": 860309,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_stream_tick": {
-          "ours_ns": 34404,
+          "ours_ns": 34519,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_refresh_25bp": {
-          "ours_ns": 102595,
+          "ours_ns": 102911,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_averaged_leg_moment_jacobian": {
-          "ours_ns": 13235,
+          "ours_ns": 13230,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_all_schemes_stream_tick": {
-          "ours_ns": 2341,
+          "ours_ns": 2356,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_all_schemes_refresh_25bp": {
-          "ours_ns": 5019,
+          "ours_ns": 5043,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_all_schemes_jacobian": {
-          "ours_ns": 8048,
+          "ours_ns": 8046,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_mixed_scheme_jacobian": {
-          "ours_ns": 19558,
+          "ours_ns": 19719,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_mixed_scheme_stream_tick": {
-          "ours_ns": 5580,
+          "ours_ns": 5610,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_mixed_scheme_refresh_25bp": {
-          "ours_ns": 12276,
+          "ours_ns": 12312,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_mixed_stream_tick": {
-          "ours_ns": 545767,
+          "ours_ns": 551122,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_mixed_refresh_25bp": {
-          "ours_ns": 2568619,
+          "ours_ns": 2589361,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_mixed_requote_tick": {
-          "ours_ns": 548419,
+          "ours_ns": 551532,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_mixed_jacobian": {
-          "ours_ns": 180195,
+          "ours_ns": 181836,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_stream_tick": {
-          "ours_ns": 2119,
+          "ours_ns": 2147,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_refresh_25bp": {
-          "ours_ns": 47010,
+          "ours_ns": 47223,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_jacobian": {
-          "ours_ns": 4555,
+          "ours_ns": 4576,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_banded_requote_tick": {
-          "ours_ns": 2405,
+          "ours_ns": 2414,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_stream_tick": {
-          "ours_ns": 1799,
+          "ours_ns": 1816,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_refresh_25bp": {
-          "ours_ns": 32877,
+          "ours_ns": 33039,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_jacobian": {
-          "ours_ns": 5440,
+          "ours_ns": 5441,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_turns_requote_tick": {
-          "ours_ns": 2053,
+          "ours_ns": 2069,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_portfolio_stream_tick": {
-          "ours_ns": 1835,
+          "ours_ns": 1850,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_portfolio_refresh_25bp": {
-          "ours_ns": 31173,
+          "ours_ns": 31330,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_portfolio_jacobian": {
-          "ours_ns": 5544,
+          "ours_ns": 5583,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_zero_coupon_stream_tick": {
-          "ours_ns": 878,
+          "ours_ns": 883,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_zero_coupon_refresh_25bp": {
-          "ours_ns": 1265,
+          "ours_ns": 1267,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_zero_coupon_jacobian": {
-          "ours_ns": 652,
+          "ours_ns": 655,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_fx_xccy_stream_tick": {
-          "ours_ns": 13815,
+          "ours_ns": 13920,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_fx_xccy_refresh_25bp": {
-          "ours_ns": 30613,
+          "ours_ns": 30972,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_fx_xccy_jacobian": {
-          "ours_ns": 61458,
+          "ours_ns": 61870,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_stream_tick": {
-          "ours_ns": 22103,
+          "ours_ns": 22373,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_refresh_25bp": {
-          "ours_ns": 1310262,
+          "ours_ns": 1304756,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_jacobian": {
-          "ours_ns": 183252,
+          "ours_ns": 181429,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_desk_requote_tick": {
-          "ours_ns": 23339,
+          "ours_ns": 23425,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_mixed_scheme_residual_pwl": {
-          "ours_ns": 1083,
+          "ours_ns": 1075,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "shape_mixed_scheme_jacobian_pwl": {
-          "ours_ns": 19740,
+          "ours_ns": 19688,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
@@ -571,157 +574,175 @@
           "speedup": null
         },
         "shape_desk_mixed_jacobian_pwl": {
-          "ours_ns": 182076,
+          "ours_ns": 180616,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "sofr_23k_square_cold_calibrate": {
-          "ours_ns": 496137,
-          "reference_ns": 16064476,
+          "ours_ns": 497257,
+          "reference_ns": 15983934,
           "reference_bm": "BM_CurveBuild_QuantLib",
-          "speedup": 32.38
+          "speedup": 32.14
+        },
+        "g10_8curve_cold_calibrate": {
+          "ours_ns": 3084864,
+          "reference_ns": 13079707,
+          "reference_bm": "BM_G10_Cold_QuantLib",
+          "speedup": 4.24
+        },
+        "g10_8curve_tick_0p3bp": {
+          "ours_ns": 11355,
+          "reference_ns": 14188939,
+          "reference_bm": "BM_G10_Tick_QuantLib",
+          "speedup": 1249.53
+        },
+        "g10_book2000_reprice": {
+          "ours_ns": 258727,
+          "reference_ns": 51966173,
+          "reference_bm": "BM_G10_Book_QuantLib",
+          "speedup": 200.85
         },
         "multicurve4_cold_calibrate": {
-          "ours_ns": 758340,
-          "reference_ns": 2911912,
+          "ours_ns": 762062,
+          "reference_ns": 2916235,
           "reference_bm": "BM_MultiCurve4_QuantLib",
-          "speedup": 3.84
+          "speedup": 3.83
         },
         "multicurve4_tick_0p3bp": {
-          "ours_ns": 4601,
-          "reference_ns": 2945695,
+          "ours_ns": 4587,
+          "reference_ns": 2953642,
           "reference_bm": "BM_MultiCurve4_QuantLib_Tick",
-          "speedup": 640.21
+          "speedup": 643.85
         },
         "sofr_23k_risk_ladder_23q_book9": {
-          "ours_ns": 111812,
-          "reference_ns": 16692450,
+          "ours_ns": 112702,
+          "reference_ns": 16755571,
           "reference_bm": "BM_Risk_QuantLib_Bump",
-          "speedup": 149.29
+          "speedup": 148.67
         },
         "sofr_23k_book1000_ois_reprice": {
-          "ours_ns": 26094,
-          "reference_ns": 23122211,
+          "ours_ns": 25838,
+          "reference_ns": 23681654,
           "reference_bm": "BM_Portfolio_QuantLib",
-          "speedup": 886.12
+          "speedup": 916.53
         },
         "sofr_23k_warm_recal_0p3bp": {
-          "ours_ns": 3587,
-          "reference_ns": 896007,
+          "ours_ns": 3549,
+          "reference_ns": 893660,
           "reference_bm": "BM_WarmRecal_QuantLib",
-          "speedup": 249.79
+          "speedup": 251.81
         },
         "sofr_23k_warm_recal_10bp": {
-          "ours_ns": 10579,
-          "reference_ns": 1034600,
+          "ours_ns": 10422,
+          "reference_ns": 1034791,
           "reference_bm": "BM_WarmRecal_QuantLib_10bp",
-          "speedup": 97.8
+          "speedup": 99.29
         },
         "ust_5000_clean_to_yield_sweep": {
-          "ours_ns": 3637512,
-          "reference_ns": 2677829810,
+          "ours_ns": 3535138,
+          "reference_ns": 2678799343,
           "reference_bm": "BM_BondSweep_QuantLib",
-          "speedup": 736.17
+          "speedup": 757.76
         },
         "ust_5000_curve_book_dirty_price": {
-          "ours_ns": 414144,
-          "reference_ns": 29815974,
+          "ours_ns": 413712,
+          "reference_ns": 29805382,
           "reference_bm": "BM_BondBook_QuantLib",
-          "speedup": 71.99
+          "speedup": 72.04
         },
         "sofr_swaption_cube17_sabr_reprice_warm": {
-          "ours_ns": 10428,
+          "ours_ns": 10540,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "sofr_swaption_cube17_cold_calibrate_price": {
-          "ours_ns": 987106,
+          "ours_ns": 989494,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_cold_build_calibrate": {
-          "ours_ns": 22951998,
+          "ours_ns": 23530962,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_rebind": {
-          "ours_ns": 288728,
+          "ours_ns": 291074,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_rebind_tension_reg": {
-          "ours_ns": 347153,
+          "ours_ns": 347887,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_rebind_stamped": {
-          "ours_ns": 90868,
+          "ours_ns": 93280,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_session_stream_tick": {
-          "ours_ns": 74243,
+          "ours_ns": 75417,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_book200_price_portfolio_oneshot": {
-          "ours_ns": 2312461,
+          "ours_ns": 2315314,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_kernel_cold_joint_lm": {
-          "ours_ns": 19660762,
+          "ours_ns": 19868657,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_kernel_one_residual": {
-          "ours_ns": 10506,
+          "ours_ns": 10541,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_kernel_one_jacobian": {
-          "ours_ns": 411785,
+          "ours_ns": 414548,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "chain8x26_book200_compiled_reprice": {
-          "ours_ns": 10664,
-          "reference_ns": 717866,
+          "ours_ns": 10768,
+          "reference_ns": 727376,
           "reference_bm": "BM_MultiCurveBook_Templated",
-          "speedup": 67.32
+          "speedup": 67.55
         },
         "usd_eur_xccy_3c8k_hybrid_jacobian": {
-          "ours_ns": 9996,
+          "ours_ns": 10091,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "usd_eur_xccy_3c8k_aad_block_jacobian": {
-          "ours_ns": 5289,
-          "reference_ns": 23172,
+          "ours_ns": 5328,
+          "reference_ns": 23420,
           "reference_bm": "BM_FxStream_AadBlockJacobianHeap",
-          "speedup": 4.38
+          "speedup": 4.4
         },
         "usd_eur_xccy_3c8k_stream_tick": {
-          "ours_ns": 63044,
+          "ours_ns": 63457,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         }
       },
-      "cpu_busy_pct_at_capture": 4.8
+      "cpu_busy_pct_at_capture": 5.2
     }
   }
 }
