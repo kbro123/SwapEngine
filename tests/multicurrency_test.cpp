@@ -856,9 +856,11 @@ TEST(EurCurves, RegularisedStreamingTracksTheCoupledTrio) {
   double worst_rt = 0, worst_dev = 0;
   for (int tk = 0; tk < 250; ++tk) {
     const double dL = lvl(rng), dS = slp(rng);
-    for (int c = 0; c < 3; ++c) {
-      const int nk = b.prob.curves[c].n_knots();
-      for (int i = 0; i < nk; ++i) x[b.off[c] + i] += dL + dS * i;  // level + linear slope => stays smooth
+    for (int c = 0; c < 3; ++c) {  // level + a slope linear in TIME => stays in the divided-difference null space (2026-09-21)
+      int i = 0;
+      for (const auto& m : b.prob.curves[c].regions)
+        for (double t : m.knots) x[b.off[c] + i++] += dL + dS * t;
+      for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) x[b.off[c] + i] += dL;
     }
     const Eigen::VectorXd q = engine.model_rates(x);
     sc.update(q);

@@ -338,7 +338,13 @@ TEST(ConsistentRisk, UnreachedKnotBecomesExactlyOneSyntheticPillar) {
   ASSERT_EQ(p.n_knots(), kNk + 1);
   ASSERT_EQ(p.n_residuals(), kNr);
   const json::object book = book_json(/*with_12y=*/true);
-  const json::object r = run(generate_risk_request(book, {p}));
+  // Under the TENSION operator explicitly: a Flat piece carries no tension energy, so the tail knot stays genuinely
+  // unreached and the synthetic-pillar path is exercised. Under the default second-difference operator (2026-09-21) the
+  // penalty pins an un-quoted knot instead (ApiPeriphery: "regularised: the un-quoted 3Y knot is pinned by the penalty").
+  json::object req = generate_risk_request(book, {p});
+  json::object rg; rg["lambda"] = 0.02; rg["tension"] = true; rg["sigma"] = 0.0; rg["curves"] = json::array{0};
+  req["generate_risk"].as_object()["regularize"] = rg;
+  const json::object r = run(req);
   ASSERT_FALSE(r.contains("error")) << json::serialize(r);
   const json::object& b = r.at("bundles").as_array()[0].as_object();
 
@@ -353,11 +359,11 @@ TEST(ConsistentRisk, UnreachedKnotBecomesExactlyOneSyntheticPillar) {
   ASSERT_EQ(head.size(), static_cast<std::size_t>(kNr));
 
   // Native mirror of the anchor calibration: the unseen knot sits at the SEED (calibrate_with's seed-anchored
-  // completion), so the reference must use the same seed. The light floor cannot see it either (Flat region: no
+  // completion), so the reference must use the same seed. The light TENSION floor cannot see it either (Flat region: no
   // tension energy), so both x agree bitwise.
   api::BundleSession ref(p);
   const cal::CalibrationResult& res =
-      ref.calibrate(api::flat_x0(p), cal::smoothing_preset(cal::Smoothing::Light, p.n_curves()));
+      ref.calibrate(api::flat_x0(p), cal::smoothing_preset(cal::Smoothing::Light, p.n_curves(), /*tension=*/true));
   ASSERT_EQ(res.rank_deficiency, 1);
   ASSERT_NEAR(ref.x()[7], api::flat_x0(p)[7], tol::step_tol) << "the unseen knot is anchored at the seed";
   ASSERT_LT((ref.x().head(kNk) - line_x(p).head(kNk)).cwiseAbs().maxCoeff(), tol::step_tol);

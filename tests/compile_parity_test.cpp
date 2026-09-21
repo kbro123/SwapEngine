@@ -232,26 +232,38 @@ TEST(CompileParity, AllGoldenSpecsMatchPython) {
 }
 
 // compile_reg_spec reads the ONE smoothing table (calibration/regularize.hpp smoothing_preset, E7 stage 3). The
-// expectations restate, by hand, the table compile_reg_spec carried inline until 2026-09-13: tension light 0.02 /
-// strong 0.2, second-difference light 0.5 / strong 5.0, "off" promoted to light when the bundle is under-determined
-// or banded, the penalty spanning the named curves (else every bundle curve), sigma only for the tension operator.
+// expectations restate the table by hand: second-difference light 0.5 / strong 5.0 -- THE DEFAULT operator since
+// 2026-09-21 (the owner's decision on the streaming soak's numbers; tension was the default from 2026-09-13) --
+// tension light 0.02 / strong 0.2 behind reg_op "tension", "off" promoted to light when the bundle is
+// under-determined or banded, the penalty spanning the named curves (else every bundle curve), sigma only for
+// the tension operator.
 TEST(CompileRegSpec, ReadsTheOneSmoothingTable) {
   swaps::api::CompileResult r;
   r.smoothness = "light";
   r.curve_names = {"A", "B"};
   r.tension_sigma = 0.3;
   swaps::api::RegSpec g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 0.02);
-  EXPECT_TRUE(g.tension);
-  EXPECT_EQ(g.sigma, 0.3);
+  EXPECT_EQ(g.lambda, 0.5);
+  EXPECT_FALSE(g.tension);
+  EXPECT_EQ(g.sigma, 0.0) << "sigma parameterises the tension operator only";
   EXPECT_EQ(g.curves, (std::vector<int>{0, 1}));
 
   r.smoothness = "strong";
   g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 0.2);
+  EXPECT_EQ(g.lambda, 5.0);
 
   r.has_reg_op = true;
-  r.reg_op = "second_difference";
+  r.reg_op = "tension";
+  g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 0.2);
+  EXPECT_TRUE(g.tension);
+  EXPECT_EQ(g.sigma, 0.3);
+  r.smoothness = "light";
+  g = swaps::api::compile_reg_spec(r);
+  EXPECT_EQ(g.lambda, 0.02);
+
+  r.reg_op = "second_difference";  // naming the default IS the default
+  r.smoothness = "strong";
   g = swaps::api::compile_reg_spec(r);
   EXPECT_EQ(g.lambda, 5.0);
   EXPECT_FALSE(g.tension);
@@ -272,6 +284,7 @@ TEST(CompileRegSpec, ReadsTheOneSmoothingTable) {
   r.curve_names.clear();
   r.bundle.curves.resize(3);
   g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 0.02) << "off is promoted to light when banded";
+  EXPECT_EQ(g.lambda, 0.5) << "off is promoted to light when banded";
+  EXPECT_FALSE(g.tension);
   EXPECT_EQ(g.curves, (std::vector<int>{0, 1, 2})) << "no named curves => every bundle curve";
 }

@@ -144,9 +144,10 @@ const Eigen::MatrixXd& BundleSession::ensure_reg_R(const RegSpec& reg) const {
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
   const auto t0 = std::chrono::steady_clock::now();
   if (reg.on() && !reg.tension) {
-    // Legacy second-difference smoothing (E6.1c, 2026-09-10): the SAME engine composition as the tension path
+    // Second-difference smoothing (E6.1c, 2026-09-10): the SAME engine composition as the tension path
     // below, with the discrete curvature operator as the constant R block -- the SmoothedProblem wrapper that
-    // paid an AAD sweep per LM iteration for this constant block is gone. The shipped default is tension.
+    // paid an AAD sweep per LM iteration for this constant block is gone. THE SHIPPED DEFAULT since 2026-09-21
+    // (tension was, 2026-09-13 .. 2026-09-21; see regularize.hpp smoothing_preset).
     const cal::HybridBundleResidual& eng = ensure_engine();
     const Eigen::MatrixXd R = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
     const cal::RegularizedEngine<cal::HybridBundleResidual> composed(eng, R);

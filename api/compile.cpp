@@ -803,7 +803,7 @@ std::string compile_json(const std::string& spec_json, const std::string& today_
 
 RegSpec compile_reg_spec(const CompileResult& r) {
   // The spec names a strength; the ONE table (calibration/regularize.hpp smoothing_preset) owns its value.
-  const bool tension = !(r.has_reg_op && r.reg_op == "second_difference");
+  const bool tension = r.has_reg_op && r.reg_op == "tension";  // default: second difference (2026-09-21; was tension)
   cal::Smoothing level = r.smoothness == "off" ? cal::Smoothing::Off
                          : r.smoothness == "strong" ? cal::Smoothing::Strong
                                                     : cal::Smoothing::Light;

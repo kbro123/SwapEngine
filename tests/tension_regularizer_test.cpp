@@ -279,8 +279,10 @@ TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
   }
 }
 
-// Backward compatibility: with no region overriding (reg_lambda<0), the operator is the plain single-lambda
-// stencil everywhere -- byte-identical to the pre-Phase-1 global-lambda behaviour.
+// With no region overriding (reg_lambda<0) every interior knot's row -- a Flat region's included: unlike the tension
+// operator, the discrete penalty is what pins a basis-only curve's Flat front (EurCurves.*) -- carries the single global
+// lambda. At unit spacing the divided second difference with its trapezoid weight IS the plain stencil
+// (a, b, c, w) = (1, -2, 1, 1), so these rows read exactly as they did before 2026-09-21.
 TEST(RegionSmoothing, UniformLambdaMatchesGlobal) {
   cal::BundleProblem p;
   cal::BundleCurveSpec spec;
@@ -297,6 +299,27 @@ TEST(RegionSmoothing, UniformLambdaMatchesGlobal) {
     EXPECT_NEAR(R(r, i), -1.4, 1e-12);
     EXPECT_NEAR(R(r, i + 1), 0.7, 1e-12);
   }
+}
+
+// NON-UNIFORM spacing: the row is the divided second difference scaled by the trapezoid weight, so an AFFINE-in-time
+// forward has exactly zero penalty on any pillar grid (1y..5y, 7y, 10y: the case the spacing-blind stencil got wrong,
+// pulling a square bundle's exact linear solution off the line under Light).
+TEST(RegionSmoothing, DividedSecondDifferenceIsZeroOnALineOverNonUniformPillars) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec spec;
+  spec.base = -1;
+  const std::vector<double> knots{1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0};
+  spec.regions.push_back(curve::CurveModule{knots, curve::Scheme::Hermite});
+  p.curves.push_back(spec);
+  const Eigen::MatrixXd R = cal::second_difference_operator(p, 0.5, {0});
+  ASSERT_EQ(R.rows(), 10);
+  Eigen::VectorXd line(12), zig(12);
+  for (int i = 0; i < 12; ++i) { line[i] = 0.03 + 4e-4 * knots[static_cast<std::size_t>(i)]; zig[i] = line[i] + (i % 2 ? -1e-3 : 1e-3); }
+  EXPECT_LT((R * line).squaredNorm(), 1e-24) << "a line in TIME costs nothing";
+  // hand-computed at knot 7y (h0 = 2, h1 = 3): weight sqrt(2.5) * 0.5 * 2/(5) * [(z8-z7)/3 - (z7-z6)/2]
+  const double f2 = 2.0 / 5.0 * ((zig[6] - zig[5]) / 3.0 - (zig[5] - zig[4]) / 2.0);
+  EXPECT_NEAR((R * zig)[4], 0.5 * std::sqrt(2.5) * f2, 1e-15);
+  EXPECT_GT((R * zig).squaredNorm(), 1e-8) << "a zigzag costs";
 }
 
 // Phase 2: per-region TENSION-ENERGY σ (and weight). Setting a region's reg_sigma changes only that

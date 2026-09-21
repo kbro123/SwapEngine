@@ -70,8 +70,10 @@ CompileResult compile_spec(const boost::json::value& spec, const std::string& to
 
 // The smoothing the spec ASKS for, as an engine RegSpec (E3-D4, 2026-09-10; ported from server/compile.py
 // reg_spec so every host -- web, Excel C-ABI, run_json compile+sample -- calibrates the same curve).
-// Default: the continuous tension-energy operator, off / light / strong from calibration/regularize.hpp smoothing_preset (the one table); `reg_op ==
-// "second_difference"` selects the discrete operator with its ~25x heavier scale 0.5 / 5.0. An
+// Default: the discrete SECOND-DIFFERENCE operator, off / light / strong from calibration/regularize.hpp smoothing_preset (the one
+// table; 0.5 / 5.0); `reg_op == "tension"` selects the continuous tension-energy operator (0.02 / 0.2 -- nominally lighter, and
+// ~1/h³ weaker at knot spacing h, which is why it stopped being the default on 2026-09-21; `reg_op == "second_difference"` is
+// accepted and means the default). An
 // under-determined OR banded spec floors "off" to "light" (a penalty is what makes those well-posed). The
 // RegSpec spans every curve; `sigma` is the spec's tension_sigma. lambda == 0 => RegSpec::on() is false.
 RegSpec compile_reg_spec(const CompileResult& r);

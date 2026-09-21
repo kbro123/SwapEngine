@@ -111,9 +111,14 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
 
   // ---- x_true: EUR ~3% ESTR forwards; small forward spreads for the tenor-basis curves. ----
   b.x_true.resize(N);
+  // x_true is linear in TIME (2026-09-21; it was linear in knot INDEX): `slope` is per year. A straight line in time is
+  // the null space of the default smoothing operator (the divided second difference, regularize.hpp D18), so the
+  // regularised tests below can ask for x_true back exactly; an index-linear line over non-uniform pillars is not.
   auto fill = [&](int c, double level, double slope) {
-    const int nk = b.prob.curves[c].n_knots();
-    for (int i = 0; i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;
+    int i = 0;
+    for (const auto& m : b.prob.curves[c].regions)
+      for (double t : m.knots) b.x_true[b.off[c] + i++] = level + slope * t;
+    for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;  // overlay states: as before
   };
   fill(b.ESTR, 0.0300, 0.0004);    // ESTR forward level ~3%, gently upward
   fill(b.EUR3M, 0.0012, 0.00003);  // EURIBOR-3M / ESTR basis ~12bp
@@ -398,9 +403,14 @@ inline MultiCcyBundle build_xccy_bundle(QuantLib::Date eval = QuantLib::Date(15,
   b.default_discount = {{b.SOFR, b.SOFR}, {b.ESTR, b.ESTR}, {b.EURUSD, b.EURUSD}};
 
   b.x_true.resize(N);
+  // x_true is linear in TIME (2026-09-21; it was linear in knot INDEX): `slope` is per year. A straight line in time is
+  // the null space of the default smoothing operator (the divided second difference, regularize.hpp D18), so the
+  // regularised tests below can ask for x_true back exactly; an index-linear line over non-uniform pillars is not.
   auto fill = [&](int c, double level, double slope) {
-    const int nk = b.prob.curves[c].n_knots();
-    for (int i = 0; i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;
+    int i = 0;
+    for (const auto& m : b.prob.curves[c].regions)
+      for (double t : m.knots) b.x_true[b.off[c] + i++] = level + slope * t;
+    for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;  // overlay states: as before
   };
   fill(b.SOFR, 0.0430, 0.0004);
   fill(b.ESTR, 0.0300, 0.0004);
@@ -507,7 +517,11 @@ inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(
 
   b.x_true.resize(N);
   auto fill = [&](int c, double level, double slope) {
-    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+    // linear in TIME (2026-09-21, see build_eur_bundle's fill): `slope` per year; overlay states as before
+    int i = 0;
+    for (const auto& m : b.prob.curves[c].regions)
+      for (double t : m.knots) b.x_true[b.off[c] + i++] = level + slope * t;
+    for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;
   };
   fill(b.SOFR, 0.0430, 0.0004);
   fill(b.ESTR, 0.0300, 0.0004);
@@ -810,7 +824,11 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
   // x_true: ESTR ~2% forwards; small forward spreads for the tenor-basis curves.
   b.x_true.resize(N);
   auto fill = [&](int c, double level, double slope) {
-    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+    // linear in TIME (2026-09-21, see build_eur_bundle's fill): `slope` per year; overlay states as before
+    int i = 0;
+    for (const auto& m : b.prob.curves[c].regions)
+      for (double t : m.knots) b.x_true[b.off[c] + i++] = level + slope * t;
+    for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;
   };
   fill(b.ESTR, 0.0200, 0.0003);
   fill(b.EUR3M, 0.0012, 0.00002);  // 3M-EURIBOR / ESTR basis ~12bp (spread over ESTR)
@@ -1074,7 +1092,11 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
 
   b.x_true.resize(N);
   auto fill = [&](int c, double level, double slope) {
-    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+    // linear in TIME (2026-09-21, see build_eur_bundle's fill): `slope` per year; overlay states as before
+    int i = 0;
+    for (const auto& m : b.prob.curves[c].regions)
+      for (double t : m.knots) b.x_true[b.off[c] + i++] = level + slope * t;
+    for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;
   };
   fill(0, 0.0200, 0.0003);
   fill(1, 0.0012, 0.00002);
@@ -1234,7 +1256,11 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   // x_true.
   b.x_true.resize(N);
   auto fill = [&](int c, double level, double slope) {
-    for (int i = 0; i < b.prob.curves[c].n_knots(); ++i) b.x_true[b.off[c] + i] = level + slope * i;
+    // linear in TIME (2026-09-21, see build_eur_bundle's fill): `slope` per year; overlay states as before
+    int i = 0;
+    for (const auto& m : b.prob.curves[c].regions)
+      for (double t : m.knots) b.x_true[b.off[c] + i++] = level + slope * t;
+    for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) b.x_true[b.off[c] + i] = level + slope * i;
   };
   {
     std::vector<double> sx(rm::reference_front_forwards.begin(), rm::reference_front_forwards.end());

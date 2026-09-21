@@ -511,9 +511,14 @@ robustness. What the first walk found, so nobody re-derives it:
   quotes becomes a ±40 bp second difference of the knot forwards (a cold LM delivers the same: it is the market, not the
   streamer). On a Hermite long end that is only ugly; on a MonotoneCubic long end it parks the curve on the Hyman
   filter's branch boundaries, where every solver crawls (desk_mixed: 1 tick in 5 fell back to an LM, ~9 ms/tick).
-- **Nobody streams unsmoothed.** Under the Light SECOND-DIFFERENCE preset every rung streams both walks with zero failed
-  ticks (desk_mixed 31 µs, zigzag ≤ 3 bp). The TENSION presets are ~1/h³ weaker at knot spacing h (≈1/125 at 5y), so
-  the API's default (Light tension) still leaves desk_mixed at 22 failed ticks / 400 -- pinned on record, not fixed.
+- **Nobody streams unsmoothed, and the default operator is the SECOND DIFFERENCE (owner's decision, 2026-09-21).** Under
+  the Light preset every rung streams the realistic walk with zero failed ticks (desk_mixed 35 µs, zigzag ≤ 3 bp; the
+  per-row stress walk: 1 failed tick on desk_mixed, pinned). Making it the default meant fixing the operator: the old
+  spacing-blind stencil λ(fᵢ₋₁ − 2fᵢ + fᵢ₊₁) is not zero on a straight line over non-uniform pillars and pulled a square
+  bundle's exact solution off the line (which is why tension had been made the default); it is now the divided second
+  difference with its trapezoid weight (ASSUMPTIONS.md D18), zero on any line in time, RᵀR = the discrete bending
+  energy. The TENSION presets are ~1/h³ weaker at knot spacing h (≈1/125 at 5y): Light tension, the default from
+  2026-09-13 to 2026-09-21, left desk_mixed at 22 failed ticks / 400 -- still available as `reg_op: "tension"`, pinned on record.
 - **The tension operator was undefined on a value-dependent region** (shape functions from unit knot vectors, which the
   filter clamps): at Strong it drove desk_mixed INTO a 149 bp zigzag. Such a region now contributes a discrete tension
   energy (ASSUMPTIONS.md D17). Also from the same soak: a converged `stream_update` left `result()` at the previous LM

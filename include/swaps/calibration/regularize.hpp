@@ -10,11 +10,14 @@
 // pillar-by-pillar, imposing locality); a global LM exposes it as a rank-deficient Jacobian, so the
 // cold solve wanders in the null space.
 //
-// The fix: add rows that penalise the SECOND DIFFERENCE (curvature) of the knot forwards, λ·(f_{i-1} −
-// 2f_i + f_{i+1}), for the chosen curves. These are LINEAR in x, so they lift the near-zero singular
-// values without touching the data fit in the observable directions: the solve now selects the
-// SMOOTHEST curve consistent with the market. Duck-types the problem interface (residuals / n_knots /
-// n_residuals), so `calibrate` and `aad_jacobian` drive it unchanged.
+// The fix: add rows that penalise the CURVATURE of the knot forwards -- the divided second difference at
+// each interior knot with its trapezoid weight, λ_i·√(½(h₀+h₁))·f''_i (detail::bending_row; since 2026-09-21,
+// zero on a straight line in time over ANY pillar spacing; the spacing-blind λ(f_{i-1} − 2f_i + f_{i+1}) it
+// replaced was not, and biased every fit on non-uniform pillars) -- for the chosen curves. These are LINEAR
+// in x, so they lift the near-zero singular values without touching the data fit in the observable
+// directions: the solve now selects the SMOOTHEST curve consistent with the market. Duck-types the problem
+// interface (residuals / n_knots / n_residuals), so `calibrate` and `aad_jacobian` drive it unchanged.
+// THIS is the default smoothing operator (smoothing_preset); the continuous tension energy below is opt-in.
 //
 // Apply it ONLY to the curves that need it (a non-smooth reference curve like SOFR — genuine policy
 // steps + a shaped term structure — should not be penalised, or it would be biased toward a line).
@@ -43,11 +46,31 @@ inline std::vector<double> region_knot_lambdas(const CurveSpec& c, double defaul
   return lam;
 }
 
-// The explicit second-difference (curvature) operator R = λ·D as a DENSE matrix (n_reg × n_knots), one
-// row λ·(e_{i-1} − 2e_i + e_{i+1}) per interior knot of each listed curve. This is the same penalty
-// the calibrate path composes onto its engine (RegularizedEngine) and the STREAMING calibrator folds as RᵀR
-// into its frozen-Newton operator M = (JᵀJ + RᵀR)⁺Jᵀ -- ONE definition of the penalty (E6.1c, 2026-09-10:
-// the SmoothedProblem / LinearRegularizedProblem wrappers that re-implemented it as AAD residual rows are gone).
+namespace detail {
+// The DISCRETE BENDING ROW at an interior knot with neighbour spacings h0 (left) and h1 (right): the divided second
+// difference f''_i ≈ 2[(f_{i+1}−f_i)/h1 − (f_i−f_{i-1})/h0]/(h0+h1) as coefficients (a, b, c) on (f_{i-1}, f_i, f_{i+1}),
+// and its trapezoid quadrature weight w = ½(h0+h1), so that Σ_i w·(f''_i)² is a composite-trapezoid ∫(f'')² dt. This is
+// ONE definition shared by second_difference_operator and by the tension operator's value-dependent regions (D17).
+// Zero on an affine forward for ANY knot spacing -- the property the spacing-blind (e_{i-1} − 2e_i + e_{i+1}) row lacked.
+inline void bending_row(double h0, double h1, double& a, double& b, double& c, double& w) {
+  const double k = 2.0 / (h0 + h1);
+  a = k / h0;
+  c = k / h1;
+  b = -a - c;
+  w = 0.5 * (h0 + h1);
+}
+}  // namespace detail
+
+// The explicit second-difference (curvature) operator R = λ·D as a DENSE matrix (n_reg × n_knots), one row per interior
+// knot of each listed curve: λ_i · √w_i · (divided second difference at knot i) -- detail::bending_row -- so RᵀR is the
+// discrete BENDING ENERGY Σ_i w_i (f''_i)² of the knot forwards, in the same units as the tension operator's ∫(f'')².
+// Until 2026-09-21 the row was the spacing-blind λ(e_{i-1} − 2e_i + e_{i+1}), which is NOT zero on a straight line over
+// non-uniform pillars (1y..5y, 7y, 10y, ...): it pulled a square bundle's exact linear solution off the line (the
+// ConsistentRisk fixture: a book NPV of 0.0013 became 0.0037 under Light), which is why the tension operator had become
+// the default. The divided form is zero on any affine forward, so Light no longer biases an identifiable fit -- and it is
+// what makes the second difference fit to be THE default operator (smoothing_preset). This is the same penalty the
+// calibrate path composes onto its engine (RegularizedEngine) and the STREAMING calibrator folds as RᵀR into its
+// frozen-Newton operator M = (JᵀJ + RᵀR)⁺Jᵀ -- ONE definition of the penalty (E6.1c, 2026-09-10).
 template <class Problem>
 Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, const std::vector<int>& curves) {
   const int nk = p.n_knots();
@@ -61,11 +84,23 @@ Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, cons
   for (int c : curves) {
     const int o = off[c], n = p.curves[c].n_interp_knots();  // curvature over interp knots only (no δ)
     const std::vector<double> lam = region_knot_lambdas(p.curves[c], lambda);  // per-region λ (Phase 1)
+    std::vector<double> t;
+    t.reserve(static_cast<std::size_t>(n));
+    for (const auto& m : p.curves[c].modules()) t.insert(t.end(), m.knots.begin(), m.knots.end());
+    // Every interior knot carries a row, a Flat region's included (unlike the tension operator, whose Flat pieces have zero
+    // energy): a basis-only curve's Flat front is in the instruments' null space and this is what pins it (EurCurves.*), and
+    // an un-quoted knot is pinned by the penalty rather than left rank-deficient (ApiPeriphery). Give a region reg_lambda = 0
+    // (CurveModule) to leave its steps alone.
     for (int i = 1; i < n - 1; ++i) {
       const double li = lam[i];  // the λ of knot i's region
-      R(r, o + i - 1) = li;
-      R(r, o + i) = -2.0 * li;
-      R(r, o + i + 1) = li;
+      const double h0 = t[static_cast<std::size_t>(i)] - t[static_cast<std::size_t>(i) - 1];
+      const double h1 = t[static_cast<std::size_t>(i) + 1] - t[static_cast<std::size_t>(i)];
+      double a, b, cc, w;
+      detail::bending_row(h0, h1, a, b, cc, w);
+      const double s = li * std::sqrt(w);
+      R(r, o + i - 1) = s * a;
+      R(r, o + i) = s * b;
+      R(r, o + i + 1) = s * cc;
       ++r;
     }
   }
@@ -247,15 +282,16 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
       row[idx[static_cast<std::size_t>(j)]] = -1.0 / h;
       K.noalias() += (h * r2 * sg * sg) * (row.transpose() * row);
     }
-    for (int i = 1; i + 1 < n; ++i) {  // bending per interior knot
+    for (int i = 1; i + 1 < n; ++i) {  // bending per interior knot (detail::bending_row: ONE definition with second_difference_operator)
       const double h0 = t[static_cast<std::size_t>(i)] - t[static_cast<std::size_t>(i) - 1], h1 = t[static_cast<std::size_t>(i) + 1] - t[static_cast<std::size_t>(i)];
       if (h0 <= 1e-13 || h1 <= 1e-13) continue;
-      const double c = 2.0 / (h0 + h1);
+      double a, b, c, w;
+      bending_row(h0, h1, a, b, c, w);
       row.setZero();
-      row[idx[static_cast<std::size_t>(i) + 1]] = c / h1;
-      row[idx[static_cast<std::size_t>(i)]] = -c / h1 - c / h0;
-      row[idx[static_cast<std::size_t>(i) - 1]] = c / h0;
-      K.noalias() += (0.5 * (h0 + h1) * r2) * (row.transpose() * row);
+      row[idx[static_cast<std::size_t>(i) + 1]] = c;
+      row[idx[static_cast<std::size_t>(i)]] = b;
+      row[idx[static_cast<std::size_t>(i) - 1]] = a;
+      K.noalias() += (w * r2) * (row.transpose() * row);
     }
   }
   return K;
@@ -333,7 +369,11 @@ inline double smoothing_lambda(Smoothing s, bool tension) {
 
 // A RegSpec at strength `s` over curves 0..n_curves-1. Off => RegSpec{} (no penalty). `sigma` is the tension
 // operator's parameter and is dropped for the second-difference operator.
-inline RegSpec smoothing_preset(Smoothing s, int n_curves, bool tension = true, double sigma = 0.0) {
+// THE DEFAULT OPERATOR IS THE DISCRETE SECOND DIFFERENCE (owner's decision, 2026-09-21). The tension-energy operator was
+// the default from 2026-09-13; the streaming soak (tests/streaming_soak_test.cpp) showed its presets are ~1/h³ weaker at
+// knot spacing h (≈1/125 at 5y), so Light tension left a MonotoneCubic long end at 22 failed ticks / 400 where Light
+// second-difference streams every rung with none. Tension stays available (`tension = true`, reg_op "tension").
+inline RegSpec smoothing_preset(Smoothing s, int n_curves, bool tension = false, double sigma = 0.0) {
   RegSpec reg;
   if (s == Smoothing::Off) return reg;
   reg.lambda = smoothing_lambda(s, tension);
