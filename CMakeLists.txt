@@ -62,6 +62,12 @@ if(SWAPS_EIGEN_DEFINES)
   target_compile_definitions(swaps INTERFACE ${SWAPS_EIGEN_DEFINES})
 endif()
 
+# LICENCE, compiler-enforced (see THIRD_PARTY_NOTICES.md): Eigen is MPL-2.0 except for a handful of modules
+# carrying LGPL-2.1 third-party code (SimplicialCholesky, AMD ordering, constrained_cg). EIGEN_MPL2_ONLY makes
+# including any of them a COMPILE ERROR, so "the shipped engine links nothing copyleft" is a build invariant
+# rather than an audit finding. The engine uses Core/Dense/SparseCore only, so this costs nothing today.
+target_compile_definitions(swaps INTERFACE EIGEN_MPL2_ONLY)
+
 # ---- Vendored dependencies (third_party/, populated by tools/bootstrap_deps.sh) ----
 # Homebrew is NOT used: macOS 13 / Intel is Homebrew Tier 3 (no bottles). See CLAUDE.md §4.
 set(SWAPS_THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party)

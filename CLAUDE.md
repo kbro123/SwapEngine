@@ -883,14 +883,17 @@ delete those, they enforce the rule. Two honest residues:
       - **Cross-validation beyond QuantLib** (`tests/bond_reference_test.cpp`, QL-free; `tools/bond_reference/`):
         Excel/OpenFormula PRICE/YIELD (reimplemented — different algebra than Horner) is checked in-code to
         1e-12, and the 31 CFR App B reimplementation now pins the coupon polynomial exactly AND the
-        street↔Treasury factor above. `gen_golden.py` emits an external **Rateslib** golden in BOTH modes
-        (`mode` column): `us_gb` asserted EQUAL to 1e-9, `ust_31bii` asserted equal after the convention
-        factor — so `BondReference.ExternalGoldenIfPresent` would catch drift in EITHER convention. It still
-        skips if the CSV is absent. **Rateslib is source-available, NOT open-source** (an earlier note here
-        and in `gen_golden.py` said "MIT" — wrong): without a registered licence, use is non-commercial only
-        (<https://rateslib.com/licence>). Generating or committing that golden is a use of it; the QuantLib
-        oracle + the two QL-free reimplementations need no third-party code. A single oracle can hide a
-        shared convention assumption — which is exactly what happened here.
+        street↔Treasury factor above. `gen_golden.py` emits an external **OpenGamma Strata** golden
+        (Apache-2.0, jars pinned by SHA-256, driven through JPype) in the street mode: every `us_gb` row is
+        asserted EQUAL to 1e-9 by `BondReference.ExternalStrataGolden`. The CSV is COMMITTED AND REQUIRED — a
+        missing file FAILS the gate (P9) — and the engine's own build never needs Java. Strata has no 31 CFR
+        App B mode, so the Treasury method is pinned by the in-test reimplementation of the regulation plus the
+        QuantLib `SimpleThenCompounded` oracle. **Licence history (LIC1, 2026-09-14):** this golden came from
+        **Rateslib** until commit `1c77771`. Rateslib is source-available, NOT open-source — without a
+        registered licence, use is non-commercial only (<https://rateslib.com/licence>) — and generating or
+        committing that golden was a use of it, so it was replaced (the `ust_31bii` rows went with it).
+        Rateslib is still CITED in comments as a convention reference, which is not a use. A single oracle can
+        hide a shared convention assumption — which is exactly what happened here.
       - **Asset swaps + API verbs — DONE.** Par-par ASW spread vs a `QuantLib::AssetSwap::fairSpread` oracle
         (`tests/bond_asset_swap_oracle.cpp`, 5e-5); the stateless street-space `bonds` run_json verb; the
         curve-space `asset_swap` verb off a bundle.
