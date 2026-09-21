@@ -130,13 +130,22 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
   const int P = static_cast<int>(bp.size()) - 1;
 
   // Per-region relative weight ρ (=1 when inheriting; default_weight>0 is guaranteed by the operator guard)
-  // and σ, plus each region's last-knot time for the midpoint->region lookup.
+  // and σ, plus each region's last-knot time for the midpoint->region lookup, and whether the region is a
+  // LINEAR map of its knot values (the precondition of the shape-function quadrature below).
   std::vector<double> region_end, rho, rsig;
-  for (const auto& m : mods) {
-    if (m.knots.empty()) continue;
-    region_end.push_back(m.knots.back());
-    rho.push_back((m.reg_lambda >= 0.0 ? m.reg_lambda : default_weight) / default_weight);
-    rsig.push_back(m.reg_sigma >= 0.0 ? m.reg_sigma : default_sigma);
+  std::vector<bool> region_linear;
+  std::vector<int> region_first;  // local index of the region's first knot
+  {
+    int o = 0;
+    for (const auto& m : mods) {
+      if (m.knots.empty()) continue;
+      region_end.push_back(m.knots.back());
+      rho.push_back((m.reg_lambda >= 0.0 ? m.reg_lambda : default_weight) / default_weight);
+      rsig.push_back(m.reg_sigma >= 0.0 ? m.reg_sigma : default_sigma);
+      region_linear.push_back(curve::scheme_is_linear(m.scheme));
+      region_first.push_back(o);
+      o += static_cast<int>(m.knots.size());
+    }
   }
   auto region_of = [&](double t_mid) -> int {
     for (std::size_t r = 0; r < region_end.size(); ++r)
@@ -163,6 +172,7 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
   for (int p = 0; p < P; ++p) {
     const double a = bp[p], b = bp[p + 1], h = b - a;
     if (h <= 1e-13) continue;
+    if (!region_linear[static_cast<std::size_t>(region_of(0.5 * (a + b)))]) continue;  // value-dependent: discrete energy below
     const double sg_interp = crv.tension_sigma_at(0.5 * (a + b));
     if (sg_interp > 0.0) {
       const int m = std::max(1, static_cast<int>(std::ceil(sg_interp * h)));
@@ -199,6 +209,54 @@ inline Eigen::MatrixXd curve_tension_stiffness(const std::vector<curve::CurveMod
     const double r2 = rho[rgn] * rho[rgn], sg = rsig[rgn], w = nodes[q].w;
     K.noalias() += (w * r2) * (D2.row(q).transpose() * D2.row(q));
     K.noalias() += (w * r2 * sg * sg) * (D1.row(q).transpose() * D1.row(q));
+  }
+
+  // A VALUE-DEPENDENT region (MonotoneCubic: scheme_is_linear == false) has no structure-only shape functions --
+  // D1/D2 above are the curve evaluated on UNIT knot vectors, and on a Hyman-filtered region a unit vector is a
+  // maximally non-monotone spike whose tangents the filter clamps to zero, so the "stiffness" that came out
+  // penalised the wrong directions and, at Strong, DROVE the curve into a zigzag (2026-09-21, the streaming soak:
+  // desk_mixed 382/400 failed ticks and a 149 bp second difference under Smoothing::Strong; the same walk under
+  // the discrete second-difference operator: 0 failed ticks, 0.1 bp). Such a region contributes the SAME energy
+  // integrals evaluated on its knot VALUES by divided differences -- the composite trapezoid tension energy, in
+  // the same units, so one `weight` serves both kinds of region:
+  //   bending  Σ_i ½(h_{i-1}+h_i) · (f''_i)²,  f''_i = 2[(f_{i+1}-f_i)/h_i - (f_i-f_{i-1})/h_{i-1}] / (h_{i-1}+h_i)
+  //   membrane Σ_j h_j · ((f_{j+1}-f_j)/h_j)²
+  // over the region's knots plus the C0 join point (the previous region's last knot), which is how the join
+  // couples into the back region's energy on the quadrature path too. ASSUMPTIONS.md D17.
+  for (std::size_t r = 0; r < region_linear.size(); ++r) {
+    if (region_linear[r]) continue;
+    std::vector<double> t;
+    std::vector<int> idx;
+    if (r > 0) { idx.push_back(region_first[r] - 1); t.push_back(region_end[r - 1]); }
+    {
+      std::size_t mi = 0;  // the r-th non-empty module
+      for (const auto& m : mods) {
+        if (m.knots.empty()) continue;
+        if (mi++ != r) continue;
+        for (std::size_t k = 0; k < m.knots.size(); ++k) { idx.push_back(region_first[r] + static_cast<int>(k)); t.push_back(m.knots[k]); }
+      }
+    }
+    const int n = static_cast<int>(t.size());
+    const double r2 = rho[r] * rho[r], sg = rsig[r];
+    Eigen::RowVectorXd row(n_local);
+    for (int j = 0; j + 1 < n; ++j) {  // membrane per segment
+      const double h = t[static_cast<std::size_t>(j) + 1] - t[static_cast<std::size_t>(j)];
+      if (h <= 1e-13) continue;
+      row.setZero();
+      row[idx[static_cast<std::size_t>(j) + 1]] = 1.0 / h;
+      row[idx[static_cast<std::size_t>(j)]] = -1.0 / h;
+      K.noalias() += (h * r2 * sg * sg) * (row.transpose() * row);
+    }
+    for (int i = 1; i + 1 < n; ++i) {  // bending per interior knot
+      const double h0 = t[static_cast<std::size_t>(i)] - t[static_cast<std::size_t>(i) - 1], h1 = t[static_cast<std::size_t>(i) + 1] - t[static_cast<std::size_t>(i)];
+      if (h0 <= 1e-13 || h1 <= 1e-13) continue;
+      const double c = 2.0 / (h0 + h1);
+      row.setZero();
+      row[idx[static_cast<std::size_t>(i) + 1]] = c / h1;
+      row[idx[static_cast<std::size_t>(i)]] = -c / h1 - c / h0;
+      row[idx[static_cast<std::size_t>(i) - 1]] = c / h0;
+      K.noalias() += (0.5 * (h0 + h1) * r2) * (row.transpose() * row);
+    }
   }
   return K;
 }

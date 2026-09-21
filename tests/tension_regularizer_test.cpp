@@ -435,3 +435,57 @@ TEST(TensionRegularizer, PiecesAreTheTrueAnalyticBreakpoints) {
   EXPECT_DOUBLE_EQ(tn.tension_sigma_at(4.0), 2.0);
   EXPECT_DOUBLE_EQ(hm.tension_sigma_at(4.0), 0.0);
 }
+
+// (A4) A VALUE-DEPENDENT region (MonotoneCubic) contributes a DISCRETE tension energy (2026-09-21). The quadrature path
+// evaluates the curve on unit knot vectors, which is a linear map's shape functions and, on a Hyman-filtered region, a
+// clamped spike that penalised the wrong directions (the streaming soak: Smoothing::Strong drove desk_mixed's long end
+// INTO a 149 bp zigzag). Such a region now contributes the composite-trapezoid energy of its knot values instead.
+//   (i)  an AFFINE forward over the whole curve has ZERO bending energy (divided second differences of an affine sequence
+//        vanish exactly) and, with sigma = 1, a membrane energy of slope^2 x (t_last - t_1) exactly -- the same identity
+//        (A1) pins on a linear region, now across a Hermite -> MonotoneCubic join;
+//   (ii) a +-10 bp zigzag on the monotone region carries the hand-computed discrete bending energy, and far more than the
+//        smooth line -- the property the shape-function path lacked.
+TEST(TensionRegularizer, AValueDependentRegionContributesItsDiscreteEnergy) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec spec;
+  spec.base = -1;
+  const std::vector<double> front{1.0, 2.0, 3.0, 4.0, 5.0, 7.0}, back{10.0, 12.0, 15.0, 20.0, 25.0, 30.0};
+  spec.regions.push_back(curve::CurveModule{front, curve::Scheme::Hermite});
+  spec.regions.push_back(curve::CurveModule{back, curve::Scheme::MonotoneCubic});
+  p.curves.push_back(spec);
+  std::vector<double> t = front;
+  t.insert(t.end(), back.begin(), back.end());
+  const int n = static_cast<int>(t.size());
+  const double a = 0.03, beta = 4e-4;
+  Eigen::VectorXd line(n);
+  for (int i = 0; i < n; ++i) line[i] = a + beta * t[static_cast<std::size_t>(i)];
+
+  const Eigen::MatrixXd R0 = cal::tension_energy_operator(p, 1.0, 0.0, std::vector<int>{0});
+  ASSERT_GT(R0.rows(), 0);
+  EXPECT_TRUE(R0.allFinite());
+  EXPECT_LT(energy(R0, line), 1e-24) << "an affine forward has no bending energy across the join either";
+  const Eigen::MatrixXd R1 = cal::tension_energy_operator(p, 1.0, 1.0, std::vector<int>{0});
+  const double memb = energy(R1, line) - energy(R0, line);
+  EXPECT_NEAR(memb, beta * beta * (t.back() - t.front()), 1e-10 * beta * beta * (t.back() - t.front()))
+      << "sigma = 1: the membrane energy of an affine forward is slope^2 x span, exactly, on both regions";
+
+  // (ii) a zigzag on the monotone region: hand-computed discrete bending over its knots plus the join point (7y)
+  Eigen::VectorXd zig = line;
+  const int off = static_cast<int>(front.size());
+  for (int k = 0; k < static_cast<int>(back.size()); ++k) zig[off + k] += (k % 2 ? -1.0 : 1.0) * 10e-4;
+  std::vector<double> tt{front.back()};
+  tt.insert(tt.end(), back.begin(), back.end());
+  Eigen::VectorXd f(static_cast<int>(tt.size()));
+  f[0] = zig[off - 1];
+  for (int k = 0; k < static_cast<int>(back.size()); ++k) f[k + 1] = zig[off + k];
+  double hand = 0.0;
+  for (int i = 1; i + 1 < f.size(); ++i) {
+    const double h0 = tt[static_cast<std::size_t>(i)] - tt[static_cast<std::size_t>(i) - 1], h1 = tt[static_cast<std::size_t>(i) + 1] - tt[static_cast<std::size_t>(i)];
+    const double f2 = 2.0 * ((f[i + 1] - f[i]) / h1 - (f[i] - f[i - 1]) / h0) / (h0 + h1);
+    hand += 0.5 * (h0 + h1) * f2 * f2;
+  }
+  const double e_zig = energy(R0, zig);
+  std::cout << "  [tension] zigzag bending energy " << e_zig << " (hand " << hand << "), line " << energy(R0, line) << "\n";
+  EXPECT_NEAR(e_zig, hand, 1e-9 * hand) << "the monotone region's energy is the composite-trapezoid bending of its knot values";
+  EXPECT_GT(e_zig, 1e6 * std::max(energy(R0, line), 1e-30)) << "a zigzag must cost far more than the smooth line";
+}
