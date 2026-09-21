@@ -44,6 +44,7 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/pnl_explain_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/portfolio_compiled_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/hotpath_shapes_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/streaming_soak_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compiled_mtm_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/conventions_registry_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/codec_test.cpp

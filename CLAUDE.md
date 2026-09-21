@@ -500,6 +500,25 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   path rides one Jacobian all day. Gate: `tests/streaming_test.cpp` (round-trip + exactness every tick).
   Demo: `tools/stream_sim.cpp` (trending day).
 
+### The streaming soak gate (2026-09-21): drive every rung along a WALK, and stream under smoothing
+`tests/streaming_soak_test.cpp` streams every shape-ladder rung through `BundleSession` for 400 seeded ticks of two
+market walks from `bench/fixtures/market_walk.hpp` -- a FACTOR walk (correlated level/slope/butterfly moves per curve,
+model-consistent quotes, bid/ask jitter, shocks: a realistic day) and a PER-ROW walk (every quote its own noise: the
+stress) -- and pins failed ticks per rung and recipe (may only decrease) plus quote-space accuracy of the delivered curve.
+Until then every ladder driver TOGGLED between two fixed markets, which is right for a timing metric and blind to
+robustness. What the first walk found, so nobody re-derives it:
+- **An unsmoothed long end is a zigzag.** Par-swap quotes are integrals of the forward, so 0.03 bp of jitter on 10y..30y
+  quotes becomes a ±40 bp second difference of the knot forwards (a cold LM delivers the same: it is the market, not the
+  streamer). On a Hermite long end that is only ugly; on a MonotoneCubic long end it parks the curve on the Hyman
+  filter's branch boundaries, where every solver crawls (desk_mixed: 1 tick in 5 fell back to an LM, ~9 ms/tick).
+- **Nobody streams unsmoothed.** Under the Light SECOND-DIFFERENCE preset every rung streams both walks with zero failed
+  ticks (desk_mixed 31 µs, zigzag ≤ 3 bp). The TENSION presets are ~1/h³ weaker at knot spacing h (≈1/125 at 5y), so
+  the API's default (Light tension) still leaves desk_mixed at 22 failed ticks / 400 -- pinned on record, not fixed.
+- **The tension operator was undefined on a value-dependent region** (shape functions from unit knot vectors, which the
+  filter clamps): at Strong it drove desk_mixed INTO a 149 bp zigzag. Such a region now contributes a discrete tension
+  energy (ASSUMPTIONS.md D17). Also from the same soak: a converged `stream_update` left `result()` at the previous LM
+  solve (fixed 2026-09-21, `b806cce`).
+
 ### Retired (E6.1, 2026-09-10): the pricing-branch and thread-pool machinery
 `LiveCurveFeed` (seqlock curve publish), `ParallelPortfolio` (sliced book reprice), `ThreadPool` and the
 branch-parallel staged solve (`calibrate_staged_parallel` / `bundle_waves`) had no production consumer —
