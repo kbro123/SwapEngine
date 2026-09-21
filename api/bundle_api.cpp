@@ -286,20 +286,24 @@ const cal::CalibrationResult& BundleSession::warm_solve(const RegSpec& reg) {
   record_tick(tick, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
   if (tick.converged) {
     x_ = stream_->current();
-    result_.x = x_;
-    result_.converged = true;
-    result_.status = "streamed (frozen-Newton tick on the shared engine)";
-    result_.info = 2;
-    result_.iterations = tick.newton_steps;
-    const Eigen::VectorXd& r = ensure_engine().residuals(x_);  // the engine's market IS the live market now
-    result_.rms_residual = std::sqrt(r.squaredNorm() / std::max<Eigen::Index>(1, r.size()));
-    result_.stationarity = 0.0;  // not evaluated on the streamed path (the tick converged to step_tol)
-    result_.solve_micros = last_solve_us_;
+    stamp_streamed(tick, ensure_engine().residuals(x_));  // re-evaluated at x_: the engine's market IS the live market now
     return result_;
   }
   calibrate(x_, reg);  // the LM fallback, warm from x_
   stream_->resync(prob_, x_, q_scratch_);
   return result_;
+}
+
+void BundleSession::stamp_streamed(const cal::StreamTick& tick, const Eigen::VectorXd& r) {
+  x_ = stream_->current();
+  result_.x = x_;
+  result_.converged = true;
+  result_.status = "streamed (frozen-Newton tick on the shared engine)";
+  result_.info = 2;
+  result_.iterations = tick.newton_steps;
+  result_.rms_residual = std::sqrt(r.squaredNorm() / std::max<Eigen::Index>(1, r.size()));
+  result_.stationarity = 0.0;  // not evaluated on the streamed path (the tick converged to step_tol)
+  result_.solve_micros = last_solve_us_;
 }
 
 void BundleSession::record_tick(const cal::StreamTick& tick, double solve_us) {
@@ -627,7 +631,13 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
   const cal::StreamTick tick = stream_->update(new_market);
   record_tick(tick, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
   x_ = stream_->current();  // the streamer never commits a half-solved curve; this is the last GOOD x
-  if (!tick.converged) {
+  if (tick.converged) {
+    // result() reports THIS tick, as it does after resolve/recalibrate (the same stamp). Until 2026-09-21 only the
+    // fallback below wrote result_, so on a healthy streaming session result().x was the LAST LM SOLVE -- a curve
+    // that could be hundreds of ticks stale, reported converged -- while x() and the return value moved on. Found
+    // by a soak probe that read it and measured a 5e-2 "error" that was just the market's drift since that solve.
+    stamp_streamed(tick, stream_->last_residual());  // no residual evaluation on the gated tick (see the header)
+  } else {
     // THE LM FALLBACK (2026-09-12) — the same one warm_solve has always had, so both entry points now agree
     // about what a tick that cannot converge means. Without it they disagreed in a way that mattered: a
     // failed tick left x_ at the PREVIOUS solution and returned it, so a caller that did not check

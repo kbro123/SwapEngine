@@ -192,6 +192,13 @@ class BundleSession {
   // carry to rebind. Unlike structure_fingerprint() it does not change when fixings resolve.
   std::uint64_t structural_stamp() const { return stamp_; }
 
+  // The report of the LAST solve, whichever path produced it: a cold calibrate, an LM fallback, or a converged
+  // streamed tick (status "streamed ...", stationarity not evaluated). result().x == x() after every entry
+  // point. rms_residual is re-evaluated at x() by resolve/recalibrate/rebind but, on stream_update, is the
+  // streamer's final corrector residual -- one sub-step_tol step before x(), so a report at the O(||J||·step_tol)
+  // level (~4e-8 measured vs 3e-9 re-evaluated on the hard test bundle) with no residual pass on the gated tick. Until 2026-09-21 a converged stream_update left
+  // this at the previous LM solve while x() moved on -- a client reading result().x off a streaming session
+  // priced a curve that could be hundreds of ticks stale, with converged == true.
   const cal::CalibrationResult& result() const { return result_; }
   const Eigen::VectorXd& x() const { return x_; }
   const cal::BundleProblem& problem() const { return prob_; }
@@ -445,6 +452,11 @@ class BundleSession {
   // The warm re-solve behind resolve/recalibrate/rebind (one streamed tick, LM fallback).
   const cal::CalibrationResult& warm_solve(const RegSpec& reg);
   void record_tick(const cal::StreamTick& tick, double solve_us);
+  // After a CONVERGED tick on either entry point (warm_solve, stream_update): commit the streamer's curve to x_
+  // and make result_ report THIS solve, with `r` as its residual. warm_solve passes a re-evaluation at x_ (its
+  // callers read rms to 1e-10); stream_update passes the streamer's last corrector residual -- no evaluation on
+  // the gated tick, a report at the O(||J||·step_tol) level (~4e-8 vs 3e-9 exact, ApiState test).
+  void stamp_streamed(const cal::StreamTick& tick, const Eigen::VectorXd& r);
   void rebuild_cbook() const;
   cal::HybridBundleResidual& ensure_engine() const {
     if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);

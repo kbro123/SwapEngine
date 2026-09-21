@@ -358,6 +358,10 @@ class StreamingCalibrator {
   }
 
   const Eigen::VectorXd& current() const { return x_cur_; }
+  // The engine residual the last corrector step was taken from: evaluated at the state ONE converged step
+  // (||dx||_inf < step_tol) before current(), so it reads the committed curve's fit to O(||J||·step_tol) --
+  // a report, not a re-evaluation; nothing on the tick is spent on it. Stale after a failed tick.
+  const Eigen::VectorXd& last_residual() const { return r_; }
   const Eigen::VectorXd& anchor_market() const { return q_anchor_; }
   const Eigen::MatrixXd& sensitivity() const { return M_; }
   int refresh_count() const { return refresh_count_; }

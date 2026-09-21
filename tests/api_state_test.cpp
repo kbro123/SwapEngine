@@ -186,6 +186,44 @@ TEST(ApiState, RebindOnAStreamingSessionIsATick) {
   EXPECT_LT(inf(s.x(), cal::calibrate(p4, x0).x), 1e-10);
 }
 
+// result() reports the LAST solve on EVERY entry point. Until 2026-09-21 a converged stream_update moved x() but
+// left result() at the previous LM solve (converged == true, the old curve): a streaming client reading result().x
+// priced a curve hundreds of ticks stale. Found by a soak probe that did exactly that.
+TEST(ApiState, StreamUpdateReportsItselfInResultLikeResolveDoes) {
+  const cal::BundleProblem p = banded_bundle(0.0, 0.0, 1.0);
+  api::BundleSession s(p);
+  s.calibrate(x0);
+  const Eigen::VectorXd x_cold = s.result().x;
+  s.start_streaming();
+  Eigen::VectorXd q = p.market();
+  for (int k = 1; k <= 5; ++k) {  // several converged ticks, none of which runs the LM
+    q.array() += 1e-4;
+    const Eigen::VectorXd& x = s.stream_update(q);
+    ASSERT_TRUE(s.last_converged()) << "tick " << k << ": " << s.last_reason();
+    EXPECT_EQ(inf(s.result().x, x), 0.0) << "tick " << k << ": result().x must be the curve stream_update returned";
+    EXPECT_EQ(inf(s.result().x, s.x()), 0.0);
+  }
+  EXPECT_GT(inf(s.result().x, x_cold), 1e-6) << "the market moved 5 bp; a stale report would still show the cold solve";
+  EXPECT_TRUE(s.result().converged);
+  EXPECT_NE(std::string(s.result().status).find("streamed"), std::string::npos) << s.result().status;
+  EXPECT_EQ(s.result().iterations, s.last_newton_steps());
+  // The streamed rms is the streamer's final corrector residual (the state one sub-step_tol step before x()),
+  // NOT a re-evaluation at x() -- that would put a residual pass on the gated tick. It is a report at the
+  // O(||J||·step_tol) level: measured 4.3e-8 here against 2.7e-9 re-evaluated (predictive convergence stops the
+  // corrector one step early), both ~1e-3 bp and below anything a client acts on. Pinned at that level.
+  cal::BundleProblem pq = p;
+  for (int i = 0; i < pq.n_residuals(); ++i) pq.instruments[i].market = q[i];
+  const Eigen::VectorXd r = pq.residuals<double>(s.x());
+  const double rms_exact = std::sqrt(r.squaredNorm() / r.size());
+  std::cout << "  [state] streamed rms " << s.result().rms_residual << " vs exact " << rms_exact << "\n";
+  EXPECT_LT(s.result().rms_residual, 1e-6);
+  EXPECT_GE(s.result().rms_residual, rms_exact) << "the corrector's residual can only be larger than the committed one";
+  // resolve() on the same market re-evaluates (its callers read rms to 1e-10): same curve, the exact number.
+  s.resolve();
+  EXPECT_EQ(inf(s.result().x, s.x()), 0.0);
+  EXPECT_LT(s.result().rms_residual, 1e-8);
+}
+
 // set_band + resolve (the scalar API) == rebind with the same band == a fresh session on that problem.
 TEST(ApiState, ScalarBandUpdateMatchesRebindAndAFreshSession) {
   const cal::BundleProblem p = banded_bundle(0.0, 2.0, 1.0);  // inconsistent hard quotes, no bands yet
