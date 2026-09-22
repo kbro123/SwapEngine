@@ -150,7 +150,7 @@ TEST_F(ZcFixture, PortfolioOfZeroCouponRatesRidesTheCompiledPath) {
   fly.combination.push_back({-1.0, p.instruments[3]});
   fly.market = quotes[1] - quotes[3];
   q.instruments.push_back(fly);
-  EXPECT_FALSE(cal::instrument_is_noncacheable(fly, q.curves));
+  EXPECT_FALSE((fly).noncacheable());
   const cal::CompiledBundleResidual cr(q);
   EXPECT_EQ(cr.n_terms(), static_cast<int>(p.instruments.size()) + 2);  // five standalone rows + the two components
   const cal::HybridBundleResidual hy(q);

@@ -63,7 +63,7 @@ cal::Instrument par_inst(double T, int role) {
 }
 
 // FX forward wrapped in a 1-component Portfolio: NON-cacheable by construction (an FX/MtM component
-// forces the AAD block -- hybrid_residual.hpp instrument_is_noncacheable).
+// forces the AAD block -- Instrument::noncacheable).
 cal::Instrument fx_portfolio_inst(double T) {
   cal::Instrument fx;
   fx.quote = cal::QuoteKind::FxForward;
@@ -140,7 +140,7 @@ struct Fixture {
 
     // The non-cacheable partition (mirrors HybridBundleResidual's), for the AadBlock-only probes.
     for (int r = 0; r < prob.n_residuals(); ++r)
-      if (cal::instrument_is_noncacheable(prob.instruments[r], prob.curves)) {
+      if ((prob.instruments[r]).noncacheable()) {
         nc.push_back(prob.instruments[r]);
         nc_rows.push_back(r);
       }

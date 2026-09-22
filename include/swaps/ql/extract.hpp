@@ -45,8 +45,8 @@ namespace swaps::qlx {
 // GEARING folds exactly into the observation: QuantLib's coupon rate is `gearing*rate + spread`, and
 //   gearing * (Σ w_k(DF/DF − 1) + realized)/tau  ==  (Σ (g·w_k)(DF/DF − 1) + g·realized)/tau,
 // so a gearing != 1 scales the weights and `realized`. At gearing == 1 we leave `weight` EMPTY, which
-// is what keeps the standard shape on the compiled engine's fused unit-weight fast path
-// (`BundleFloatBatch::sub_is_identity` / `cpn_is_plain`) and bit-exact vs the legacy kernel.
+// is what keeps the standard shape (RateObservation::standard / FloatCoupon::standard -- the one
+// definition the templated fast path and the compiled batch's fused gather both read) bit-exact vs the legacy kernel.
 
 namespace detail {
 

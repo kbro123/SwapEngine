@@ -25,6 +25,11 @@
 // zero-coupon transform was applied after accumulation, so neither could sit inside a Σ).
 // The Jacobian is the same chain: each term scatters weight·xf'·∂value/∂DF into G, rho' scales the row,
 // the support-blocked −(G·diag(DF))·W product maps to knot space, and State terms add their direct entry.
+// A Quotient term's numerator is Σ_legs sign·pv(leg) over its SIGNED LEGS in ONE float batch (stage B, 2026-09-22):
+// ParRate = {+fwd}, ParSpread = {+bench, −fwd}, XccyMtmBasis = {+self, −foreign, +mtm}. The batch scatters each
+// leg's partials straight onto its term's row with its sign (pricing::LegTable), so there are no per-kind
+// batches and no padded empty legs to keep them index-aligned; an MtM leg in a bundle no longer puts every
+// quotient row through the MtM formula (the batch picks the coupon formula per leg).
 
 #include <Eigen/Core>
 
@@ -61,10 +66,9 @@ class CompiledBundleResidual {
   // `pwl` (EXPERIMENT, exp/piecewise-linear-w): accept value-dependent (piecewise-linear) curves at any time;
   // their W is taken at a state and the OWNER must call rebuild_W(x) whenever x's branch pattern changes.
   explicit CompiledBundleResidual(const BundleProblem& p, bool pwl = false)
-      : n_gen_(static_cast<int>(p.instruments.size())), market_(p.market()) {
+      : n_gen_(static_cast<int>(p.instruments.size())), instruments_(p.instruments), market_(p.market()) {
     cs_.init(p.curves);  // p.curves ARE pricing::CurveStructure now (BundleCurveSpec is an alias), no copy
     if (pwl) cs_.enable_pwl();
-    row_log_.assign(n_gen_, 0.0);
     band_lo_.assign(n_gen_, 0.0);
     band_up_.assign(n_gen_, 0.0);
     band_dc_.assign(n_gen_, 1.0);
@@ -73,12 +77,16 @@ class CompiledBundleResidual {
     register_generic(p);
 
     cs_.finalize();  // builds W_all now that every (curve, time) is registered
-    gen_pos_.finalize();
-    gen_neg_.finalize();
+    gen_float_.finalize();
+    {  // per-COUPON row (its term's quotient position) and sign, built once for the derivative scatter
+      const Eigen::VectorXi& cl = gen_float_.coupon_leg();
+      cpn_q_.resize(static_cast<std::size_t>(cl.size()));
+      cpn_sign_.resize(static_cast<std::size_t>(cl.size()));
+      for (int c = 0; c < cl.size(); ++c) { cpn_q_[static_cast<std::size_t>(c)] = leg_q_[static_cast<std::size_t>(cl[c])]; cpn_sign_[static_cast<std::size_t>(c)] = leg_sign_[static_cast<std::size_t>(cl[c])]; }
+    }
     gen_fixed_.finalize();
-    gen_mtm_.finalize();
-    has_moment_ = gen_pos_.has_moment() || gen_neg_.has_moment() || gen_rate_.has_moment() || gen_mtm_.has_moment();
     gen_rate_.finalize();
+    has_moment_ = gen_float_.has_moment() || gen_rate_.has_moment();
 
     // Jacobian scratch buffers, sized ONCE here and reused (setZero) every call -- no per-iteration
     // allocation of the N×T / nq×T / nr×T dense matrices.
@@ -97,24 +105,25 @@ class CompiledBundleResidual {
     // final product then sums ONLY over each row's support instead of a dense n_res × T × n_knots GEMM.
     {
       std::vector<std::vector<int>> sup(n_gen_);
-      const auto add_float = [&](const pricing::BundleFloatBatch& b, const std::vector<int>& term_of) {
+      // row_of(leg / future) -> the residual row: a float leg belongs to a quotient term through leg_q_, a
+      // future to a rate term directly.
+      const auto add_float = [&](const pricing::BundleFloatBatch& b, auto&& row_of) {
         for (int i = 0; i < b.n_coupons(); ++i)
-          if (b.pay[i] >= 0) sup[terms_[term_of[b.inst[i]]].row].push_back(b.pay[i]);  // futures carry pay = -1
+          if (b.pay[i] >= 0) sup[row_of(b.inst[i])].push_back(b.pay[i]);  // futures carry pay = -1
         for (int j = 0; j < static_cast<int>(b.subS.size()); ++j) {
-          const int r = terms_[term_of[b.inst[b.sub_cpn[j]]]].row;
+          const int r = row_of(b.inst[b.sub_cpn[j]]);
           sup[r].push_back(b.subS[j]);
           sup[r].push_back(b.subE[j]);
         }
       };
-      add_float(gen_pos_, qterm_);
-      add_float(gen_neg_, qterm_);
-      add_float(gen_rate_, rterm_);
-      add_float(gen_mtm_, qterm_);
-      for (int i = 0; i < gen_mtm_.n_coupons(); ++i)  // the MtM coupon's reset ratio and notional exchanges
-        if (gen_mtm_.rN[i] >= 0) {
-          const int r = terms_[qterm_[gen_mtm_.inst[i]]].row;
-          sup[r].push_back(gen_mtm_.rN[i]); sup[r].push_back(gen_mtm_.rD[i]);
-          sup[r].push_back(gen_mtm_.dS[i]); sup[r].push_back(gen_mtm_.dE[i]);
+      const auto leg_row = [&](int leg) { return terms_[qterm_[leg_q_[leg]]].row; };
+      add_float(gen_float_, leg_row);
+      add_float(gen_rate_, [&](int i) { return terms_[rterm_[i]].row; });
+      for (int i = 0; i < gen_float_.n_coupons(); ++i)  // an MtM coupon's reset ratio and notional exchanges
+        if (gen_float_.rN[i] >= 0) {
+          const int r = leg_row(gen_float_.inst[i]);
+          sup[r].push_back(gen_float_.rN[i]); sup[r].push_back(gen_float_.rD[i]);
+          sup[r].push_back(gen_float_.dS[i]); sup[r].push_back(gen_float_.dE[i]);
         }
       for (int i = 0; i < static_cast<int>(gen_fixed_.pay.size()); ++i)
         sup[terms_[qterm_[gen_fixed_.inst[i]]].row].push_back(gen_fixed_.pay[i]);
@@ -210,7 +219,7 @@ class CompiledBundleResidual {
   // band (the templated instrument_residual applies the log map first; see register_generic).
   void set_quote(int row, double market, double lower, double upper, double decay) {
     market_[row] = market;
-    if (row_log_[row] == 0.0) {
+    if (instruments_[static_cast<std::size_t>(row)].quote != QuoteKind::FxForward) {
       band_lo_[row] = lower;
       band_up_[row] = upper;
       band_dc_[row] = decay;
@@ -228,25 +237,23 @@ class CompiledBundleResidual {
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;  // valid whenever df_at(x) is (same memo)
-    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); gen_mtm_.set_state(x); }
+    if (has_moment_) { gen_float_.set_state(x); gen_rate_.set_state(x); }
     out_.setZero(n_residuals());
     // The batch passes: each accessor returns a ref into ITS OWN batch's scratch (distinct objects), so
     // all stay live across the term loop below. Empty batches are skipped (their refs are never read).
-    const bool mtm = gen_mtm_.has_mtm();
-    const Eigen::VectorXd* ann = nullptr; const Eigen::VectorXd* pp = nullptr; const Eigen::VectorXd* pn = nullptr;
-    const Eigen::VectorXd* pm = nullptr; const Eigen::VectorXd* rt = nullptr;
+    const Eigen::VectorXd* ann = nullptr; const Eigen::VectorXd* rt = nullptr;
     if (!qterm_.empty()) {
       ann = &gen_fixed_.annuity(DF);
-      pp = &gen_pos_.pv(DF, INV);
-      pn = &gen_neg_.pv(DF, INV);
-      if (mtm) pm = &gen_mtm_.pv(DF, INV);  // the MtM funding leg (already divided by fx_spot: R is the bare reset ratio)
+      // Σ sign·pv(leg) per quotient term, accumulated by the batch's own per-leg loop (an MtM leg's pv is
+      // already divided by fx_spot: R is the bare reset ratio).
+      num_.setZero(static_cast<int>(qterm_.size()));
+      gen_float_.pv_into(DF, INV, num_, leg_q_.data(), leg_sign_.data());
     }
     if (!rterm_.empty()) rt = &gen_rate_.rate(DF, INV);
     for (const Term& t : terms_) {
       switch (t.src) {
         case Src::Quotient: {
-          double num = (*pp)[t.idx] - (*pn)[t.idx];
-          if (mtm) num += (*pm)[t.idx];
+          const double num = num_[t.idx];
           // (weight·num)/ann: the association the pre-row-model quotient loop used, bit for bit.
           if (t.xf == Xf::ZeroCoupon) out_[t.row] += t.weight * zero_coupon_transform_d(num / (*ann)[t.idx], t.tau).first;
           else out_[t.row] += t.weight * num / (*ann)[t.idx];
@@ -313,7 +320,7 @@ class CompiledBundleResidual {
   void jacobian_core(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, bool values) const {
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;
-    if (has_moment_) { gen_pos_.set_state(x); gen_neg_.set_state(x); gen_rate_.set_state(x); gen_mtm_.set_state(x); }
+    if (has_moment_) { gen_float_.set_state(x); gen_rate_.set_state(x); }
     const std::vector<RowMap>& maps = row_maps();
     values = values || !maps.empty();
     G_.setZero();  // reuse the scratch buffer (sized once in the ctor)
@@ -328,16 +335,13 @@ class CompiledBundleResidual {
       // Compute each batch's per-coupon numerator (the sub-period gather + reduce) ONCE, then feed it
       // to BOTH the value pass (pv_from_num) and the derivative pass (d_pv_from_num) -- the gather no
       // longer runs a second time for the derivative.
-      const Eigen::VectorXd& num_pos = gen_pos_.num(DF, INV);
-      const Eigen::VectorXd& num_neg = gen_neg_.num(DF, INV);
-      num_.noalias() = gen_pos_.pv_from_num(num_pos, DF) - gen_neg_.pv_from_num(num_neg, DF);
-      if (gen_mtm_.has_mtm()) { num_mtm_ = gen_mtm_.num(DF, INV); num_ += gen_mtm_.pv_from_num(num_mtm_, DF); }
+      const Eigen::VectorXd& num_cpn = gen_float_.num(DF, INV);
+      num_.setZero(static_cast<int>(qterm_.size()));
+      gen_float_.pv_from_num_into(num_cpn, DF, num_, leg_q_.data(), leg_sign_.data());  // Σ sign·pv(leg) per term
       ann = &gen_fixed_.annuity(DF);
       dnum_.setZero();
       dann_.setZero();
-      gen_pos_.d_pv_from_num(num_pos, DF, INV, dnum_, 0, 1.0);
-      gen_neg_.d_pv_from_num(num_neg, DF, INV, dnum_, 0, -1.0);
-      if (gen_mtm_.has_mtm()) gen_mtm_.d_pv_from_num(num_mtm_, DF, INV, dnum_, 0, 1.0);
+      gen_float_.d_pv_from_num(num_cpn, DF, INV, dnum_, legs());  // every leg's partials onto its term's row, with its sign
       gen_fixed_.d_annuity(dann_, 0);
       if (has_moment_) { ann_keep_ = *ann; num_keep_ = num_; }  // the quotient factors for the direct terms below
     }
@@ -439,9 +443,7 @@ class CompiledBundleResidual {
         const int k = qterm_[bi];
         J(terms_[k].row, j) += tf_[k] * row_scale_[terms_[k].row] * v / ann_keep_[bi];
       };
-      gen_pos_.moment_direct_pv(DF, 1.0, add_q);
-      gen_neg_.moment_direct_pv(DF, -1.0, add_q);
-      gen_mtm_.moment_direct_pv(DF, 1.0, add_q);
+      gen_float_.moment_direct_pv(DF, legs(), add_q);
       gen_rate_.moment_direct_rate([&](int bi, int j, double v) {
         const int k = rterm_[bi];
         J(terms_[k].row, j) += tf_[k] * row_scale_[terms_[k].row] * v;
@@ -525,8 +527,7 @@ class CompiledBundleResidual {
       // The row's residual map is decided by the TOP-LEVEL quote kind, exactly as instrument_residual does:
       // a standalone FX forward is the log-basis row (never banded -- the templated residual applies the log
       // map first); everything else takes the bid/offer band when one is set (r = w(q)·(q − market), a per-
-      // row scalar post-transform, so the row stays on the W-cache path).
-      row_log_[row] = (ins.quote == QuoteKind::FxForward) ? ins.fx_time : 0.0;
+      // row scalar post-transform, so the row stays on the W-cache path). row_maps() asks instruments_.
       band_lo_[row] = ins.band_lower;
       band_up_[row] = ins.band_upper;
       band_dc_[row] = ins.band_decay;
@@ -540,9 +541,19 @@ class CompiledBundleResidual {
   // becomes three weighted quotient terms summed into one row, fully on the W-cache path; likewise a
   // portfolio of FX forwards (a Σ of outrights, plain residual) or of zero-coupon rates (a Σ of transformed
   // quotients). Only a genuinely non-W-cacheable LEAF forces the AAD engine: an incomplete or SEASONED MtM
-  // leg, or a compounded observation (hybrid_residual.hpp instrument_is_noncacheable).
+  // leg, or a compounded observation (Instrument::noncacheable, which the router asks).
+  // One signed float leg of quotient term `q` into the ONE float batch.
+  void add_leg(int q, double sign, const FloatLeg& leg) {
+    leg_q_.push_back(q);
+    leg_sign_.push_back(sign);
+    gen_float_.add(cs_, leg.forecast, leg.discount, leg.coupons);
+  }
+  // A quotient term's numerator is Σ sign·pv(leg) over its legs, accumulated from 0.0 in registration order by
+  // the batch itself (pv_into / pv_from_num_into): (0 + pv_a) + (−pv_b) == pv_a − pv_b bit for bit, so a
+  // ParRate / ParSpread / MtM numerator equals the old per-kind form exactly.
+  pricing::LegTable legs() const { return pricing::LegTable{cpn_q_.data(), cpn_sign_.data()}; }
+
   void register_at(const Instrument& ins, int row, double weight, const std::vector<BundleCurveSpec>& curves) {
-    static const std::vector<pricing::FloatCoupon> no_leg;
     if (ins.quote == QuoteKind::Portfolio) {
       for (const auto& comp : ins.combination) register_at(comp.instrument, row, weight * comp.weight, curves);
       return;
@@ -575,9 +586,8 @@ class CompiledBundleResidual {
       terms_.push_back({row, weight, Src::State, Xf::None, state_index, 0.0});
       return;
     }
-    // Every remaining kind is a QUOTIENT term: (pv_pos − pv_neg [+ pv_mtm]) / annuity, with the batches
-    // index-aligned at this term's quotient position (an unused leg is registered EMPTY so the alignment
-    // holds; an empty leg's pv is exactly 0.0 and its d_pv contributes nothing).
+    // Every remaining kind is a QUOTIENT term: Σ sign·pv(leg) / annuity over its signed legs in the ONE float
+    // batch (leg_q_/leg_sign_ map each batch leg back to this term's quotient position and sign).
     Xf xf = Xf::None;
     double tau = 0.0;
     if (ins.quote == QuoteKind::ZeroCouponRate) {  // the ParRate quotient of the same legs, then r = (1+τq)^(1/τ) − 1
@@ -592,41 +602,49 @@ class CompiledBundleResidual {
       // (BundleFloatBatch::add_mtm / d_pv_from_num). Linear in the row weight, so it composes inside a Portfolio.
       if (ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0)
         throw std::invalid_argument("CompiledBundleResidual: an XccyMtmBasis row needs a complete MtM leg (forecast/discount/reset_num/reset_den)");
-      gen_pos_.add(cs_, ins.fwd.forecast, ins.fwd.discount, ins.fwd.coupons);         // + pv_self
-      gen_neg_.add(cs_, ins.bench.forecast, ins.bench.discount, ins.bench.coupons);   // − pv_fx
-      gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);                     // annuity
-      gen_mtm_.add_mtm(cs_, ins.mtm.forecast, ins.mtm.discount, ins.mtm.reset_num, ins.mtm.reset_den, ins.mtm.coupons);
+      const int q = static_cast<int>(qterm_.size());
+      add_leg(q, +1.0, ins.fwd);    // + pv_self
+      add_leg(q, -1.0, ins.bench);  // − pv_fx
+      leg_q_.push_back(q); leg_sign_.push_back(+1.0);  // + mtm (the resetting funding leg)
+      gen_float_.add_mtm(cs_, ins.mtm.forecast, ins.mtm.discount, ins.mtm.reset_num, ins.mtm.reset_den, ins.mtm.coupons);
+      gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);  // annuity
     } else {
-      const bool spread = (ins.quote == QuoteKind::ParSpread);
-      const FloatLeg& pos = spread ? ins.bench : ins.fwd;  // ParSpread: +bench; ParRate: +fwd
-      gen_pos_.add(cs_, pos.forecast, pos.discount, pos.coupons);
-      if (spread)
-        gen_neg_.add(cs_, ins.fwd.forecast, ins.fwd.discount, ins.fwd.coupons);  // ParSpread: -fwd
-      else
-        gen_neg_.add(cs_, 0, 0, no_leg);  // ParRate: nothing subtracted
+      const int q = static_cast<int>(qterm_.size());
+      if (ins.quote == QuoteKind::ParSpread) {
+        add_leg(q, +1.0, ins.bench);  // ParSpread: +bench
+        add_leg(q, -1.0, ins.fwd);    //            −fwd
+      } else {
+        add_leg(q, +1.0, ins.fwd);    // ParRate / ZeroCoupon: +fwd
+      }
       gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);
-      gen_mtm_.add(cs_, 0, 0, no_leg);  // keeps the MtM batch index-aligned with the quotient terms (empty here)
     }
     qterm_.push_back(static_cast<int>(terms_.size()));
     terms_.push_back({row, weight, Src::Quotient, xf, static_cast<int>(qterm_.size()) - 1, tau});
   }
 
   int n_gen_;
+  // THE FLAT SOURCE, kept beside the compiled arrays (2026-09-22): whatever the engine needs to know about an
+  // instrument that is not a hot-path number (its quote kind, its FX tenor, what it reads) it asks the
+  // instrument, never re-derives from what it packed. The router hands in a sub-problem, so this is a copy.
+  std::vector<Instrument> instruments_;
   pricing::CompiledCurveSet cs_;
-  // The ONE generic block (design §3): ParRate/ParSpread/ZeroCoupon/MtM share the pos/neg float pair + the
-  // fixed annuity (+ the MtM funding batch); Rate futures use the rate batch.
-  pricing::BundleFloatBatch gen_pos_, gen_neg_, gen_rate_, gen_mtm_;  // gen_mtm_: MtM funding legs, index-aligned with the quotient terms
+  // The ONE generic block (design §3): every float leg of every quotient term in ONE float batch (signed, mapped
+  // back to its term by leg_q_/leg_sign_), the fixed annuities, and the rate batch for the futures.
+  pricing::BundleFloatBatch gen_float_, gen_rate_;
   pricing::BundleFixedLegs gen_fixed_;
+  std::vector<int> leg_q_;        // batch leg -> quotient term position
+  std::vector<double> leg_sign_;  // batch leg -> its sign in that term's numerator
+  std::vector<int> cpn_q_;        // batch coupon -> quotient term position (the derivative scatter's row)
+  std::vector<double> cpn_sign_;  // batch coupon -> its leg's sign
   // THE row model: every term, in registration (component) order, and the batch-position -> term maps
   // (quotient batch position i is term qterm_[i]; rate batch position j is term rterm_[j]).
   std::vector<Term> terms_;
   std::vector<int> qterm_, rterm_;
   std::vector<FxRatio> fx_;  // FxRatio terms' DF indices, by Term::idx
-  // The per-row residual map data: a log row (T > 0; a standalone FX forward, never banded) or a band
-  // (upper > lower). The RowMap list is DERIVED from these (rebuilt lazily after a scalar set_quote; the
-  // vector was reserved to n_gen_ in the ctor, so a rebuild never allocates). Empty for a plain bundle, so
-  // the fast path is untouched when no row is mapped.
-  std::vector<double> row_log_;                      // T of a log row, 0.0 = not a log row
+  // The per-row residual map: a log row (a standalone FX forward -- asked of instruments_, never banded) or a
+  // band (upper > lower, the mutable quote state below). The RowMap list is DERIVED from these (rebuilt lazily
+  // after a scalar set_quote; the vector was reserved to n_gen_ in the ctor, so a rebuild never allocates).
+  // Empty for a plain bundle, so the fast path is untouched when no row is mapped.
   std::vector<double> band_lo_, band_up_, band_dc_;  // per-row band (upper <= lower: none)
   mutable std::vector<RowMap> maps_;
   mutable bool maps_dirty_ = false;
@@ -634,7 +652,8 @@ class CompiledBundleResidual {
     if (maps_dirty_) {
       maps_.clear();
       for (int row = 0; row < n_gen_; ++row) {
-        if (row_log_[row] > 0.0) maps_.push_back({row, true, row_log_[row], 0.0, 0.0});
+        const Instrument& ins = instruments_[static_cast<std::size_t>(row)];
+        if (ins.quote == QuoteKind::FxForward) maps_.push_back({row, true, ins.fx_time, 0.0, 0.0});
         else if (band_up_[row] > band_lo_[row]) maps_.push_back({row, false, band_lo_[row], band_up_[row], band_dc_[row]});
       }
       maps_dirty_ = false;
@@ -649,7 +668,7 @@ class CompiledBundleResidual {
   bool has_moment_ = false;                    // any batch carries moment-path coupons (set_state + direct terms)
   mutable Eigen::VectorXd row_scale_, tf_, ann_keep_, num_keep_;  // jacobian_vs scratch: row slopes, term chain factors, the moment direct terms' quotient factors
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
-  mutable Eigen::VectorXd mrj_, num_, num_mtm_;  // jacobian_vs scratch: the pass's own row values, quotient numerator, MtM numerator
+  mutable Eigen::VectorXd mrj_, num_;  // jacobian_vs scratch: the pass's own row values, the quotient numerators
   // ROW-MAJOR: every fill site (the d_* scatters, the per-row G assembly, the row-map scaling) and the
   // product's G(r,t) reads are row-local, so row-major makes them contiguous (a col-major .row()
   // expression is strided by n_res -- it dominated the fill cost).

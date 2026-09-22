@@ -404,6 +404,26 @@ class CompiledCurveSet {
 // not a type (design §1).
 //
 // All curve indices are GLOBAL into the CompiledCurveSet.
+//
+// WHERE A LEG'S VALUE GOES (2026-09-22): the derivative scatters and the moment direct terms take a LegMap policy that
+// says, per leg (batch instrument), which output row it lands on and with what sign. The two policies:
+//   LegOffset{row0, sign} -- leg i -> row0 + i, one sign for the batch (the book twin, the tests);
+//   LegTable{row, sign}   -- leg i -> row[i], sign[i]: several signed legs of ONE quotient row in ONE batch, which is
+//                            how CompiledBundleResidual folds +bench/-fwd/+mtm into a single float batch (no padded
+//                            empty legs, no per-kind batches).
+// Both are indexed by COUPON on the hot path (one load per coupon, exactly the old `row0 + inst[c]`): the batch
+// hands LegOffset its per-coupon leg array, and a LegTable is the caller's per-COUPON row/sign arrays
+// (BundleFloatBatch::coupon_leg() maps a coupon to its leg so a caller can build them once).
+struct LegOffset {
+  int row0; double sign; const int* inst = nullptr;
+  int row(int c) const { return row0 + inst[c]; }
+  double sgn(int) const { return sign; }
+};
+struct LegTable {
+  const int* rows; const double* signs;  // per COUPON
+  int row(int c) const { return rows[c]; }
+  double sgn(int c) const { return signs[c]; }
+};
 struct BundleFloatBatch {
   // Per sub-period (every coupon of every instrument, flattened).
   Eigen::VectorXi subS, subE, sub_cpn;  // sub_cpn = owning coupon
@@ -420,14 +440,13 @@ struct BundleFloatBatch {
   Eigen::VectorXd konst, k, realized, inv_tau, convexity;
   Eigen::SparseMatrix<double> R_cpn;               // n_inst x n_coupons, 0/1
   int n_inst = 0;
-  // True iff R_sub is EXACTLY the identity (one unit-weight sub-period per coupon, in order) -- the
-  // standard compounded-OIS / IBOR / single-period-future shape. Then R_sub*v == v and we skip the
-  // reduction entirely, so generalizing costs the hot path nothing.
+  // True iff EVERY observation is standard() (one implicit-unit-weight sub-period per coupon, in
+  // order): R_sub is then EXACTLY the identity, R_sub*v == v, and the reduction is skipped entirely.
   bool sub_is_identity = false;
-  // True iff EVERY coupon has konst == 0 and k == 1 -- no spread, nothing realized, and
-  // tau_pay == tau_index: the standard OIS / portfolio shape. The "+ konst" and "* k" passes are then
-  // pure overhead over the whole coupon vector (~1.28x on a 1000-swap book, measured), so pv() fuses
-  // to the minimal pre-generalization expression. Genericity must cost the hot path nothing (design §4).
+  // True iff EVERY coupon is standard() (no spread, nothing realized, tau_pay == tau_index, no scale):
+  // the "+ konst" and "* k" passes are then pure overhead over the whole coupon vector (~1.28x on a 1000-swap
+  // book, measured), so pv() fuses to the minimal pre-generalization expression. Both flags are aggregates of
+  // the per-coupon predicates from cashflows.hpp (see finalize); the per-leg forms drive the value pass.
   bool cpn_is_plain = false;
 
   // ---- MOMENT coupons (RateObservation::fixing_step > 0; docs/bezier-and-moments.md Part B) -------------------
@@ -485,6 +504,7 @@ struct BundleFloatBatch {
   int n_coupons() const { return n_cpn_; }
   int size() const { return n_inst; }
   bool has_mtm() const { return has_mtm_; }
+  bool mtm_leg(int leg) const { return mtm_leg_[static_cast<std::size_t>(leg)] != 0; }
   static constexpr int reduce_layout() { return SWAPS_REDUCE_LAYOUT; }
 
   // --- generic registration -------------------------------------------------------------------
@@ -492,29 +512,32 @@ struct BundleFloatBatch {
   void add(CompiledCurveSet& cs, int fc, int dc, const std::vector<FloatCoupon>& leg) {
     for (const auto& c : leg) {
       push_obs(cs, fc, c.obs);
-      // FX `scale` (default 1) folds into the per-coupon k (× 1.0 is exact). A scale != 1 makes k != 1,
-      // so the coupon drops off the cpn_is_plain fused fast path automatically -- exactly right: only a
-      // foreign (converted) leg pays that cost, and the analytic Jacobian formula (pv = DF·A·k) is
-      // unchanged because scale rides inside k as a constant.
+      // FX `scale` (default 1) folds into the per-coupon k (× 1.0 is exact). A scale != 1 is a non-standard
+      // coupon (FloatCoupon::standard), so it leaves the fused fast path -- exactly right: only a foreign
+      // (converted) leg pays that cost, and the analytic Jacobian formula (pv = DF·A·k) is unchanged because
+      // scale rides inside k as a constant.
       push_coupon(cs.reg(dc, c.pay), c.obs.realized + c.spread * c.obs.tau_index,
-                  c.tau_pay / c.obs.tau_index * c.scale, c.obs.realized, 1.0 / c.obs.tau_index, 0.0);
+                  c.tau_pay / c.obs.tau_index * c.scale, c.obs.realized, 1.0 / c.obs.tau_index, 0.0,
+                  c.obs.standard(), c.standard());
     }
+    mtm_leg_.push_back(0);
     ++n_inst;
   }
   // One instrument = one MtM (FX-resettable-notional) funding leg: coupons forecast `fc`, discount `dc`, notional
   // fx·DF[num](reset)/DF[den](reset) with reset = coupon.reset_time (>= 0) else the period start. fx_spot is NOT
   // folded in (the XccyMtmBasis quote divides it out: mtm/(fx·ann)); the caller scales if it wants the raw PV.
   void add_mtm(CompiledCurveSet& cs, int fc, int dc, int num, int den, const std::vector<FloatCoupon>& leg) {
+    mtm_leg_.push_back(0);  // set below once a coupon proves the leg MtM (an empty leg stays plain)
     for (const auto& c : leg) {
       // A SEASONED coupon (fixed FX reset, settled initial exchange, past reset) is a constant times a
       // reduced flow set, not a product of registered DFs: it prices on the templated kernel. The hybrid
-      // router (instrument_is_noncacheable) sends such instruments to the AAD block, so this only fires
+      // router (Instrument::noncacheable) sends such instruments to the AAD block, so this only fires
       // when a caller compiles one directly.
       if (!c.accrual_set && (c.obs.sub_start.empty() || c.obs.sub_end.empty()))
         throw std::runtime_error(
             "CompiledBook: a fully-fixed MtM coupon has no accrual period or observation window to place its "
             "notional exchanges on (set accrual_start/accrual_end)");  // identical to pricing::xccy_mtm_leg_pv
-      if (mtm_coupon_is_seasoned(c))
+      if (c.seasoned_mtm())
         throw std::invalid_argument(
             "CompiledBook: a seasoned MtM coupon (fixed reset_fx, settled or past-reset accrual) is not W-cacheable; "
             "price it through the templated kernel (the hybrid engine routes it there)");
@@ -523,18 +546,21 @@ struct BundleFloatBatch {
       const double reset = (c.reset_time >= 0.0) ? c.reset_time : s;
       push_obs(cs, fc, c.obs);
       push_coupon(cs.reg(dc, c.pay), c.obs.realized + c.spread * c.obs.tau_index,
-                  c.tau_pay / c.obs.tau_index * c.scale, c.obs.realized, 1.0 / c.obs.tau_index, 0.0);
+                  c.tau_pay / c.obs.tau_index * c.scale, c.obs.realized, 1.0 / c.obs.tau_index, 0.0,
+                  c.obs.standard(), c.standard());
       rn_.back() = cs.reg(num, reset); rd_.back() = cs.reg(den, reset);
       ds_.back() = cs.reg(dc, s);      de_.back() = cs.reg(dc, e);
       has_mtm_ = true;
     }
+    if (!leg.empty()) mtm_leg_.back() = 1;
     ++n_inst;
   }
   // One instrument = one future on `obs` forecasting `fc`. No discounting: the terminal transform is
   // rate(), not pv(). `convexity` is an INPUT NUMBER (design §3) -- the model lives in tests.
   void add_future(CompiledCurveSet& cs, int fc, const RateObservation& o, double conv) {
     push_obs(cs, fc, o);
-    push_coupon(-1, 0.0, 0.0, o.realized, 1.0 / o.tau_index, conv);
+    push_coupon(-1, 0.0, 0.0, o.realized, 1.0 / o.tau_index, conv, o.standard(), o.standard());
+    mtm_leg_.push_back(0);
     ++n_inst;
   }
 
@@ -561,12 +587,43 @@ struct BundleFloatBatch {
     sub_begin_.assign(n_cpn_ + 1, 0);
     for (std::size_t j = 0; j < sc_.size(); ++j) { assert(j == 0 || sc_[j] >= sc_[j - 1]); ++sub_begin_[sc_[j] + 1]; }
     for (int c = 0; c < n_cpn_; ++c) sub_begin_[c + 1] += sub_begin_[c];
-    sub_is_identity = (static_cast<int>(sc_.size()) == n_cpn_);
-    for (std::size_t j = 0; sub_is_identity && j < sc_.size(); ++j)
-      sub_is_identity = (sc_[j] == static_cast<int>(j) && sw_[j] == 1.0);
+    // The fast-path flags are AGGREGATES of what each coupon SAYS of itself (RateObservation::standard /
+    // FloatCoupon::standard, asked once at registration -- the definition the templated kernel reads too),
+    // never a rediscovery from the packed arrays. Batch-wide (the book's grid path, the reference layout) and PER LEG
+    // (2026-09-22: the value pass picks the coupon formula per leg, so one weighted, moment or MtM leg in a
+    // batch no longer takes every other leg off the fused standard-shape gather -- the residual folds a whole
+    // bundle's legs into one batch now). sub0_[c] is coupon c's first sub-period: on a standard observation it
+    // IS the coupon's only one, so the fused gather reads ss[sub0[c]] where the batch-wide path read ss[c].
+    sub_is_identity = true;
     cpn_is_plain = true;
-    for (std::size_t j = 0; cpn_is_plain && j < konst_.size(); ++j)
-      cpn_is_plain = (konst_[j] == 0.0 && k_[j] == 1.0);
+    for (int c = 0; c < n_cpn_; ++c) {
+      sub_is_identity = sub_is_identity && obs_std_[static_cast<std::size_t>(c)];
+      cpn_is_plain = cpn_is_plain && cpn_std_[static_cast<std::size_t>(c)];
+    }
+    sub0_.assign(sub_begin_.begin(), sub_begin_.end() - 1);
+    // The fused per-leg gather reads a coupon's ONLY sub-period's DF indices directly (cs0/ce0): one load, exactly
+    // as the batch-wide fast path read ss[c] -- not ss[sub0[c]], a dependent double indirection that measurably
+    // lengthened the gather chain (+18 % on a plain single-curve residual, A/B 2026-09-22).
+    cs0_.resize(n_cpn_); ce0_.resize(n_cpn_);
+    for (int c = 0; c < n_cpn_; ++c) { cs0_[c] = subS[sub0_[static_cast<std::size_t>(c)]]; ce0_[c] = subE[sub0_[static_cast<std::size_t>(c)]]; }
+    leg_general_.assign(static_cast<std::size_t>(n_inst), 0);
+    leg_plain_.assign(static_cast<std::size_t>(n_inst), 1);
+    for (int c = 0; c < n_cpn_; ++c) {
+      const std::size_t i = static_cast<std::size_t>(row_[c]);
+      if (!obs_std_[static_cast<std::size_t>(c)]) leg_general_[i] = 1;
+      if (!cpn_std_[static_cast<std::size_t>(c)]) leg_plain_[i] = 0;
+    }
+    any_general_leg_ = false;
+    for (unsigned char g : leg_general_) any_general_leg_ = any_general_leg_ || g;
+    // ONE kind byte per leg for the value pass's dispatch: 0 = standard (fused), 1 = standard observations with
+    // spread / k / scale, 2 = needs the materialised numerator, 3 = MtM.
+    leg_kind_.assign(static_cast<std::size_t>(n_inst), 0);
+    for (int i = 0; i < n_inst; ++i) {
+      const std::size_t u = static_cast<std::size_t>(i);
+      leg_kind_[u] = mtm_leg_[u] ? 3 : leg_general_[u] ? 2 : leg_plain_[u] ? 0 : 1;
+    }
+    mom_of_.assign(static_cast<std::size_t>(n_cpn_), -1);
+    for (int q = 0; q < static_cast<int>(moments_.size()); ++q) mom_of_[static_cast<std::size_t>(moments_[static_cast<std::size_t>(q)].cpn)] = q;
   }
 
   // --- pricing --------------------------------------------------------------------------------
@@ -627,14 +684,29 @@ struct BundleFloatBatch {
   // Per-instrument float-leg PV. Returns a const ref into per-batch scratch (valid until the next call
   // on THIS batch) -- gen_pos_ and gen_neg_ are distinct objects, so model_rates can hold both at once.
   const Eigen::VectorXd& pv(const Eigen::VectorXd& DF) const { return pv(DF, inverse_of(DF)); }
+  // Every leg's PV ACCUMULATED with a sign into a caller slot: out[row[leg]] += sign[leg]·pv(leg), legs in order
+  // (the caller zeroes `out`). This is how a quotient's numerator Σ sign·pv(leg) is formed in the batch's own
+  // per-leg loop, with no second pass over the legs; (0 + pv_a) + (−pv_b) == pv_a − pv_b bit for bit. SEGMENT
+  // layout only (the reference layout has no per-leg loop); pv() is this with row = identity, sign = +1.
+  void pv_into(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV, Eigen::VectorXd& out, const int* row, const double* sign) const {
+    pv_impl(DF, INV, out.data(), row, sign);
+  }
   const Eigen::VectorXd& pv(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
+    if (SWAPS_REDUCE_LAYOUT >= 1) {
+      pv_res_.resize(n_inst);
+      pv_impl(DF, INV, pv_res_.data(), nullptr, nullptr);
+      return pv_res_;
+    }
+    return pv_reference(DF, INV);
+  }
+  const Eigen::VectorXd& pv_reference(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
     // PERF RULE: what reaches R_cpn must be a materialized VectorXd -- handing Eigen's sparse*dense an
     // unevaluated gather/divide re-does that work per access (~1.28x slower, measured). On the identity
     // path we fuse the sub-period gather straight into the coupon vector, so the standard shape costs
     // exactly one materialized pass, as it did before this generalization.
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv() needs pay dates: this is a futures batch");
     Eigen::VectorXd& coupon = coupon_;  // reuse the per-batch scratch (no per-tick allocation)
-    if (has_mtm_) {  // MtM coupons: R·(A + DF[dE] − DF[dS]); constant-notional coupons in the same batch: A
+    if (has_mtm_) {  // (reference layout) MtM coupons: R·(A + DF[dE] − DF[dS]); constant-notional coupons in the same batch: A
       const Eigen::VectorXd& nm = num(DF, INV);
       coupon.resize(n_cpn_);
       const double* __restrict df = DF.data();
@@ -652,29 +724,6 @@ struct BundleFloatBatch {
         out[i] = v;
       }
       return reduce_coupons(coupon);
-    }
-    if (SWAPS_REDUCE_LAYOUT >= 1) {  // SEGMENT: each coupon's gather-product accumulates into its instrument's slot
-      pv_res_.setZero(n_inst);
-      const double* __restrict df = DF.data();
-      const double* __restrict iv = INV.data();
-      const int* __restrict p = pay.data();
-      const double* __restrict kk = konst.data();
-      const double* __restrict kv = k.data();
-      const int* __restrict cb = cpn_begin_.data();
-      double* __restrict out = pv_res_.data();
-      if (!moments_.empty() || !sub_is_identity) {
-        const Eigen::VectorXd& nm = num(DF, INV);
-        const double* __restrict nn = nm.data();
-        for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (nn[c] + kk[c]) * kv[c]; out[i] = acc; }
-      } else {
-        const int* __restrict ss = subS.data();
-        const int* __restrict se = subE.data();
-        if (cpn_is_plain)
-          for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (df[ss[c]] * iv[se[c]] - 1.0); out[i] = acc; }
-        else
-          for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (df[ss[c]] * iv[se[c]] - 1.0 + kk[c]) * kv[c]; out[i] = acc; }
-      }
-      return pv_res_;
     }
     if (!moments_.empty() || !sub_is_identity) {  // moment coupons or a weighted/multi-sub-period batch: go through num()
       const Eigen::VectorXd& nm = num(DF, INV);  // materialised per-coupon numerator (sub_ or num_res_)
@@ -716,15 +765,81 @@ struct BundleFloatBatch {
     return pv_res_;
   }
 
+  // SEGMENT: each coupon's gather-product accumulates into its leg's slot (row = nullptr: slot i, written; else
+  // out[row[i]] += sign[i]·pv, accumulated).
+  void pv_impl(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV, double* __restrict out, const int* __restrict row, const double* __restrict sign) const {
+    {
+      // The formula is chosen PER LEG (2026-09-22): an MtM leg R·(A + DF[dE] − DF[dS]) reads the materialised
+      // numerator; a plain leg keeps the fused standard-shape gather it always had -- so one MtM leg in the batch
+      // costs the par-swap legs beside it nothing (the residual folds every leg of a bundle into ONE batch now).
+      // No batch-wide numerator pass: a leg that needs the materialised numerator (weighted / multi-sub-period /
+      // moment coupons, or an MtM leg) computes it INLINE per coupon -- the same segment-sum num() would form,
+      // in the same order -- so the plain legs beside it never pay for a pass they do not read.
+      if (!moments_.empty() && !state_set_) throw std::logic_error("BundleFloatBatch: set_state(x) must precede num/pv/rate on a batch with moment coupons");
+      const double* __restrict df = DF.data();
+      const double* __restrict iv = INV.data();
+      const int* __restrict p = pay.data();
+      const double* __restrict kk = konst.data();
+      const double* __restrict kv = k.data();
+      const int* __restrict cb = cpn_begin_.data();
+      const int* __restrict ss = subS.data();
+      const int* __restrict se = subE.data();
+      const int* __restrict s0 = sub0_.data();
+      const int* __restrict cs0 = cs0_.data();
+      const int* __restrict ce0 = ce0_.data();
+      const int* __restrict sb = sub_begin_.data();
+      const double* __restrict sw = sub_w.data();
+      const int* __restrict mo = mom_of_.data();
+      const int* __restrict rn = rN.data(); const int* __restrict rdn = rD.data();
+      const int* __restrict dsn = dS.data(); const int* __restrict den = dE.data();
+      const unsigned char* __restrict lk = leg_kind_.data();
+      // coupon c's numerator, exactly as num() forms it: sum_j w_j (DF[s_j]*INV[e_j] - 1), a moment bracket's
+      // w * (ln(DF[a]*INV[b]) + mom)
+      const unsigned char* __restrict os = obs_std_.data();
+      const auto numer = [&](int c) {
+        if (os[c]) return df[cs0[c]] * iv[ce0[c]] - 1.0;  // standard: the one gather (== 1.0 * that, bit for bit)
+        if (mo[c] >= 0) { const int j = s0[c]; return sw[j] * (std::log(df[ss[j]] * iv[se[j]]) + moments_[static_cast<std::size_t>(mo[c])].mom); }
+        double n = 0.0;
+        for (int j = sb[c]; j < sb[c + 1]; ++j) n += sw[j] * (df[ss[j]] * iv[se[j]] - 1.0);
+        return n;
+      };
+      for (int i = 0; i < n_inst; ++i) {
+        double acc = 0.0;
+        if (lk[i] == 3) {
+          for (int c = cb[i]; c < cb[i + 1]; ++c) {
+            const double v = df[p[c]] * (numer(c) + kk[c]) * kv[c];
+            acc += (v + df[den[c]] - df[dsn[c]]) * (df[rn[c]] * iv[rdn[c]]);
+          }
+        } else if (lk[i] == 2) {  // weighted / multi-sub-period / moment coupons: the inline numerator
+          for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (numer(c) + kk[c]) * kv[c];
+        } else if (lk[i] == 0) {  // the standard shape: the fused gather, exactly the pre-generalization expression
+          for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (df[cs0[c]] * iv[ce0[c]] - 1.0);
+        } else {
+          for (int c = cb[i]; c < cb[i + 1]; ++c) acc += df[p[c]] * (df[cs0[c]] * iv[ce0[c]] - 1.0 + kk[c]) * kv[c];
+        }
+        if (row) out[row[i]] += sign[i] * acc;
+        else out[i] = acc;
+      }
+    }
+  }
   // Per-instrument PV from a PRECOMPUTED per-coupon numerator `num_cpn` (== num(DF)). Lets the
   // Jacobian's value pass share the single sub-period gather with its derivative pass (d_pv_from_num)
   // instead of each re-gathering. BIT-IDENTICAL to pv(DF): on the plain path (konst == 0, k == 1) it
   // is DF[pay]*num_cpn, exactly the fused pv coupon; otherwise the same DF[pay]*(num+konst)*k form.
   const Eigen::VectorXd& pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF) const {
+    pv_res_.resize(n_inst);
+    pv_from_num_impl(num_cpn, DF, pv_res_.data(), nullptr, nullptr);
+    return pv_res_;
+  }
+  // The accumulate form of pv_from_num (see pv_into): out[row[leg]] += sign[leg]·pv(leg).
+  void pv_from_num_into(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, Eigen::VectorXd& out, const int* row, const double* sign) const {
+    pv_from_num_impl(num_cpn, DF, out.data(), row, sign);
+  }
+  void pv_from_num_impl(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, double* __restrict res, const int* __restrict row, const double* __restrict sign) const {
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv_from_num() needs pay dates");
     if (n_cpn_ == 0) {
-      pv_res_.setZero(n_inst);
-      return pv_res_;
+      if (!row) for (int i = 0; i < n_inst; ++i) res[i] = 0.0;
+      return;
     }
     Eigen::VectorXd& coupon = coupon_;
     coupon.resize(n_cpn_);
@@ -735,29 +850,47 @@ struct BundleFloatBatch {
       const double* __restrict kk = konst.data();
       const double* __restrict kv = k.data();
       double* __restrict out = coupon.data();
-      if (has_mtm_) {
+      if (has_mtm_) {  // per LEG: the MtM legs take the reset-ratio form, the plain legs beside them their usual one
         const double* __restrict iv = inverse_of(DF).data();
         const int* __restrict rn = rN.data(); const int* __restrict rdn = rD.data();
         const int* __restrict dsn = dS.data(); const int* __restrict den = dE.data();
-        for (int i = 0; i < n_cpn_; ++i) {
-          double v = df[p[i]] * (nn[i] + kk[i]) * kv[i];
-          if (rn[i] >= 0) v = (v + df[den[i]] - df[dsn[i]]) * (df[rn[i]] * iv[rdn[i]]);
-          out[i] = v;
+        const int* __restrict cb = cpn_begin_.data();
+        const unsigned char* __restrict ml = mtm_leg_.data();
+        const unsigned char* __restrict lp = leg_plain_.data();
+        for (int i = 0; i < n_inst; ++i) {
+          if (ml[i])
+            for (int c = cb[i]; c < cb[i + 1]; ++c) {
+              const double v = df[p[c]] * (nn[c] + kk[c]) * kv[c];
+              out[c] = (v + df[den[c]] - df[dsn[c]]) * (df[rn[c]] * iv[rdn[c]]);
+            }
+          else if (lp[i])
+            for (int c = cb[i]; c < cb[i + 1]; ++c) out[c] = df[p[c]] * nn[c];
+          else
+            for (int c = cb[i]; c < cb[i + 1]; ++c) out[c] = df[p[c]] * (nn[c] + kk[c]) * kv[c];
         }
       } else if (cpn_is_plain)
         for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * nn[i];
-      else
-        for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (nn[i] + kk[i]) * kv[i];
+      else {
+        const int* __restrict cb = cpn_begin_.data();
+        const unsigned char* __restrict lp = leg_plain_.data();
+        for (int i = 0; i < n_inst; ++i) {
+          if (lp[i]) for (int c = cb[i]; c < cb[i + 1]; ++c) out[c] = df[p[c]] * nn[c];
+          else for (int c = cb[i]; c < cb[i + 1]; ++c) out[c] = df[p[c]] * (nn[c] + kk[c]) * kv[c];
+        }
+      }
     }
     // (IndexedView form retired 2026-09-09: it materialised index temporaries on every Jacobian — E3-A2/A3.)
     if (SWAPS_REDUCE_LAYOUT >= 1) {
-      pv_res_.resize(n_inst);
-      const int* __restrict cb = cpn_begin_.data(); const double* __restrict cc = coupon.data(); double* __restrict out = pv_res_.data();
-      for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += cc[c]; out[i] = acc; }
-      return pv_res_;
+      const int* __restrict cb = cpn_begin_.data(); const double* __restrict cc = coupon.data();
+      for (int i = 0; i < n_inst; ++i) {
+        double acc = 0.0;
+        for (int c = cb[i]; c < cb[i + 1]; ++c) acc += cc[c];
+        if (row) res[row[i]] += sign[i] * acc;
+        else res[i] = acc;
+      }
+      return;
     }
-    pv_res_.noalias() = R_cpn * coupon;
-    return pv_res_;
+    Eigen::Map<Eigen::VectorXd>(res, n_inst).noalias() = R_cpn * coupon;  // reference layout: identity map only
   }
 
   // --- BATCHED pricing over a curve-state GRID (MC-exposure hot path, design R12 coupon-batch) --------
@@ -840,64 +973,94 @@ struct BundleFloatBatch {
   template <class Mat>  // any dense matrix (row-major preferred: the scatters are row-local)
   void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, Mat& d,
                      int row0, double sign) const {
-    d_pv_from_num(num_cpn, DF, inverse_of(DF), d, row0, sign);
+    d_pv_from_num(num_cpn, DF, inverse_of(DF), d, LegOffset{row0, sign, inst.data()});
   }
   template <class Mat>
   void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, const Eigen::VectorXd& INV,
                      Mat& d, int row0, double sign) const {
+    d_pv_from_num(num_cpn, DF, INV, d, LegOffset{row0, sign, inst.data()});
+  }
+  // The coupon -> leg map, so a caller can build per-coupon row/sign tables once (LegTable).
+  const Eigen::VectorXi& coupon_leg() const { return inst; }
+  // The general form: coupon c's partials land on row m.row(c) with sign m.sgn(c) (LegOffset / LegTable).
+  // Runs PER LEG: an MtM leg takes the reset-ratio partials, every other leg the plain ones -- one MtM leg in
+  // the batch costs the plain legs nothing (the batch-wide has_mtm_ path used to multiply every partial by R = 1).
+  template <class Mat, class LegMap>
+  void d_pv_from_num(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, const Eigen::VectorXd& INV,
+                     Mat& d, const LegMap& m) const {
     assert((pay.size() == 0 || pay.minCoeff() >= 0) && "d_pv_from_num() needs pay dates");
     if (has_mtm_) {
-      // MtM coupon i: value = R·(A + DF[dE] − DF[dS]), R = DF[rN]·INV[rD], A = DF[pay]·(num+konst)·k.
-      //   ∂/∂DF[pay] = R·(num+konst)·k;  ∂/∂DF[s],[e] = R·(the ordinary A partials);  ∂/∂DF[dE] = +R;  ∂/∂DF[dS] = −R;
-      //   ∂/∂DF[rN] = value·INV[rN];      ∂/∂DF[rD] = −value·INV[rD].     (aliased indices accumulate via +=)
-      rmul_.resize(n_cpn_);
-      for (int i = 0; i < n_cpn_; ++i) rmul_[i] = rN[i] >= 0 ? DF[rN[i]] * INV[rD[i]] : 1.0;
-      for (int i = 0; i < n_cpn_; ++i) {
-        const double R = rmul_[i];
-        const double A = DF[pay[i]] * (num_cpn[i] + konst[i]) * k[i];
-        d(row0 + inst[i], pay[i]) += sign * R * (num_cpn[i] + konst[i]) * k[i];
-        if (rN[i] >= 0) {
-          const double value = R * (A + DF[dE[i]] - DF[dS[i]]);
-          d(row0 + inst[i], dE[i]) += sign * R;
-          d(row0 + inst[i], dS[i]) += -sign * R;
-          d(row0 + inst[i], rN[i]) += sign * value * INV[rN[i]];
-          d(row0 + inst[i], rD[i]) += -sign * value * INV[rD[i]];
+      for (int leg = 0; leg < n_inst; ++leg) {
+        const int c0 = cpn_begin_[leg], c1 = cpn_begin_[leg + 1];
+        if (c0 == c1) continue;
+        const int j0 = sub_begin_[c0], j1 = sub_begin_[c1];
+        if (mtm_leg_[static_cast<std::size_t>(leg)]) {
+          d_pv_mtm_leg(num_cpn, DF, INV, d, m, c0, c1, j0, j1);
+        } else {
+          for (int i = c0; i < c1; ++i)
+            d(m.row(i), pay[i]) += m.sgn(i) * (num_cpn[i] + konst[i]) * k[i];
+          for (int j = j0; j < j1; ++j) {
+            const int i = sub_cpn[j], s = subS[j], e = subE[j];
+            const double f = m.sgn(i) * DF[pay[i]] * k[i] * sub_w[j];
+            const double ie = INV[e];
+            d(m.row(i), s) += f * ie;
+            d(m.row(i), e) += -f * DF[s] * ie * ie;
+          }
         }
       }
-      for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
-        const int i = sub_cpn[j], s = subS[j], e = subE[j];
-        const double f = sign * rmul_[i] * DF[pay[i]] * k[i] * sub_w[j];
-        const double ie = INV[e];
-        d(row0 + inst[i], s) += f * ie;
-        d(row0 + inst[i], e) += -f * DF[s] * ie * ie;
-      }
-      for (const auto& mc : moments_) {  // (moment coupons inside an MtM batch: same log-bracket swap, scaled by R)
+      for (const auto& mc : moments_) {  // moment brackets (either leg kind): the log-bracket swap, scaled by R on an MtM leg
         const int i = mc.cpn, s = subS[mc.sub], e = subE[mc.sub];
-        const double f = sign * rmul_[i] * DF[pay[i]] * k[i] * sub_w[mc.sub];
+        const double R = rN[i] >= 0 ? DF[rN[i]] * INV[rD[i]] : 1.0;
+        const double f = m.sgn(i) * R * DF[pay[i]] * k[i] * sub_w[mc.sub];
         const double ie = INV[e];
-        d(row0 + inst[i], s) += -f * ie + f * INV[s];
-        d(row0 + inst[i], e) += f * DF[s] * ie * ie - f * ie;
+        d(m.row(i), s) += -f * ie + f * INV[s];
+        d(m.row(i), e) += f * DF[s] * ie * ie - f * ie;
       }
       return;
     }
     for (int i = 0; i < n_cpn_; ++i)
-      d(row0 + inst[i], pay[i]) += sign * (num_cpn[i] + konst[i]) * k[i];
+      d(m.row(i), pay[i]) += m.sgn(i) * (num_cpn[i] + konst[i]) * k[i];
     for (int j = 0; j < static_cast<int>(subS.size()); ++j) {
       const int i = sub_cpn[j], s = subS[j], e = subE[j];
-      const double f = sign * DF[pay[i]] * k[i] * sub_w[j];
+      const double f = m.sgn(i) * DF[pay[i]] * k[i] * sub_w[j];
       const double ie = INV[e];
-      d(row0 + inst[i], s) += f * ie;
-      d(row0 + inst[i], e) += -f * DF[s] * ie * ie;
+      d(m.row(i), s) += f * ie;
+      d(m.row(i), e) += -f * DF[s] * ie * ie;
     }
     // moment brackets: d ln(DF[a]/DF[b]) / dDF = +INV[a] on a, −INV[b] on b (replacing the ratio partials above)
     for (const auto& mc : moments_) {
       const int i = mc.cpn, s = subS[mc.sub], e = subE[mc.sub];
-      const double f = sign * DF[pay[i]] * k[i] * sub_w[mc.sub];
+      const double f = m.sgn(i) * DF[pay[i]] * k[i] * sub_w[mc.sub];
       const double ie = INV[e];
-      d(row0 + inst[i], s) -= f * ie;                 // undo the ratio partials
-      d(row0 + inst[i], e) -= -f * DF[s] * ie * ie;
-      d(row0 + inst[i], s) += f * INV[s];             // log-bracket partials
-      d(row0 + inst[i], e) += -f * ie;
+      d(m.row(i), s) -= f * ie;                 // undo the ratio partials
+      d(m.row(i), e) -= -f * DF[s] * ie * ie;
+      d(m.row(i), s) += f * INV[s];             // log-bracket partials
+      d(m.row(i), e) += -f * ie;
+    }
+  }
+  // The MtM leg's partials over coupons [c0, c1) and their sub-periods [j0, j1): value = R·(A + DF[dE] − DF[dS]),
+  // R = DF[rN]·INV[rD], A = DF[pay]·(num+konst)·k.
+  //   ∂/∂DF[pay] = R·(num+konst)·k;  ∂/∂DF[s],[e] = R·(the ordinary A partials);  ∂/∂DF[dE] = +R;  ∂/∂DF[dS] = −R;
+  //   ∂/∂DF[rN] = value·INV[rN];      ∂/∂DF[rD] = −value·INV[rD].     (aliased indices accumulate via +=)
+  template <class Mat, class LegMap>
+  void d_pv_mtm_leg(const Eigen::VectorXd& num_cpn, const Eigen::VectorXd& DF, const Eigen::VectorXd& INV, Mat& d,
+                    const LegMap& m, int c0, int c1, int j0, int j1) const {
+    for (int i = c0; i < c1; ++i) {
+      const double R = DF[rN[i]] * INV[rD[i]], sign = m.sgn(i);
+      const double A = DF[pay[i]] * (num_cpn[i] + konst[i]) * k[i];
+      d(m.row(i), pay[i]) += sign * R * (num_cpn[i] + konst[i]) * k[i];
+      const double value = R * (A + DF[dE[i]] - DF[dS[i]]);
+      d(m.row(i), dE[i]) += sign * R;
+      d(m.row(i), dS[i]) += -sign * R;
+      d(m.row(i), rN[i]) += sign * value * INV[rN[i]];
+      d(m.row(i), rD[i]) += -sign * value * INV[rD[i]];
+    }
+    for (int j = j0; j < j1; ++j) {
+      const int i = sub_cpn[j], s = subS[j], e = subE[j];
+      const double f = m.sgn(i) * (DF[rN[i]] * INV[rD[i]]) * DF[pay[i]] * k[i] * sub_w[j];
+      const double ie = INV[e];
+      d(m.row(i), s) += f * ie;
+      d(m.row(i), e) += -f * DF[s] * ie * ie;
     }
   }
   // DIRECT x-space derivative of the moment corrections (the part that is NOT a function of DF): for each moment
@@ -905,11 +1068,15 @@ struct BundleFloatBatch {
   // the caller can scatter into its own Jacobian with the row's quotient / band factors. Precondition: set_state(x).
   template <class Add>
   void moment_direct_pv(const Eigen::VectorXd& DF, double sign, Add&& add) const {
+    moment_direct_pv(DF, LegOffset{0, sign, inst.data()}, std::forward<Add>(add));
+  }
+  template <class LegMap, class Add>
+  void moment_direct_pv(const Eigen::VectorXd& DF, const LegMap& m, Add&& add) const {
     for (const auto& mc : moments_) {
       const int i = mc.cpn;
       const double R = (has_mtm_ && rN[i] >= 0) ? DF[rN[i]] / DF[rD[i]] : 1.0;
-      const double f = sign * R * DF[pay[i]] * k[i] * sub_w[mc.sub];
-      for (int j = 0; j < static_cast<int>(mc.support.size()); ++j) add(inst[i], mc.support[j], f * mc.dmom[j]);
+      const double f = m.sgn(i) * R * DF[pay[i]] * k[i] * sub_w[mc.sub];
+      for (int j = 0; j < static_cast<int>(mc.support.size()); ++j) add(m.row(i), mc.support[j], f * mc.dmom[j]);
     }
   }
   // Same for a futures batch: ∂rate_inst/∂x_j += inv_tau·w·∂mom_c/∂x_j.
@@ -1002,7 +1169,9 @@ struct BundleFloatBatch {
     for (std::size_t j = 0; j < o.sub_start.size(); ++j)
       push_sub(cs, fc, o.sub_start[j], o.sub_end[j], weighted ? o.weight[j] : 1.0);
   }
-  void push_coupon(int pay_idx, double konst, double kk, double rz, double inv_tau, double conv) {
+  void push_coupon(int pay_idx, double konst, double kk, double rz, double inv_tau, double conv, bool obs_std, bool cpn_std) {
+    obs_std_.push_back(obs_std ? 1 : 0);
+    cpn_std_.push_back(cpn_std ? 1 : 0);
     p_.push_back(pay_idx);
     konst_.push_back(konst);
     k_.push_back(kk);
@@ -1027,6 +1196,14 @@ struct BundleFloatBatch {
   std::vector<int> ss_, se_, sc_, p_, row_;
   std::vector<int> rn_, rd_, ds_, de_;                     // MtM reset / notional-exchange indices (-1 = none)
   bool has_mtm_ = false;
+  std::vector<unsigned char> mtm_leg_;                     // per leg (batch instrument): 1 iff it is an MtM leg
+  std::vector<unsigned char> obs_std_, cpn_std_;           // per coupon: obs.standard() / coupon.standard(), asked at registration
+  std::vector<unsigned char> leg_general_, leg_plain_;     // per leg: any non-standard observation / every coupon standard
+  std::vector<unsigned char> leg_kind_;                    // per leg: 0 fused / 1 fused with konst,k / 2 materialised numerator / 3 MtM
+  std::vector<int> sub0_;                                  // per coupon: its first sub-period (== its only one on an identity leg)
+  Eigen::VectorXi cs0_, ce0_;                              // per coupon: that sub-period's start/end DF indices (the fused gather)
+  std::vector<int> mom_of_;                                // per coupon: its moment-coupon index, or -1
+  bool any_general_leg_ = false;
   std::vector<int> cpn_begin_, sub_begin_;                // segment offsets (coupons of an instrument; subs of a coupon)
   std::vector<double> sw_, konst_, k_, rz_, it_, cv_;
   // Per-batch reusable scratch (sized on first use) so pv/num/rate never allocate in the hot loop.

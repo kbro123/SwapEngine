@@ -31,13 +31,15 @@
     },
     "Linux|GNU 13.3.0|-march=x86-64-v3|AVX2+FMA": {
       "captured": "2026-09-22",
-      "note": "GitHub ubuntu-24.04 runner (ci.yml quantlib-free-gate), read off run 35719680823: mixed_scheme 2 failed (refresh cap), max|dq| 1.27e-4; desk_mixed 0, 2.7e-7. unsmoothed_factor not yet captured there (the CI log hides passing output) -> report-only until it is.",
+      "note": "GitHub ubuntu-24.04 runner (ci.yml quantlib-free-gate). smoothed_per_row read off run 35719680823: mixed_scheme 2 failed (refresh cap), max|dq| 1.27e-4; desk_mixed 0, 2.7e-7. unsmoothed_factor read off run 35734841453's soak report step: mixed_scheme 33, desk_mixed 88 (pinned with ~25 % slack like the Mac's, 2026-09-22).",
       "rungs": {
         "mixed_scheme": {
-          "smoothed_per_row": { "failed": 2, "dq": 2e-4 }
+          "smoothed_per_row": { "failed": 2, "dq": 2e-4 },
+          "unsmoothed_factor": { "failed": 42, "dq": 2e-5 }
         },
         "desk_mixed": {
-          "smoothed_per_row": { "failed": 0, "dq": 2e-5 }
+          "smoothed_per_row": { "failed": 0, "dq": 2e-5 },
+          "unsmoothed_factor": { "failed": 110, "dq": 2e-5 }
         }
       }
     }

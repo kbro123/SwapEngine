@@ -51,13 +51,13 @@ TEST(FxSpotTimePiece2, TheBuilderQuotesTheSpotDateAndFixesEachPeriodTwoBusinessD
   }
   EXPECT_DOUBLE_EQ(m[0].fx_fixing_time, 0.0) << "the first period fixes on the trade date";
   EXPECT_DOUBLE_EQ(m[1].fx_fixing_time, b::curve_time(trade, d("2021-06-07"))) << "CARR: FX reset Monday 7 June 2021";
-  EXPECT_FALSE(px::mtm_coupon_is_seasoned(m[1])) << "a future fixing is not seasoned";
+  EXPECT_FALSE((m[1]).seasoned_mtm()) << "a future fixing is not seasoned";
   // a weekend value date: RAW spot Tue 9 March minus 2 BD = Fri 5 March, before Saturday 6 March -> floored at the value date
   const b::Date sat = d("2021-03-06");
   ASSERT_FALSE(b::is_business_day(x.calendar, sat)) << "premise";
   const cal::Instrument w = b::xccy_mtm_basis(sat, x, b::resolve("1Y", sat, x.calendar, x.bdc, x.spot_lag), 0, 1, 2, 1.25, 0.0);
   EXPECT_DOUBLE_EQ(w.mtm.coupons.front().fx_fixing_time, 0.0);
-  EXPECT_FALSE(px::mtm_coupon_is_seasoned(w.mtm.coupons.front()));
+  EXPECT_FALSE((w.mtm.coupons.front()).seasoned_mtm());
 }
 
 // Valued between a period's FX fixing and its start (the CARR 7 June .. 9 June window): the notional is KNOWN.
@@ -75,7 +75,7 @@ TEST(FxSpotTimePiece2, APassedFixingNeedsTheFixedRateAndAFutureOneIsTheForward) 
   c.accrual_end = c.obs.sub_end.back();
   c.fx_fixing_set = true;
   c.fx_fixing_time = -1.0 / 365.0;  // fixed yesterday
-  ASSERT_TRUE(px::mtm_coupon_is_seasoned(c));
+  ASSERT_TRUE((c).seasoned_mtm());
   EXPECT_THROW(px::xccy_mtm_leg_pv<double>(std::vector<px::FloatCoupon>{c}, 1.10, fund, fund, num, den), std::runtime_error)
       << "a curve-implied forward for a known fixing is not a price";
   px::FloatCoupon fixed = c;
@@ -87,7 +87,7 @@ TEST(FxSpotTimePiece2, APassedFixingNeedsTheFixedRateAndAFutureOneIsTheForward) 
   future.fx_fixing_time = 1.0 / 365.0;  // fixes tomorrow: still the forward
   px::FloatCoupon unset = c;
   unset.fx_fixing_set = false;
-  EXPECT_FALSE(px::mtm_coupon_is_seasoned(future));
+  EXPECT_FALSE((future).seasoned_mtm());
   EXPECT_EQ(px::xccy_mtm_leg_pv<double>(std::vector<px::FloatCoupon>{future}, 1.10, fund, fund, num, den),
             px::xccy_mtm_leg_pv<double>(std::vector<px::FloatCoupon>{unset}, 1.10, fund, fund, num, den))
       << "a future fixing time does not move the forward";
@@ -117,7 +117,7 @@ TEST(FxSpotTimePiece2, RollBookAgesTheFixingTimeAndKeepsTheSpotTime) {
   ASSERT_EQ(rolled.positions.size(), 1u);
   EXPECT_DOUBLE_EQ(rolled.positions[0].fx_spot_time, 2.0 / 365.0) << "an unchanged market is the same spot quote for the new spot date";
   EXPECT_DOUBLE_EQ(rolled.positions[0].mtm_coupons[0].fx_fixing_time, 0.245 - 0.30) << "the fixing ages (unfloored: passed = known)";
-  EXPECT_TRUE(px::mtm_coupon_is_seasoned(rolled.positions[0].mtm_coupons[0]));
+  EXPECT_TRUE((rolled.positions[0].mtm_coupons[0]).seasoned_mtm());
 }
 
 TEST(FxSpotTimePiece2, TheFxForwardBuilderCarriesTheSpotTime) {

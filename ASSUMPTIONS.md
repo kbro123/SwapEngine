@@ -87,7 +87,7 @@ null completion -- uses it since 2026-09-10).
 | K8 | `curve/regions.hpp` Tension | σ → 0 recovers the natural cubic; linear in the knot forwards | `tension_test` 1e-12 / 1e-13 | PINNED |
 | K9 | `curve/regions.hpp` BSpline | convex hull; per-breakpoint 2-pt Gauss exact for the cubic's integral | `bspline_test` 1e-12 / 1e-13 | PINNED |
 | K10 | `curve/regions.hpp`, `curve_module.hpp` | a leading region flat-extrapolates its first free knot | `region_combinatorial_test` 1e-10 | PINNED |
-| K11 | `cashflows.hpp`, `compiled_book.hpp` | k-form reduction bit-exact; `cpn_is_plain` / `sub_is_identity` fast paths | `generic_cashflow_test` 1e-15, `compiled_generic_test` | PINNED |
+| K11 | `cashflows.hpp`, `compiled_book.hpp` | k-form reduction bit-exact; the fused fast paths are driven by `RateObservation::standard()` / `FloatCoupon::standard()` (the ONE definition, asked per coupon at registration; per-leg and per-batch aggregates, 2026-09-22 -- until then the batch re-derived `konst == 0 && k == 1` numerically) | `generic_cashflow_test` 1e-15, `compiled_generic_test` | PINNED |
 | K12 | `cashflows.hpp`, `build/observations.hpp` | observation SHIFT telescopes; lookback/lockout do not (⇒ compounded) | `rfr_coupon_oracle_test` 1e-12 vs QuantLib | PINNED |
 | K13 | `build/observations.hpp` | partial-fix compounded prefix as `weight = 1 + rτ_past`, `realized = f − 1` (exact identity) | `fixings_test`, `ois_weekend_test` | PINNED |
 | K16 | `calibration/aad_block.hpp` | DF-cache query times are x-independent; affine map only on linear ancestry; cursor replay with search + exact fallback | `aad_block_pooled_test`, `hotpath_shapes_test` | PINNED |

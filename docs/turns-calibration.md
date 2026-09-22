@@ -106,7 +106,7 @@ meeting dates, as year fractions.
 ## 5. Anti-patterns (each breaks the fast path)
 
 - **Do not** bump the forward day-by-day inside `obs_forward_sum` (`cashflows.hpp` ~L134) — it
-  destroys telescoping and drops coupons off the fused `sub_is_identity` / `cpn_is_plain` paths.
+  destroys telescoping and drops coupons off the fused standard-shape paths (`FloatCoupon::standard()`).
 - **Do not** model a turn as a `Flat` region — regions must partition `[0,T]` and be non-overlapping
   (`check_region_joins`, `curve_module.hpp` ~L148); a turn *overlaps* the region it sits inside. It
   is an additive overlay, not a partition.

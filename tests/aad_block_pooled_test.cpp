@@ -8,7 +8,7 @@
 //   * a bundle whose touched width exceeds kPooledMaxW engages the heap fallback and still matches.
 // QuantLib-free: the FX/MtM bundle is synthetic (Portfolio-nested FX forwards, compiled since the 2026-09-22 row
 // model, + payment-lagged MtM bases whose compounded funding coupons are genuinely non-cacheable per
-// hybrid_residual.hpp's instrument_is_noncacheable -- the block is those five rows).
+// Instrument::noncacheable -- the block is those five rows).
 #include <gtest/gtest.h>
 
 #include <Eigen/Core>
@@ -127,7 +127,7 @@ struct Fixture {
     for (auto& ins : prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
 
     for (int r = 0; r < prob.n_residuals(); ++r)
-      if (cal::instrument_is_noncacheable(prob.instruments[r], prob.curves)) {
+      if ((prob.instruments[r]).noncacheable()) {
         nc.push_back(prob.instruments[r]);
         nc_rows.push_back(r);
       }

@@ -36,28 +36,14 @@ inline std::vector<std::vector<int>> bundle_adjacency(const BundleProblem& p) {
   // free, mutually-referenced curve, an instrument edge closes the cycle -> they land in one SCC.
   for (int c = 0; c < N; ++c)
     if (p.curves[c].base >= 0) add(c, p.curves[c].base);
-  // An instrument pins its quoted leg's forecast curve, which therefore depends on every OTHER curve
-  // its legs reference. A `Rate` instrument references only its own forecast curve -> no edge.
+  // An instrument pins its PRIMARY curve (its first curve reference: the quoted leg's forecast, an FX
+  // forward's numerator, a turn's curve), which therefore depends on every OTHER curve it references --
+  // for_each_curve_ref, the one encoding of which members a kind reads (a Rate instrument references only
+  // its own forecast curve -> no edge; a MtM basis's resetting funding leg couples the collateral curve to
+  // the funding curve; a Portfolio's components each contribute their references).
   for (const auto& ins : p.instruments) {
-    if (ins.quote == QuoteKind::Rate) continue;
     const int c = ins.primary_curve();
-    if (ins.quote == QuoteKind::FxForward) {
-      add(c, ins.fx_den);  // the FX forward pins fx_num (=c) and depends on the DENOMINATOR curve
-      continue;
-    }
-    add(c, ins.fwd.discount);
-    add(c, ins.fixed.discount);
-    if (ins.quote == QuoteKind::ParSpread || ins.quote == QuoteKind::XccyMtmBasis) {
-      add(c, ins.bench.forecast);
-      add(c, ins.bench.discount);
-    }
-    if (ins.quote == QuoteKind::XccyMtmBasis) {
-      // The resetting funding leg couples the collateral curve to the funding (e.g. SOFR) curve.
-      add(c, ins.mtm.forecast);
-      add(c, ins.mtm.discount);
-      if (ins.mtm.reset_num >= 0) add(c, ins.mtm.reset_num);
-      if (ins.mtm.reset_den >= 0) add(c, ins.mtm.reset_den);
-    }
+    ins.for_each_curve_ref([&](int d, const char*) { add(c, d); });
   }
   return adj;
 }

@@ -96,6 +96,12 @@ struct RateObservation {
   // it would price its whole period at a zero rate -- so the pricing kernels refuse it (see float_coupon_pv
   // / CompiledBook::push_obs) instead of returning a silent zero.
   bool resolved = false;
+
+  // THE STANDARD SHAPE (2026-09-22; a property of the observation, asked of it, never rediscovered from packed
+  // arrays): ONE sub-period with the implicit all-ones weight, nothing realized, the exact daily path, arithmetic.
+  // Its numerator is then the literal DF(s)/DF(e) - 1, which is what float_coupon_pv's fast path and the compiled
+  // batch's fused gather both compute. A new field that breaks that reduction is added HERE, once.
+  bool standard() const { return sub_start.size() == 1 && weight.empty() && fixing_step == 0.0 && realized == 0.0 && !compounded; }
 };
 
 // One floating coupon: an observation, discounted at its own pay date on its own accrual basis.
@@ -132,12 +138,23 @@ struct FloatCoupon {
   // reset_time (unset = the accrual start).
   bool fx_fixing_set = false;
   double fx_fixing_time = 0.0;
+
+  // THE STANDARD COUPON: a standard observation, no spread, paid on the index accrual (tau_pay == tau_index, so
+  // k == 1) and no FX scale. Then pv == DF(pay)*(DF(s)/DF(e) - 1) to the last bit -- float_coupon_pv's fast path
+  // and BundleFloatBatch's fused gather read THIS predicate (the batch asks it once per coupon at registration).
+  bool standard() const { return obs.standard() && spread == 0.0 && tau_pay == obs.tau_index && scale == 1.0; }
+  // A SEASONED MtM coupon: its reset FX is a fixed number (reset_fx set), or its initial exchange has settled
+  // (accrual_start < 0), or its reset is in the past (fixing / reset time < 0). Such a coupon is a constant times
+  // a reduced flow set, priced on the templated kernel (xccy_mtm_leg_pv), not a product of registered DFs.
+  bool seasoned_mtm() const;
 };
 
 // True iff an MtM coupon is SEASONED -- a fixed FX reset, a settled initial exchange or a past reset date --
 // so it must price on the templated kernel (xccy_mtm_leg_pv), never on the W-cache batch (whose value is a
 // product of registered DFs at non-negative times). Shared by the hybrid router and the compiled guard.
-inline bool mtm_coupon_is_seasoned(const FloatCoupon& c) {
+inline bool mtm_coupon_is_seasoned_impl(const FloatCoupon& c);
+inline bool FloatCoupon::seasoned_mtm() const { return mtm_coupon_is_seasoned_impl(*this); }
+inline bool mtm_coupon_is_seasoned_impl(const FloatCoupon& c) {
   if (c.reset_fx >= 0.0) return true;
   if (c.fx_fixing_set && c.fx_fixing_time < 0.0) return true;  // the FX already fixed: the notional is a known number
   const double s = c.accrual_set ? c.accrual_start : (c.obs.sub_start.empty() ? -1.0 : c.obs.sub_start.front());
@@ -300,11 +317,8 @@ Scalar float_coupon_pv(const FloatCoupon& c, const FCurve& fc, const DCurve& dc)
   //   pv == DF(pay) * (DF(s)/DF(e) - 1)
   // with none of the general k-form's extra scalar work. It is BIT-IDENTICAL to the general branch
   // (a * 1.0, konst == 0) but materially cheaper under AAD, so the risk ladder's per-coupon AAD pass
-  // stays fast. This is the templated analogue of the compiled BundleFloatBatch cpn_is_plain fast path.
-  if (o.sub_start.size() == 1 && o.weight.empty() && o.fixing_step == 0.0 && o.realized == 0.0 &&
-      c.spread == 0.0 && c.tau_pay == o.tau_index && c.scale == 1.0) {
-    return dc.discount(c.pay) * sub_growth<Scalar>(o, 0, fc);
-  }
+  // stays fast. FloatCoupon::standard is THE definition; the compiled BundleFloatBatch's fused path reads the same one.
+  if (c.standard()) return dc.discount(c.pay) * sub_growth<Scalar>(o, 0, fc);
   const double k = c.tau_pay / c.obs.tau_index * c.scale;  // FX scale folds into the constant k (× 1.0 exact)
   const double konst = c.obs.realized + c.spread * c.obs.tau_index;
   if (c.obs.sub_start.empty()) return dc.discount(c.pay) * (konst * k);

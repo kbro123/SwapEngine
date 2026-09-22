@@ -273,7 +273,7 @@ class CompiledMultiCurveBook {
     if (p.mtm_reset_num < 0 || p.mtm_reset_den < 0 || p.mtm_coupons.empty() || p.float_coupons.empty()) return false;
     for (const auto& c : p.mtm_coupons) {
       if (c.obs.compounded || c.obs.fixing_step > 0.0) return false;
-      if (pricing::mtm_coupon_is_seasoned(c)) return false;
+      if (c.seasoned_mtm()) return false;
       if (!c.accrual_set && (c.obs.sub_start.empty() || c.obs.sub_end.empty())) return false;
     }
     for (const auto& c : p.float_coupons)

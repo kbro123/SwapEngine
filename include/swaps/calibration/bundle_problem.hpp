@@ -134,28 +134,15 @@ inline void validate_problem(const BundleProblem& p, const std::string& where = 
     if (i < 0 || i >= nc)
       fail("instrument " + std::to_string(row) + " references " + role + " curve " + std::to_string(i) + " outside the bundle's " + std::to_string(nc) + " curves");
   };
+  // Every curve reference the instrument reads (for_each_curve_ref: the ONE encoding of which members a kind
+  // reads; Portfolio components included), then the one check that is not a curve reference: a turn's index.
   std::function<void(const Instrument&, int)> check = [&](const Instrument& ins, int row) {
     validate_instrument(ins, where + " instrument " + std::to_string(row));
-    switch (ins.quote) {
-      case QuoteKind::Rate: idx(ins.forecast, "forecast", row); break;
-      case QuoteKind::FxForward: idx(ins.fx_num, "fx_num", row); idx(ins.fx_den, "fx_den", row); break;
-      case QuoteKind::TurnJump:
-        idx(ins.turn_curve, "turn", row);
-        if (ins.turn_index >= static_cast<int>(p.curves[ins.turn_curve].turns.size()))
-          fail("instrument " + std::to_string(row) + " pins turn " + std::to_string(ins.turn_index) + " but curve " + std::to_string(ins.turn_curve) + " has " + std::to_string(p.curves[ins.turn_curve].turns.size()) + " turns");
-        break;
-      case QuoteKind::Portfolio:
-        for (const auto& c : ins.combination) check(c.instrument, row);
-        break;
-      case QuoteKind::ParSpread:
-      case QuoteKind::XccyMtmBasis:
-        idx(ins.bench.forecast, "benchmark forecast", row); idx(ins.bench.discount, "benchmark discount", row);
-        [[fallthrough]];
-      case QuoteKind::ParRate:
-      case QuoteKind::ZeroCouponRate:
-        idx(ins.fwd.forecast, "forecast", row); idx(ins.fwd.discount, "discount", row); idx(ins.fixed.discount, "fixed discount", row);
-        break;
-    }
+    ins.for_each_curve_ref([&](int c, const char* role) { idx(c, role, row); });
+    if (ins.quote == QuoteKind::TurnJump && ins.turn_index >= static_cast<int>(p.curves[ins.turn_curve].turns.size()))
+      fail("instrument " + std::to_string(row) + " pins turn " + std::to_string(ins.turn_index) + " but curve " + std::to_string(ins.turn_curve) + " has " + std::to_string(p.curves[ins.turn_curve].turns.size()) + " turns");
+    if (ins.quote == QuoteKind::Portfolio)
+      for (const auto& c : ins.combination) check(c.instrument, row);  // each component's own validate_instrument + turn check
   };
   for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) check(p.instruments[i], i);
 }

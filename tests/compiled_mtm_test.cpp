@@ -134,7 +134,7 @@ TEST(CompiledMtm, AdversarialConfigurationsCompileExactly) {
 TEST(CompiledMtm, RoutingIsExplicit) {
   for (const Shape& s : {swaps::shapes::fx_xccy(), swaps::shapes::desk()}) {
     int aad = 0;
-    for (const auto& in : s.prob.instruments) if (cal::instrument_is_noncacheable(in, s.prob.curves)) ++aad;
+    for (const auto& in : s.prob.instruments) if ((in).noncacheable()) ++aad;
     EXPECT_EQ(aad, 0) << s.name << ": every row must be W-cacheable";
     EXPECT_NO_THROW(cal::CompiledBundleResidual{s.prob}) << s.name;
   }
@@ -143,11 +143,11 @@ TEST(CompiledMtm, RoutingIsExplicit) {
   for (const auto& in : s.prob.instruments) if (in.quote == cal::QuoteKind::XccyMtmBasis) { lookback = in; found = true; break; }
   ASSERT_TRUE(found);
   for (auto& c : lookback.mtm.coupons) c.obs.compounded = true;  // a compounded PRODUCT observation: still AAD
-  EXPECT_TRUE(cal::instrument_is_noncacheable(lookback, s.prob.curves));
+  EXPECT_TRUE((lookback).noncacheable());
   lookback = s.prob.instruments[0];
   for (auto& in : s.prob.instruments) if (in.quote == cal::QuoteKind::XccyMtmBasis) { lookback = in; break; }
   lookback.mtm.reset_num = -1;  // an incomplete MtM leg cannot be compiled — refused, not silently priced
-  EXPECT_TRUE(cal::instrument_is_noncacheable(lookback, s.prob.curves));
+  EXPECT_TRUE((lookback).noncacheable());
 }
 
 // 4. The funding term is PRICED, not dropped: on the lagged EURUSD product the exact quote differs from the
@@ -217,8 +217,8 @@ TEST(CompiledMtm, SeasonedCouponUsesItsFixedResetAndSkipsTheSettledExchange) {
   c.accrual_start = -0.1;
   c.obs.sub_start = {0.0}; c.obs.sub_end = {e}; c.obs.realized = 4e-4;
   c.reset_fx = 1.07 * fx;
-  EXPECT_TRUE(px::mtm_coupon_is_seasoned(c));
-  EXPECT_TRUE(cal::instrument_is_noncacheable(ins, p.curves)) << "routed to the AAD block";
+  EXPECT_TRUE((c).seasoned_mtm());
+  EXPECT_TRUE((ins).noncacheable()) << "routed to the AAD block";
   // Hand value of that coupon: reset_fx * (float_coupon_pv + DF(e)) -- NO −DF(s) term, NO curve-implied FX.
   const auto C = cal::build_bundle_curves<double>(p.curves, [&](int cc, int i) { return x[p.offset(cc) + i]; });
   const auto& fc = *C[ins.mtm.forecast]; const auto& dc = *C[ins.mtm.discount];

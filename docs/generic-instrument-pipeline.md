@@ -35,7 +35,7 @@ ARCHITECTURE.md `curve/` row): generic instruments over generic composable regio
 | 3 | `FloatLeg`/`FixedLeg`, roles on legs | **LANDED** |
 | 3 | `Instrument` + `ParRate`/`ParSpread`/`Rate` | **LANDED** — now the only construction path |
 | 3 | Documented deterministic residual order | **LANDED** — `avg_futs, comp_futs, swaps, bases, instruments`; generic block appended LAST so no existing row renumbers |
-| 4 | ONE float batch (`BundleFloatBatch`) | **LANDED** — legs + comp + avg futures; both fused fast paths (`sub_is_identity`, `cpn_is_plain`) preserved |
+| 4 | ONE float batch (`BundleFloatBatch`) | **LANDED** — legs + comp + avg futures; both fused fast paths preserved (driven by `FloatCoupon::standard()` since 2026-09-22, per leg and per batch) |
 | 4 | Analytic Jacobian chain vs AAD ~1e-9 | **LANDED** — achieved **6.4e-16** |
 | 5 | Generic extractors, dispatch on coupon type | **LANDED** — legacy per-shape extractors removed |
 | 6 | All 10 regression items | **LANDED** |

@@ -26,22 +26,6 @@
 
 namespace swaps::calibration {
 
-// True iff any observation this instrument prices is COMPOUNDED (RFR lookback/lockout). The compiled batch
-// computes the arithmetic Σ and cannot represent the product (compiled_book push_obs would throw), so such
-// an instrument must ride the AAD block. Recursive over Portfolio components.
-inline bool has_compounded_obs(const Instrument& ins) {
-  const auto leg = [](const FloatLeg& l) {
-    for (const auto& c : l.coupons)
-      if (c.obs.compounded) return true;
-    return false;
-  };
-  if (ins.quote == QuoteKind::Rate && ins.obs.compounded) return true;
-  if (leg(ins.fwd) || leg(ins.bench) || leg(ins.mtm)) return true;
-  for (const auto& c : ins.combination)
-    if (has_compounded_obs(c.instrument)) return true;
-  return false;
-}
-
 // (curves_are_noncacheable — "do these curves have a constant W?" — moved to pricing/curve_handle.hpp in
 // E6.4 and is re-exported by bundle_problem.hpp; it is a curve-set property, not a residual-engine one.)
 
@@ -87,28 +71,11 @@ inline bool instrument_within_horizons(const Instrument& ins, const std::vector<
   return true;
 }
 
-// True iff this instrument must go to the AAD block rather than the W-cache. Every quote kind is W-cacheable
-// in its standard form -- a FX forward (F = fx_spot·DF/DF, a term of the compiled row model), a MtM-xccy basis
-// with a complete funding leg (priced EXACTLY on the batch since 2026-09-09), a zero-coupon rate (a per-term
-// transform) and a Portfolio of any of them (terms accumulate onto one row; the nested FX / zero-coupon
-// refusals fell with the row model, 2026-09-22). What still needs AAD is a SHAPE the batch cannot express:
-// a compounded (RFR lookback/lockout) observation anywhere (the batch's arithmetic Σ cannot represent the
-// product), or an incomplete / SEASONED MtM funding leg. This asks only "can the BATCH express this row's
-// shape?"; whether the row's times reach a value-dependent part of a curve is the separate, per-curve
+// Which instruments must go to the AAD block rather than the W-cache is the INSTRUMENT'S own answer
+// (Instrument::noncacheable: a compounded observation anywhere, or an incomplete / seasoned MtM funding leg;
+// everything else compiles, nested in a Portfolio or not, since the 2026-09-22 row model). The router asks it
+// once per row. Whether a row's times reach a value-dependent part of a curve is the separate, per-curve
 // horizon question above.
-inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<BundleCurveSpec>& curves) {
-  if (has_compounded_obs(ins)) return true;
-  if (ins.quote == QuoteKind::XccyMtmBasis) {
-    if (ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0) return true;
-    for (const auto& c : ins.mtm.coupons)
-      if (pricing::mtm_coupon_is_seasoned(c)) return true;  // E3-S2/G4: a seasoned coupon prices on the templated kernel
-    return false;
-  }
-  if (ins.quote == QuoteKind::Portfolio)
-    for (const auto& c : ins.combination)
-      if (instrument_is_noncacheable(c.instrument, curves)) return true;
-  return false;
-}
 
 // The piecewise-linear W tier is ON by default (adopted 2026-09-20). A MonotoneCubic curve is piecewise-linear
 // in its knots, so rows reading the value-dependent region ride the compiled W-cache -- W exact inside a Hyman
@@ -132,7 +99,7 @@ class HybridBundleResidual {
   HybridBundleResidual(const BundleProblem& p, bool pwl) : n_res_(static_cast<int>(p.instruments.size())) {
     validate_problem(p, "HybridBundleResidual");  // E1/E2/B12: refuse a malformed bundle before compiling it
     // ONE partition pass. Each instrument's cacheability is decided once (the MtM guard inside
-    // instrument_is_noncacheable prices real cashflows, so it is not free -- do not re-ask per consumer).
+    // Instrument::noncacheable walks real cashflows, so it is not free -- do not re-ask per consumer).
     // Per-curve LINEAR HORIZONS replace the old whole-bundle veto (2026-09-10). A value-dependent region
     // used to send EVERY instrument in the bundle to the AAD block, including par swaps on curves that never
     // touched it. Now a row is only pushed off the W-cache if it actually reads past a horizon. When every
@@ -149,7 +116,7 @@ class HybridBundleResidual {
     std::vector<int> nc_rows;
     cache_pos_.assign(n_res_, -1);
     for (int r = 0; r < n_res_; ++r) {
-      const bool off_cache = instrument_is_noncacheable(p.instruments[r], p.curves) ||
+      const bool off_cache = p.instruments[r].noncacheable() ||
                              (mixed && !instrument_within_horizons(p.instruments[r], p.curves, horizons));
       if (off_cache) {
         nc.push_back(p.instruments[r]);
@@ -328,7 +295,7 @@ class HybridBundleResidual {
     std::vector<Instrument> nc;
     std::vector<int> nc_rows, rows, pos(n_res_, -1);
     for (int r = 0; r < n_res_; ++r) {
-      if (instrument_is_noncacheable(p.instruments[r], p.curves)) {
+      if (p.instruments[r].noncacheable()) {
         nc.push_back(p.instruments[r]);
         nc_rows.push_back(r);
       } else {

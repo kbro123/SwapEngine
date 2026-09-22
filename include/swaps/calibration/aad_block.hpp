@@ -269,27 +269,9 @@ class AadBlock {
     }
   }
 
-  // Curve roles an instrument reads (recursing through Portfolio components).
+  // Curve roles an instrument reads (for_each_curve_ref: the one encoding; Portfolio components included).
   static void collect_curves(const Instrument& ins, std::set<int>& s) {
-    auto leg = [&](const FloatLeg& l) {
-      s.insert(l.forecast); s.insert(l.discount);
-      if (l.reset_num >= 0) s.insert(l.reset_num);
-      if (l.reset_den >= 0) s.insert(l.reset_den);
-    };
-    switch (ins.quote) {
-      case QuoteKind::Rate: s.insert(ins.forecast); break;
-      case QuoteKind::TurnJump: s.insert(ins.turn_curve); break;  // the δ state lives on the turn's curve (B11)
-      case QuoteKind::FxForward:
-        if (ins.fx_num >= 0) s.insert(ins.fx_num);
-        if (ins.fx_den >= 0) s.insert(ins.fx_den);
-        break;
-      case QuoteKind::Portfolio:
-        for (const auto& c : ins.combination) collect_curves(c.instrument, s);
-        break;
-      default:  // ParRate / ParSpread / XccyMtmBasis
-        leg(ins.fwd); leg(ins.bench); leg(ins.mtm); s.insert(ins.fixed.discount);
-        break;
-    }
+    ins.for_each_curve_ref([&](int c, const char*) { if (c >= 0) s.insert(c); });
   }
 
   // Build the per-curve discount cache: discover the query times, then the constant affine map to their

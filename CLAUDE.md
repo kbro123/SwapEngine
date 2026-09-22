@@ -654,15 +654,26 @@ There is ONE cashflow model (`RateObservation`/`FloatCoupon`/`FixedCoupon`) and 
   `1. avg_futs | 2. comp_futs | 3. swaps | 4. bases | 5. instruments (insertion order)`.
   The generic block is LAST precisely so no existing row is renumbered.
 - **The generic instruments ride the analytic W-cache** (`compiled_bundle.hpp`), not a slow path:
-  `ParRate` and `ParSpread` share ONE pair of float batches (ParRate's subtracted leg is empty ⇒ `pv`
-  is exactly 0.0); every instrument is one or more TERMS onto its row (`qterm_`/`rterm_` map batch position → term), so a mixed quote-kind list
-  keeps insertion order without grouping by kind. Compiled vs templated kernel: **3.6e-17**; analytic
+  every float leg of every quotient row goes into ONE float batch as a SIGNED leg (`ParRate` = {+fwd},
+  `ParSpread` = {+bench, −fwd}, `XccyMtmBasis` = {+self, −foreign, +mtm}; the batch scatters each leg's
+  partials onto its row with its sign through `pricing::LegTable`, so there are no per-kind batches and no
+  padded empty legs, 2026-09-22); every instrument is one or more TERMS onto its row (`qterm_`/`rterm_` map
+  batch position → term), so a mixed quote-kind list keeps insertion order without grouping by kind. Compiled vs templated kernel: **3.6e-17**; analytic
   block Jacobian vs AAD: **6.4e-16** (design bar: 1e-9).
 - **`BundleFloatBatch` is the ONE float primitive** — legs, compounded futures and averaged futures
-  are all it. **PERF (measured, do not regress):** it has two fused fast paths detected at
-  `finalize()` — `sub_is_identity` (`R_sub == I`) and `cpn_is_plain` (`konst == 0 && k == 1`).
-  Without `cpn_is_plain` the portfolio book costs **1.28×** (192 µs vs 150 µs). Any new coupon shape
-  must keep the standard shape fused. Always materialize a `VectorXd` BEFORE a sparse reduction `R*v`.
+  are all it. **PERF (measured, do not regress):** its fused fast paths are driven by what each coupon SAYS
+  of itself — `RateObservation::standard()` / `FloatCoupon::standard()` (cashflows.hpp, the one definition
+  the templated fast path reads too), asked once at registration and aggregated per LEG (`leg_plain_` /
+  `leg_general_`, 2026-09-22) and per batch (`sub_is_identity` / `cpn_is_plain`, the book's grid path). The
+  batch never rediscovers the shape from its packed arrays. Without the plain path the portfolio book costs
+  **1.28×** (192 µs vs 150 µs). Any new coupon shape must keep the standard shape fused. Always materialize
+  a `VectorXd` BEFORE a sparse reduction `R*v`.
+- **An instrument REFLECTS its own properties; nothing re-derives them (owner rule, 2026-09-22).**
+  `Instrument::for_each_curve_ref` (which curve roles a kind reads -- validation, the staged solver's
+  dependency graph, the AAD block's touched set and `primary_curve` all walk it), `has_compounded_obs`,
+  `noncacheable` (the router asks it), `FloatLeg::mtm_complete`, `FloatCoupon::standard` / `seasoned_mtm`.
+  The compiled residual keeps the flat source (`instruments_`) beside its arrays and asks it for anything
+  that is not a hot-path number (a row's kind, its FX tenor). Adding a kind or a field: teach the struct.
 - **Extractors dispatch on QuantLib COUPON TYPE, never index identity** (`ql/extract.hpp`).
   `extract_float_coupon` is the ONE type switch (`OvernightIndexedCoupon` / `IborCoupon`).
   Times use the CURVE day counter; accruals (`tau_pay`, `tau_index`) use the instrument/index's own —

@@ -94,7 +94,7 @@ struct World {
 TEST(RollBookSettledEndRepro, MtmLegDoesNotBookAFinalExchangeThatSettledBeforeTheValuationDate) {
   const Flat fund{0.04}, num{0.02}, den{0.04};
   const px::FloatCoupon c = fixed_mtm_coupon(-0.26, -0.01, 0.004);  // accrual ended yesterday-ish, interest pays in 1.5 days
-  ASSERT_TRUE(px::mtm_coupon_is_seasoned(c)) << "premise";
+  ASSERT_TRUE((c).seasoned_mtm()) << "premise";
   const double want = 1.12 * (std::exp(-0.04 * 0.004) * 0.0105);  // interest only: both exchanges settled
   EXPECT_NEAR(px::xccy_mtm_leg_pv<double>(std::vector<px::FloatCoupon>{c}, 1.10, fund, fund, num, den), want, 1e-15);
 }

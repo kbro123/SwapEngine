@@ -47,6 +47,8 @@ struct FloatLeg {
   // path and, since 2026-09-09, EXACTLY on the W-cache too (BundleFloatBatch::add_mtm: a product of registered DFs).
   int reset_num = -1;   // FX-forward NUMERATOR (foreign) discount curve role
   int reset_den = -1;   // FX-forward DENOMINATOR (domestic) discount curve role
+  // A COMPLETE MtM leg: both reset roles set (the compiled batch prices it as a product of registered DFs).
+  bool mtm_complete() const { return forecast >= 0 && discount >= 0 && reset_num >= 0 && reset_den >= 0; }
   double fx_spot = 1.0;  // FX spot for the notional reset
   // O-X3 (2026-09-14): fx_spot is the SPOT-DATE quote and fx_spot_time the curve time of that spot date, so period i's
   // notional is fx_spot · ratio(reset_i) / ratio(fx_spot_time), ratio(t) = DF[reset_num](t)/DF[reset_den](t). 0 = today.
@@ -173,10 +175,23 @@ struct Instrument {
     band_decay = t.band_decay;
   }
 
-  // The curve this instrument primarily PINS. Used by the staged solver to assign it to a dependency
-  // block; FxForward pins its FOREIGN (fx_num) curve, every leg-based quote its fwd leg's forecast, a
-  // Portfolio its first component's. Defined out-of-line (Portfolio dereferences the nested type).
+  // ---- what the instrument SAYS of itself (2026-09-22): every consumer asks these, none re-derives them ----
+  // The curve references this quote kind READS, in the order it reads them -- the one encoding of "which members
+  // a given `quote` reads" (the comment above). fn(curve_index, role) per role; a Portfolio walks its components.
+  // Behind validate_problem's range check, bundle_adjacency's dependency edges, the AAD block's touched set and
+  // primary_curve. (The four copies it replaced disagreed: the staged solver read a TurnJump's and a Portfolio's
+  // DEFAULT fwd/fixed legs as curve 0, the AAD block seeded a ParRate's unused bench/mtm legs.)
+  template <class Fn>
+  void for_each_curve_ref(Fn&& fn) const;
+  // The curve this instrument primarily PINS: its FIRST curve reference (an FX forward its numerator, a turn its
+  // curve, a leg-based quote its fwd leg's forecast, a Portfolio its first component's). Defined out-of-line.
   int primary_curve() const;
+  // Any COMPOUNDED (RFR lookback/lockout product) observation anywhere in this instrument (components included).
+  bool has_compounded_obs() const;
+  // True iff this instrument is a SHAPE the compiled batch cannot express, so it must ride the AAD tier: a
+  // compounded observation anywhere, or an incomplete / SEASONED MtM funding leg. Every other kind, nested in a
+  // Portfolio or not, compiles (hybrid_residual.hpp is the router; this is the instrument's own answer).
+  bool noncacheable() const;
 };
 
 // A weighted component of a Portfolio instrument. Holds a full Instrument by value, so portfolios nest.
@@ -185,13 +200,68 @@ struct WeightedInstrument {
   Instrument instrument;
 };
 
+template <class Fn>
+void Instrument::for_each_curve_ref(Fn&& fn) const {
+  const Instrument& ins = *this;
+  const auto leg = [&](const FloatLeg& l, const char* fc, const char* dc, const char* rn, const char* rd) {
+    fn(l.forecast, fc);
+    fn(l.discount, dc);
+    if (l.reset_num >= 0) fn(l.reset_num, rn);
+    if (l.reset_den >= 0) fn(l.reset_den, rd);
+  };
+  switch (ins.quote) {
+    case QuoteKind::Rate: fn(ins.forecast, "forecast"); break;
+    case QuoteKind::FxForward: fn(ins.fx_num, "fx_num"); fn(ins.fx_den, "fx_den"); break;
+    case QuoteKind::TurnJump: fn(ins.turn_curve, "turn"); break;  // the δ state lives on the turn's curve
+    case QuoteKind::Portfolio:
+      for (const auto& c : ins.combination) c.instrument.for_each_curve_ref(fn);
+      break;
+    case QuoteKind::ParRate:
+    case QuoteKind::ZeroCouponRate:
+    case QuoteKind::ParSpread:
+    case QuoteKind::XccyMtmBasis:
+      leg(ins.fwd, "forecast", "discount", "reset_num", "reset_den");
+      if (ins.quote == QuoteKind::ParSpread || ins.quote == QuoteKind::XccyMtmBasis)
+        leg(ins.bench, "benchmark forecast", "benchmark discount", "benchmark reset_num", "benchmark reset_den");
+      if (ins.quote == QuoteKind::XccyMtmBasis)
+        leg(ins.mtm, "mtm forecast", "mtm discount", "mtm reset_num", "mtm reset_den");
+      fn(ins.fixed.discount, "fixed discount");
+      break;
+  }
+}
+
 inline int Instrument::primary_curve() const {
-  if (quote == QuoteKind::Rate) return forecast;
-  if (quote == QuoteKind::FxForward) return fx_num;
-  if (quote == QuoteKind::TurnJump) return turn_curve;  // a turn pins the curve that carries it
+  int first = 0;
+  bool seen = false;
+  for_each_curve_ref([&](int c, const char*) { if (!seen) { first = c; seen = true; } });
+  return first;  // an empty Portfolio pins nothing: 0, as before
+}
+
+inline bool Instrument::has_compounded_obs() const {
+  const auto leg = [](const FloatLeg& l) {
+    for (const auto& c : l.coupons)
+      if (c.obs.compounded) return true;
+    return false;
+  };
+  if (quote == QuoteKind::Rate && obs.compounded) return true;
+  if (leg(fwd) || leg(bench) || leg(mtm)) return true;
+  for (const auto& c : combination)
+    if (c.instrument.has_compounded_obs()) return true;
+  return false;
+}
+
+inline bool Instrument::noncacheable() const {
+  if (has_compounded_obs()) return true;
+  if (quote == QuoteKind::XccyMtmBasis) {
+    if (!mtm.mtm_complete()) return true;
+    for (const auto& c : mtm.coupons)
+      if (c.seasoned_mtm()) return true;  // a seasoned coupon prices on the templated kernel
+    return false;
+  }
   if (quote == QuoteKind::Portfolio)
-    return combination.empty() ? 0 : combination.front().instrument.primary_curve();
-  return fwd.forecast;
+    for (const auto& c : combination)
+      if (c.instrument.noncacheable()) return true;
+  return false;
 }
 
 // Compile-time detection: does the curve object a CurveOf accessor returns expose turn_jump(int)? True

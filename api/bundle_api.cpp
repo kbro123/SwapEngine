@@ -113,7 +113,7 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   for (const auto& ins : prob_.instruments) {
     // `has_fx_` reports the ENGINE's partition (E6.1c: the API used to keep a second, disagreeing definition
     // that called every FX forward / MtM row non-cacheable; standalone ones ride the W-cache since 2026-09-09).
-    if (cal::instrument_is_noncacheable(ins, prob_.curves)) has_fx_ = true;
+    if ((ins).noncacheable()) has_fx_ = true;
     if (ins.band_upper > ins.band_lower)
       has_band_ = true;  // soft target: compiled COLD calibrate is fine, streams frozen-Newton (soft LS)
   }

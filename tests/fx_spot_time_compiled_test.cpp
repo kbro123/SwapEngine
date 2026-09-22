@@ -139,7 +139,7 @@ TEST(FxSpotTimeCompiled, PortfolioOfFxForwardsIsACompiledRowWithAPlainResidual) 
   ff.market = cal::instrument_model_quote<double>(ff, w0) + 2e-4;  // off-market so the residual is not 0
   p.instruments.push_back(ff);
   const int r = p.n_residuals() - 1;
-  EXPECT_FALSE(cal::instrument_is_noncacheable(ff, p.curves));
+  EXPECT_FALSE((ff).noncacheable());
   const cal::CompiledBundleResidual cr(p);
   EXPECT_EQ(cr.n_terms(), p.n_residuals() + 1);
   const cal::HybridBundleResidual hy(p);
