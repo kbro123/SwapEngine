@@ -42,6 +42,7 @@
 #include <vector>
 
 #include "swaps/calibration/background_jacobian.hpp"
+#include "swaps/calibration/normal_op.hpp"  // THE normal-equations operator: M, G, B, the rank-one re-scale
 #include "swaps/calibration/problem.hpp"  // band_slope / band_residual_d, QuoteKind
 #include "swaps/calibration/residual_engine.hpp"
 
@@ -218,7 +219,7 @@ class StreamingCalibrator {
       if constexpr (requires(Engine& e, const Problem& p) { e.set_quotes(p); }) owned_engine_->set_quotes(prob);
     }
     collect_bands(prob);
-    drift_refresh_ = (n_res_ != static_cast<int>(x.size())) || !bands_.empty() || RtR_.size() > 0;
+    drift_refresh_ = (n_res_ != static_cast<int>(x.size())) || !bands_.empty() || op_.regularised();
     if (!set_anchor(x, q)) throw std::invalid_argument("StreamingCalibrator::resync: the Jacobian at the anchor is non-finite");
     x_cur_ = x;
     q_cur_ = q;
@@ -236,15 +237,10 @@ class StreamingCalibrator {
     }
     if (!x0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor state x0 contains a non-finite value");
     if (!q0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor market q0 contains a non-finite quote");
-    if (opt_.regularizer.size()) {
-      RtR_.noalias() = opt_.regularizer.transpose() * opt_.regularizer;
-      S_.resize(n_res_ + opt_.regularizer.rows(), x0.size());  // the stacked [J; R]: R rows written ONCE (factor writes J's)
-      S_.bottomRows(opt_.regularizer.rows()) = opt_.regularizer;
-    }
-    cod_ = Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>(n_res_ + opt_.regularizer.rows(), x0.size());  // sized once
+    op_.reset(n_res_, static_cast<int>(x0.size()), opt_.regularizer);  // THE operator (normal_op.hpp): sized once, R rows written once
     collect_bands(prob);
     // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0.
-    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || RtR_.size() > 0;
+    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || op_.regularised();
     // The background worker hands over M ONLY (no B, no band re-scaling, and its private engine copy never
     // sees a later set_quotes), which is exact for a SQUARE, unbanded, unregularised problem and wrong for
     // the rest (E3 register S3 / G5): a regularised or banded stream would mix an un-regularised M with a
@@ -363,7 +359,7 @@ class StreamingCalibrator {
   // a report, not a re-evaluation; nothing on the tick is spent on it. Stale after a failed tick.
   const Eigen::VectorXd& last_residual() const { return r_; }
   const Eigen::VectorXd& anchor_market() const { return q_anchor_; }
-  const Eigen::MatrixXd& sensitivity() const { return M_; }
+  const Eigen::MatrixXd& sensitivity() const { return op_.M(); }
   int refresh_count() const { return refresh_count_; }
   int prefetch_hits() const { return prefetch_hits_; }  // refreshes served from the background worker
   int rescale_count() const { return rescale_count_; }  // band-edge re-scales (cheap M refactors) so far
@@ -465,8 +461,8 @@ class StreamingCalibrator {
           have_last_step_ = false;  // an active-set change legitimately turns the step
         }
       }
-      dx_.noalias() = M_ * r_;
-      if (RtR_.size()) dx_.noalias() += B_ * x;  // curvature pull toward the smoothest market-consistent curve
+      dx_.noalias() = op_.M() * r_;
+      if (op_.regularised()) dx_.noalias() += op_.B() * x;  // curvature pull toward the smoothest market-consistent curve
       double alpha = 1.0;
       std::size_t hit = 0;
       int hit_side = 0;
@@ -806,7 +802,7 @@ class StreamingCalibrator {
   // max_refresh). The worker hands over M only, so band rows cannot be re-scaled off it (have_J_).
   bool refresh(const Eigen::VectorXd& x, const Eigen::VectorXd& q, StreamTick& t) {
     if (bg_ && bg_->try_take(bg_x_, bg_M_)) {
-      M_ = std::move(bg_M_);
+      op_.adopt_M(std::move(bg_M_));
       x_anchor_ = std::move(bg_x_);
       q_anchor_ = q;  // reset drift from here
       have_J_ = false;
@@ -866,14 +862,8 @@ class StreamingCalibrator {
     return true;
   }
 
-  // M = (JᵀJ)⁻¹Jᵀ (= J⁻¹ when square). With a smoothness regulariser R, M = (JᵀJ + RᵀR)⁻¹Jᵀ and
-  // B = (JᵀJ + RᵀR)⁻¹RᵀR (the per-step curvature pull). BOTH branches are RANK-SAFE: a rank-thresholded
-  // complete orthogonal decomposition (kRankThreshold) -- of J, or of the stacked [J; R] whose pseudo-
-  // inverse P gives (JᵀJ + RᵀR)⁺ = P·Pᵀ. A bundle can be legitimately rank-deficient (a knot no instrument
-  // pins, redundant xccy/basis rows), and R's null space (level + linear forward moves) can meet J's when
-  // a curve has knots but no level-pinning row: a tolerance-free LDLT of that singular normal matrix used
-  // to send every tick to the refresh cap and walk the unpinned curve to negative forwards. The COD
-  // zeroes the null directions instead, so an unpinned state never moves off its anchor.
+  // The operator M = (JᵀJ + RᵀR)⁺Jᵀ, G and B live in ONE place, normal_op.hpp (2026-09-22: it was written here and in
+  // three other files). What stays here is the streamer's POLICY on top of it:
   // TWO-THRESHOLD OPERATOR (2026-09-15). A direction below the walk threshold -- kWalkRankThreshold x sigma_max, measured against the
   // UNPINNED scale (a pinned row carries kPinWeight and would set sigma_max) -- is WEAK. An anchor factorisation (construction, resync, an
   // external set_anchor, the commit re-anchor) records how many weak directions the committed state has: those are STRUCTURAL (a
@@ -883,68 +873,32 @@ class StreamingCalibrator {
   double walk_threshold() const { return n_pinned_ > 0 ? kWalkRankThreshold / kPinWeight : kWalkRankThreshold; }
   void factor(const Eigen::MatrixXd& J) {
     ++factor_count_;
-    // ONE decomposition for the calibrator's life (C6, 2026-09-15): sized (rows, cols) at construction, so compute() on a same-shaped
-    // matrix writes into storage it already owns -- the same Eigen operations on the same data as a fresh local, bit-identical.
-    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;
-    if (RtR_.size()) S_.topRows(J.rows()) = J;
-    const Eigen::MatrixXd& A = RtR_.size() ? S_ : J;
-    cod.setThreshold(kRankThreshold);
-    cod.compute(A);
-    const Eigen::Index full = cod.rank();
-    cod.setThreshold(walk_threshold());
-    const int weak = static_cast<int>(full - cod.rank());
-    cod.setThreshold(kRankThreshold);
+    op_.decompose(J, kRankThreshold);
+    const Eigen::Index full = op_.rank();
+    const int weak = static_cast<int>(full - op_.rank_at(walk_threshold()));
+    op_.rank_at(kRankThreshold);
     truncated_ = false;
     if (!in_walk_ || full_rank_) {
       anchor_weak_ = weak;
     } else if (weak > anchor_weak_) {
       truncated_ = true;
       stamp(StreamStage::Truncated);
-      cod.setThreshold(walk_threshold());
-      cod.compute(A);
+      op_.decompose(J, walk_threshold());
     }
-    if (RtR_.size()) {
-      const Eigen::MatrixXd P = cod.pseudoInverse();  // n_knots x (n_res + n_reg)
-      M_ = P.leftCols(J.rows());
-      G_.noalias() = P * P.transpose();  // (JᵀJ + RᵀR)⁺ -- kept for the O(n·m) band re-scale updates
-      B_.noalias() = G_ * RtR_;
-    } else {
-      M_ = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
-      G_.noalias() = M_ * M_.transpose();  // (JᵀJ)⁺ = J⁺ J⁺ᵀ
-    }
+    op_.form();
   }
 
-  // A band re-scale (E3-C7, 2026-09-10): row `row` of the frozen Jacobian changes slope by c = new/old, a
-  // RANK-ONE change of JᵀJ (β·u uᵀ, β = c² − 1, u = the old row). The operator is updated exactly by
-  // Sherman–Morrison on G = (JᵀJ + RᵀR)⁺ (u lies in G's range, so the pseudo-inverse form holds):
-  //     v = G u,  d = 1 + β uᵀv,   G' = G − (β/d) v vᵀ,
-  //     M' = G' J'ᵀ = M − (β/d) v (J v)ᵀ + ((c−1)/d) v e_rowᵀ,   B' = G' RᵀR = B − (β/d) v (RᵀR v)ᵀ,
-  // O(n·m) and allocation-free after first use, where a re-factorisation is O(n³) (300 µs on the desk rung
-  // and 1.75 MB of temporaries, 12–16 times per 25 bp tick). Rounding in G moves no fixed point (any
-  // non-singular preconditioner leaves the stationarity condition alone); the pins' 1e3 weight gives d ~ 1e6.
+  // A band re-scale (E3-C7, 2026-09-10): row `row` of the frozen Jacobian changes slope; the operator takes the exact
+  // rank-one (Sherman–Morrison) update in normal_op.hpp -- O(n·m), allocation-free after first use, where a
+  // re-factorisation is O(n³) (300 µs on the desk rung and 1.75 MB of temporaries, 12–16 times per 25 bp tick).
+  // Rounding in G moves no fixed point (any non-singular preconditioner leaves the stationarity condition alone).
   void rescale_row(std::size_t k, double new_slope) {
     const int row = bands_[k].row;
     const double c = new_slope / slope_cur_[k];
-    if (have_J_ && c != 1.0 && opt_.rescale_update) {
-      u_ = J_cur_.row(row).transpose();
-      v_.noalias() = G_ * u_;
-      const double s = u_.dot(v_), beta = c * c - 1.0, d = 1.0 + beta * s;
-      // Releasing a PIN (c = decay / 1e3) on a row whose leverage s is close to 1 cancels d = 1 + βs
-      // catastrophically; such a row is rare (one release per row per tick) -- re-factorise instead.
-      if (std::isfinite(d) && std::abs(d) > 1e-3) {
-        jv_.noalias() = J_cur_ * v_;  // the OLD J
-        const double f = beta / d;
-        M_.noalias() -= f * v_ * jv_.transpose();
-        M_.col(row) += ((c - 1.0) / d) * v_;
-        if (RtR_.size()) {
-          rv_.noalias() = RtR_ * v_;
-          B_.noalias() -= f * v_ * rv_.transpose();
-        }
-        G_.noalias() -= f * v_ * v_.transpose();
-        J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
-        slope_cur_[k] = new_slope;
-        return;
-      }
+    if (have_J_ && c != 1.0 && opt_.rescale_update && op_.rank_one_update(row, c, J_cur_)) {  // J_cur_ is still the OLD J here
+      J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
+      slope_cur_[k] = new_slope;
+      return;
     }
     J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
     slope_cur_[k] = new_slope;
@@ -953,15 +907,12 @@ class StreamingCalibrator {
   }
 
   int n_res_;
+  NormalOp op_;                             // THE operator: M, G, B, the rank-one re-scale (normal_op.hpp)
   const Engine* engine_ = nullptr;          // the residual engine driven every tick (borrowed or owned)
   std::unique_ptr<Engine> owned_engine_;    // set only by the (prob, ...) constructor
   Options opt_;
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
   Eigen::VectorXd q_cur_;  // the market x_cur_ solves (a failed tick restores the anchor here)
-  Eigen::MatrixXd M_;
-  Eigen::MatrixXd RtR_, B_;  // smoothness regulariser: RᵀR and the per-step curvature pull B=(JᵀJ+RᵀR)⁻¹RᵀR
-  Eigen::MatrixXd G_;        // (JᵀJ + RᵀR)⁺ from the last factor(), updated rank-one per band re-scale
-  Eigen::VectorXd u_, v_, jv_, rv_;  // rescale_row scratch (no per-rescale allocation after first use)
   int refresh_count_ = 0;
   int prefetch_hits_ = 0;
   int rescale_count_ = 0;
@@ -982,8 +933,6 @@ class StreamingCalibrator {
   std::vector<char> band_eligible_;          // per row: may carry a tracked band (FX forwards never do)
   int n_pinned_ = 0;
   Eigen::MatrixXd J_ref_, J_cur_;
-  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod_;  // factor()'s decomposition, sized once at construction (C6)
-  Eigen::MatrixXd S_;  // regularised only: the stacked [J; R] (R rows written at construction)
   bool have_J_ = false;
   bool need_full_ = false;
   bool drift_refresh_ = false;  // Options::refresh_drift applies (non-square / banded / regularised)

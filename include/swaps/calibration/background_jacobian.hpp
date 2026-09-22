@@ -18,6 +18,8 @@
 
 #include <Eigen/Dense>
 
+#include "swaps/calibration/normal_op.hpp"  // the ONE rank-safe operator
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -91,10 +93,9 @@ class BackgroundJacobian {
       // RANK-SAFE, at the ONE shared threshold (E3-B2 / G5, 2026-09-10): the same complete orthogonal
       // decomposition StreamingCalibrator::factor uses, so a rank-deficient square bundle gets the
       // minimum-norm pseudo-inverse here too (an un-thresholded QR produced |M| up to 6e14).
-      Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-      cod.setThreshold(kRankThreshold);
-      cod.compute(J);
-      Eigen::MatrixXd M = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
+      NormalOp op(n_res_, static_cast<int>(J.cols()));
+      op.factor(J);
+      Eigen::MatrixXd M = op.M();
       {
         std::lock_guard<std::mutex> lk(res_m_);
         res_x_ = std::move(x);

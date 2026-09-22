@@ -48,9 +48,9 @@ MUTATIONS = [
      "",
      ["hotpath_census_test.cpp"], "*", "a stage the census cannot see is unpinned (census)"),
     # 2026-09-15 G1-G3: the streamer's hot-path stages each carry an allocation / factorisation / refresh-count pin.
-    ("rescale_always_refactorises", "include/swaps/calibration/streaming.hpp",
-     "      if (std::isfinite(d) && std::abs(d) > 1e-3) {\n",
-     "      if (std::isfinite(d) && std::abs(d) > 1e300) {\n",
+    ("rescale_always_refactorises", "include/swaps/calibration/normal_op.hpp",
+     "    if (std::isfinite(d) && std::abs(d) > 1e-3) {\n",
+     "    if (std::isfinite(d) && std::abs(d) > 1e300) {\n",
      ["streaming_walk_guard_test.cpp"], "*", "a band crossing refactorising instead of its rank-one update is unpinned (G1)"),
     ("verify_pins_never_releases", "include/swaps/calibration/streaming.hpp",
      "&& releases_[k] == 0) {\n",
@@ -69,7 +69,7 @@ MUTATIONS = [
      "",
      ["streaming_walk_guard_test.cpp"], "*", "the one post-convergence refresh per drift refresh is unpinned (G2)"),
     ("drift_refresh_on_square", "include/swaps/calibration/streaming.hpp",
-     "    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || RtR_.size() > 0;\n",
+     "    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || op_.regularised();\n",  # re-anchored 2026-09-22 (NormalOp)
      "    drift_refresh_ = true;\n",
      ["streaming_walk_guard_test.cpp"], "*", "a square rung's 25 bp tick refreshing is unpinned (G2)"),
     ("tick_state_copied_per_tick", "include/swaps/calibration/streaming.hpp",
@@ -90,12 +90,12 @@ MUTATIONS = [
      "    if (!sides_from_j) engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)\n",
      "    if (!sides_from_j) J_ref_ = engine_->jacobian_vs(x, q);\n",
      ["streaming_refresh_alloc_repro_test.cpp"], "*", "a refresh writing J in place is unpinned (C6)"),
-    ("decomposition_rebuilt_per_refresh", "include/swaps/calibration/streaming.hpp",
+    ("decomposition_rebuilt_per_refresh", "include/swaps/calibration/normal_op.hpp",
      "    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
      "    cod_ = Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>();\n    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
      ["streaming_refresh_alloc_repro_test.cpp"], "*", "reusing the refresh's decomposition storage is unpinned (C6)"),
-    ("stacked_regulariser_rows_not_written", "include/swaps/calibration/streaming.hpp",
-     "      S_.bottomRows(opt_.regularizer.rows()) = opt_.regularizer;\n",
+    ("stacked_regulariser_rows_not_written", "include/swaps/calibration/normal_op.hpp",
+     "      S_.bottomRows(R.rows()) = R;\n",
      "",
      ["jacobian_into_parity_test.cpp"], "*", "the regularised refresh's R rows are unpinned (C6)"),
     # 2026-09-15 C8: a tick reports the drift it refreshed on.
@@ -168,8 +168,8 @@ MUTATIONS = [
      "            damp = 1.0;\n",
      ["streaming_kink_cycle_repro_test.cpp"], "*", "breaking a MonotoneCubic kink 2-cycle is unpinned (FLK2)"),
     ("breakeven_override_ignored", "include/swaps/calibration/streaming.hpp",
-     "      if (opt_.breakeven_steps > 0.0) breakeven_steps_ = opt_.breakeven_steps;  // pinned (Options::breakeven_steps)\n",
-     "",
+     "    breakeven_steps_ = opt_.breakeven_steps > 0.0 ? opt_.breakeven_steps : kBreakevenCap;\n",  # re-anchored 2026-09-22: the 2026-09-21 deterministic default had orphaned it
+     "    breakeven_steps_ = kBreakevenCap;\n",
      ["streaming_kink_cycle_repro_test.cpp"], "*", "Options::breakeven_steps is unpinned (FLK2)"),
     # 2026-09-14 ASW weekend month-end: the asset-swap float leg ends on the maturity adjusted Following (ql::AssetSwap), the
     # interior boundaries keep the product convention.
@@ -533,7 +533,7 @@ MUTATIONS = [
      ["trade_weekend_maturity_repro_test.cpp"], "*", "an ISDA boundary rolling onto the end is unpinned"),
     # 2026-09-14 weekend-maturity fix: a schedule ends on the termination date rolled by the convention.
     ("schedule_raw_termination", "include/swaps/build/schedule.hpp",
-     "  const Date end = adjust(cal_id, maturity_date, bdc);",
+     "  const Date end = adjust(cal_id, maturity_date, rule.termination_bdc.empty() ? bdc : rule.termination_bdc);",  # re-anchored 2026-09-22
      "  const Date end = maturity_date;",
      ["trade_weekend_maturity_repro_test.cpp"], "*", "rolling a booked non-business-day maturity is unpinned"),
     # 2026-09-14 spread-curve fix: a parallel move / PV01 moves every curve's forward once.
@@ -748,8 +748,8 @@ MUTATIONS = [
      ["bond_terms_test.cpp"], "*", "street_analytics' clean/dirty relation is unpinned (E7 3.2)"),
     # E7 stage 3: the one smoothing table. A drifted light value would re-smooth every verb's default calibration.
     ("smoothing_light_value_drifts", "include/swaps/calibration/regularize.hpp",
-     "case Smoothing::Light: return tension ? 0.02 : 0.5;",
-     "case Smoothing::Light: return tension ? 0.2 : 0.5;",
+     "case Smoothing::Light: return 0.5;",  # re-anchored 2026-09-22 (tension column retired)
+     "case Smoothing::Light: return 0.4;",
      ["smoothing_preset_test.cpp"], "*", "the composer's smoothing table is unpinned (E7 stage 3)"),
     ("hermite_bessel_weights_swapped", "include/swaps/curve/regions.hpp",
      "m[j] = (h[j] * sec[j - 1] + h[j - 1] * sec[j]) / (h[j - 1] + h[j]);",
@@ -764,7 +764,7 @@ MUTATIONS = [
      "q_rows_[j].weight * (dnum.row(j) / ann[j]);",
      ["generic_instrument_test.cpp"], "*", "the analytic Jacobian is not compared to AAD (audit M4b)"),
     ("df_memo_never_invalidates", "include/swaps/calibration/compiled_bundle.hpp",
-     "if (x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {",
+     "if (df_stale_ || x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {",  # re-anchored 2026-09-22 (pwl tier added df_stale_)
      "if (x.size() != df_x_.size()) {",
      ["generic_instrument_test.cpp", "portfolio_instrument_test.cpp"], "*", "a stale DF memo is invisible (audit M9)"),
     ("pfe_is_the_median", "include/swaps/xva/exposure.hpp",
@@ -783,19 +783,19 @@ MUTATIONS = [
      "rev_record<T>(a.idx, inv, b.idx, -(val)*inv));", "rev_record<T>(a.idx, inv, b.idx, -(val)));",
      ["gamma_test.cpp"], "*", "the reverse tape's division rule is not checked against forward AAD (audit M7a)"),
     ("structure_equal_ignores_leg_fx_spot", "include/swaps/calibration/structure_fingerprint.hpp",
-     "if (a.fx_spot != b.fx_spot || a.coupons.size() != b.coupons.size()) return false;",
+     "if (a.fx_spot != b.fx_spot || a.fx_spot_time != b.fx_spot_time || a.coupons.size() != b.coupons.size()) return false;",  # re-anchored 2026-09-22 (O-X3 added fx_spot_time)
      "if (a.coupons.size() != b.coupons.size()) return false;",
      ["kernel_pins_test.cpp"], "StructureEqual.*", "a structural field can be dropped from the warm-vs-recompile gate unnoticed (audit M8)"),
     ("rescale_anchor_normalisation_dropped", "include/swaps/calibration/streaming.hpp",
      "J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);",
      "J_cur_.row(row) = J_ref_.row(row) * new_slope;",
      ["streaming_band_test.cpp"], "StreamingBand.*", "a wrong band re-scale is rescued by a refresh (audit M2)"),
-    ("streaming_ldlt_instead_of_cod", "include/swaps/calibration/streaming.hpp",
-     "M_ = cod.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));",
-     "M_ = (J.transpose() * J).ldlt().solve(J.transpose());",
+    ("operator_rank_threshold_dropped", "include/swaps/calibration/normal_op.hpp",  # re-anchored 2026-09-22: the operator moved to normal_op.hpp
+     "    cod.setThreshold(threshold);\n",
+     "    cod.setThreshold(0.0);\n",
      ["rank_safety_test.cpp", "streaming_contract_test.cpp"], "*", "the rank-safe streaming operator has no non-oracle test (audit M3b)"),
     ("lm_rank_deficiency_never_reported", "include/swaps/calibration/lm.hpp",
-     "res.rank_deficiency = n_knots - static_cast<int>(cod.rank());",
+     "res.rank_deficiency = n_knots - static_cast<int>(op.rank());",
      "res.rank_deficiency = 0;",
      ["calibration_status_test.cpp", "rank_safety_test.cpp"], "*", "the LM min-norm completion has no non-oracle test (audit M3)"),
     # Re-anchored 2026-09-12: the weight now lives in the ONE decomposition (build::fixing_rows), so this
@@ -824,7 +824,7 @@ MUTATIONS = [
      "  o.sub_start = {a}; o.sub_end = {b}; if (std::abs(rmax - 1.0) > 1e-15) o.weight = {rmax};\n  o.tau_index = year_frac(dc, start, end, cal);",
      ["build_instruments_test.cpp"], "*", "the MOMENT averaged observation's day-count weight is unpinned (item 17)"),
     ("hyman_clamp_disabled", "include/swaps/curve/regions.hpp",
-     "correction = m[i] / abs(m[i]) * smin(abs(m[i]), abs(3.0 * S[0]));",
+     "correction = m[i] / am * (clamp ? M.v : am);",  # re-anchored 2026-09-22 (the canonical-formula filter)
      "correction = m[i];",
      ["kernel_pins_test.cpp", "monotone_cubic_test.cpp"], "SchemeValues.*:MonotoneCubic.*", "the Hyman end-clamp branch is pinned only by the oracle binary"),
 ]

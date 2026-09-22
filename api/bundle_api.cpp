@@ -344,23 +344,13 @@ Eigen::VectorXd BundleSession::residual_market_scale() const {
 
 Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   const Eigen::MatrixXd J = jacobian(reg);  // n_res x n_knots (shared with jacobian(), no desync)
-  const int m = static_cast<int>(J.rows()), n = static_cast<int>(J.cols());
-  // Stack the regulariser rows under J: the IFT on min ||r||² + ||Rx||² reads [J; R]ᵀ[J; R] dx = Jᵀ D dq.
-  Eigen::MatrixXd S = J;
-  if (reg.on()) {
-    // The R block comes from the session cache (ensure_reg_R: structure-only, built once per reg) --
-    // E3-D6: rebuilding it here cost 4,449 allocations per risk_operator call.
-    const Eigen::MatrixXd& R = ensure_reg_R(reg);
-    S.resize(m + R.rows(), n);
-    S << J, R;
-  }
-  // Rank-thresholded pseudo-inverse (the SAME kRankThreshold the streamer and LM use): min-norm on the
-  // identified directions, exactly (SᵀS)⁻¹Sᵀ when S has full column rank, and never a singular solve.
-  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-  cod.setThreshold(cal::kRankThreshold);
-  cod.compute(S);
-  const Eigen::MatrixXd P = cod.pseudoInverse();  // n_knots x (n_res + n_reg)
-  return P.leftCols(m) * residual_market_scale().asDiagonal();  // n_knots x n_res = dx/dq
+  // THE operator (normal_op.hpp): the IFT on min ||r||² + ||Rx||² reads [J; R]ᵀ[J; R] dx = Jᵀ D dq, rank-safe at the ONE
+  // kRankThreshold the streamer and LM use. The R block comes from the session cache (ensure_reg_R: structure-only, built
+  // once per reg) -- E3-D6: rebuilding it here cost 4,449 allocations per risk_operator call.
+  cal::NormalOp op(static_cast<int>(J.rows()), static_cast<int>(J.cols()));
+  if (reg.on()) op.reset(static_cast<int>(J.rows()), static_cast<int>(J.cols()), ensure_reg_R(reg));
+  op.factor(J);
+  return op.quote_sensitivity(residual_market_scale());  // n_knots x n_res = dx/dq
 }
 
 std::optional<pf::MultiCurveBook> BundleSession::resolve_book(const pf::MultiCurveBook& book) const {

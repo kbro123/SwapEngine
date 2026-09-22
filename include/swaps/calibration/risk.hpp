@@ -20,6 +20,7 @@
 
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/lm.hpp"
+#include "swaps/calibration/normal_op.hpp"  // THE operator: dx/dq = M·D, rank-safe at the one threshold
 #include "swaps/calibration/residual_engine.hpp"  // kRankThreshold
 #include "swaps/curve/curve_module.hpp"
 
@@ -33,10 +34,9 @@ inline Eigen::VectorXd residual_market_scale(const CalibrationProblem& prob, con
 // The IFT quote-sensitivity operator dx/dq = J⁺ D  (n_knots x n_residuals), rank-safe.
 inline Eigen::MatrixXd ift_operator(const CalibrationProblem& prob, const Eigen::VectorXd& x) {
   const Eigen::MatrixXd J = aad_jacobian(prob, x);  // n_resid x n_knots
-  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-  cod.setThreshold(kRankThreshold);
-  cod.compute(J);
-  return cod.pseudoInverse() * residual_market_scale(prob, x).asDiagonal();
+  NormalOp op(static_cast<int>(J.rows()), static_cast<int>(J.cols()));
+  op.factor(J);
+  return op.quote_sensitivity(residual_market_scale(prob, x));
 }
 
 // One AAD pass for d(NPV)/dx off the calibration curve, in a caller-chosen forward-AAD scalar.
@@ -109,13 +109,11 @@ inline NullCompletedLadder null_completed_ladder(const Eigen::MatrixXd& J, const
     v.cwiseAbs().maxCoeff(&idx);                // the knot it loads on most -> its label
     out.synthetic_knot.push_back(idx);
   }
-  // Jf has full column rank by construction; the pseudo-inverse (rank-safe at the same threshold) is
-  // (JfᵀJf)⁻¹Jfᵀ without forming the normal matrix.
-  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-  cod.setThreshold(kRankThreshold);
-  cod.compute(Jf);
-  const Eigen::MatrixXd Mf = cod.pseudoInverse();  // n_knots x (n_res + n_null)
-  out.full = Mf.transpose() * g;                   // length n_res + n_null: dP/dr, then the synthetic pillars
+  // Jf has full column rank by construction; THE operator (normal_op.hpp) gives (JfᵀJf)⁻¹Jfᵀ rank-safe at the same
+  // threshold without forming the normal matrix.
+  NormalOp op(n_res + n_null, nk);
+  op.factor(Jf);
+  out.full = op.M().transpose() * g;  // length n_res + n_null: dP/dr, then the synthetic pillars
   out.full.head(n_res).array() *= market_scale.array();  // dP/dq on the real quotes
   return out;
 }

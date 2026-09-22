@@ -15,6 +15,7 @@
 
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/jacobian.hpp"        // aad_jacobian (re-exported here for back-compat)
+#include "swaps/calibration/normal_op.hpp"       // NormalOp: the ONE rank rule (rank_deficiency)
 #include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/residual_engine.hpp"  // residual_engine_t: the analytic fast path for cold calibrate
 
@@ -157,10 +158,9 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
   res.iterations = lm.iter;
   Eigen::MatrixXd J = engine.jacobian(res.x);
 
-  Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod;
-  cod.setThreshold(kRankThreshold);
-  cod.compute(J);
-  res.rank_deficiency = n_knots - static_cast<int>(cod.rank());
+  NormalOp op(n_residuals, n_knots);
+  op.decompose(J);  // the ONE rank rule (kRankThreshold), shared with the streamer and the risk operators
+  res.rank_deficiency = n_knots - static_cast<int>(op.rank());
   if (res.rank_deficiency > 0) {
     // SEED-ANCHORED re-solve (rank-deficient problems ONLY; a determined problem never enters here).
     // A post-hoc null-space projection is NOT enough: the null combination of a nonlinear problem is
@@ -170,7 +170,7 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
     // in constrained directions its pull is (w/sigma)^2-suppressed — w = 1e-8·|max pivot| biases a
     // genuine direction by parts-per-billion of its value. For a WARM re-solve x0 is the previous
     // solution, so unconstrained states stay put tick to tick.
-    const double w = 1e-8 * std::abs(cod.maxPivot());
+    const double w = 1e-8 * std::abs(op.max_pivot());
     struct Anchored {
       const Engine* base;
       const Eigen::VectorXd* x0;
