@@ -233,7 +233,6 @@ TEST(StructureEqual, EveryStructuralFieldIsCompared) {
   differs([&] { auto p = b; p.instruments[2].fx_time = 0.5; return p; }(), "fx_time");
   differs([&] { auto p = b; p.instruments[0].fixed.discount = 1; return p; }(), "the fixed leg's discount role");
   differs([&] { auto p = b; p.instruments[1].bench.forecast = 1; return p; }(), "the bench leg's forecast role");
-  differs([&] { auto p = b; p.curves[1].regions[1].reg_sigma = 0.7; return p; }(), "a region's regulariser sigma");
   differs([&] { auto p = b; p.curves[1].regions[1].reg_lambda = 0.7; return p; }(), "a region's regulariser lambda");
   // and the ones the old enumeration already had
   differs([&] { auto p = b; p.curves[0].regions[1].scheme = cv::Scheme::Linear; return p; }(), "region scheme");

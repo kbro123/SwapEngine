@@ -52,7 +52,6 @@ constexpr double kVol = 0.008;
 api::BundleSession calibrated_session() {
   api::BundleSession sess(api::bundle_from_json(boost::json::parse(bundle_json())));
   api::RegSpec reg;
-  reg.tension = true;
   reg.lambda = 0.02;
   reg.curves = {0};
   sess.calibrate(api::flat_x0(sess.problem()), reg);

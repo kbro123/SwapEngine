@@ -73,7 +73,7 @@ formula-generated `x_true` (`reference_curve.hpp`, `reference_bundle.hpp`, `refe
 | `compiled_residual_test.cpp` | W-cache residual/Jacobian vs templated/AAD (1e-12 / 1e-9) | T3 parity |
 | `generic_cashflow_test.cpp` | Generic `FloatCoupon` identities vs hand formulas (1e-15); legacy shapes reprice exactly | T3/T5 |
 | `migration_guard_test.cpp` | Legacy shapes re-expressed as generic instruments reprice bit-for-bit; QuantLib coupon date facts | T3 parity |
-| `tension_regularizer_oracle_test.cpp` | Regulariser drops the Jacobian condition number; first-order optimal on the self-consistent EUR trio (**no QuantLib in the file**; `raw_err < 1e-2` = 100 bp — E5 tightens) | T2 calibration |
+| `smoothing_regulariser_oracle_test.cpp` | Regulariser (second_difference_operator; tension retired 2026-09-22) drops the Jacobian condition number; first-order optimal on the self-consistent EUR trio (**no QuantLib in the file**; `raw_err < 1e-2` = 100 bp — E5 tightens) | T2 calibration |
 
 ## Reference builders
 

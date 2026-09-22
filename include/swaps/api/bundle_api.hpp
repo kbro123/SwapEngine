@@ -328,7 +328,7 @@ class BundleSession {
   // delta per calibration quote — ladder[i] = Σⱼ curve_grad[j]·M[j,i]. The AAD reprice + the M multiply are
   // ENGINE-timed into risk_us (also last_risk_us()); the M FORMATION (the calibration Jacobian solve, book-
   // independent) is outside the clock, mirroring how price_portfolio times only the book-dependent pass.
-  // `reg` regularises the RISK OPERATOR (independently of the calibration reg): with a curvature/tension
+  // `reg` regularises the RISK OPERATOR (independently of the calibration reg): with a curvature
   // penalty it damps the alternating-sign "fan-out" of a delta ladder over collinear instruments into a
   // localized key-rate hedge. Because R annihilates constant+linear forward moves (regularize.hpp), the
   // TOTAL (parallel) DV01 is preserved exactly — only the ladder's SHAPE is stabilised. Default {} = raw M.
@@ -441,7 +441,7 @@ class BundleSession {
   // ---- the cached warm engine (fingerprint-keyed W-cache reuse) ----------------------------------
   // The hybrid residual engine is compiled ONCE per problem STRUCTURE and reused across every solve:
   // recalibrate()/rebind() overwrite only the quote RHS (engine_->set_quotes) and re-solve warm on the
-  // same engine -- no W rebuild, no batch re-registration, no MtM re-guard. The tension pseudo-residual
+  // same engine -- no W rebuild, no batch re-registration, no MtM re-guard. The curvature pseudo-residual
   // block R is likewise structure-only (given fixed reg params), so it is cached keyed on (lambda, sigma,
   // curves) and recomputed only when those change. invalidate_engine() drops the engine, R, the book's
   // compiled twin AND the streamer (it borrows the engine) whenever prob_ mutates STRUCTURALLY -- today
@@ -462,7 +462,7 @@ class BundleSession {
     if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);
     return *engine_;
   }
-  const Eigen::MatrixXd& ensure_reg_R(const RegSpec& reg) const;  // cached tension block (structure-only)
+  const Eigen::MatrixXd& ensure_reg_R(const RegSpec& reg) const;  // cached curvature block R (structure-only)
 
   cal::BundleProblem prob_;
   std::uint64_t fingerprint_ = 0;  // structure hash at compile time (the warm-vs-recompile switch)
@@ -486,7 +486,7 @@ class BundleSession {
   bool stream_armed_ = false;
   bool bands_changed_ = false;  // a set_band/rebind changed a band since the streamer last anchored
   Eigen::VectorXd q_scratch_;   // the live market gathered from prob_ (reused; no per-solve allocation)
-  // The cached hybrid engine + tension-block cache (see ensure_engine/ensure_reg_R above).
+  // The cached hybrid engine + R-block cache (see ensure_engine/ensure_reg_R above).
   std::uint64_t stamp_ = 0;  // E8: the structural stamp of the compiled document (resolution-insensitive)
   // The quote-RHS half of a rebind (targets + bands + resolve), shared by both rebind overloads once the
   // caller's structural check -- O(n) equality or the stamp -- has passed.
@@ -494,8 +494,7 @@ class BundleSession {
   mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
   mutable Eigen::MatrixXd reg_R_;
   mutable bool reg_R_valid_ = false;
-  mutable Eigen::MatrixXd reg_second_diff_;  // risk_operator's legacy second-difference block (uncached, rare)
-  mutable double reg_R_lambda_ = 0, reg_R_sigma_ = 0;
+  mutable double reg_R_lambda_ = 0;
   mutable std::vector<int> reg_R_curves_;
   swaps::pricing::FixingTable fixings_;
   int eval_date_ = 0;
@@ -572,9 +571,7 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json);
 // One-shot stateless JSON dispatcher for a web call. Request:
 //   { "bundle": {...},                         (required) the BundleProblem object graph
 //     "x0": [...],                             (optional) start; else a flat guess
-//     "regularize": {"lambda":1.0,"curves":[3,4],   (optional) smoothness penalty on those curves;
-//                     "tension":true,"sigma":0.0},   add tension:true for the continuous tension energy
-//                                                     (sigma=0 curvature, sigma>0 taut) vs 2nd-difference
+//     "regularize": {"lambda":1.0,"curves":[3,4]},  (optional) curvature penalty on those curves
 //     "sample_times": [...],                   (optional) grid to sample every curve on
 //     "price": [ {instrument}, ... ],          (optional) instruments to price off the solved curves
 //     "risk": true }                           (optional) include the dx/dq operator

@@ -19,11 +19,9 @@ const rb::MultiCcyBundle& fx() {
   static const rb::MultiCcyBundle b = rb::build_xccy_bundle();
   return b;
 }
-api::RegSpec tension_reg(const rb::MultiCcyBundle& b) {
-  api::RegSpec r;                       // the web/SDK default smoothing shape
+api::RegSpec tension_reg(const rb::MultiCcyBundle& b) {  // (name kept: the bench's regularised variant)
+  api::RegSpec r;                       // the web/SDK default smoothing shape: the curvature penalty
   r.lambda = 1e-3;
-  r.tension = true;
-  r.sigma = 0.5;
   for (int c = 0; c < b.n_curves(); ++c) r.curves.push_back(c);
   return r;
 }

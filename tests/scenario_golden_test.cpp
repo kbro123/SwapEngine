@@ -365,7 +365,7 @@ TEST(ScenarioGolden, VarRevalSeededAndSmoothedResponseIsBitwise) {
   req["x0"] = std::move(x0);
   json::array reg_curves;
   for (int c = 0; c < p.n_curves(); ++c) reg_curves.push_back(c);
-  req["regularize"] = json::object{{"lambda", 1e-4}, {"tension", true}, {"curves", reg_curves}};  // on(): lambda AND curves
+  req["regularize"] = json::object{{"lambda", 1e-4}, {"curves", reg_curves}};  // on(): lambda AND curves
   req["scenarios"] = json::array{
       json::object{{"parallel_bp", 37.5}},
       json::object{{"parallel_bp", 34.0}, {"shift_curve", json::object{{"1", -31.75}}}},

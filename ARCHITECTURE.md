@@ -211,7 +211,7 @@ unchanged.
   consistent `jacobian_vs(x, q)`; at the soft minimum `dx = J⁺·r → 0` even though `r ≠ 0`. A band-edge
   crossing is handled by re-scaling that frozen row and re-factorising `M` (no Jacobian recompute,
   `StreamTick::rescales`); a drift-triggered refresh bounds the second-order error on non-square problems.
-  Banded bundles are floored to light tension smoothing by both compilers (`has_bands`): the band slack
+  Banded bundles are floored to light smoothing by both compilers (`has_bands`): the band slack
   otherwise leaves the forwards free along the direction the quotes barely see. The compiled band
   Jacobian is pinned against AAD, streaming-==-recalibrate is pinned, and streamed-==-cold-LS through
   edge crossings is pinned (`tests/streaming_band_test.cpp`), in
@@ -231,9 +231,11 @@ unchanged.
 2. **Compile** — `residual_engine_t<BundleProblem>` = `CompiledBundleResidual`: `CompiledCurveSet` builds
    the block `W_all`; instruments register into columnar batches (`BundleFloatBatch`/`BundleFixedLegs`).
 3. **Solve** — `calibrate()` runs Levenberg–Marquardt: `residuals(x)` = `exp(-W·x)` + per-quote transforms,
-   `jacobian(x)` analytic. Under-determined bundles add a Tikhonov smoothness penalty — the discrete
-   `second_difference_operator` (curvature) or the continuous `tension_energy_operator` (∫(f″)²+σ²∫(f′)²) —
-   as a constant pseudo-residual block composed onto the engine (`RegularizedEngine`), off the AAD path.
+   `jacobian(x)` analytic. Under-determined bundles add a Tikhonov smoothness penalty — `second_difference_operator`,
+   the divided-difference curvature row (zero on a line in time; no row on a Flat knot) — as a constant pseudo-residual
+   block composed onto the engine (`RegularizedEngine`), off the AAD path. (The continuous `tension_energy_operator`
+   was retired on 2026-09-22: indistinguishable from it at equal weight, at the cost of shape-function quadrature,
+   a second preset column and a UI knob.)
 4. **Stream** — `start_streaming()` anchors a `StreamingCalibrator`; each `update(q)` re-solves to the exact
    curve via frozen-Newton (µs). Hard, banded, portfolio AND mixed FX/MtM bundles all take this path (FX/MtM
    on the hybrid engine, its AAD Jacobian refreshed only on staleness); only a MonotoneCubic scheme — which

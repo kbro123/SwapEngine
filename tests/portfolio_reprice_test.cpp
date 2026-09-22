@@ -582,7 +582,7 @@ TEST(PortfolioRisk, RegularizedLadderPreservesParallelPnLAndDampsShape) {
 
   api::RegSpec reg;
   reg.lambda = 1e-3;
-  reg.tension = false;  // discrete second-difference curvature penalty (the classic key-rate stabiliser)
+  // the curvature penalty (the classic key-rate stabiliser)
   for (int c = 0; c < prob.n_curves(); ++c) reg.curves.push_back(c);
 
   const api::PortfolioRisk r0 = sess.price_portfolio_risk(book);        // raw M

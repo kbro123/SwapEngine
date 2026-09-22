@@ -212,7 +212,7 @@ TEST(StreamingWalkGuard, ARegularisedTickIsAllocationFree) {
     std::vector<int> curves(s.prob.curves.size());
     for (std::size_t c = 0; c < curves.size(); ++c) curves[c] = static_cast<int>(c);
     SC::Options o = pinned();
-    o.regularizer = cal::tension_energy_operator(s.prob, 0.02, 1.0, curves);
+    o.regularizer = cal::second_difference_operator(s.prob, 0.02, curves);
     ASSERT_GT(o.regularizer.rows(), 0) << "premise: a non-empty regulariser";
     const Eigen::VectorXd x = cal::calibrate(s.prob, s.x0).x;
     cal::HybridBundleResidual eng(s.prob);

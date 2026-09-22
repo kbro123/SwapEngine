@@ -304,18 +304,16 @@ TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
   const cal::BundleProblem p = build_bundle(x_true);
   const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(p.n_knots(), 0.02);
 
-  // (1) Tension reg: composed compiled engine vs the old AAD wrapper, same seed, same reg.
+  // (1) Curvature reg: composed compiled engine vs the AAD engine composed with the same R, same seed, same reg.
   api::RegSpec reg;
   reg.lambda = 1e-3;
-  reg.tension = true;
-  reg.sigma = 0.5;
   reg.curves = {0, 1};
   api::BundleSession sess(p);
   sess.calibrate(x0, reg);
   // The reference path: the GENERIC AAD engine composed with the same constant R block (E6.1c: the
   // LinearRegularizedProblem wrapper this used to compare against was deleted -- one penalty definition).
   const cal::AadResidualEngine<cal::BundleProblem> aad(p);
-  const Eigen::MatrixXd R_ref = cal::tension_energy_operator(p, reg.lambda, reg.sigma, reg.curves);
+  const Eigen::MatrixXd R_ref = cal::second_difference_operator(p, reg.lambda, reg.curves);
   const cal::RegularizedEngine<cal::AadResidualEngine<cal::BundleProblem>> composed_ref(aad, R_ref);
   const auto old_path = cal::calibrate_with(composed_ref, p.n_knots(), composed_ref.n_residuals(), x0);
   EXPECT_LT((sess.x() - old_path.x).cwiseAbs().maxCoeff(), 1e-9)

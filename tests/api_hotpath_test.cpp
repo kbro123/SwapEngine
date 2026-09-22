@@ -44,7 +44,7 @@ struct Chain {
   static constexpr int NC = 4, NK = 26;
   cal::BundleProblem prob;
   Eigen::VectorXd x0;
-  api::RegSpec tension;
+  api::RegSpec reg;      // the SDK/web default: curvature smoothing over every curve
   pf::MultiCurveBook book;
   Chain() {
     std::vector<double> meeting{0.25}, back;
@@ -67,8 +67,8 @@ struct Chain {
     for (int i = 0; i < int(prob.instruments.size()); ++i) prob.instruments[i].market += r0[i];
     x0.resize(NC * NK);
     for (int c = 0; c < NC; ++c) for (int i = 0; i < NK; ++i) x0[c * NK + i] = (c == 0) ? 0.040 : 0.0020;
-    tension.lambda = 1e-3; tension.tension = true; tension.sigma = 0.5;
-    for (int c = 0; c < NC; ++c) tension.curves.push_back(c);
+    reg.lambda = 1e-3;
+    for (int c = 0; c < NC; ++c) reg.curves.push_back(c);
     for (int i = 0; i < 40; ++i) {
       const double T = 1.0 + (i % 30); Legs L = annual(T);
       pf::MultiCurveBook::Position p;
@@ -114,24 +114,24 @@ TEST(ApiHotPath, OneShotPv01IsTheGradientAlongTheParallelDirectionFromOneNarrowP
   if (swaps::testing::alloc_counting_available()) EXPECT_LE(allocs, 200u) << "the one-shot grew a heap-Dual pass back";
 }
 
-TEST(ApiHotPath, RiskOperatorTakesTheTensionBlockFromTheSessionCache) {
+TEST(ApiHotPath, RiskOperatorTakesTheRBlockFromTheSessionCache) {
   const Chain f;
   api::BundleSession s(f.prob);
-  s.calibrate(f.x0, f.tension);
+  s.calibrate(f.x0, f.reg);
   ASSERT_TRUE(s.result().converged) << s.result().status;
-  const Eigen::MatrixXd M1 = s.risk_operator(f.tension);  // warm: J cached, R cached
+  const Eigen::MatrixXd M1 = s.risk_operator(f.reg);  // warm: J cached, R cached
   unsigned long allocs = 0;
   Eigen::MatrixXd M2;
   {
     swaps::testing::AllocScope scope;
-    M2 = s.risk_operator(f.tension);
+    M2 = s.risk_operator(f.reg);
     allocs = scope.allocs();
   }
-  std::cout << "  [hotpath] risk_operator (tension, warm): " << allocs << " allocs\n";
+  std::cout << "  [hotpath] risk_operator (regularised, warm): " << allocs << " allocs\n";
   EXPECT_EQ((M1 - M2).cwiseAbs().maxCoeff(), 0.0) << "same inputs, same operator";
-  // Explicit formula off the same J and a freshly built tension block: the cached block is the same block.
-  const Eigen::MatrixXd J = s.jacobian(f.tension);
-  const Eigen::MatrixXd R = cal::tension_energy_operator(f.prob, f.tension.lambda, f.tension.sigma, f.tension.curves);
+  // Explicit formula off the same J and a freshly built R block: the cached block is the same block.
+  const Eigen::MatrixXd J = s.jacobian(f.reg);
+  const Eigen::MatrixXd R = cal::second_difference_operator(f.prob, f.reg.lambda, f.reg.curves);
   Eigen::MatrixXd S(J.rows() + R.rows(), J.cols()); S << J, R;
   Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod; cod.setThreshold(cal::kRankThreshold); cod.compute(S);
   const Eigen::MatrixXd Mref = cod.pseudoInverse().leftCols(J.rows()) * s.residual_market_scale().asDiagonal();

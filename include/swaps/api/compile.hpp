@@ -60,7 +60,7 @@ struct CompileResult {
   bool has_bands = false;  // any instrument carries a soft bid/offer band (floors smoothing to light)
   std::string value_date, smoothness = "light", reg_op;  // reg_op empty => null
   bool has_reg_op = false;
-  double tension_sigma = 0.0;
+  double tension_sigma = 0.0;  // parsed + echoed for the document shape; non-zero is refused (compile_reg_spec)
 };
 
 // Compile a composer spec (Boost.JSON) into the resolved bundle + streaming config. `today_iso` supplies
@@ -70,12 +70,14 @@ CompileResult compile_spec(const boost::json::value& spec, const std::string& to
 
 // The smoothing the spec ASKS for, as an engine RegSpec (E3-D4, 2026-09-10; ported from server/compile.py
 // reg_spec so every host -- web, Excel C-ABI, run_json compile+sample -- calibrates the same curve).
-// Default: the discrete SECOND-DIFFERENCE operator, off / light / strong from calibration/regularize.hpp smoothing_preset (the one
-// table; 0.5 / 5.0); `reg_op == "tension"` selects the continuous tension-energy operator (0.02 / 0.2 -- nominally lighter, and
-// ~1/h³ weaker at knot spacing h, which is why it stopped being the default on 2026-09-21; `reg_op == "second_difference"` is
-// accepted and means the default). An
-// under-determined OR banded spec floors "off" to "light" (a penalty is what makes those well-posed). The
-// RegSpec spans every curve; `sigma` is the spec's tension_sigma. lambda == 0 => RegSpec::on() is false.
+// The operator is the curvature (second-difference) penalty, off / light / strong from calibration/regularize.hpp
+// smoothing_preset (the one table; 0.5 / 5.0). `reg_op` may name it ("second_difference"); any other value, and a
+// non-zero `tension_sigma`, are REFUSED (std::invalid_argument from calibration::refuse_retired_regulariser -- the check
+// lives with the regulariser, P14): the tension-energy operator was retired on 2026-09-22 and
+// a spec still asking for it should not be silently given something else. Both fields stay in CompileResult and
+// compile_to_json so the compile document's shape is unchanged. An under-determined OR banded spec floors "off" to
+// "light" (a penalty is what makes those well-posed). The RegSpec spans every curve. lambda == 0 => RegSpec::on()
+// is false.
 RegSpec compile_reg_spec(const CompileResult& r);
 
 // Serialize a CompileResult to the SAME JSON document server/compile.py's compile_spec returns.

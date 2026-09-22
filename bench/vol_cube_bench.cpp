@@ -90,7 +90,6 @@ api::VolCubeSpec cube_spec() {
 
 api::RegSpec sofr_reg() {
   api::RegSpec reg;
-  reg.tension = true;
   reg.lambda = 0.02;
   reg.curves = {0};
   return reg;

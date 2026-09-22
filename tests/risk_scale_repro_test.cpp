@@ -213,8 +213,6 @@ json::object negligible_reg(int n_curves) {
   json::array cs;
   for (int c = 0; c < n_curves; ++c) cs.push_back(c);
   r["curves"] = std::move(cs);
-  r["tension"] = true;
-  r["sigma"] = 0.0;
   return r;
 }
 

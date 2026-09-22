@@ -38,7 +38,7 @@
 #include "swaps/calibration/compiled_bundle.hpp"  // CompiledBundleResidual::model_rates (streaming anchor)
 #include <type_traits>
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
-#include "swaps/calibration/regularize.hpp"       // second_difference_operator(), tension_energy_operator()
+#include "swaps/calibration/regularize.hpp"       // second_difference_operator()
 #include "swaps/calibration/structure_fingerprint.hpp"  // structure_fingerprint (warm-vs-recompile switch)
 
 namespace swaps::api {
@@ -126,15 +126,14 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   resolve_fixings();  // resolve any schedule-carrying observations (no-op when none carry a schedule)
 }
 
-// The cached tension pseudo-residual block R (= sqrt(mu)*L, regularize.hpp §5). R depends only on the
-// bundle's STRUCTURE and the reg parameters, never on quotes or x -- so it is built once per (lambda,
-// sigma, curves) and reused across every warm re-solve. invalidate_engine() drops it with the engine.
+// The cached curvature pseudo-residual block R (second_difference_operator). R depends only on the bundle's
+// STRUCTURE and the reg parameters, never on quotes or x -- so it is built once per (lambda, curves) and reused
+// across every warm re-solve and risk_operator call (E3-D6: rebuilding it per call cost 4,449 allocations).
+// invalidate_engine() drops it with the engine.
 const Eigen::MatrixXd& BundleSession::ensure_reg_R(const RegSpec& reg) const {
-  if (!reg_R_valid_ || reg_R_lambda_ != reg.lambda || reg_R_sigma_ != reg.sigma ||
-      reg_R_curves_ != reg.curves) {
-    reg_R_ = cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves);
+  if (!reg_R_valid_ || reg_R_lambda_ != reg.lambda || reg_R_curves_ != reg.curves) {
+    reg_R_ = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
     reg_R_lambda_ = reg.lambda;
-    reg_R_sigma_ = reg.sigma;
     reg_R_curves_ = reg.curves;
     reg_R_valid_ = true;
   }
@@ -143,32 +142,20 @@ const Eigen::MatrixXd& BundleSession::ensure_reg_R(const RegSpec& reg) const {
 
 const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
   const auto t0 = std::chrono::steady_clock::now();
-  if (reg.on() && !reg.tension) {
-    // Second-difference smoothing (E6.1c, 2026-09-10): the SAME engine composition as the tension path
-    // below, with the discrete curvature operator as the constant R block -- the SmoothedProblem wrapper that
-    // paid an AAD sweep per LM iteration for this constant block is gone. THE SHIPPED DEFAULT since 2026-09-21
-    // (tension was, 2026-09-13 .. 2026-09-21; see regularize.hpp smoothing_preset).
-    const cal::HybridBundleResidual& eng = ensure_engine();
-    const Eigen::MatrixXd R = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+  // EVERY path drives the ONE cached hybrid engine (compiled W-cache rows + width-reduced AAD rows; for a
+  // non-linear scheme the hybrid routes every row to the AAD block, so it subsumes the old pre-E4.A AAD-only
+  // escape hatch). The engine is built once per structure and reused across warm re-solves -- construction
+  // (W build, batch registration, MtM guard) is no longer paid per calibrate call.
+  const cal::HybridBundleResidual& eng = ensure_engine();
+  if (reg.on()) {
+    // The curvature penalty as an ENGINE composition (E6.1c, 2026-09-10): instrument rows keep the compiled /
+    // analytic residual + Jacobian, the constant R block costs a GEMV -- the regularised solve rides the
+    // W-cache instead of a per-iteration AAD sweep over a wrapper problem (the SmoothedProblem wrapper is gone).
+    const Eigen::MatrixXd& R = ensure_reg_R(reg);
     const cal::RegularizedEngine<cal::HybridBundleResidual> composed(eng, R);
     result_ = cal::calibrate_with(composed, prob_.n_knots(), prob_.n_residuals() + static_cast<int>(R.rows()), x0);
   } else {
-    // EVERY other path drives the ONE cached hybrid engine (compiled W-cache rows + width-reduced AAD
-    // rows; for a non-linear scheme the hybrid routes every row to the AAD block, so it subsumes the old
-    // pre-E4.A AAD-only escape hatch). The engine is built once per structure and reused across warm re-solves
-    // -- construction (W build, batch registration, MtM guard) is no longer paid per calibrate call.
-    const cal::HybridBundleResidual& eng = ensure_engine();
-    if (reg.on() && reg.tension) {
-      // Tension-energy penalty as an ENGINE composition: instrument rows keep the compiled/analytic
-      // residual + Jacobian, the constant R block costs a GEMV -- the regularised solve now rides the
-      // W-cache instead of falling to a per-iteration AAD sweep over the wrapper problem.
-      const Eigen::MatrixXd& R = ensure_reg_R(reg);
-      const cal::RegularizedEngine<cal::HybridBundleResidual> composed(eng, R);
-      result_ = cal::calibrate_with(composed, prob_.n_knots(),
-                                    prob_.n_residuals() + static_cast<int>(R.rows()), x0);
-    } else {
-      result_ = cal::calibrate_with(eng, prob_.n_knots(), prob_.n_residuals(), x0);
-    }
+    result_ = cal::calibrate_with(eng, prob_.n_knots(), prob_.n_residuals(), x0);
   }
   last_solve_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
   result_.solve_micros = last_solve_us_;
@@ -263,7 +250,7 @@ const cal::CalibrationResult& BundleSession::rebind_quotes(const cal::BundleProb
 
 namespace {
 bool same_reg(const RegSpec& a, const RegSpec& b) {
-  return a.lambda == b.lambda && a.sigma == b.sigma && a.tension == b.tension && a.curves == b.curves;
+  return a.lambda == b.lambda && a.curves == b.curves;
 }
 }  // namespace
 
@@ -361,10 +348,9 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   // Stack the regulariser rows under J: the IFT on min ||r||² + ||Rx||² reads [J; R]ᵀ[J; R] dx = Jᵀ D dq.
   Eigen::MatrixXd S = J;
   if (reg.on()) {
-    // The tension block comes from the session cache (ensure_reg_R: structure-only, built once per reg) --
+    // The R block comes from the session cache (ensure_reg_R: structure-only, built once per reg) --
     // E3-D6: rebuilding it here cost 4,449 allocations per risk_operator call.
-    const Eigen::MatrixXd& R = reg.tension ? ensure_reg_R(reg)
-                                           : (reg_second_diff_ = cal::second_difference_operator(prob_, reg.lambda, reg.curves));
+    const Eigen::MatrixXd& R = ensure_reg_R(reg);
     S.resize(m + R.rows(), n);
     S << J, R;
   }
@@ -503,7 +489,7 @@ PortfolioRisk BundleSession::price_portfolio_risk(const pf::MultiCurveBook& book
 
   // The risk operator M = dx/dq (n_knots x n_res). Its FORMATION (the calibration-Jacobian solve) is book-
   // INDEPENDENT, so it sits OUTSIDE the engine clock, mirroring how price_portfolio times only the book pass.
-  // `reg` regularises M: a curvature/tension penalty damps the ladder's fan-out into a local key-rate hedge
+  // `reg` regularises M: a curvature penalty damps the ladder's fan-out into a local key-rate hedge
   // while preserving total DV01 (R annihilates level+linear moves). Default reg={} -> the raw operator.
   const Eigen::MatrixXd M = risk_operator(reg);
 
@@ -592,10 +578,7 @@ void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
   // so anchoring at the mids keeps the drift ~0 at the first real tick.
   const Eigen::VectorXd q0 = prob_.market();
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
-  if (reg.on())
-    opt.regularizer = reg.tension
-                          ? cal::tension_energy_operator(prob_, reg.lambda, reg.sigma, reg.curves)
-                          : cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+  if (reg.on()) opt.regularizer = ensure_reg_R(reg);
   if (step_tol > 0.0) opt.step_tol = step_tol;  // looser tol -> fewer corrector steps (speed/accuracy knob)
   // The streamer BORROWS the session's one compiled engine (the object model): a scalar set_quotes on the
   // session is what it prices next tick. It is dropped with the engine (invalidate_engine) and rebuilt
@@ -709,8 +692,6 @@ std::string run_json(const json::object& o) {
           json::object r;
           r["lambda"] = reg.lambda;
           r["curves"] = json::array(reg.curves.begin(), reg.curves.end());
-          r["tension"] = reg.tension;
-          r["sigma"] = reg.sigma;
           req2["regularize"] = std::move(r);
         }
       }
@@ -786,7 +767,6 @@ std::string run_json(const json::object& o) {
       c["status"] = res.status;        // the LM stopping reason, in words
       c["regularize_applied"] = reg.on();  // which smoothing this calibration ran under (E3-D4)
       c["regularize_lambda"] = reg.lambda;
-      c["regularize_tension"] = reg.tension;
       c["rank_deficiency"] = res.rank_deficiency;  // >0: the instrument set under-determines the curve
       out["calibration"] = c;
     }

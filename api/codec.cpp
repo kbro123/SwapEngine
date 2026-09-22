@@ -262,7 +262,8 @@ cal::BundleCurveSpec spec_from(const json::object& o) {
       into(ro, "knots", m.knots);
       into(ro, "sigma", m.sigma);            // tension hyperparameter (Scheme::Tension only); else ignored
       into(ro, "reg_lambda", m.reg_lambda);  // per-region smoothing weight (Phase 1); <0 = inherit
-      into(ro, "reg_sigma", m.reg_sigma);    // per-region tension-energy σ (Phase 2); <0 = inherit
+      if (ro.contains("reg_sigma") && ro.at("reg_sigma").to_number<double>() >= 0.0)
+        throw std::invalid_argument("region 'reg_sigma': the tension-energy regulariser (and its per-region sigma) was retired on 2026-09-22; use reg_lambda");
       s.regions.push_back(std::move(m));
     }
   // Calibration TURNS (docs/turns-calibration.md, Mode 2): an OPTIONAL array of overlay windows. Absent
@@ -399,7 +400,6 @@ json::object spec_to(const cal::BundleCurveSpec& s) {
     mo["knots"] = vecf(m.knots);
     if (m.scheme == curve::Scheme::Tension) mo["sigma"] = m.sigma;
     if (m.reg_lambda >= 0.0) mo["reg_lambda"] = m.reg_lambda;  // emit only when set (default stays byte-identical)
-    if (m.reg_sigma >= 0.0) mo["reg_sigma"] = m.reg_sigma;
     rs.push_back(std::move(mo));
   }
   o["regions"] = std::move(rs);
@@ -949,12 +949,18 @@ RegSpec reg_from_json(const json::object& request) {
   RegSpec reg;
   if (!request.contains("regularize") || request.at("regularize").is_null()) return reg;
   if (!request.at("regularize").is_object())
-    throw std::invalid_argument("'regularize' must be an object {lambda, curves, tension, sigma}");
+    throw std::invalid_argument("'regularize' must be an object {lambda, curves}");
   const auto& r = request.at("regularize").as_object();
   into(r, "lambda", reg.lambda);
   into(r, "curves", reg.curves);
-  into(r, "tension", reg.tension);  // continuous tension energy vs discrete second-difference
-  into(r, "sigma", reg.sigma);      // tension parameter (tension=true); 0 => pure curvature
+  // The tension-energy operator was retired on 2026-09-22 (regularize.hpp RegSpec). A request that still asks for it is
+  // refused rather than silently given the curvature penalty; the no-op spellings (tension:false, sigma:0) are accepted.
+  bool tension = false;
+  double sigma = 0.0;
+  into(r, "tension", tension);
+  into(r, "sigma", sigma);
+  if (tension || sigma != 0.0)
+    throw std::invalid_argument("'regularize': the tension-energy operator ('tension':true / 'sigma') was retired on 2026-09-22; the penalty is the curvature (second-difference) operator: {lambda, curves}");
   return reg;
 }
 

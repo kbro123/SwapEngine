@@ -101,7 +101,6 @@ extern "C" const char* swaps_session_calibrate(void* session) {
     json::object o;
     o["regularize_applied"] = cs->reg.on();
     o["regularize_lambda"] = cs->reg.lambda;
-    o["regularize_tension"] = cs->reg.tension;
     o["rms_residual"] = r.rms_residual;
     o["converged"] = r.converged;
     o["status"] = r.status;

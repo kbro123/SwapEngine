@@ -517,12 +517,14 @@ robustness. What the first walk found, so nobody re-derives it:
   spacing-blind stencil λ(fᵢ₋₁ − 2fᵢ + fᵢ₊₁) is not zero on a straight line over non-uniform pillars and pulled a square
   bundle's exact solution off the line (which is why tension had been made the default); it is now the divided second
   difference with its trapezoid weight (ASSUMPTIONS.md D18), zero on any line in time, RᵀR = the discrete bending
-  energy. The TENSION presets are ~1/h³ weaker at knot spacing h (≈1/125 at 5y): Light tension, the default from
-  2026-09-13 to 2026-09-21, left desk_mixed at 22 failed ticks / 400 -- still available as `reg_op: "tension"`, pinned on record.
-- **The tension operator was undefined on a value-dependent region** (shape functions from unit knot vectors, which the
-  filter clamps): at Strong it drove desk_mixed INTO a 149 bp zigzag. Such a region now contributes a discrete tension
-  energy (ASSUMPTIONS.md D17). Also from the same soak: a converged `stream_update` left `result()` at the previous LM
-  solve (fixed 2026-09-21, `b806cce`).
+  energy. The TENSION-ENERGY operator that sat beside it (the default 2026-09-13..21; its presets ~1/h³ weaker at knot
+  spacing h, so Light tension left desk_mixed at 22 failed ticks / 400) was RETIRED on 2026-09-22: at equal weight the
+  two were indistinguishable on the soak (0 / 0 failed ticks, 34.8 vs 34.9 µs), and it cost ~200 lines of shape-function
+  quadrature, a preset column, a value-dependent fallback (it evaluated clamped unit-vector shape functions on a
+  MonotoneCubic region and at Strong drove desk_mixed INTO a 149 bp zigzag) and a UI σ control. `RegSpec` is
+  `{lambda, curves}`; a request for `tension`/`sigma`/`reg_op:"tension"` is REFUSED, not silently mapped. The Tension
+  interpolation SCHEME is unrelated and stays. Also from the same soak: a converged `stream_update` left `result()` at
+  the previous LM solve (fixed 2026-09-21, `b806cce`).
 
 ### Retired (E6.1, 2026-09-10): the pricing-branch and thread-pool machinery
 `LiveCurveFeed` (seqlock curve publish), `ParallelPortfolio` (sliced book reprice), `ThreadPool` and the

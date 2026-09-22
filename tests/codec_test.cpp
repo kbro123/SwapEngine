@@ -222,7 +222,6 @@ TEST(Codec, AnAbsentCurveOrRegFieldTakesTheStructsOwnDefault) {
   EXPECT_EQ(p.curves[0].regions[0].scheme, dm.scheme);  // the struct now HAS a default (it was indeterminate)
   EXPECT_EQ(p.curves[0].regions[0].sigma, dm.sigma);
   EXPECT_EQ(p.curves[0].regions[0].reg_lambda, dm.reg_lambda);
-  EXPECT_EQ(p.curves[0].regions[0].reg_sigma, dm.reg_sigma);
   ASSERT_EQ(p.curves[0].turns.size(), 1u);
   EXPECT_EQ(p.curves[0].turns[0].start, px::Turn{}.start);
   EXPECT_EQ(p.curves[0].turns[0].end, px::Turn{}.end);
@@ -232,8 +231,6 @@ TEST(Codec, AnAbsentCurveOrRegFieldTakesTheStructsOwnDefault) {
     const api::RegSpec r = api::reg_from_json(json::parse(doc).as_object());
     EXPECT_EQ(r.lambda, dr.lambda) << doc;
     EXPECT_EQ(r.curves, dr.curves) << doc;
-    EXPECT_EQ(r.tension, dr.tension) << doc;
-    EXPECT_EQ(r.sigma, dr.sigma) << doc;
   }
 }
 
@@ -273,7 +270,6 @@ TEST(Codec, APresentFieldIsCarriedExactly) {
     m.scheme = s;
     m.knots = {t, t + 0.5, t + 1.0};
     m.reg_lambda = 0.1;
-    m.reg_sigma = 0.2;
     if (s == crv::Scheme::Tension) m.sigma = 1.5;
     outright.regions.push_back(m);
     t += 2.0;
@@ -314,11 +310,13 @@ TEST(Codec, APresentFieldIsCarriedExactly) {
   EXPECT_EQ(q.mtm_coupons[0].pay, 0.25);
 
   const api::RegSpec r = api::reg_from_json(
-      json::parse(R"({"regularize": {"lambda": 0.02, "curves": [0, 2], "tension": true, "sigma": 0.7}})").as_object());
+      json::parse(R"({"regularize": {"lambda": 0.02, "curves": [0, 2], "tension": false, "sigma": 0.0}})").as_object());
   EXPECT_EQ(r.lambda, 0.02);
   EXPECT_EQ(r.curves, (std::vector<int>{0, 2}));
-  EXPECT_TRUE(r.tension);
-  EXPECT_EQ(r.sigma, 0.7);
+  // The tension-energy operator was retired on 2026-09-22: its no-op spellings are accepted, a request for it is REFUSED
+  // (never silently given the curvature penalty), and a region's per-region regulariser sigma is refused the same way.
+  EXPECT_THROW(api::reg_from_json(json::parse(R"({"regularize": {"lambda": 0.02, "curves": [0], "tension": true}})").as_object()), std::invalid_argument);
+  EXPECT_THROW(api::reg_from_json(json::parse(R"({"regularize": {"lambda": 0.02, "curves": [0], "sigma": 0.7}})").as_object()), std::invalid_argument);
 }
 
 // The six verbs that decoded "regularize" by hand disagreed on exactly these inputs until 2026-09-13: five

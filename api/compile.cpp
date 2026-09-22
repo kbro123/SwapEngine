@@ -803,14 +803,14 @@ std::string compile_json(const std::string& spec_json, const std::string& today_
 
 RegSpec compile_reg_spec(const CompileResult& r) {
   // The spec names a strength; the ONE table (calibration/regularize.hpp smoothing_preset) owns its value.
-  const bool tension = r.has_reg_op && r.reg_op == "tension";  // default: second difference (2026-09-21; was tension)
+  cal::refuse_retired_regulariser(r.has_reg_op, r.reg_op, r.tension_sigma);  // regularize.hpp: refused, never silently remapped
   cal::Smoothing level = r.smoothness == "off" ? cal::Smoothing::Off
                          : r.smoothness == "strong" ? cal::Smoothing::Strong
                                                     : cal::Smoothing::Light;
   if (level == cal::Smoothing::Off && (r.under_determined || r.has_bands)) level = cal::Smoothing::Light;
   const int n_curves = r.curve_names.empty() ? static_cast<int>(r.bundle.curves.size())
                                              : static_cast<int>(r.curve_names.size());
-  return cal::smoothing_preset(level, n_curves, tension, r.tension_sigma);
+  return cal::smoothing_preset(level, n_curves);
 }
 
 }  // namespace swaps::api

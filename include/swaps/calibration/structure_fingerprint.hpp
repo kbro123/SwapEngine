@@ -177,7 +177,7 @@ inline bool curve_equal(const BundleCurveSpec& a, const BundleCurveSpec& b) {
   for (std::size_t i = 0; i < a.regions.size(); ++i) {
     const auto &r = a.regions[i], &t = b.regions[i];
     if (r.scheme != t.scheme || r.knots != t.knots || r.sigma != t.sigma) return false;
-    if (r.reg_lambda != t.reg_lambda || r.reg_sigma != t.reg_sigma) return false;
+    if (r.reg_lambda != t.reg_lambda) return false;
   }
   if (a.turns.size() != b.turns.size()) return false;
   for (std::size_t i = 0; i < a.turns.size(); ++i)
@@ -222,7 +222,6 @@ inline std::uint64_t structure_fingerprint(const BundleProblem& p) {
       H.i(static_cast<long long>(m.scheme));
       H.d(m.sigma);
       H.d(m.reg_lambda);
-      H.d(m.reg_sigma);
       H.vd(m.knots);
     }
     H.i(static_cast<long long>(c.turns.size()));
@@ -353,7 +352,6 @@ inline std::uint64_t structural_stamp(const BundleProblem& p) {
       H.vd(m.knots);
       H.d(m.sigma);
       H.d(m.reg_lambda);
-      H.d(m.reg_sigma);
     }
     H.i(static_cast<long long>(c.turns.size()));
     for (const auto& t : c.turns) {

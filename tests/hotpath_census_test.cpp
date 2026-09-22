@@ -122,7 +122,7 @@ Outcome reg_desk_small() {
   std::vector<int> curves(s.prob.curves.size());
   for (std::size_t c = 0; c < curves.size(); ++c) curves[c] = static_cast<int>(c);
   SC::Options o = pinned();
-  o.regularizer = cal::tension_energy_operator(s.prob, 0.02, 1.0, curves);
+  o.regularizer = cal::second_difference_operator(s.prob, 0.02, curves);
   cal::HybridBundleResidual eng(s.prob);
   SC st(eng, s.prob, calibrated(s), s.q0, o);
   return run(st, 6, 20, [&](int k) { return st.update(k % 2 == 0 ? s.q_small : s.q0); });

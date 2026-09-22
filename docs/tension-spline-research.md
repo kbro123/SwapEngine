@@ -1,3 +1,5 @@
+> **2026-09-22: the tension-energy REGULARISER this note proposes (§5) was retired.** At equal weight it was indistinguishable from the divided-difference curvature penalty (`second_difference_operator`) on the streaming soak, and it cost ~200 lines of shape-function quadrature, a preset column, a value-dependent fallback and a UI control. The Tension interpolation SCHEME (`Scheme::Tension`, the spline under tension) is unrelated and remains. This note is kept as history.
+
 # Tension Splines — research notes
 
 **Status:** pure research, no code yet. Branch `claude/tension-spline-research-v8eyc2`.

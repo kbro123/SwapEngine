@@ -476,8 +476,6 @@ json::object generate_risk_verb(const Reference& R, const cal::BundleProblem& p)
   json::array cs;
   for (int c = 0; c < NROLES; ++c) cs.push_back(c);
   reg["curves"] = std::move(cs);
-  reg["tension"] = true;
-  reg["sigma"] = 0.0;
   json::object g;
   g["book"] = R.book;
   g["bundles"] = json::array{api::bundle_to_json(p)};

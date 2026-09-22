@@ -68,7 +68,7 @@ struct Fixture {
   cal::BundleProblem prob;
   Eigen::VectorXd x0;
   cal::BundleProblem pert;  // ~1bp-perturbed quotes (the rebind payload)
-  api::RegSpec tension;     // the SDK/web default: tension-energy smoothing over every curve
+  api::RegSpec reg;         // the SDK/web default: curvature smoothing over every curve
 
   Fixture() {
     std::vector<double> meeting{0.25}, back;
@@ -99,10 +99,8 @@ struct Fixture {
     for (int i = 0; i < static_cast<int>(pert.instruments.size()); ++i)
       pert.instruments[i].market += 1e-4 * std::sin(0.7 * i + 0.3);
 
-    tension.lambda = 1e-3;
-    tension.tension = true;
-    tension.sigma = 0.5;
-    for (int c = 0; c < NC; ++c) tension.curves.push_back(c);
+    reg.lambda = 1e-3;
+    for (int c = 0; c < NC; ++c) reg.curves.push_back(c);
   }
 };
 
@@ -146,20 +144,20 @@ static void BM_Session_RebindWarm(benchmark::State& state) {
 }
 BENCHMARK(BM_Session_RebindWarm);
 
-// The SDK/web DEFAULT path: rebind under tension-energy smoothing. Rides the cached compiled engine
+// The SDK/web DEFAULT path: rebind under curvature smoothing. Rides the cached compiled engine
 // composed with the constant R block -- previously a per-iteration AAD sweep over a wrapper problem.
-static void BM_Session_RebindTensionWarm(benchmark::State& state) {
+static void BM_Session_RebindRegWarm(benchmark::State& state) {
   const auto& f = fx();
   api::BundleSession sess(f.prob);
-  sess.calibrate(f.x0, f.tension);
+  sess.calibrate(f.x0, f.reg);
   bool flip = false;
   for (auto _ : state) {
-    sess.rebind(flip ? f.prob : f.pert, f.tension);
+    sess.rebind(flip ? f.prob : f.pert, f.reg);
     flip = !flip;
     benchmark::DoNotOptimize(sess.x().data());
   }
 }
-BENCHMARK(BM_Session_RebindTensionWarm);
+BENCHMARK(BM_Session_RebindRegWarm);
 
 // The GATED bundle-scale streaming tick: frozen-Newton stream_update against an alternating ~1bp market.
 // This is the headline "microsecond live curve" claim at desk scale -- previously unbenched, so it had no

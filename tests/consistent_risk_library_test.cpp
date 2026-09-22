@@ -176,7 +176,6 @@ TEST(ConsistentRiskLibrary, TheReLevelingCalibrationIsTheCallersRegulariserElseL
   const cal::RegSpec want = cal::smoothing_preset(cal::Smoothing::Light, 3);
   EXPECT_EQ(light.lambda, want.lambda);
   EXPECT_EQ(light.curves, want.curves);
-  EXPECT_EQ(light.tension, want.tension);
   cal::RegSpec mine;
   mine.lambda = 0.5;
   mine.curves = {1};

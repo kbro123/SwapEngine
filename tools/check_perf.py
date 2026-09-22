@@ -150,7 +150,7 @@ METRICS = {
     # --- the SHIPPED session paths at desk scale (8-curve spread chain, 26 knots/curve) ---
     "chain8x26_session_cold_build_calibrate": ("session_warm_bench",  "BM_Session_ColdBuildCalibrate",   None),
     "chain8x26_session_rebind": ("session_warm_bench",  "BM_Session_RebindWarm",           None),
-    "chain8x26_session_rebind_tension_reg": ("session_warm_bench", "BM_Session_RebindTensionWarm",   None),
+    "chain8x26_session_rebind_reg": ("session_warm_bench", "BM_Session_RebindRegWarm",   None),
     # The STAMPED requote (E8): the same rebind, structural identity proved by the stamp the bundle was built
     # with instead of an O(n) walk of every coupon. Gated separately from chain8x26_session_rebind so BOTH
     # paths stay protected -- the O(n) overload is still what an unstamped caller gets.

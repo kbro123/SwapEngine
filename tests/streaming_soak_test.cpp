@@ -32,19 +32,20 @@
 // The tension presets are much weaker than the second-difference ones on 5-year knot spacings (the energy of a second
 // difference D over spacing h is ~D^2/h^3, so the same weight buys ~1/125 of the discrete row's strength at h = 5).
 //
-// So the gate pins three things per rung:
-//   SMOOTHED (the API's Light preset, i.e. second-difference over every curve -- the owner made it the default operator on
-//     2026-09-21 on these numbers) -- the recipe that streams EVERY rung: ZERO failed ticks on the realistic walk. The invariant.
-//   LIGHT TENSION (the opt-in operator, the default until 2026-09-21) -- its measured counts on the factor walk, so the
-//     tension operator's cost on a value-dependent region is on record and may only DECREASE.
+// So the gate pins two things per rung:
+//   SMOOTHED (the API's Light preset: the curvature penalty over every curve) -- the recipe that streams EVERY rung: ZERO
+//     failed ticks on the realistic walk. The invariant.
 //   UNSMOOTHED -- the stress case, its measured counts, may only decrease.
+// (A LIGHT TENSION row was pinned here from 2026-09-21 until the tension-energy operator was retired on 2026-09-22: at
+// equal weight it was indistinguishable from the curvature penalty -- 0 / 0 failed ticks and 34.8 vs 34.9 us on
+// desk_mixed's factor walk -- so it was removed as a feature. Its numbers above are the historical record.)
 // Plus, on every row: ACCURACY of the delivered curve in QUOTE space (CLAUDE.md 3b: never knot-space distance on a
 // weakly-identified bundle) -- its model quotes against those of a cold solve of the SAME objective (targets, bands,
 // regulariser) refined FROM it, every `check_every` ticks (null: a square rung's converged tick is exact, ~1e-12); and,
 // informational, the largest second difference of the first curve's knot forwards (the zigzag amplitude).
 //
 // SWAPS_SOAK_TICKS (default 400) lengthens the walks for a local soak (pins are per-400-tick counts scaled to the run);
-// SWAPS_SOAK_REG=second|tension and SWAPS_SOAK_LAMBDA override the smoothed rows' recipe for local experiments only.
+// SWAPS_SOAK_LAMBDA overrides the smoothed rows' weight for local experiments only.
 #include <gtest/gtest.h>
 
 #include <Eigen/Core>
@@ -81,11 +82,10 @@ long soak_ticks() {
   return 400;
 }
 
-enum class Recipe { Smoothed, LightTension, Unsmoothed };
+enum class Recipe { Smoothed, Unsmoothed };
 const char* to_string(Recipe r) {
   switch (r) {
     case Recipe::Smoothed: return "SMOOTHED (the API's Light preset: second-difference over every curve)";
-    case Recipe::LightTension: return "LIGHT TENSION (opt-in operator; the default until 2026-09-21)";
     case Recipe::Unsmoothed: return "UNSMOOTHED (the stress case)";
   }
   return "";
@@ -95,15 +95,9 @@ cal::RegSpec reg_for(Recipe r, const Shape& s) {
   const int nc = static_cast<int>(s.prob.curves.size());
   switch (r) {
     case Recipe::Unsmoothed: return cal::RegSpec{};
-    case Recipe::LightTension: return cal::smoothing_preset(cal::Smoothing::Light, nc, /*tension=*/true);
     case Recipe::Smoothed: {
       cal::RegSpec reg = cal::smoothing_preset(cal::Smoothing::Light, nc);  // THE shipped default
-      if (const char* e = std::getenv("SWAPS_SOAK_REG")) {  // local experiments only
-        reg.tension = std::string(e) != "second";
-        reg.lambda = cal::smoothing_lambda(cal::Smoothing::Light, reg.tension);
-        reg.sigma = 0.0;
-      }
-      if (const char* e = std::getenv("SWAPS_SOAK_LAMBDA")) reg.lambda = std::atof(e);
+      if (const char* e = std::getenv("SWAPS_SOAK_LAMBDA")) reg.lambda = std::atof(e);  // local experiments only
       return reg;
     }
   }
@@ -179,13 +173,13 @@ Outcome soak(const Shape& s, WalkKind kind, const cal::RegSpec& reg, long n, uns
 // gave 0). The LIGHT TENSION and UNSMOOTHED rows carry the value-dependent rungs' measured counts on the factor walk
 // (tension: mixed_scheme 82, desk_mixed 22; unsmoothed: 49, 85) plus ~25 % slack. Every pin may only DECREASE: lower one
 // when you fix the cause, never raise one.
-struct Pin { const char* name; long smoothed_per_row, tension_factor, unsmoothed_factor; };
-const Pin kPins[] = {{"mixed_scheme", 0, 103, 62}, {"desk_mixed", 1, 28, 108}};
+struct Pin { const char* name; long smoothed_per_row, unsmoothed_factor; };
+const Pin kPins[] = {{"mixed_scheme", 0, 62}, {"desk_mixed", 1, 108}};
 long pin_for(const std::string& name, Recipe r, WalkKind kind, long n) {
   if (r == Recipe::Smoothed && kind == WalkKind::Factor) return 0;
   for (const Pin& p : kPins)
     if (name == p.name) {
-      const long per400 = r == Recipe::Smoothed ? p.smoothed_per_row : r == Recipe::LightTension ? p.tension_factor : p.unsmoothed_factor;
+      const long per400 = r == Recipe::Smoothed ? p.smoothed_per_row : p.unsmoothed_factor;
       return (per400 * n + 399) / 400;
     }
   return 0;
@@ -221,5 +215,4 @@ void run_walk(WalkKind kind, Recipe recipe) {
 
 TEST(StreamingSoak, FactorWalkSmoothedEveryRung) { run_walk(WalkKind::Factor, Recipe::Smoothed); }
 TEST(StreamingSoak, PerRowWalkSmoothedEveryRung) { run_walk(WalkKind::PerRow, Recipe::Smoothed); }
-TEST(StreamingSoak, FactorWalkUnderLightTensionIsOnRecord) { run_walk(WalkKind::Factor, Recipe::LightTension); }
 TEST(StreamingSoak, UnsmoothedFactorWalkIsTheStressCase) { run_walk(WalkKind::Factor, Recipe::Unsmoothed); }

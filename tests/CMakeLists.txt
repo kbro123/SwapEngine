@@ -13,7 +13,7 @@ add_executable(swaps_tests
   generic_instrument_test.cpp
   portfolio_instrument_test.cpp
   fixings_test.cpp
-  tension_regularizer_test.cpp
+  smoothing_operator_test.cpp
   smoothing_preset_test.cpp
   bond_terms_test.cpp
   delivery_basket_test.cpp
@@ -189,7 +189,7 @@ if(TARGET quantlib_oracle)
     streaming_test.cpp
     compiled_residual_test.cpp
     migration_guard_test.cpp
-    tension_regularizer_oracle_test.cpp
+    smoothing_regulariser_oracle_test.cpp
   )
   target_link_libraries(swaps_consistency_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
   target_include_directories(swaps_consistency_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -41,7 +41,6 @@ struct RegionIface {
   virtual S forward_d1(double t) const = 0;           // exact df/dt (0 outside / at a Flat step)
   virtual S forward_d2(double t) const = 0;           // exact d²f/dt²
   virtual std::vector<double> pieces() const = 0;     // breakpoints between which f is ONE analytic piece
-  virtual double tension_sigma() const = 0;           // Scheme::Tension's σ (0 for every other scheme)
   virtual Boundary<S> out() const = 0;
   // EXPERIMENT (exp/piecewise-linear-w): append this region's value-dependent branch trace (empty for every
   // LINEAR scheme -- it has no decisions). Equal traces over the whole curve => the same linear map of x.
@@ -70,7 +69,6 @@ struct RegionHolder final : RegionIface<S> {
   S forward_d1(double t) const override { return p.forward_d1(t); }
   S forward_d2(double t) const override { return p.forward_d2(t); }
   std::vector<double> pieces() const override { return p.pieces(); }
-  double tension_sigma() const override { return 0.0; }
   Boundary<S> out() const override { return p.out(); }
   void pattern_into(std::vector<unsigned char>& out) const override {
     if constexpr (requires { p.pattern(); }) out.insert(out.end(), p.pattern().begin(), p.pattern().end());
@@ -117,7 +115,6 @@ struct TensionHolder final : RegionIface<S> {
   S forward_d1(double t) const override { return p.forward_d1(t); }
   S forward_d2(double t) const override { return p.forward_d2(t); }
   std::vector<double> pieces() const override { return p.pieces(); }
-  double tension_sigma() const override { return p.sigma(); }
   Boundary<S> out() const override { return p.out(); }
 };
 
@@ -155,16 +152,12 @@ struct CurveModule {
   // Tension hyperparameter (Scheme::Tension only): pulls the spline taut, σ→0 recovers NaturalCubic,
   // σ→∞ approaches piecewise-linear. Ignored by every other scheme. <=0 means "use the default 1.0".
   double sigma = 0.0;
-  // PER-REGION smoothing weight (Phase 1): the curvature/tension-energy penalty strength for THIS region's
-  // knots. <0 (the default) means "inherit the bundle default λ" — so a curve whose regions never set this
-  // is penalised exactly as before (one global λ). Set it to give the meeting-date front λ=0 while the long
-  // end is smoothed, or two regions different tension. The regulariser reads it per region.
+  // PER-REGION smoothing weight (Phase 1): the curvature penalty strength for THIS region's knots. <0 (the
+  // default) means "inherit the bundle default λ" — so a curve whose regions never set this is penalised
+  // exactly as before (one global λ). Set it to give the meeting-date front λ=0 while the long end is smoothed,
+  // or two regions different strengths. The regulariser reads it per region. (A per-region regulariser σ,
+  // `reg_sigma`, went with the tension-energy operator on 2026-09-22.)
   double reg_lambda = -1.0;
-  // PER-REGION tension-energy membrane σ (Phase 2): the σ in the (bending + σ²·membrane) tension-energy
-  // penalty, applied to THIS region's intervals. <0 (the default) inherits the bundle default σ. Distinct
-  // from `sigma` above (that is the INTERPOLATION tension of a Scheme::Tension region); this is the
-  // REGULARISER's σ, and it may vary per region while the interpolation stays whatever the scheme is.
-  double reg_sigma = -1.0;
 };
 
 template <class S>
@@ -244,10 +237,6 @@ class ModularCurve {
     std::sort(bp.begin(), bp.end());
     bp.erase(std::unique(bp.begin(), bp.end(), [](double a, double b) { return std::abs(a - b) <= 1e-13 * (1.0 + std::abs(a)); }), bp.end());
     return bp;
-  }
-  // The interpolation tension σ of the region containing t (0 for a non-Tension region): sizes the quadrature.
-  double tension_sigma_at(double t) const {
-    return locate(t, [](const RegionIface<S>& r, double) { return r.tension_sigma(); });
   }
   // CONVENTION (E3 register D11): integral(t <= 0) == 0, i.e. discount(t) == 1 for ANY non-positive time.
   // Nothing in pricing may rely on a negative-time discount factor: a seasoned MtM reset in the past must

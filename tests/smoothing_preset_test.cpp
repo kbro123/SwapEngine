@@ -12,42 +12,26 @@
 namespace cal = swaps::calibration;
 
 TEST(SmoothingPreset, TheComposerTableIsPinned) {
-  // Continuous tension-energy operator (opt-in; the default until 2026-09-21).
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Off, true), 0.0);
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Light, true), 0.02);
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Strong, true), 0.2);
-  // Discrete second-difference operator.
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Off, false), 0.0);
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Light, false), 0.5);
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Strong, false), 5.0);
+  // ONE operator (the curvature / second-difference penalty) and one column: the tension-energy operator and its
+  // 0.02 / 0.2 column were retired on 2026-09-22.
+  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Off), 0.0);
+  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Light), 0.5);
+  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Strong), 5.0);
 }
 
 TEST(SmoothingPreset, APresetCoversEveryCurveAndOffIsNoPenalty) {
-  // THE DEFAULT OPERATOR is the discrete second difference (owner's decision 2026-09-21: the tension presets are ~1/h^3
-  // weaker at knot spacing h and left a MonotoneCubic long end failing ticks where second-difference Light streams it).
-  const cal::RegSpec dflt = cal::smoothing_preset(cal::Smoothing::Light, 2);
-  EXPECT_FALSE(dflt.tension);
-  EXPECT_EQ(dflt.lambda, 0.5);
-  EXPECT_EQ(dflt.sigma, 0.0);
-
-  const cal::RegSpec light = cal::smoothing_preset(cal::Smoothing::Light, 3, true, 0.7);
+  const cal::RegSpec light = cal::smoothing_preset(cal::Smoothing::Light, 3);
   EXPECT_TRUE(light.on());
-  EXPECT_EQ(light.lambda, 0.02);
+  EXPECT_EQ(light.lambda, 0.5);
   EXPECT_EQ(light.curves, (std::vector<int>{0, 1, 2}));
-  EXPECT_TRUE(light.tension);
-  EXPECT_EQ(light.sigma, 0.7);
 
-  const cal::RegSpec strong_sd = cal::smoothing_preset(cal::Smoothing::Strong, 2, false, 0.7);
-  EXPECT_EQ(strong_sd.lambda, 5.0);
-  EXPECT_EQ(strong_sd.curves, (std::vector<int>{0, 1}));
-  EXPECT_FALSE(strong_sd.tension);
-  EXPECT_EQ(strong_sd.sigma, 0.0) << "sigma parameterises the tension operator only";
+  const cal::RegSpec strong = cal::smoothing_preset(cal::Smoothing::Strong, 2);
+  EXPECT_EQ(strong.lambda, 5.0);
+  EXPECT_EQ(strong.curves, (std::vector<int>{0, 1}));
 
-  const cal::RegSpec off = cal::smoothing_preset(cal::Smoothing::Off, 4, true, 0.7);
+  const cal::RegSpec off = cal::smoothing_preset(cal::Smoothing::Off, 4);
   const cal::RegSpec none;
   EXPECT_FALSE(off.on());
   EXPECT_EQ(off.lambda, none.lambda);
   EXPECT_EQ(off.curves, none.curves);
-  EXPECT_EQ(off.tension, none.tension);
-  EXPECT_EQ(off.sigma, none.sigma);
 }

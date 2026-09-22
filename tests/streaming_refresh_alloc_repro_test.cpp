@@ -67,7 +67,7 @@ TEST(StreamingRefreshAllocRepro, ARegularisedRefreshReusesItsStackedMatrix) {
       for (std::size_t c = 0; c < curves.size(); ++c) curves[c] = static_cast<int>(c);
       SC::Options o;
       o.breakeven_steps = 64;
-      o.regularizer = cal::tension_energy_operator(s.prob, 0.02, 1.0, curves);
+      o.regularizer = cal::second_difference_operator(s.prob, 0.02, curves);
       ASSERT_GT(o.regularizer.rows(), 0) << "premise: a non-empty regulariser";
       const unsigned long n = refresh_allocs(s, o);
       std::printf("  [refresh] %-20s regularised allocs %lu (pin %lu)\n", s.name.c_str(), n, p.refresh);

@@ -140,19 +140,16 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
   ASSERT_TRUE(cr.under_determined);
   const api::RegSpec reg = api::compile_reg_spec(cr);
   EXPECT_TRUE(reg.on());
-  EXPECT_DOUBLE_EQ(reg.lambda, 0.5);  // the default operator is the second difference (2026-09-21; tension's 0.02 before)
-  EXPECT_FALSE(reg.tension);
-  // "off" on an under-determined spec floors to light; "strong" is 5.0; reg_op "tension" selects the tension table
+  EXPECT_DOUBLE_EQ(reg.lambda, 0.5);  // the curvature operator's Light (0.02 under the tension table until 2026-09-21)
+  // "off" on an under-determined spec floors to light; "strong" is 5.0; reg_op "tension" is REFUSED (retired 2026-09-22)
   api::CompileResult r2 = cr; r2.smoothness = "off";
   EXPECT_DOUBLE_EQ(api::compile_reg_spec(r2).lambda, 0.5);
   r2.smoothness = "strong";
   EXPECT_DOUBLE_EQ(api::compile_reg_spec(r2).lambda, 5.0);
   r2.has_reg_op = true; r2.reg_op = "tension";
-  EXPECT_DOUBLE_EQ(api::compile_reg_spec(r2).lambda, 0.2);
-  EXPECT_TRUE(api::compile_reg_spec(r2).tension);
-  r2.reg_op = "second_difference";  // naming the default is the default
+  EXPECT_THROW(api::compile_reg_spec(r2), std::invalid_argument);
+  r2.reg_op = "second_difference";  // naming the operator is fine
   EXPECT_DOUBLE_EQ(api::compile_reg_spec(r2).lambda, 5.0);
-  EXPECT_FALSE(api::compile_reg_spec(r2).tension);
   r2.under_determined = false; r2.has_bands = false; r2.smoothness = "off";
   EXPECT_FALSE(api::compile_reg_spec(r2).on());
 
@@ -185,8 +182,8 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
   ASSERT_FALSE(rw.contains("error")) << json::serialize(rw);
   EXPECT_TRUE(rw.at("calibration").as_object().at("regularize_applied").as_bool());
   const std::vector<double> f_rw = fwd(json::value(rw));
-  // ... and equals an explicit light second-difference request (the default operator since 2026-09-21)
-  json::object rg; rg["lambda"] = 0.5; rg["tension"] = false; rg["sigma"] = 0.0; rg["curves"] = json::array{0};
+  // ... and equals an explicit light curvature request
+  json::object rg; rg["lambda"] = 0.5; rg["curves"] = json::array{0};
   rq["regularize"] = rg;
   const std::vector<double> f_ex = fwd(json::parse(api::run_json(json::serialize(rq))));
   ASSERT_EQ(f_capi.size(), 6u);

@@ -42,7 +42,7 @@
     "sofr_swaption_cube17_cold_calibrate_price": "Same 17-cell cube, but construct the session from JSON, calibrate the SOFR bundle, then price \u2014 the one-shot verb cost (Excel / fresh run_json).",
     "chain8x26_session_cold_build_calibrate": "DESK-SCALE SYNTHETIC SPREAD CHAIN: 8 curves (curve 0 outright + 7 spread curves each over the previous), 26 knots per curve (1 front + 25 back), annual par/basis pillars to 30y (annual coupons, ACT/ACT-style year fractions, no calendars) \u2014 208 knots, 208 rows. BundleSession built from JSON + cold joint LM.",
     "chain8x26_session_rebind": "Same 8\u00d726 chain: BundleSession::rebind (new quotes, same structure) \u2014 TODAY a full LM re-solve (13.6 ms), not a warm path; E6.2 target \u2264 1 ms.",
-    "chain8x26_session_rebind_tension_reg": "Same rebind with the tension-energy regulariser on (the SDK default): cached RegularizedEngine path.",
+    "chain8x26_session_rebind_reg": "Same rebind with the tension-energy regulariser on (the SDK default): cached RegularizedEngine path.",
     "chain8x26_session_stream_tick": "Same 8\u00d726 chain: one BundleSession::stream_update tick (frozen-Jacobian Newton to convergence on the compiled W-cache engine) after a small quote move.",
     "chain8x26_book200_price_portfolio_oneshot": "200-swap multi-curve book spread across all 8 forecast curves of the chain, ONE-SHOT price_portfolio (templated virtual-handle path, no bind) \u2014 NPV + AAD PV01.",
     "chain8x26_book200_compiled_reprice": "The same 200-swap book on the CompiledMultiCurveBook twin (what reprice_bound uses per tick): one DF=exp(-W_all x) matvec + gathered reduce, flipping between two curve states. Reference row: the templated virtual-handle path.",
@@ -675,7 +675,7 @@
           "reference_bm": null,
           "speedup": null
         },
-        "chain8x26_session_rebind_tension_reg": {
+        "chain8x26_session_rebind_reg": {
           "ours_ns": 347887,
           "reference_ns": null,
           "reference_bm": null,

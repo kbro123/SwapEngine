@@ -43,7 +43,7 @@ TEST(JacobianIntoParity, ARegularisedStreamLandsOnTheRegularisedColdSolve) {
     if (s.name != "ois_nolag") continue;
     std::vector<int> curves(s.prob.curves.size());
     for (std::size_t c = 0; c < curves.size(); ++c) curves[c] = static_cast<int>(c);
-    const Eigen::MatrixXd R = cal::tension_energy_operator(s.prob, 0.02, 1.0, curves);
+    const Eigen::MatrixXd R = cal::second_difference_operator(s.prob, 0.02, curves);
     ASSERT_GT(R.rows(), 0) << "premise: a non-empty regulariser";
     const auto cold = [&](const Eigen::VectorXd& q) {
       cal::BundleProblem p = s.prob;

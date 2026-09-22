@@ -169,7 +169,7 @@ TEST(StreamingBand, RescaledOperatorEqualsARefactorisation) {
       Eigen::MatrixXd R;
       cal::StreamingCalibrator<cal::BundleProblem>::Options upd, ref;
       const Eigen::MatrixXd* Rp = nullptr;
-      if (lambda > 0.0) { R = cal::tension_energy_operator(p, lambda, 0.0, {0}); upd.regularizer = R; ref.regularizer = R; Rp = &R; }
+      if (lambda > 0.0) { R = cal::second_difference_operator(p, lambda, {0}); upd.regularizer = R; ref.regularizer = R; Rp = &R; }
       ref.rescale_update = false;
       const Eigen::VectorXd x0 = cold(p, q0, Eigen::VectorXd::Constant(6, 0.03), Rp);
       cal::StreamingCalibrator<cal::BundleProblem> a(p, x0, q0, upd), b(p, x0, q0, ref);
