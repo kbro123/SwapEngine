@@ -6,8 +6,9 @@
 //     so the sweep computes the exact same doubles in the exact same order);
 //   * both match the full-width aad_jacobian oracle on the non-cacheable rows (touched-set completeness);
 //   * a bundle whose touched width exceeds kPooledMaxW engages the heap fallback and still matches.
-// QuantLib-free: the FX/MtM bundle is synthetic (Portfolio-nested FX forwards + payment-lagged MtM basis,
-// both genuinely non-cacheable per hybrid_residual.hpp's instrument_is_noncacheable).
+// QuantLib-free: the FX/MtM bundle is synthetic (Portfolio-nested FX forwards, compiled since the 2026-09-22 row
+// model, + payment-lagged MtM bases whose compounded funding coupons are genuinely non-cacheable per
+// hybrid_residual.hpp's instrument_is_noncacheable -- the block is those five rows).
 #include <gtest/gtest.h>
 
 #include <Eigen/Core>
@@ -56,7 +57,9 @@ cal::Instrument par_inst(double T, int role) {
   in.fixed = {L.fix, role};
   return in;
 }
-// FX forward nested in a 1-component Portfolio -> non-cacheable (the compiled transforms don't compose).
+// FX forward nested in a 1-component Portfolio. Until 2026-09-22 this was non-cacheable (the compiled FX row did
+// not compose in a Σ); under the row model it COMPILES like a standalone forward, so these rows now ride the
+// W-cache and are NOT in the block -- they stay in the bundle so the touched width / oracle rows are unchanged.
 cal::Instrument fx_portfolio_inst(double T) {
   cal::Instrument fx;
   fx.quote = cal::QuoteKind::FxForward;
@@ -140,7 +143,7 @@ TEST(AadBlockPooled, NarrowBlockPooledMatchesHeapBitForBit) {
   const Fixture f(std::vector<double>{0.5, 1, 2, 3, 5, 7, 10});  // 8 knots/curve -> width 24
   ASSERT_EQ(f.prob.n_knots(), 24);
   ASSERT_FALSE(f.nc_rows.empty()) << "fixture must genuinely exercise the AAD block";
-  ASSERT_EQ(static_cast<int>(f.nc_rows.size()), 12);  // 7 Portfolio-FX + 5 lagged MtM
+  ASSERT_EQ(static_cast<int>(f.nc_rows.size()), 5);  // the 5 compounded-funding MtM rows (the 7 Portfolio-FX rows compile, 2026-09-22)
 
   cal::AadBlock pooled, heap;
   pooled.init(f.prob.curves, f.nc, f.nc_rows, f.prob.n_knots());

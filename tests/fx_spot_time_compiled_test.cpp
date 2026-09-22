@@ -4,6 +4,7 @@
 // the t = 0 expression bit for bit; the MtM basis quote is invariant to the spot level and the spot time; an xccy position
 // with a spot time leaves the compiled book for the templated fallback and prices identically; validation refuses a
 // negative or non-finite spot time (a tom-next forward delivering before spot stays valid); structure equality sees it.
+// Also (2026-09-22, the row model): a Portfolio of FX forwards is a compiled row with a PLAIN residual.
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -17,6 +18,7 @@
 #include "swaps/build/instruments.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
+#include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/structure_fingerprint.hpp"
@@ -119,6 +121,50 @@ TEST(FxSpotTimeCompiled, CompiledFxRowsCarryTheSpotTimeExactly) {
     Jfd.col(j) = (p.residuals<double>(xp) - p.residuals<double>(xm)) / (2 * h);
   }
   EXPECT_LE((J - Jfd).cwiseAbs().maxCoeff() / scale, 1e-6);  // central FD, h = 1e-6: truncation + roundoff floor
+}
+
+TEST(FxSpotTimeCompiled, PortfolioOfFxForwardsIsACompiledRowWithAPlainResidual) {
+  // A forward-forward (F(6M) − F(9d), a Σ of two outrights) as ONE Portfolio row. Until 2026-09-22 an FX forward
+  // inside a Portfolio was refused on the compiled path (the FX row ASSIGNED its outright; a Σ of log-residuals
+  // is not the log map). Under the row model each forward is an FxRatio TERM accumulating onto the row, and the
+  // row's residual map is decided by the TOP-LEVEL kind -- a Portfolio: PLAIN q − market, exactly what the
+  // templated instrument_residual computes -- while the standalone rows keep their log-basis map. Value vs the
+  // templated quote, Jacobian vs AAD, and the router keeps the row on the W-cache.
+  cal::BundleProblem p = fx_rows(true);
+  cal::Instrument ff;
+  ff.quote = cal::QuoteKind::Portfolio;
+  ff.combination.push_back({1.0, p.instruments[3]});   // 6M
+  ff.combination.push_back({-1.0, p.instruments[2]});  // 9d
+  const World w0;
+  ff.market = cal::instrument_model_quote<double>(ff, w0) + 2e-4;  // off-market so the residual is not 0
+  p.instruments.push_back(ff);
+  const int r = p.n_residuals() - 1;
+  EXPECT_FALSE(cal::instrument_is_noncacheable(ff, p.curves));
+  const cal::CompiledBundleResidual cr(p);
+  EXPECT_EQ(cr.n_terms(), p.n_residuals() + 1);
+  const cal::HybridBundleResidual hy(p);
+  EXPECT_GE(hy.compiled_row(r), 0) << "the router keeps the portfolio on the W-cache";
+  const Eigen::VectorXd xs = steep(w0.x);
+  const World ws(&xs);
+  const double want = cal::instrument_model_quote<double>(ff, ws);
+  EXPECT_NEAR(cr.model_rates(xs)[r], want, 1e-14);
+  EXPECT_NEAR(cr.residuals(xs)[r], want - ff.market, 1e-14) << "plain residual, not a log map";
+  EXPECT_LE((cr.residuals(xs) - p.residuals<double>(xs)).cwiseAbs().maxCoeff(), 1e-11) << "every row, incl. the standalone log rows";
+  const Eigen::MatrixXd J = cr.jacobian(xs), Jaad = cal::aad_jacobian(p, xs);
+  const double scale = std::max(1.0, Jaad.cwiseAbs().maxCoeff());
+  EXPECT_LE((J - Jaad).cwiseAbs().maxCoeff() / scale, tol::jacobian_rel);
+  EXPECT_LE((hy.jacobian(xs) - Jaad).cwiseAbs().maxCoeff() / scale, tol::jacobian_rel);
+  // The band applies to the portfolio row (a plain row) but never to a standalone FX row.
+  cal::BundleProblem pb = p;
+  pb.instruments[static_cast<std::size_t>(r)].band_lower = ff.market - 5e-4;
+  pb.instruments[static_cast<std::size_t>(r)].band_upper = ff.market + 5e-4;
+  pb.instruments[static_cast<std::size_t>(r)].band_decay = 0.25;
+  const cal::CompiledBundleResidual crb(pb);
+  // The Huber band residual of the PORTFOLIO quote (problem.hpp band_residual), whichever side of the band it sits.
+  EXPECT_NEAR(crb.residuals(xs)[r], cal::band_residual_d(want, ff.market, ff.market - 5e-4, ff.market + 5e-4, 0.25).first, 1e-14);
+  EXPECT_NEAR(crb.residuals(xs)[r], pb.residuals<double>(xs)[r], 1e-14) << "== the templated banded residual";
+  const Eigen::MatrixXd Jb = crb.jacobian(xs), Jbaad = cal::aad_jacobian(pb, xs);
+  EXPECT_LE((Jb - Jbaad).cwiseAbs().maxCoeff() / scale, tol::jacobian_rel);
 }
 
 TEST(FxSpotTimeCompiled, MtmBasisQuoteIsInvariantToTheSpotLevelAndTheSpotTime) {

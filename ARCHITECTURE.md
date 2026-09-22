@@ -146,8 +146,12 @@ graph LR
   and no curve-dependent notionals. `CompiledResidual` is **not** a second kernel: it wraps the single
   curve as a 1-curve bundle (`single_curve_bundle`) and runs `CompiledBundleResidual`.
 - **Hybrid tier** — `residual_engine_t<BundleProblem>` = `HybridBundleResidual`: cacheable rows on the
-  W-cache **plus** an `AadBlock` for any non-cacheable rows (a NON-par MtM funding leg, or a portfolio
-  containing an FX/MtM leaf), so one exotic trade no longer drops the whole book to AAD. (Standalone FX
+  W-cache **plus** an `AadBlock` for any non-cacheable rows (an incomplete/seasoned MtM funding leg or a
+  compounded observation, standalone or nested), so one exotic trade no longer drops the whole book to AAD.
+  The compiled engine's ROW MODEL (2026-09-22): every row is `rho_row(Σ_terms w·xf(value), q)` — ONE
+  term list over four value sources (Quotient / Rate / State / FxRatio), a per-term transform (zero-coupon),
+  and a per-row residual map (band or FX log-basis) — so a Portfolio of any cacheable kinds is just more
+  terms on one row. (Standalone FX
   forwards AND MtM-xccy bases with a par funding leg are now on the W-cache — see `FxForward`/`XccyMtmBasis`
   below — so only a non-par MtM funding leg and MonotoneCubic still need the AAD tier. A standard FX+MtM
   cross-currency book is now FULLY W-cacheable: the AAD block is empty, ~13µs/tick vs ~130µs before.) The AAD block seeds only the knots those
@@ -175,17 +179,19 @@ unchanged.
 
 - **`Portfolio`** — a linear combination `Σ weight·quote(component)` of nested `Instrument`s (a swap
   butterfly/condor as ONE residual, no leg outrights). It is **W-cacheable when its components are**: the
-  components register as extra batch entries whose weighted quotes ACCUMULATE onto the portfolio's single
-  row (`q_rows_/r_rows_` carry a (row, weight) pair; `register_at` recurses so nested portfolios flatten).
-  So a swap butterfly stays on the compiled path and streams frozen-Newton at µs. Only a genuinely
-  non-cacheable LEAF (a non-par MtM funding leg, here or nested) forces that instrument to the AAD tier.
+  components register as extra TERMS whose weighted (transformed) quotes ACCUMULATE onto the portfolio's
+  single row (`register_at` recurses so nested portfolios flatten). So a swap butterfly, a DI curve spread
+  (zero-coupon rates) or an FX forward-forward stays on the compiled path and streams frozen-Newton at µs.
+  Only a genuinely non-cacheable LEAF (an incomplete/seasoned MtM funding leg or a compounded observation,
+  here or nested) forces that instrument to the AAD tier.
 - **`FxForward`** — a standalone FX forward is **W-cacheable**. `F = fx_spot·DF_num(T)/DF_den(T)`, so the
   residual `(ln F − ln q)/T` is AFFINE in x (`ln DF = −Wx`): `CompiledBundleResidual` registers the two
-  DFs, emits `F` in `model_rates`, applies the log-basis in `residuals_vs`, and scatters a two-entry
-  `dr/dDF` (`+1/(DF_num·T)`, `−1/(DF_den·T)`) — the `−(G·diag(DF))·W` matmul then yields the *constant*
-  `(W_den−W_num)/T` Jacobian row. So an FX-forward-only cross-currency book streams at pure W-cache µs
-  (measured: 3 FX add ~0.1µs). Pinned == AAD in `multicurrency_test.cpp`. (FX INSIDE a portfolio still
-  routes to AAD — a Σ of FX log-residuals isn't this transform.)
+  DFs as an `FxRatio` term, emits `F` in `model_rates`, applies the log-basis as the row's residual map in
+  `residuals_vs`, and scatters `±F/DF` into `dr/dDF` which the map's slope `1/(F·T)` turns into
+  `±1/(DF·T)` — the `−(G·diag(DF))·W` matmul then yields the *constant* `(W_den−W_num)/T` Jacobian row.
+  So an FX-forward-only cross-currency book streams at pure W-cache µs (measured: 3 FX add ~0.1µs).
+  Pinned == AAD in `multicurrency_test.cpp`. An FX forward INSIDE a portfolio is the same term with a
+  weight; the portfolio row's map is then PLAIN (`Σ w·F − q`), as the templated residual defines it.
 - **`XccyMtmBasis`** — a MtM cross-currency basis with a **par funding leg** is **W-cacheable**. Its
   funding (mtm) leg value is `Σ N_i·[float_coupon_pv(c_i) + (DF_dc(e_i)−DF_dc(s_i))]`; for a par leg
   (`discount==forecast`, plain OIS coupons paying at period end) each bracket is IDENTICALLY zero

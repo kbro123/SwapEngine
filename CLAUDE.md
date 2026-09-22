@@ -647,7 +647,7 @@ There is ONE cashflow model (`RateObservation`/`FloatCoupon`/`FixedCoupon`) and 
   The generic block is LAST precisely so no existing row is renumbered.
 - **The generic instruments ride the analytic W-cache** (`compiled_bundle.hpp`), not a slow path:
   `ParRate` and `ParSpread` share ONE pair of float batches (ParRate's subtracted leg is empty ⇒ `pv`
-  is exactly 0.0); `q_rows_`/`r_rows_` map batch position → residual row, so a mixed quote-kind list
+  is exactly 0.0); every instrument is one or more TERMS onto its row (`qterm_`/`rterm_` map batch position → term), so a mixed quote-kind list
   keeps insertion order without grouping by kind. Compiled vs templated kernel: **3.6e-17**; analytic
   block Jacobian vs AAD: **6.4e-16** (design bar: 1e-9).
 - **`BundleFloatBatch` is the ONE float primitive** — legs, compounded futures and averaged futures

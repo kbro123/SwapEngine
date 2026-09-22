@@ -87,20 +87,17 @@ inline bool instrument_within_horizons(const Instrument& ins, const std::vector<
   return true;
 }
 
-// True iff this instrument must go to the AAD block rather than the W-cache. Both cross-currency quotes are
-// now W-cacheable in their standard form: a STANDALONE FX forward (affine (ln F − ln q)/T residual) and a
-// MtM-xccy basis with a PAR funding leg (its FX-reset-notional term is identically zero, so it collapses to
-// the ParSpread quotient). Only a non-par MtM funding leg -- a genuine curve-dependent notional -- still
-// needs AAD. FX/MtM INSIDE a Portfolio are excluded too (the compiled transforms don't compose in a Σ).
-// A compounded (RFR lookback/lockout) observation anywhere also forces AAD -- the batch's arithmetic Σ
-// cannot represent the product. This asks only "can the BATCH express this row's shape?"; whether the row's
-// times reach a value-dependent part of a curve is the separate, per-curve horizon question above.
+// True iff this instrument must go to the AAD block rather than the W-cache. Every quote kind is W-cacheable
+// in its standard form -- a FX forward (F = fx_spot·DF/DF, a term of the compiled row model), a MtM-xccy basis
+// with a complete funding leg (priced EXACTLY on the batch since 2026-09-09), a zero-coupon rate (a per-term
+// transform) and a Portfolio of any of them (terms accumulate onto one row; the nested FX / zero-coupon
+// refusals fell with the row model, 2026-09-22). What still needs AAD is a SHAPE the batch cannot express:
+// a compounded (RFR lookback/lockout) observation anywhere (the batch's arithmetic Σ cannot represent the
+// product), or an incomplete / SEASONED MtM funding leg. This asks only "can the BATCH express this row's
+// shape?"; whether the row's times reach a value-dependent part of a curve is the separate, per-curve
+// horizon question above.
 inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<BundleCurveSpec>& curves) {
   if (has_compounded_obs(ins)) return true;
-  // A MtM basis is cacheable only if its FX-reset funding term is NUMERICALLY negligible on the real
-  // (until 2026-09-09 a numeric "funding term negligible" test decided this; the batch now prices the leg exactly)
-  // An MtM xccy basis row is W-cacheable EXACTLY since 2026-09-09 (BundleFloatBatch::add_mtm prices the resetting
-  // notional as a product of registered DFs); only an incomplete MtM leg (no reset roles) stays on AAD.
   if (ins.quote == QuoteKind::XccyMtmBasis) {
     if (ins.mtm.forecast < 0 || ins.mtm.discount < 0 || ins.mtm.reset_num < 0 || ins.mtm.reset_den < 0) return true;
     for (const auto& c : ins.mtm.coupons)
@@ -109,10 +106,7 @@ inline bool instrument_is_noncacheable(const Instrument& ins, const std::vector<
   }
   if (ins.quote == QuoteKind::Portfolio)
     for (const auto& c : ins.combination)
-      if (c.instrument.quote == QuoteKind::FxForward ||
-          c.instrument.quote == QuoteKind::ZeroCouponRate ||
-          instrument_is_noncacheable(c.instrument, curves))
-        return true;
+      if (instrument_is_noncacheable(c.instrument, curves)) return true;
   return false;
 }
 

@@ -6,8 +6,8 @@
 // dispatches on it; (2) the transform is exactly r = (1+τq)^(1/τ) − 1 of the ParRate of the same legs;
 // (3) CLOSED FORM: on a single self-discounted curve the calibrated DF satisfies DF(T)/DF(spot) == (1+r)^(−τ)
 // to 1e-12 — an analytic identity, not a self-consistency; (4) the compiled W-cache path (value AND analytic
-// Jacobian, with and without a band) matches the templated/AAD path; (5) the documented refusal inside a
-// Portfolio on the compiled path.
+// Jacobian, with and without a band) matches the templated/AAD path; (5) a Portfolio of zero-coupon rates is a
+// compiled row too (the transform is applied per term, 2026-09-22).
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -22,6 +22,7 @@
 #include "swaps/build/schedule.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
+#include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
@@ -136,7 +137,12 @@ TEST_F(ZcFixture, CompiledPathMatchesTemplatedAndAadWithAndWithoutABand) {
   }
 }
 
-TEST_F(ZcFixture, PortfolioOfZeroCouponRatesIsRefusedOnTheCompiledPath) {
+TEST_F(ZcFixture, PortfolioOfZeroCouponRatesRidesTheCompiledPath) {
+  // Until 2026-09-22 this was REFUSED here (and routed to AAD): the compiled engine applied the zero-coupon
+  // transform to the accumulated row, so a Σ could not be one transformed quotient. The row model applies the
+  // transform per TERM before accumulating, so a DI curve spread (a Σ of two transformed quotients, exactly
+  // instrument_model_quote's definition) is a compiled row like any other: value vs the templated quote,
+  // Jacobian vs AAD, and the router keeps it on the W-cache.
   cal::BundleProblem q = p;
   cal::Instrument fly;
   fly.quote = cal::QuoteKind::Portfolio;
@@ -144,6 +150,23 @@ TEST_F(ZcFixture, PortfolioOfZeroCouponRatesIsRefusedOnTheCompiledPath) {
   fly.combination.push_back({-1.0, p.instruments[3]});
   fly.market = quotes[1] - quotes[3];
   q.instruments.push_back(fly);
-  EXPECT_THROW(cal::CompiledBundleResidual{q}, std::invalid_argument);  // a Σ of transformed quotes is not one quotient
-  EXPECT_TRUE(cal::instrument_is_noncacheable(fly, q.curves));          // the hybrid engine routes it to AAD
+  EXPECT_FALSE(cal::instrument_is_noncacheable(fly, q.curves));
+  const cal::CompiledBundleResidual cr(q);
+  EXPECT_EQ(cr.n_terms(), static_cast<int>(p.instruments.size()) + 2);  // five standalone rows + the two components
+  const cal::HybridBundleResidual hy(q);
+  EXPECT_GE(hy.compiled_row(q.n_residuals() - 1), 0) << "the router keeps the portfolio on the W-cache";
+  const Eigen::VectorXd xs = cal::calibrate(p, x0()).x;
+  for (double bump : {0.0, 8e-4, -1.5e-3}) {
+    Eigen::VectorXd x = xs;
+    for (int i = 0; i < x.size(); ++i) x[i] += bump * std::sin(0.7 * i + 0.3);
+    const auto C = cal::build_bundle_curves<double>(q.curves, [&](int, int i) { return x[i]; });
+    const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
+    const int r = q.n_residuals() - 1;
+    EXPECT_NEAR(cr.model_rates(x)[r], cal::instrument_model_quote<double>(fly, curve_of), 1e-15) << bump;
+    EXPECT_NEAR(cr.residuals(x)[r], q.residuals<double>(x)[r], 1e-15) << bump;
+    const Eigen::MatrixXd Ja = cr.jacobian(x), Jaad = cal::aad_jacobian(q, x);
+    const double scale = Jaad.cwiseAbs().maxCoeff();
+    EXPECT_LT((Ja - Jaad).cwiseAbs().maxCoeff() / scale, 1e-10) << bump;
+    EXPECT_LT((hy.jacobian(x) - Jaad).cwiseAbs().maxCoeff() / scale, 1e-10) << bump;
+  }
 }

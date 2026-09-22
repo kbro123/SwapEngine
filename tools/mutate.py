@@ -211,11 +211,11 @@ MUTATIONS = [
      ["fx_spot_time_repro_test.cpp"], "*", "the templated spot-date roll-back is unpinned (O-X3)"),
     # ... on the compiled row, value and Jacobian ...
     ("compiled_fx_row_ignores_spot_time", "include/swaps/calibration/compiled_bundle.hpp",
-     "      if (f.idx_snum >= 0) out_[f.row] *= DF[f.idx_sden] / DF[f.idx_snum];  // O-X3: roll back from the spot date",
+     "    if (f.idx_snum >= 0) v *= DF[f.idx_sden] / DF[f.idx_snum];  // O-X3: roll back from the spot date",  # re-anchored 2026-09-22 (row model: fx_value)
      "",
      ["fx_spot_time_compiled_test.cpp"], "*", "the compiled FX outright ignoring the spot time is unpinned"),
     ("compiled_fx_jacobian_drops_spot_entries", "include/swaps/calibration/compiled_bundle.hpp",
-     "        G(f.row, f.idx_sden) += 1.0 / (DF[f.idx_sden] * f.fx_time);\n        G(f.row, f.idx_snum) += -1.0 / (DF[f.idx_snum] * f.fx_time);\n",
+     "              G(t.row, fx.idx_sden) += F * INV[fx.idx_sden];\n              G(t.row, fx.idx_snum) += -F * INV[fx.idx_snum];\n",  # re-anchored 2026-09-22 (row model)
      "",
      ["fx_spot_time_compiled_test.cpp"], "*", "the compiled FX row's two spot-time Jacobian entries are unpinned"),
     # ... the MtM notional and the basis divisor ...
@@ -756,12 +756,12 @@ MUTATIONS = [
      "m[j] = (h[j - 1] * sec[j - 1] + h[j] * sec[j]) / (h[j - 1] + h[j]);",
      ["kernel_pins_test.cpp"], "SchemeValues.*", "the Hermite interpolant has no value pin (audit M5)"),
     ("band_chain_rule_dropped", "include/swaps/calibration/compiled_bundle.hpp",
-     "const double sc = band_residual_d(qb_[i], q[b.row], b.lower, b.upper, b.decay).second;",
+     "const double sc = row_residual_d(m, mrj_[m.row], q[m.row]).second;",  # re-anchored 2026-09-22 (row model: the ONE row map)
      "const double sc = 1.0;",
      ["portfolio_instrument_test.cpp"], "BandResidual.*", "the band chain rule is tested only outside the band (audit M4)"),
     ("quotient_rule_annuity_term_dropped", "include/swaps/calibration/compiled_bundle.hpp",
-     "q_rows_[j].weight * (dnum.row(j) / ann[j] - num[j] * dann.row(j) / (ann[j] * ann[j]));",
-     "q_rows_[j].weight * (dnum.row(j) / ann[j]);",
+     "f * (dnum.row(i) / (*ann)[i] - num[i] * dann.row(i) / ((*ann)[i] * (*ann)[i]));",  # re-anchored 2026-09-22 (row model)
+     "f * (dnum.row(i) / (*ann)[i]);",
      ["generic_instrument_test.cpp"], "*", "the analytic Jacobian is not compared to AAD (audit M4b)"),
     ("df_memo_never_invalidates", "include/swaps/calibration/compiled_bundle.hpp",
      "if (df_stale_ || x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {",  # re-anchored 2026-09-22 (pwl tier added df_stale_)

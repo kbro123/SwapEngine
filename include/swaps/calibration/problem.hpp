@@ -71,18 +71,18 @@ enum class QuoteKind {
   // Cross-currency (multi-currency). BOTH are W-cacheable in their STANDARD form (compiled_bundle.hpp):
   // a standalone FxForward's log-residual is affine in x (constant Jacobian row), and a MtM basis with a
   // funding leg is priced EXACTLY on the W-cache since 2026-09-09 (BundleFloatBatch::add_mtm; the retired mtm_funding_term_negligible
-  // guard proves the dropped term is 0). Only the non-standard cases -- an FX/MtM NESTED in a Portfolio,
-  // or a MtM whose funding term is genuinely nonzero (payment lag / averaging convexity / CSA discount)
-  // -- ride the width-reduced AAD block of the hybrid engine (hybrid_residual.hpp).
+  // guard proves the dropped term is 0). Only a MtM whose funding leg is incomplete or seasoned rides the
+  // width-reduced AAD block of the hybrid engine (hybrid_residual.hpp); an FX forward or MtM NESTED in a
+  // Portfolio is a term of the compiled row model like any other (2026-09-22).
   FxForward,      // FX-forward point: fx_spot · DF[fx_num](fx_time)/DF[fx_den](fx_time) (pins fx_num vs fx_den)
   XccyMtmBasis,   // MtM (FX-resettable-notional) xccy basis: par basis incl. the resetting funding leg
   Portfolio,      // linear combination of component instruments: model quote = Σ weight·quote(component).
                   // `market` is the COMBINED quote (a butterfly/condor spread), so you calibrate to the
                   // combo directly without pinning each leg's outright rate. Components are full nested
                   // Instruments, so portfolios compose. ONE residual, no knots (knots are in the curve
-                  // spec). W-CACHEABLE when every component is: the components register weighted onto the
-                  // one row and accumulate in the compiled batches (an FX/MtM component NESTED here forces
-                  // AAD -- standalone they compile since 2026-09-09; hybrid_residual.hpp is the authority).
+                  // spec). W-CACHEABLE when every component is: the components register as weighted TERMS
+                  // onto the one row (compiled_bundle.hpp's row model) -- FX forwards, MtM bases and
+                  // zero-coupon rates included; hybrid_residual.hpp is the authority on what is not.
   TurnJump,       // a TURN's jump δ (docs/turns-calibration.md). The model quote is the raw overlay state
                   // variable δ of (turn_curve, turn_index) -- a STATE-PIN, LINEAR in x (Jacobian row is a
                   // unit vector at δ's state index). Almost always BANDED (target/lower/upper): the band's
