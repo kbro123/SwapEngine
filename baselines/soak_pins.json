@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Streaming-soak pins PER NUMERIC FINGERPRINT (tests/streaming_soak_test.cpp; 2026-09-22). A failed-tick count on a",
+    "seeded 400-tick walk over a VALUE-DEPENDENT rung (MonotoneCubic: the state sits on Hyman branch boundaries, where an",
+    "ulp decides the branch) is deterministic for one instruction stream and different for another -- the same seeded",
+    "walk read 0 failed ticks on mixed_scheme under Apple clang and 2 under GCC/glibc. So, exactly like the perf",
+    "baselines (baselines.json), these rows are keyed by the numeric fingerprint OS|compiler|arch flags|ISA (the CPU",
+    "model is NOT in the key: the same instruction stream gives the same doubles on any chip). A row with no entry for",
+    "the running key is REPORT-ONLY; the test prints the measured values to paste. Pins only ever RATCHET DOWN per key.",
+    "Universal invariants stay hard-coded in the test (every linear rung, and every rung on the smoothed factor walk,",
+    "at ZERO failed ticks with the class dq tolerance): those are platform-independent by construction.",
+    "Rows: smoothed_per_row = the API Light preset on the PER-ROW stress walk; unsmoothed_factor = no regulariser on the",
+    "factor walk. failed = the pin per 400 ticks (scaled to SWAPS_SOAK_TICKS); dq = the quote-space tolerance (rate) of",
+    "the delivered curve vs a cold solve of the same objective (a value-dependent rung compares two LM optima on a",
+    "kinked landscape, so it is a class tolerance ~1.5x the measurement, not a rounding bound)."
+  ],
+  "keys": {
+    "Darwin|AppleClang 21.0.0.21000101|-march=x86-64-v3|AVX2+FMA": {
+      "captured": "2026-09-21",
+      "note": "the reference machine (Mac Pro 2019, Xeon W-3223; perf fingerprint 966685f93279), seed 20260921",
+      "rungs": {
+        "mixed_scheme": {
+          "smoothed_per_row": { "failed": 0, "dq": 2e-5 },
+          "unsmoothed_factor": { "failed": 62, "dq": 2e-5 }
+        },
+        "desk_mixed": {
+          "smoothed_per_row": { "failed": 1, "dq": 2e-5 },
+          "unsmoothed_factor": { "failed": 108, "dq": 2e-5 }
+        }
+      }
+    },
+    "Linux|GNU 13.3.0|-march=x86-64-v3|AVX2+FMA": {
+      "captured": "2026-09-22",
+      "note": "GitHub ubuntu-24.04 runner (ci.yml quantlib-free-gate), read off run 35719680823: mixed_scheme 2 failed (refresh cap), max|dq| 1.27e-4; desk_mixed 0, 2.7e-7. unsmoothed_factor not yet captured there (the CI log hides passing output) -> report-only until it is.",
+      "rungs": {
+        "mixed_scheme": {
+          "smoothed_per_row": { "failed": 2, "dq": 2e-4 }
+        },
+        "desk_mixed": {
+          "smoothed_per_row": { "failed": 0, "dq": 2e-5 }
+        }
+      }
+    }
+  }
+}

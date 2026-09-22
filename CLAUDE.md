@@ -525,6 +525,14 @@ robustness. What the first walk found, so nobody re-derives it:
   `{lambda, curves}`; a request for `tension`/`sigma`/`reg_op:"tension"` is REFUSED, not silently mapped. The Tension
   interpolation SCHEME is unrelated and stays. Also from the same soak: a converged `stream_update` left `result()` at
   the previous LM solve (fixed 2026-09-21, `b806cce`).
+- **The value-dependent rungs' pins are PER NUMERIC FINGERPRINT (`baselines/soak_pins.json`, 2026-09-22).** The first
+  CI runs of the soak failed on Linux/GCC while the Mac gate was green: on a Hyman-filtered rung an ulp decides the
+  branch, so a seeded walk's failed-tick count is deterministic per instruction stream and differs across them
+  (mixed_scheme, smoothed per-row: 0 under Apple clang, 2 under GCC/glibc). Rounding intermediate rates would not
+  help (the divergence is in the state's path, not in the quotes; a rounding step is a new kink for Newton). So those
+  rows are keyed `OS|compiler|arch flags|ISA` exactly as perf baselines are keyed by machine+toolchain; no entry =
+  report-only and the test prints the stanza to paste (CI's "streaming soak report" step shows it). The universal rows
+  -- every linear rung, every rung on the smoothed factor walk -- stay hard asserts at zero failed ticks on every platform.
 
 ### Retired (E6.1, 2026-09-10): the pricing-branch and thread-pool machinery
 `LiveCurveFeed` (seqlock curve publish), `ParallelPortfolio` (sliced book reprice), `ThreadPool` and the

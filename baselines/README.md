@@ -4,6 +4,14 @@ Policy: PRINCIPLES.md P9/P10. `baselines.json` = per-fingerprint self-baselines 
 `targets.json` = absolute desk-scale targets (ratchet down only). QuantLib is an informational reference.
 `tools/check_perf.py` is the gate; `tools/nightly.sh` writes `NIGHTLY.md`.
 
+`soak_pins.json` (2026-09-22) = the streaming soak's platform-sensitive pins, keyed by the NUMERIC fingerprint
+`OS|compiler|arch flags|ISA` (no CPU model: one instruction stream, one set of doubles). A value-dependent rung's
+failed-tick count on a seeded walk is deterministic per key and differs across keys (0 vs 2 on mixed_scheme, Apple
+clang vs GCC/glibc), so it is a per-key pin like a timing, not a universal invariant. The universal rows (linear
+rungs; every rung on the smoothed factor walk) stay hard-coded in `tests/streaming_soak_test.cpp`. No entry for the
+running key = report-only; the test (and the CI "streaming soak report" step) prints the stanza to paste. Ratchet
+down only, per key.
+
 ## Before / after: the toolchain-mismatch correction (E1.1 + E1.7)
 
 Until 2026-09-08 the QuantLib reference was built 2026-07-18 with Apple clang 16 and `-march=native`

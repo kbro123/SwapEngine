@@ -42,3 +42,8 @@ jobs:
         run: cmake --build build -j "$(nproc)"
       - name: test (QuantLib-free binaries)
         run: ctest --test-dir build --output-on-failure -j "$(nproc)"
+      # The streaming soak's per-rung report, VISIBLE even when it passes (ctest hides passing output): its value-
+      # dependent rows are pinned per numeric fingerprint (baselines/soak_pins.json), and a row this runner has no pin
+      # for prints the measured stanza to paste. This is how the Linux key gets captured and kept honest.
+      - name: streaming soak report (per-fingerprint pins)
+        run: ./build/api/swaps_api_tests --gtest_filter='StreamingSoak.*' --gtest_color=no

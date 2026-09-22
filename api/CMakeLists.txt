@@ -67,6 +67,7 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
   # SOFR bundle fixture the vol-cube test calibrates against (also used by bench/vol_cube_bench).
   target_compile_definitions(swaps_api_tests PRIVATE
     SWAPS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/golden"
+    SWAPS_BASELINES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../baselines"
     SOFR_BUNDLE_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../bench/fixtures/sofr_bundle.json"
     SWAPS_CONVENTIONS_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../conventions/conventions.json")
   gtest_discover_tests(swaps_api_tests)

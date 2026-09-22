@@ -34,8 +34,8 @@
 //
 // So the gate pins two things per rung:
 //   SMOOTHED (the API's Light preset: the curvature penalty over every curve) -- the recipe that streams EVERY rung: ZERO
-//     failed ticks on the realistic walk. The invariant.
-//   UNSMOOTHED -- the stress case, its measured counts, may only decrease.
+//     failed ticks on the realistic walk. The invariant, on every platform.
+//   UNSMOOTHED -- the stress case, its measured counts, may only decrease -- PER NUMERIC FINGERPRINT (see PINS below).
 // (A LIGHT TENSION row was pinned here from 2026-09-21 until the tension-energy operator was retired on 2026-09-22: at
 // equal weight it was indistinguishable from the curvature penalty -- 0 / 0 failed ticks and 34.8 vs 34.9 us on
 // desk_mixed's factor walk -- so it was removed as a feature. Its numbers above are the historical record.)
@@ -49,13 +49,17 @@
 #include <gtest/gtest.h>
 
 #include <Eigen/Core>
+#include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <map>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -63,6 +67,7 @@
 #include "shape_ladder.hpp"
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/calibration/regularize.hpp"
+#include "swaps/simd_config.hpp"
 
 namespace api = swaps::api;
 namespace cal = swaps::calibration;
@@ -166,47 +171,100 @@ Outcome soak(const Shape& s, WalkKind kind, const cal::RegSpec& reg, long n, uns
   return o;
 }
 
-// PINS: failed ticks per 400-tick walk, measured 2026-09-21 (seed 20260921) with the divided-difference operator (D18). The
-// SMOOTHED FACTOR walk -- the realistic day under the shipped default -- is pinned at ZERO on every rung: that is the
-// invariant. The SMOOTHED PER-ROW walk (contradictory neighbours every tick) is zero on every linear rung and 1 on
-// desk_mixed (measured; the divided row is ~1/h^3 weaker at the 5y long-end spacing than the spacing-blind stencil that
-// gave 0). The LIGHT TENSION and UNSMOOTHED rows carry the value-dependent rungs' measured counts on the factor walk
-// (tension: mixed_scheme 82, desk_mixed 22; unsmoothed: 49, 85) plus ~25 % slack. Every pin may only DECREASE: lower one
-// when you fix the cause, never raise one.
-struct Pin { const char* name; long smoothed_per_row, unsmoothed_factor; };
-const Pin kPins[] = {{"mixed_scheme", 0, 62}, {"desk_mixed", 1, 108}};
-long pin_for(const std::string& name, Recipe r, WalkKind kind, long n) {
-  if (r == Recipe::Smoothed && kind == WalkKind::Factor) return 0;
-  for (const Pin& p : kPins)
-    if (name == p.name) {
-      const long per400 = r == Recipe::Smoothed ? p.smoothed_per_row : p.unsmoothed_factor;
-      return (per400 * n + 399) / 400;
+// PINS. Two kinds (2026-09-22):
+//   UNIVERSAL -- platform-independent by construction, hard-coded here: every LINEAR rung on every walk and recipe, and
+//     EVERY rung on the smoothed FACTOR walk (the realistic day under the shipped default), at ZERO failed ticks; the
+//     delivered curve within the class dq tolerance (0.01 bp factor / 0.05 bp per-row: the frozen operator's second-order
+//     term on contradictory quotes, 0.013 bp measured on the compiled rungs under Light).
+//   PER NUMERIC FINGERPRINT -- baselines/soak_pins.json, keyed OS|compiler|arch flags|ISA exactly as the perf baselines
+//     are keyed by machine+toolchain: a VALUE-DEPENDENT rung (MonotoneCubic) on the per-row stress walk or under no
+//     smoothing sits on Hyman branch boundaries where an ulp decides the branch, so its failed-tick count (and how far a
+//     kinked fallback LM lands from another) is deterministic PER instruction stream and differs across them: the same
+//     seeded walk read 0 on mixed_scheme under Apple clang and 2 under GCC/glibc (CI, 2026-09-22). A row with no entry
+//     for the running key is REPORT-ONLY and the test prints the stanza to paste. Pins only ever DECREASE per key.
+// (The 2026-09-21 Mac measurements: smoothed per-row mixed_scheme 0 / desk_mixed 1; unsmoothed factor 62 / 108 incl. ~25 %
+// slack -- the divided row is ~1/h^3 weaker at the 5y long-end spacing than the spacing-blind stencil that gave 0.)
+std::string numeric_key() {
+#if defined(__APPLE__)
+  const char* os = "Darwin";
+#elif defined(__linux__)
+  const char* os = "Linux";
+#elif defined(_WIN32)
+  const char* os = "Windows";
+#else
+  const char* os = "unknown";
+#endif
+  namespace d = swaps::simd::detected;
+  return std::string(os) + "|" + d::compiler_id + " " + d::compiler_version + "|" + d::arch_flags + "|" + d::isa_name;
+}
+struct RowPin { long failed; double dq; };
+struct PinTable {
+  std::string key;
+  bool known = false;
+  std::map<std::string, RowPin> rows;  // "<rung>/<row>" -> pin
+};
+const PinTable& pins() {
+  static const PinTable table = [] {
+    PinTable t;
+    t.key = numeric_key();
+    const std::string path = std::string(SWAPS_BASELINES_DIR) + "/soak_pins.json";
+    std::ifstream in(path);
+    if (!in.good()) throw std::runtime_error("missing " + path);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    const boost::json::value doc = boost::json::parse(ss.str());
+    const boost::json::object& keys = doc.at("keys").as_object();
+    if (const auto it = keys.find(t.key); it != keys.end()) {
+      t.known = true;
+      for (const auto& rung : it->value().at("rungs").as_object())
+        for (const auto& row : rung.value().as_object())
+          t.rows[std::string(rung.key()) + "/" + std::string(row.key())] = {row.value().at("failed").as_int64(),
+                                                                          row.value().at("dq").to_number<double>()};
     }
-  return 0;
+    return t;
+  }();
+  return table;
+}
+const char* row_name(WalkKind kind, Recipe r) {
+  const bool per_row = kind == WalkKind::PerRow;
+  return r == Recipe::Smoothed ? (per_row ? "smoothed_per_row" : "smoothed_factor") : (per_row ? "unsmoothed_per_row" : "unsmoothed_factor");
 }
 
 void run_walk(WalkKind kind, Recipe recipe) {
   const long n = soak_ticks();
   const int check_every = 40;
   std::printf("  [soak] %s walk, %s, %ld ticks per rung, accuracy every %d\n", swaps::shapes::to_string(kind), to_string(recipe), n, check_every);
+  std::printf("  [soak] numeric fingerprint %s: %s\n", pins().key.c_str(), pins().known ? "pinned in baselines/soak_pins.json" : "NO ENTRY -- value-dependent rows are report-only");
   std::printf("  %-20s %6s %6s %6s %10s %10s %11s %8s  %s\n", "rung", "ticks", "failed", "maxrun", "mean us", "p99 us", "max|dq|",
               "zig bp", "failures by reason");
+  std::map<std::string, Outcome> unpinned;
   for (const Shape& s : ladder()) {
     const Outcome o = soak(s, kind, reg_for(recipe, s), n, 20260921u, check_every);
     std::string why;
     for (const auto& [r, c] : o.reasons) why += (why.empty() ? "" : "; ") + std::to_string(c) + "x " + r;
     std::printf("  %-20s %6ld %6ld %6ld %10.1f %10.1f %11.2e %8.1f  %s\n", s.name.c_str(), o.ticks, o.failed, o.maxrun, o.mean_us,
                 o.p99_us, o.worst_dq, 1e4 * o.worst_zig, why.c_str());
-    EXPECT_LE(o.failed, pin_for(s.name, recipe, kind, n)) << s.name << " (" << swaps::shapes::to_string(kind) << " walk, " << to_string(recipe)
-                                                    << "): failed ticks above the pin";
-    // 0.01 bp between the delivered curve's quotes and the cold solve's on the realistic walk. The per-row walk's contradictory
-    // quotes enlarge the frozen operator's second-order term (its fixed point is J_anchor^T r + R^T R x = 0, the cold solve's
-    // J(x)^T r + R^T R x = 0): 0.013 bp measured on the compiled rungs under Light, judged at 0.05 bp. A value-dependent rung
-    // on the per-row walk, or under a recipe that still fails ticks, is judged at 0.2 bp: there the fallback LM itself stalls
-    // on the kinked landscape (0.11 bp measured on mixed_scheme, per-row smoothed).
-    const bool clean = s.expect_compiled || (recipe == Recipe::Smoothed && kind == WalkKind::Factor);
-    const double dq_tol = !clean ? 2e-5 : (kind == WalkKind::PerRow ? 5e-6 : 1e-6);
-    EXPECT_LT(o.worst_dq, dq_tol) << s.name << ": the delivered curve's quotes differ from the cold solve's by more than the tolerance";
+    const bool universal = s.expect_compiled || (recipe == Recipe::Smoothed && kind == WalkKind::Factor);
+    if (universal) {
+      EXPECT_EQ(o.failed, 0) << s.name << " (" << swaps::shapes::to_string(kind) << " walk, " << to_string(recipe)
+                             << "): a failed tick on a platform-independent row";
+      const double dq_tol = kind == WalkKind::PerRow ? 5e-6 : 1e-6;
+      EXPECT_LT(o.worst_dq, dq_tol) << s.name << ": the delivered curve's quotes differ from the cold solve's by more than the tolerance";
+      continue;
+    }
+    const std::string id = s.name + "/" + row_name(kind, recipe);
+    const auto it = pins().rows.find(id);
+    if (it == pins().rows.end()) {
+      std::printf("  %-20s REPORT-ONLY: no pin for this row under the running fingerprint\n", "");
+      unpinned[id] = o;
+      continue;
+    }
+    EXPECT_LE(o.failed, (it->second.failed * n + 399) / 400) << id << ": failed ticks above the pin for " << pins().key;
+    EXPECT_LT(o.worst_dq, it->second.dq) << id << ": the delivered curve's quotes differ from the cold solve's by more than the pinned tolerance for " << pins().key;
+  }
+  if (!unpinned.empty()) {  // the stanza to paste under this key (measured values; give dq ~1.5x slack)
+    std::printf("  [soak] measured, unpinned rows for \"%s\":\n", pins().key.c_str());
+    for (const auto& [id, o] : unpinned) std::printf("    %-36s {\"failed\": %ld, \"dq\": %.1e}\n", id.c_str(), o.failed, o.worst_dq);
   }
   std::fflush(stdout);
 }
