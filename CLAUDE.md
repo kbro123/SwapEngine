@@ -214,8 +214,9 @@ combine into prices.** Exploit this — it is the whole optimization thesis:
   scattered, then one `W` matmul. Matches AAD to 1e-15, ~15× faster (25 µs vs 373 µs) — this is what
   makes the streaming Jacobian *refresh* cheap. AAD has exactly TWO remaining roles (PRINCIPLES.md P3):
   producing `W` once (`integral_weight_matrix`, generic for any linear region policy), and the pooled
-  `AadBlock` tier for the rows the W-cache cannot express (value-dependent schemes, MtM funding legs,
-  FX-in-portfolio) — `HybridBundleResidual` composes the two and the tier of every row is fingerprinted.
+  `AadBlock` tier for the rows the W-cache cannot express (a compounded observation, an incomplete or seasoned
+  MtM funding leg) — `HybridBundleResidual` is a list of `RowEngine`s (`row_engine.hpp`: the compiled subset
+  and the AAD block are two implementations of one interface) and the tier of every row is fingerprinted.
 - **Extending/re-wrapping QuantLib is allowed where it unlocks this.** QuantLib instruments recompute
   per-coupon on every pricing call; our wrapper computes `W` once (reusing QuantLib only to build the
   schedule) and reprices by matrix algebra. Reimplement/extend the hot parts; reuse the rest.

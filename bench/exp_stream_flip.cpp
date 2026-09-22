@@ -68,6 +68,7 @@ struct Result {
 Result stream(const Shape& s, bool pwl, const std::vector<Eigen::VectorXd>& path, bool check = false) {
   std::vector<cal::Instrument> ins = s.prob.instruments, ins_j = s.prob.instruments;
   cal::HybridBundleResidual eng(s.prob, pwl);
+  eng.enable_pwl_stats();  // distinct-cell diagnostics (opt-in: a std::set insert per cell change)
   // The W check's judge: a SHIPPED engine that receives the SAME band requotes (a banded row's residual reads
   // its band, so a judge with stale bands would disagree on every banded row regardless of W).
   cal::HybridBundleResidual judge_eng(s.prob, false);

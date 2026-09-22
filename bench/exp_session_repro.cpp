@@ -1,5 +1,5 @@
 // EXPERIMENT (exp/piecewise-linear-w): reproduce ShapeLadder.EveryRungConvergesOnTheGateTicks on mixed_scheme
-// step by step. Run with SWAPS_EXP_PWL=1 (the session's engine is then the PWL tier) and without (control).
+// step by step. The session's engine is the PWL tier (the default); the judge below is the control routing.
 #include <cstdio>
 
 #include "shape_ladder.hpp"

@@ -77,6 +77,7 @@ class CompiledBundleResidual {
     register_generic(p);
 
     cs_.finalize();  // builds W_all now that every (curve, time) is registered
+    if (pwl) cs_.pwl_init();  // the piecewise-linear trackers (structure-only; W is re-taken on the first sync)
     gen_float_.finalize();
     {  // per-COUPON row (its term's quotient position) and sign, built once for the derivative scatter
       const Eigen::VectorXi& cl = gen_float_.coupon_leg();
@@ -160,38 +161,14 @@ class CompiledBundleResidual {
     }
   }
 
-  // EXPERIMENT (exp/piecewise-linear-w): re-take W at x (its branch-pattern cell) and everything derived
-  // from it -- the transposed copy, the per-time nonzero spans, the DF memo. The batches hold DF INDICES
-  // only, so nothing else depends on W's values. Only valid on a pwl-constructed engine; costs one AAD pass
-  // per value-dependent curve + the block rebuild, and runs only when the pattern actually changes.
-  void rebuild_W(const Eigen::VectorXd& x) {
-    cs_.set_eval_state(x);
-    cs_.finalize();
-    build_wt();
-    df_stale_ = true;  // the memo keyed on x alone is stale: the same x now maps through a new W
-  }
-  // EXPERIMENT (analytic re-take): prepare the rank-k structure for curve c (-1 = unsupported), and apply
-  // one update -- W, its ancestry blocks (CompiledCurveSet), W^T and the per-time spans. Allocation-free.
-  int pwl_prepare(int c) { return cs_.pwl_prepare(c); }
-  void pwl_rank_update(int pc, const std::vector<int>& nodes, const Eigen::Ref<const Eigen::MatrixXd>& dM) {
-    cs_.pwl_rank_update(pc, nodes, dM);
-    mirror_delta(pc);
-  }
-  void pwl_set(int pc, const Eigen::Ref<const Eigen::MatrixXd>& M) {
-    cs_.pwl_set(pc, M);
-    mirror_delta(pc);
-  }
-  void mirror_delta(int pc) {  // the last CompiledCurveSet delta into W^T and the spans
-    const auto& P = cs_.pwl_curve(pc);
-    for (int r = 0; r < static_cast<int>(P.rows.size()); ++r) {
-      const int g = P.rows[r].g;
-      Wt_.col(g).segment(P.off, P.ni) += P.D.row(r).transpose();
-      wlo_[g] = std::min(wlo_[g], P.off);  // a zero entry may have become nonzero: widen (a superset is exact)
-      whi_[g] = std::max(whi_[g], P.off + P.ni);
-    }
-    df_stale_ = true;
-  }
   const pricing::CompiledCurveSet& curve_set() const { return cs_; }
+  // The piecewise-linear tier's observability: is it engaged, how many syncs changed W, of which analytic,
+  // distinct cells visited (opt-in: enable_pwl_stats, a std::set insert per change).
+  bool pwl_active() const { return cs_.pwl(); }
+  int pwl_rebuilds() const { return cs_.pwl_rebuilds(); }
+  int pwl_analytic() const { return cs_.pwl_analytic(); }
+  int pwl_distinct() const { return cs_.pwl_distinct(); }
+  void enable_pwl_stats() { cs_.enable_pwl_stats(); }
 
   int n_residuals() const { return n_gen_; }
   int n_times() const { return cs_.n_times(); }
@@ -502,7 +479,43 @@ class CompiledBundleResidual {
     }
   }
 
+  // THE TIER'S SYNC (2026-09-22, moved here from the router): keep W in step with x's branch pattern before
+  // any evaluation at x. The set decides (its trackers); this engine applies the three effects on ITS derived
+  // data -- the rank-k delta or the cell reset into W and its ancestry blocks, mirrored into W^T and the per-time
+  // spans; or the full AAD re-take. const: W is a pure function of x, so this is the DF memo's own key changing
+  // (the same argument as df_x_), not observable state.
+  void sync(const Eigen::VectorXd& x) const {
+    if (!cs_.pwl()) return;
+    auto& self = const_cast<CompiledBundleResidual&>(*this);
+    self.cs_.pwl_sync(
+        x,
+        [&](int pc, const std::vector<int>& nodes, const Eigen::Ref<const Eigen::MatrixXd>& dM) { self.cs_.pwl_rank_update(pc, nodes, dM); self.mirror_delta(pc); },
+        [&](int pc, const Eigen::Ref<const Eigen::MatrixXd>& M) { self.cs_.pwl_set(pc, M); self.mirror_delta(pc); },
+        [&] { self.rebuild_W(x); });
+  }
+  // Re-take W at x (its branch-pattern cell) and everything derived from it -- the transposed copy, the per-time
+  // nonzero spans, the DF memo. The batches hold DF INDICES only, so nothing else depends on W's values. Costs one
+  // AAD pass per value-dependent curve + the block rebuild; runs only when a pattern changes and no analytic
+  // re-take covers it.
+  void rebuild_W(const Eigen::VectorXd& x) {
+    cs_.set_eval_state(x);
+    cs_.finalize();
+    build_wt();
+    df_stale_ = true;  // the memo keyed on x alone is stale: the same x now maps through a new W
+  }
+  void mirror_delta(int pc) {  // the last CompiledCurveSet delta into W^T and the spans
+    const auto& P = cs_.pwl_curve(pc);
+    for (int r = 0; r < static_cast<int>(P.rows.size()); ++r) {
+      const int g = P.rows[r].g;
+      Wt_.col(g).segment(P.off, P.ni) += P.D.row(r).transpose();
+      wlo_[g] = std::min(wlo_[g], P.off);  // a zero entry may have become nonzero: widen (a superset is exact)
+      whi_[g] = std::max(whi_[g], P.off + P.ni);
+    }
+    df_stale_ = true;
+  }
+
   const Eigen::VectorXd& df_at(const Eigen::VectorXd& x) const {
+    sync(x);
     if (df_stale_ || x.size() != df_x_.size() || (x.array() != df_x_.array()).any()) {
       df_stale_ = false;
       cs_.df_into(x, df_);  // allocation-free recompute into the df_ scratch

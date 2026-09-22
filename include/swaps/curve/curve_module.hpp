@@ -53,6 +53,9 @@ struct RegionIface {
   virtual void set_tangent_override(const S*) {}
   virtual int n_nodes() const { return 0; }
   virtual const std::vector<double>* node_spacing() const { return nullptr; }
+  // The piecewise-linear capability (2026-09-22): the region's own cell description. 0 / no-op when linear.
+  virtual int node_pattern_bytes() const { return 0; }
+  virtual void node_formula(int, const unsigned char*, double*) const {}
 };
 
 template <class S, template <class> class Policy>
@@ -90,6 +93,13 @@ struct RegionHolder final : RegionIface<S> {
   const std::vector<double>* node_spacing() const override {
     if constexpr (requires { p.node_spacing(); }) return &p.node_spacing();
     return nullptr;
+  }
+  int node_pattern_bytes() const override {
+    if constexpr (requires { p.node_pattern_bytes(); }) return p.node_pattern_bytes();
+    return 0;
+  }
+  void node_formula(int j, const unsigned char* pat, double* phi) const override {
+    if constexpr (requires { p.node_formula(j, pat, phi); }) p.node_formula(j, pat, phi);
   }
   void pattern_from_prefilter(const double* z, std::vector<unsigned char>& out) const override {
     if constexpr (requires { p.pattern_from_prefilter(z, out); }) {
@@ -279,6 +289,19 @@ class ModularCurve {
   const std::vector<double>* pwl_spacing() const {
     for (const auto& r : regions_) if (!r->linear()) return r->node_spacing();
     return nullptr;
+  }
+  // The single value-dependent region's cell description (the capability; 0 / no-op on a linear curve).
+  int pwl_pattern_bytes() const {
+    for (const auto& r : regions_) if (!r->linear()) return r->node_pattern_bytes();
+    return 0;
+  }
+  int pwl_prefilter_size() const {
+    int n = 0;
+    for (const auto& r : regions_) n += r->prefilter_size();
+    return n;
+  }
+  void pwl_node_formula(int j, const unsigned char* pat, double* phi) const {
+    for (const auto& r : regions_) if (!r->linear()) { r->node_formula(j, pat, phi); return; }
   }
   // Requires one prior set_forwards (a region's node spacing includes its join time).
   void pattern_from_prefilter(const Eigen::VectorXd& z, std::vector<unsigned char>& out) const {

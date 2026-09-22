@@ -30,6 +30,7 @@
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/problem.hpp"
+#include "swaps/calibration/row_engine.hpp"
 
 namespace swaps::calibration {
 
@@ -79,12 +80,13 @@ struct RecordingCurve : CurveHandle<double> {
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}
 };
 
-class AadBlock {
+// A ROW ENGINE (row_engine.hpp): the hybrid holds it in its engine list beside the compiled W-cache.
+class AadBlock final : public RowEngine {
  public:
   AadBlock() = default;
   bool empty() const { return rows_.empty(); }
   int size() const { return static_cast<int>(rows_.size()); }
-  const std::vector<int>& rows() const { return rows_; }
+  const std::vector<int>& rows() const override { return rows_; }
 
   // Overwrite the quote RHS (target + band) of every block instrument from the FULL problem `p`, matched
   // by each block instrument's global residual row. Quote fields are read at residual time, never during
@@ -102,7 +104,7 @@ class AadBlock {
   }
   // Scalar counterparts for one GLOBAL row (a no-op when the row is not in this block; the block is small,
   // so the linear row lookup is cheaper than a map).
-  void set_quote(int global_row, double market, double lower, double upper, double decay) {
+  void set_quote(int global_row, double market, double lower, double upper, double decay) override {
     for (int j = 0; j < size(); ++j)
       if (rows_[j] == global_row) {
         Instrument& d = sub_.instruments[j];
@@ -113,7 +115,7 @@ class AadBlock {
         return;
       }
   }
-  void set_market(int global_row, double market) {
+  void set_market(int global_row, double market) override {
     for (int j = 0; j < size(); ++j)
       if (rows_[j] == global_row) { sub_.instruments[j].market = market; return; }
   }
@@ -171,7 +173,7 @@ class AadBlock {
   // Model quotes of the block's instruments (doubles), written to out[global_row]. (Used only to fill the
   // uniform model_rates vector; a bundle with a non-cacheable instrument does not stream, so these rows
   // are never the driver of a frozen-Newton reprice.)
-  void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const {
+  void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override {
     if (rows_.empty()) return;
     dcurves_.update([&](int c, int i) { return x[off_[c] + i]; });
     const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
@@ -180,7 +182,7 @@ class AadBlock {
   }
 
   // True residuals (doubles) of the block's instruments against their stored markets, into out[global_row].
-  void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const {
+  void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override {
     if (rows_.empty()) return;
     refresh_curves(x);
     const auto curve_of = [this](int i) -> const CurveHandle<double>& { return *resolve_[i]; };
@@ -190,7 +192,7 @@ class AadBlock {
 
   // Jacobian rows d(residual)/dx via WIDTH-REDUCED AAD, into J.row(global_row) of an (n_res x n_knots) J.
   // Only the touched columns are nonzero; the rest stay whatever the caller pre-zeroed.
-  void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const {
+  void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const override {
     if (rows_.empty()) return;
     if (pooled_) jacobian_impl(pool_, x, J, nullptr);
     else jacobian_impl(heap_, x, J, nullptr);
@@ -203,7 +205,7 @@ class AadBlock {
 
   // True residuals against the live market q, into out[global_row]: instrument_residual with q as the
   // target (FX gets ln F_model − ln q[row]; a banded row gets w(q_model)·(q_model − q[row])).
-  void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const {
+  void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const override {
     if (rows_.empty()) return;
     refresh_curves(x);
     const auto curve_of = [this](int i) -> const CurveHandle<double>& { return *resolve_[i]; };
@@ -215,7 +217,7 @@ class AadBlock {
   // Consistent with residuals_vs_into by construction: AAD differentiates the SAME instrument_residual
   // (so the band chain-rule term (q_model − q) and the FX 1/F_model factor fall out automatically).
   // The same, and each row's residual value into (*r)[global_row] -- the dual's value part, computed by the sweep anyway (S2).
-  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) const {
+  void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) const override {
     if (rows_.empty()) return;
     if (pooled_) jacobian_impl(pool_, x, J, &q, r);
     else jacobian_impl(heap_, x, J, &q, r);

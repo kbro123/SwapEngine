@@ -93,7 +93,7 @@ Eigen::VectorXd generic_rates(const cal::BundleProblem& p, const Eigen::VectorXd
 // region is piecewise-linear in its knots, so a row reading it still rides the compiled W-cache (W exact in
 // the current Hyman branch cell, re-taken analytically when x crosses one) and NOTHING is pushed to the AAD
 // block for interpolation reasons. The horizon partition below it -- rows within their curve's linear prefix
-// compiled, rows past it on AAD -- is what SWAPS_EXP_PWL=0 restores, and it is still the fallback whenever a
+// compiled, rows past it on AAD -- is what HybridBundleResidual(p, false) restores, and it is still the fallback whenever a
 // curve is not piecewise-linear-capable, so both are pinned here.
 TEST(RouterPartition, ThePiecewiseLinearTierKeepsEveryRowOnTheWCache) {
   const cal::BundleProblem p = mixed_bundle();
@@ -106,7 +106,7 @@ TEST(RouterPartition, ThePiecewiseLinearTierKeepsEveryRowOnTheWCache) {
   EXPECT_EQ(eng.n_compiled_rows(), 15);
 }
 
-// The FALLBACK routing (SWAPS_EXP_PWL=0, and any curve the tier cannot cover): per row, against each curve's
+// The FALLBACK routing (HybridBundleResidual(p, false), and any curve the tier cannot cover): per row, against each curve's
 // LINEAR HORIZON -- the end of its maximal linear prefix, recursively capped by its base's. Before 2026-09-10
 // one value-dependent region anywhere sent EVERY row to the AAD block, including short par swaps that never
 // read past the linear front and rows on a completely different curve.

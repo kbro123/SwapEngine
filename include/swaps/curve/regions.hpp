@@ -674,6 +674,14 @@ class MonotoneCubic {
       default: break;
     }
   }
+  // THE piecewise-linear REGION CAPABILITY (2026-09-22): a value-dependent region describes its own branch cells --
+  // `node_pattern_bytes()` per node in the pattern it records, and `node_formula(j, node_pattern, phi)`: node j's
+  // filtered tangent as a row over this region's prefilter inputs z, for that node's pattern bytes. The pricing
+  // layer's tracker (CompiledCurveSet) reads patterns off z = G·x and re-takes W by these rows; it names no scheme.
+  int node_pattern_bytes() const { return 2; }
+  void node_formula(int j, const unsigned char* node_pattern, double* phi) const {
+    tangent_formula(node_pattern[0], node_pattern[1], j, h_, n_nodes(), phi);
+  }
   void pattern_from_prefilter(const double* z, std::vector<unsigned char>& out) const {
     const int nseg = static_cast<int>(h_.size());
     std::vector<double>& S = scratch_S_;

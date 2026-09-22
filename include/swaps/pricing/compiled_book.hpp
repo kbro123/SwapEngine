@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cassert>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -187,6 +188,121 @@ class CompiledCurveSet {
     }
   }
   const PwlCurve& pwl_curve(int pc) const { return pwlc_[pc]; }
+
+  // ---- THE PIECEWISE-LINEAR TRACKER (moved here from the calibration router, 2026-09-22) -------------------
+  // One per value-dependent curve. Phase 2 of the tier: the region's filter inputs z are LINEAR in x, so G =
+  // d(prefilter)/dx is taken ONCE (one AAD pass) and every sync reads the branch pattern off z = G·x with the
+  // region's own recorder (pattern_from_prefilter) -- no curve rebuild. When a node's pattern changes, its
+  // formula row (the region's node_formula, over z) times G is the new row of M = Φ_P·G, and W moves by the
+  // rank-k update ΔW = B·ΔM (pwl_rank_update). Nothing here names a scheme: the region describes its cells.
+  struct PwlTracker {
+    int c = -1, off = 0, ni = 0, npb = 0;
+    curve::ModularCurve<double> crv;
+    std::vector<unsigned char> cur, cached;
+    Eigen::MatrixXd G;   // d(filter inputs)/dx: structure-only
+    Eigen::VectorXd z;   // G·x scratch
+    int pc = -1, N = 0;  // analytic re-take structure (-1: this curve re-takes W by AAD)
+    std::vector<double> phi;
+    Eigen::MatrixXd M, dM;  // current formula rows Φ_P·G (N x ni); the change scratch
+    Eigen::RowVectorXd row;
+    std::vector<int> nodes;
+    bool dirty = false;
+  };
+  // Build the trackers (after finalize, on a pwl-enabled set).
+  void pwl_init() {
+    trk_.clear();
+    for (int k = 0; k < static_cast<int>(specs_.size()); ++k) {
+      if (!value_dependent(k)) continue;
+      const int ni = specs_[k].n_interp_knots();
+      PwlTracker t;
+      t.c = k; t.off = knot_offset_[k]; t.ni = ni;
+      t.crv = curve::make_modular_curve<double>(specs_[k].modules());
+      // G = d(prefilter)/dx, ONE AAD pass: the filter inputs precede the filter, so this is exact at any x.
+      auto cd = curve::make_modular_curve<ad::Dual>(specs_[k].modules());
+      cd.set_forwards(ad::seed(Eigen::VectorXd::Constant(ni, 0.03)));
+      std::vector<ad::Dual> z;
+      cd.prefilter_into(z);
+      t.G.resize(static_cast<int>(z.size()), ni);
+      for (int i = 0; i < static_cast<int>(z.size()); ++i)
+        t.G.row(i) = z[static_cast<std::size_t>(i)].derivatives().size() == ni
+                         ? Eigen::RowVectorXd(z[static_cast<std::size_t>(i)].derivatives().transpose())
+                         : Eigen::RowVectorXd::Zero(ni);
+      t.z.resize(t.G.rows());
+      t.crv.set_forwards(Eigen::VectorXd::Constant(ni, 0.03));  // fixes each region's node spacing once
+      t.pc = pwl_prepare(k);
+      if (t.pc >= 0) {
+        t.N = t.crv.pwl_nodes();
+        t.npb = t.crv.pwl_pattern_bytes();
+        t.M.setZero(t.N, ni);
+        t.dM.resize(t.N, ni);
+        t.phi.assign(static_cast<std::size_t>(t.crv.pwl_prefilter_size()), 0.0);
+        t.row.resize(ni);
+        t.nodes.reserve(static_cast<std::size_t>(t.N));
+      }
+      trk_.push_back(std::move(t));
+    }
+  }
+  // Keep W in step with x's branch pattern. Per call: z = G·x and the region's recorder on doubles. On a
+  // change: the ANALYTIC rank-k update (nodes whose formula changed) when every changed curve supports it,
+  // else a full re-take. The owner supplies the three effects on ITS derived data (it mirrors W's deltas):
+  //   rank_update(pc, nodes, dM)   set(pc, M)   full_retake()  -- the last also re-seats every analytic curve.
+  // Returns true iff W changed. The first sync is always a full re-take.
+  template <class RankUpdate, class Set, class FullRetake>
+  bool pwl_sync(const Eigen::VectorXd& x, RankUpdate&& rank_update, Set&& set, FullRetake&& full_retake) {
+    bool changed = false, analytic = pwl_synced_;
+    for (auto& t : trk_) {
+      t.z.noalias() = t.G * x.segment(t.off, t.ni);  // the one-pass linear map to the filter inputs
+      t.crv.pattern_from_prefilter(t.z, t.cur);
+      t.dirty = (t.cur != t.cached);
+      if (t.dirty) {
+        changed = true;
+        if (t.pc < 0 || t.cur.size() != t.cached.size()) analytic = false;
+      }
+    }
+    if (pwl_synced_ && !changed) return false;
+    if (analytic) {
+      for (auto& t : trk_) {
+        if (!t.dirty) continue;
+        t.nodes.clear();
+        for (int j = 0; j < t.N; ++j) {
+          bool same = true;
+          for (int b = 0; b < t.npb && same; ++b) same = t.cur[static_cast<std::size_t>(j * t.npb + b)] == t.cached[static_cast<std::size_t>(j * t.npb + b)];
+          if (same) continue;
+          formula_row(t, t.cur, j);
+          t.dM.row(static_cast<int>(t.nodes.size())) = t.row - t.M.row(j);
+          t.M.row(j) = t.row;
+          t.nodes.push_back(j);
+        }
+        rank_update(t.pc, t.nodes, t.dM.topRows(static_cast<int>(t.nodes.size())));
+        t.cached = t.cur;  // same size: no allocation
+      }
+      ++pwl_analytic_;
+    } else {
+      // Full reset. An AAD re-take only for curves the analytic path does not cover; every analytic-capable
+      // curve is then SET to its recorded pattern's W (L + B·M), which stays exact at degenerate states.
+      bool need_aad = false;
+      for (const auto& t : trk_) need_aad = need_aad || t.pc < 0;
+      if (need_aad) full_retake();
+      for (auto& t : trk_) {
+        t.cached = t.cur;
+        if (t.pc < 0) continue;
+        for (int j = 0; j < t.N; ++j) { formula_row(t, t.cached, j); t.M.row(j) = t.row; }
+        set(t.pc, t.M);
+      }
+      pwl_synced_ = true;
+    }
+    ++pwl_rebuilds_;
+    if (pwl_stats_) {  // opt-in diagnostics: a std::set insert allocates, so it is OFF unless asked for
+      std::vector<unsigned char> key;
+      for (const auto& t : trk_) key.insert(key.end(), t.cached.begin(), t.cached.end());
+      pwl_seen_.insert(std::move(key));
+    }
+    return true;
+  }
+  int pwl_rebuilds() const { return pwl_rebuilds_; }
+  int pwl_analytic() const { return pwl_analytic_; }
+  int pwl_distinct() const { return static_cast<int>(pwl_seen_.size()); }
+  void enable_pwl_stats() { pwl_stats_ = true; }
 
   int reg(int curve, double t) {
     const auto key = std::make_pair(curve, t);
@@ -374,6 +490,15 @@ class CompiledCurveSet {
   bool pwl_ = false;                     // EXPERIMENT: value-dependent curves take W at eval_x_
   std::vector<Eigen::VectorXd> eval_x_;  // EXPERIMENT: per-curve W evaluation state (empty = default seed)
   std::vector<PwlCurve> pwlc_;           // EXPERIMENT: analytic re-take structure per value-dependent curve
+  std::vector<PwlTracker> trk_;          // the tier's trackers (pwl_init)
+  bool pwl_synced_ = false, pwl_stats_ = false;
+  int pwl_rebuilds_ = 0, pwl_analytic_ = 0;  // syncs that changed W; of which analytic rank-k updates
+  std::set<std::vector<unsigned char>> pwl_seen_;  // opt-in diagnostics: distinct cells visited
+  // M's row j for pattern `pat`: the region's own formula for node j over its prefilter inputs, times G.
+  static void formula_row(PwlTracker& t, const std::vector<unsigned char>& pat, int j) {
+    t.crv.pwl_node_formula(j, pat.data() + j * t.npb, t.phi.data());
+    t.row.noalias() = Eigen::Map<const Eigen::RowVectorXd>(t.phi.data(), static_cast<Eigen::Index>(t.phi.size())) * t.G;
+  }
   std::map<std::pair<int, double>, int> idx_;
   std::vector<std::pair<int, double>> pts_;  // global index -> (curve, time)
   Eigen::MatrixXd W_;

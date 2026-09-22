@@ -13,9 +13,7 @@
 
 #include <Eigen/Core>
 
-#include <cstdlib>
 #include <optional>
-#include <set>
 #include <limits>
 #include <vector>
 
@@ -77,26 +75,21 @@ inline bool instrument_within_horizons(const Instrument& ins, const std::vector<
 // once per row. Whether a row's times reach a value-dependent part of a curve is the separate, per-curve
 // horizon question above.
 
-// The piecewise-linear W tier is ON by default (adopted 2026-09-20). A MonotoneCubic curve is piecewise-linear
-// in its knots, so rows reading the value-dependent region ride the compiled W-cache -- W exact inside a Hyman
-// branch cell, re-taken analytically (rank-k) when x crosses one -- instead of dropping to the AAD block:
-// desk_mixed residual 133 -> 4.6 us, Jacobian 747 -> 181 us, streamed tick 3.7-4.8x, parity ~1e-16 vs the
-// pre-adoption router. SWAPS_EXP_PWL=0 is the opt-OUT: it restores the horizon partition (value-dependent rows
-// to AAD) for a bisect or an A/B, and is what tests/router_partition_test.cpp pins the old routing with.
-inline bool exp_pwl_default() {
-  static const bool on = [] {
-    const char* e = std::getenv("SWAPS_EXP_PWL");
-    return !(e && e[0] == '0');
-  }();
-  return on;
-}
+// The piecewise-linear W tier is ON by default (adopted 2026-09-20): a MonotoneCubic curve is piecewise-linear
+// in its knots, so rows reading the value-dependent region ride the compiled W-cache -- W exact inside a branch
+// cell, re-taken analytically (rank-k) when x crosses one -- instead of dropping to the AAD block: desk_mixed
+// residual 133 -> 4.6 us, Jacobian 747 -> 181 us, streamed tick 3.7-4.8x, parity ~1e-16 vs the pre-adoption
+// router. `HybridBundleResidual(p, false)` is the opt-OUT: it restores the horizon partition (value-dependent
+// rows to AAD) for a bisect or an A/B, and is what tests/router_partition_test.cpp pins the old routing with.
+// (Until 2026-09-22 the tier's trackers and the scheme's tangent formula lived HERE and an environment
+// variable chose the routing; the trackers are the curve set's now (pricing::CompiledCurveSet::pwl_sync,
+// off the region's own cell description), and routing is a constructor argument.)
 
 class HybridBundleResidual {
  public:
-  explicit HybridBundleResidual(const BundleProblem& p) : HybridBundleResidual(p, exp_pwl_default()) {}
-  // `pwl` (EXPERIMENT): rows that read past a value-dependent region's start stay on the COMPILED engine,
-  // whose W is re-taken at x whenever x's branch pattern changes (sync) -- instead of going to the AAD block.
-  HybridBundleResidual(const BundleProblem& p, bool pwl) : n_res_(static_cast<int>(p.instruments.size())) {
+  // `pwl` (default ON): rows that read past a value-dependent region's start stay on the COMPILED engine, whose
+  // W is re-taken at x whenever x's branch pattern changes -- instead of going to the AAD block.
+  explicit HybridBundleResidual(const BundleProblem& p, bool pwl = true) : n_res_(static_cast<int>(p.instruments.size())) {
     validate_problem(p, "HybridBundleResidual");  // E1/E2/B12: refuse a malformed bundle before compiling it
     // ONE partition pass. Each instrument's cacheability is decided once (the MtM guard inside
     // Instrument::noncacheable walks real cashflows, so it is not free -- do not re-ask per consumer).
@@ -134,11 +127,13 @@ class HybridBundleResidual {
   }
 
   int n_residuals() const { return n_res_; }
-  // EXPERIMENT observability: is the piecewise-linear tier engaged, and how many W re-takes has it done.
-  bool pwl_active() const { return pwl_; }
-  int pwl_rebuilds() const { return pwl_rebuilds_; }
-  int pwl_distinct() const { return static_cast<int>(pwl_seen_.size()); }  // distinct patterns (SWAPS_EXP_PWL_STATS=1)
-  int pwl_analytic() const { return pwl_analytic_; }
+  // The piecewise-linear tier's observability (forwarded from the compiled engine): engaged, how many syncs
+  // changed W, of which analytic, distinct cells visited (opt-in: enable_pwl_stats).
+  bool pwl_active() const { return cacheable_ && cacheable_->pwl_active(); }
+  int pwl_rebuilds() const { return cacheable_ ? cacheable_->pwl_rebuilds() : 0; }
+  int pwl_distinct() const { return cacheable_ ? cacheable_->pwl_distinct() : 0; }
+  int pwl_analytic() const { return cacheable_ ? cacheable_->pwl_analytic() : 0; }
+  void enable_pwl_stats() { if (cacheable_) cacheable_->enable_pwl_stats(); }
   int n_times() const { return cacheable_ ? cacheable_->n_times() : 0; }
   // The ROW PARTITION, observable (item 5, 2026-09-10): which engine took a given global row. >=0 is the
   // row's index in the compiled W-cache sub-problem, -1 means it went to the AAD block. Exposed so a test
@@ -181,7 +176,6 @@ class HybridBundleResidual {
   }
 
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {
-    sync(x);
     if (nc_.empty() && cacheable_) return cacheable_->model_rates(x);
     if (cacheable_) scatter(cacheable_->model_rates(x), out_);
     else out_.setZero(n_res_);
@@ -190,7 +184,6 @@ class HybridBundleResidual {
   }
 
   const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const {
-    sync(x);
     if (nc_.empty() && cacheable_) return cacheable_->residuals(x);
     if (cacheable_) scatter(cacheable_->residuals(x), res_);  // cacheable rows (incl. their bands)
     else res_.setZero(n_res_);
@@ -203,7 +196,6 @@ class HybridBundleResidual {
   // block's `_vs` forms. When nothing is non-cacheable it is a straight delegate (q is already global).
   // The cacheable engine indexes q by ITS sub-rows, so the global q is first gathered onto them.
   const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
-    sync(x);
     if (nc_.empty() && cacheable_) return cacheable_->residuals_vs(x, q);
     if (cacheable_) {
       gather_cache(q, qsub_);
@@ -224,7 +216,6 @@ class HybridBundleResidual {
   // that re-evaluation rebuilt every AAD curve: 192 us and 23 allocations per refresh).
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) const {
     if (!r) { jacobian_vs_into(x, q, J); return; }
-    sync(x);
     if (nc_.empty() && cacheable_) { cacheable_->jacobian_vs_into(x, q, J, r); return; }
     r->resize(n_res_);
     J.resize(n_res_, nknots(x));
@@ -239,7 +230,6 @@ class HybridBundleResidual {
   }
   // Into a caller-owned J (C6, 2026-09-15): the cacheable half writes into a member scratch Jc_, so a warm call allocates no matrix.
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J) const {
-    sync(x);
     if (nc_.empty() && cacheable_) {
       cacheable_->jacobian_vs_into(x, q, J);
       return;
@@ -256,7 +246,6 @@ class HybridBundleResidual {
   }
 
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
-    sync(x);
     if (nc_.empty() && cacheable_) return cacheable_->jacobian(x);
     Eigen::MatrixXd J = Eigen::MatrixXd::Zero(n_res_, nknots(x));
     if (cacheable_) {
@@ -270,25 +259,10 @@ class HybridBundleResidual {
  private:
   static int nknots(const Eigen::VectorXd& x) { return static_cast<int>(x.size()); }
 
-  struct PatternTracker {
-    int off = 0, ni = 0;
-    curve::ModularCurve<double> crv;
-    std::vector<unsigned char> cur, cached;
-    Eigen::MatrixXd G;   // d(filter inputs)/dx: structure-only (phase 2)
-    Eigen::VectorXd z;   // G·x scratch
-    // analytic re-take
-    int pc = -1, N = 0;
-    std::vector<double> h, phi;
-    Eigen::MatrixXd M, dM;  // current formula rows Φ_P·G (N x ni); the change scratch
-    Eigen::RowVectorXd row;
-    std::vector<int> nodes;
-    bool dirty = false;
-  };
-
-  // EXPERIMENT: engage the piecewise-linear tier. Only the SHAPE question routes a row to AAD (can the batch
-  // express it at all?); the horizon question disappears. Refused (-> the shipped routing) if nothing would
-  // stay compiled or the compiled engine rejects the bundle (e.g. moment-path coupons on a value-dependent
-  // curve: forward_weight_matrix has no piecewise form yet).
+  // Engage the piecewise-linear tier: only the SHAPE question routes a row to AAD (can the batch express it at
+  // all?); the horizon question disappears. Refused (-> the shipped routing) if nothing would stay compiled or
+  // the compiled engine rejects the bundle (e.g. moment-path coupons on a value-dependent curve:
+  // forward_weight_matrix has no piecewise form yet).
   bool try_pwl(const BundleProblem& p) {
     BundleProblem c;
     c.curves = p.curves;
@@ -314,110 +288,8 @@ class HybridBundleResidual {
     cache_rows_ = std::move(rows);
     cache_pos_ = std::move(pos);
     nc_.init(p.curves, std::move(nc), std::move(nc_rows), p.n_knots());
-    auto& eng = *cacheable_;
-    const auto& cs = eng.curve_set();
-    for (int k = 0; k < static_cast<int>(p.curves.size()); ++k)
-      if (cs.value_dependent(k)) {
-        const int ni = p.curves[k].n_interp_knots();
-        PatternTracker t{cs.knot_offset(k), ni, curve::make_modular_curve<double>(p.curves[k].modules())};
-        // G = d(prefilter)/dx, ONE AAD pass: the filter inputs precede the filter, so this is exact at any x.
-        auto cd = curve::make_modular_curve<ad::Dual>(p.curves[k].modules());
-        cd.set_forwards(ad::seed(Eigen::VectorXd::Constant(ni, 0.03)));
-        std::vector<ad::Dual> z;
-        cd.prefilter_into(z);
-        t.G.resize(static_cast<int>(z.size()), ni);
-        for (int i = 0; i < static_cast<int>(z.size()); ++i)
-          t.G.row(i) = z[static_cast<std::size_t>(i)].derivatives().size() == ni
-                           ? Eigen::RowVectorXd(z[static_cast<std::size_t>(i)].derivatives().transpose())
-                           : Eigen::RowVectorXd::Zero(ni);
-        t.z.resize(t.G.rows());
-        t.crv.set_forwards(Eigen::VectorXd::Constant(ni, 0.03));  // fixes each region's node spacing once
-        // Analytic re-take structure (-1: this curve re-takes W by AAD).
-        t.pc = eng.pwl_prepare(k);
-        if (t.pc >= 0) {
-          t.N = t.crv.pwl_nodes();
-          t.h = *t.crv.pwl_spacing();
-          t.M.setZero(t.N, ni);
-          t.dM.resize(t.N, ni);
-          t.phi.assign(static_cast<std::size_t>(2 * t.N - 1), 0.0);
-          t.row.resize(ni);
-          t.nodes.reserve(static_cast<std::size_t>(t.N));
-        }
-        trk_.push_back(std::move(t));
-      }
-    pwl_ = true;
     return true;
   }
-
-  // M = Φ_P·G for the tracker's CACHED pattern, rows `j` (node j's filtered-tangent formula over x_c).
-  static void formula_row(PatternTracker& t, const std::vector<unsigned char>& pat, int j) {
-    curve::MonotoneCubic<double>::tangent_formula(pat[2 * j], pat[2 * j + 1], j, t.h, t.N, t.phi.data());
-    t.row.noalias() = Eigen::Map<const Eigen::RowVectorXd>(t.phi.data(), 2 * t.N - 1) * t.G;
-  }
-
-  // EXPERIMENT: keep the compiled W in step with x's branch pattern. Per call: z = G·x and the filter's
-  // branch logic on doubles (phase 2). On a change: the ANALYTIC rank-k update (nodes whose formula changed)
-  // when every changed curve supports it, else the full AAD re-take. The first sync is always a full re-take.
-  void sync(const Eigen::VectorXd& x) const {
-    if (!pwl_) return;
-    bool changed = false, analytic = pwl_synced_;
-    for (auto& t : trk_) {
-      t.z.noalias() = t.G * x.segment(t.off, t.ni);  // the one-pass linear map to the filter inputs
-      t.crv.pattern_from_prefilter(t.z, t.cur);
-      t.dirty = (t.cur != t.cached);
-      if (t.dirty) {
-        changed = true;
-        if (t.pc < 0 || t.cur.size() != t.cached.size()) analytic = false;
-      }
-    }
-    if (pwl_synced_ && !changed) return;
-    auto& eng = const_cast<CompiledBundleResidual&>(*cacheable_);  // const API caches a pure fn of x
-    if (analytic) {
-      for (auto& t : trk_) {
-        if (!t.dirty) continue;
-        t.nodes.clear();
-        for (int j = 0; j < t.N; ++j)
-          if (t.cur[2 * j] != t.cached[2 * j] || t.cur[2 * j + 1] != t.cached[2 * j + 1]) {
-            formula_row(t, t.cur, j);
-            t.dM.row(static_cast<int>(t.nodes.size())) = t.row - t.M.row(j);
-            t.M.row(j) = t.row;
-            t.nodes.push_back(j);
-          }
-        eng.pwl_rank_update(t.pc, t.nodes, t.dM.topRows(static_cast<int>(t.nodes.size())));
-        t.cached = t.cur;  // same size: no allocation
-      }
-      ++pwl_analytic_;
-    } else {
-      // Full reset. An AAD re-take only for curves the analytic path does not cover; every analytic-capable
-      // curve is then SET to its recorded pattern's W (L + B·M), which stays exact at degenerate states.
-      bool need_aad = false;
-      for (const auto& t : trk_) need_aad = need_aad || t.pc < 0;
-      if (need_aad) eng.rebuild_W(x);
-      for (auto& t : trk_) {
-        t.cached = t.cur;
-        if (t.pc < 0) continue;
-        for (int j = 0; j < t.N; ++j) { formula_row(t, t.cached, j); t.M.row(j) = t.row; }
-        eng.pwl_set(t.pc, t.M);
-      }
-      pwl_synced_ = true;
-    }
-    ++pwl_rebuilds_;
-    if (pwl_stats()) {  // opt-in diagnostics: a std::set insert allocates, so it is OFF on the measured path
-      std::vector<unsigned char> key;
-      for (const auto& t : trk_) key.insert(key.end(), t.cached.begin(), t.cached.end());
-      pwl_seen_.insert(std::move(key));
-    }
-  }
-  static bool pwl_stats() {
-    static const bool on = [] { const char* e = std::getenv("SWAPS_EXP_PWL_STATS"); return e && e[0] == '1'; }();
-    return on;
-  }
-  bool pwl_ = false;
-  mutable bool pwl_synced_ = false;
-  mutable int pwl_rebuilds_ = 0;
-  mutable int pwl_analytic_ = 0;  // of which: rank-k analytic updates (the rest are full AAD re-takes)
-  mutable std::set<std::vector<unsigned char>> pwl_seen_;  // EXPERIMENT diagnostics: distinct cells visited
-  mutable std::vector<PatternTracker> trk_;
 
   void scatter(const Eigen::VectorXd& sub, Eigen::VectorXd& full) const {
     full.setZero(n_res_);
