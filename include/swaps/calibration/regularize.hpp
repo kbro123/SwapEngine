@@ -85,13 +85,21 @@ Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, cons
     const int o = off[c], n = p.curves[c].n_interp_knots();  // curvature over interp knots only (no δ)
     const std::vector<double> lam = region_knot_lambdas(p.curves[c], lambda);  // per-region λ (Phase 1)
     std::vector<double> t;
+    std::vector<bool> flat;  // a knot in a Flat region: a step level, not a point on a smooth forward
     t.reserve(static_cast<std::size_t>(n));
-    for (const auto& m : p.curves[c].modules()) t.insert(t.end(), m.knots.begin(), m.knots.end());
-    // Every interior knot carries a row, a Flat region's included (unlike the tension operator, whose Flat pieces have zero
-    // energy): a basis-only curve's Flat front is in the instruments' null space and this is what pins it (EurCurves.*), and
-    // an un-quoted knot is pinned by the penalty rather than left rank-deficient (ApiPeriphery). Give a region reg_lambda = 0
-    // (CurveModule) to leave its steps alone.
+    for (const auto& m : p.curves[c].modules()) {
+      t.insert(t.end(), m.knots.begin(), m.knots.end());
+      flat.insert(flat.end(), m.knots.size(), m.scheme == curve::Scheme::Flat);
+    }
     for (int i = 1; i < n - 1; ++i) {
+      // The SAME rule as the tension operator's zero-energy Flat pieces: no curvature row centred on a Flat knot, nor on a knot
+      // whose RIGHT neighbour is Flat (a following Flat region ignores its incoming boundary, so the smooth region ends at
+      // knot i and has no curvature there). The LEFT neighbour may be a Flat region's last knot: that is the C0 join value
+      // the smooth region starts from, and it couples through this row exactly as through the tension operator's join piece
+      // -- which is what pins a basis-only curve's single Flat front knot (EurCurves.*). Meeting-date policy steps are never
+      // smoothed; a trailing Flat knot no instrument reaches stays genuinely unreached (ConsistentRisk.UnreachedKnot).
+      // A row is kept (as zeros) so the row count stays n - 2 per curve. ASSUMPTIONS.md D18.
+      if (flat[static_cast<std::size_t>(i)] || flat[static_cast<std::size_t>(i) + 1]) { ++r; continue; }
       const double li = lam[i];  // the λ of knot i's region
       const double h0 = t[static_cast<std::size_t>(i)] - t[static_cast<std::size_t>(i) - 1];
       const double h1 = t[static_cast<std::size_t>(i) + 1] - t[static_cast<std::size_t>(i)];

@@ -279,11 +279,14 @@ TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
   }
 }
 
-// With no region overriding (reg_lambda<0) every interior knot's row -- a Flat region's included: unlike the tension
-// operator, the discrete penalty is what pins a basis-only curve's Flat front (EurCurves.*) -- carries the single global
-// lambda. At unit spacing the divided second difference with its trapezoid weight IS the plain stencil
-// (a, b, c, w) = (1, -2, 1, 1), so these rows read exactly as they did before 2026-09-21.
-TEST(RegionSmoothing, UniformLambdaMatchesGlobal) {
+// With no region overriding (reg_lambda<0) every SMOOTH knot's row carries the single global lambda. At unit spacing the
+// divided second difference with its trapezoid weight IS the plain stencil (a, b, c, w) = (1, -2, 1, 1), so the smooth
+// rows read exactly as they did before 2026-09-21. The rows centred on the Flat region's knots (i = 1, 2) are ZERO: a Flat
+// knot is a step level, not a point on a smooth forward -- the same rule the tension operator's zero-energy Flat pieces
+// give (ASSUMPTIONS.md D18) -- so meeting-date policy steps are never smoothed by the default operator either. Knot 3
+// (the Hermite region's first) IS smoothed, against the join value at knot 2: that join row is what pins a single Flat
+// front knot on a basis-only curve.
+TEST(RegionSmoothing, UniformLambdaOnSmoothKnotsAndNoRowOnFlatOnes) {
   cal::BundleProblem p;
   cal::BundleCurveSpec spec;
   spec.base = -1;
@@ -293,12 +296,30 @@ TEST(RegionSmoothing, UniformLambdaMatchesGlobal) {
 
   const Eigen::MatrixXd R = cal::second_difference_operator(p, /*global lambda*/ 0.7, {0});
   ASSERT_EQ(R.rows(), 4);
-  for (int r = 0; r < 4; ++r) {
+  EXPECT_NEAR(R.row(0).cwiseAbs().sum(), 0.0, 1e-15) << "knot 1 is a Flat step level";
+  EXPECT_NEAR(R.row(1).cwiseAbs().sum(), 0.0, 1e-15) << "knot 2 is a Flat step level";
+  for (int r = 2; r < 4; ++r) {
     const int i = r + 1;
     EXPECT_NEAR(R(r, i - 1), 0.7, 1e-12);
     EXPECT_NEAR(R(r, i), -1.4, 1e-12);
     EXPECT_NEAR(R(r, i + 1), 0.7, 1e-12);
   }
+}
+
+// A trailing single-knot Flat region (the ConsistentRisk unreached-knot fixture): no row reaches it, so an instrument-free
+// tail knot stays genuinely unreached under the default operator -- the same as under tension.
+TEST(RegionSmoothing, ATrailingFlatKnotHasNoRowReachingIt) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec spec;
+  spec.base = -1;
+  spec.regions.push_back(curve::CurveModule{{1.0, 2.0, 3.0, 4.0, 5.0}, curve::Scheme::Hermite});
+  spec.regions.push_back(curve::CurveModule{{15.0}, curve::Scheme::Flat});
+  p.curves.push_back(spec);
+  const Eigen::MatrixXd R = cal::second_difference_operator(p, 0.5, {0});
+  ASSERT_EQ(R.rows(), 4);
+  EXPECT_NEAR(R.col(5).cwiseAbs().sum(), 0.0, 1e-15) << "nothing couples the Flat tail knot";
+  EXPECT_NEAR(R.row(3).cwiseAbs().sum(), 0.0, 1e-15) << "the last Hermite knot's row would reach into the Flat tail: dropped";
+  for (int r = 0; r < 3; ++r) EXPECT_GT(R.row(r).cwiseAbs().sum(), 0.0);
 }
 
 // NON-UNIFORM spacing: the row is the divided second difference scaled by the trapezoid weight, so an AFFINE-in-time
