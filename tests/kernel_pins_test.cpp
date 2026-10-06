@@ -94,7 +94,7 @@ TEST(SchemeValues, MonotoneCubicHymanEndClampMatchesTheHandComputation) {
 // (E6.1c: curve::scheme_is_linear replaced three enum tests; the runtime truth is ModularCurve::is_linear_map.)
 TEST(SchemeLinearity, StaticAnswerMatchesTheBuiltCurve) {
   for (cv::Scheme s : {cv::Scheme::Flat, cv::Scheme::Linear, cv::Scheme::NaturalCubic, cv::Scheme::Hermite,
-                       cv::Scheme::MonotoneCubic, cv::Scheme::BSpline, cv::Scheme::Tension}) {
+                       cv::Scheme::MonotoneCubic, cv::Scheme::BSpline, cv::Scheme::Tension, cv::Scheme::MonotoneConvex}) {
     cv::CurveModule m{{1.0, 2.0, 3.0, 5.0, 7.0, 10.0}, s};
     if (s == cv::Scheme::Tension) m.sigma = 1.0;
     const auto c = cv::make_modular_curve<double>({m});

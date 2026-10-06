@@ -74,6 +74,10 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<curve::CurveModu
 // linear builder uses would be WRONG here -- a flat state zeroes every secant, which sits on a cell boundary.
 inline Eigen::MatrixXd integral_weight_matrix_at(const std::vector<curve::CurveModule>& regions,
                                                  const std::vector<double>& times, const Eigen::VectorXd& x) {
+  for (const auto& r : regions)
+    if (!curve::scheme_is_piecewise_linear(r.scheme))
+      throw std::invalid_argument("integral_weight_matrix_at: a region that is not piecewise-linear in its knots (e.g. "
+                                  "MonotoneConvex) has no cell-constant W; its rows belong on the AAD engine.");
   auto c = curve::make_modular_curve<ad::Dual>(regions);
   const int m = c.n_knots();
   if (x.size() != m) throw std::invalid_argument("integral_weight_matrix_at: state size != curve knot count");
@@ -97,7 +101,7 @@ inline Eigen::MatrixXd forward_weight_matrix(const std::vector<curve::CurveModul
                                              const std::vector<double>& times) {
   auto c = curve::make_modular_curve<ad::Dual>(regions);
   if (!c.is_linear_map())
-    throw std::invalid_argument("forward_weight_matrix: requires linear interpolation regions (MonotoneCubic is value-dependent)");
+    throw std::invalid_argument("forward_weight_matrix: requires linear interpolation regions (a value-dependent scheme has no constant forward weights)");
   const int m = c.n_knots();
   Eigen::MatrixXd P(static_cast<int>(times.size()), m);
   c.set_forwards(ad::seed(Eigen::VectorXd::Constant(m, 0.03)));

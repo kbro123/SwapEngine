@@ -9,6 +9,7 @@ add_executable(swaps_tests
   region_combinatorial_test.cpp
   bspline_test.cpp
   monotone_cubic_test.cpp
+  monotone_convex_test.cpp
   compiled_generic_test.cpp
   generic_instrument_test.cpp
   portfolio_instrument_test.cpp

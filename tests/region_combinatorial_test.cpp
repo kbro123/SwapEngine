@@ -46,7 +46,7 @@ namespace {
 // THE canonical list. Every combinatorial test iterates over this, so extending the enum + this array is
 // all it takes to grow coverage. Order matches enum class Scheme (curve_module.hpp).
 constexpr Scheme ALL_SCHEMES[] = {Scheme::Flat,   Scheme::Linear,  Scheme::NaturalCubic, Scheme::Hermite,
-                                  Scheme::MonotoneCubic, Scheme::BSpline, Scheme::Tension};
+                                  Scheme::MonotoneCubic, Scheme::BSpline, Scheme::Tension, Scheme::MonotoneConvex};
 constexpr int kNScheme = static_cast<int>(sizeof(ALL_SCHEMES) / sizeof(ALL_SCHEMES[0]));
 
 const char* name(Scheme s) {
@@ -58,13 +58,15 @@ const char* name(Scheme s) {
     case Scheme::MonotoneCubic: return "MonotoneCubic";
     case Scheme::BSpline: return "BSpline";
     case Scheme::Tension: return "Tension";
+    case Scheme::MonotoneConvex: return "MonotoneConvex";
   }
   return "?";
 }
 
 // Every scheme interpolates its knot values EXCEPT BSpline, whose free values are control points that do
-// not lie on the curve (regions.hpp) — so only there is forward-at-knot != the input value.
-bool interpolates_knots(Scheme s) { return s != Scheme::BSpline; }
+// not lie on the curve (regions.hpp), and MonotoneConvex, whose free values are the DISCRETE forwards over
+// the intervals (the interval averages, not the forward at the knot) — so there forward-at-knot != the input.
+bool interpolates_knots(Scheme s) { return s != Scheme::BSpline && s != Scheme::MonotoneConvex; }
 
 // Factory: a region of `scheme` over `knots`, supplying the per-scheme extras (Tension's σ = 1.0). Every
 // other constraint (>= 3 strictly-increasing knots; time-ordering across regions) is the caller's job and

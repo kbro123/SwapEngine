@@ -80,11 +80,11 @@
     },
     "usd_eur_xccy_3c8k_hybrid_jacobian": {
       "target_ns": 42100,
-      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 32.4 us x1.3; ratchets DOWN only"
+      "note": "ratcheted 2026-09-09 after E4.D (moment path + segment-sum reduce): 32.4 us x1.3; ratchets DOWN only. 2026-10-06: the fixture's AAD block had silently EMPTIED (Portfolio FX and plain MtM legs compile since 2026-09-22, so the block timed nothing); its 5 MtM rows now carry the compounded funding observation and ride the block again -- the shape this target was set against. Target unchanged."
     },
     "usd_eur_xccy_3c8k_aad_block_jacobian": {
       "target_ns": 38200,
-      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only. 2026-10-06: fixture re-pointed (5 MtM rows back on the AAD block); target unchanged.. 2026-10-06: fixture re-pointed to the 5 compounded-funding MtM rows (the block had emptied and read 1 ns); target unchanged."
     },
     "usd_eur_xccy_3c8k_stream_tick": {
       "target_ns": 114000,

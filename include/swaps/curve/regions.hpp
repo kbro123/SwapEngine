@@ -20,6 +20,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace swaps::curve {
@@ -702,6 +703,272 @@ class MonotoneCubic {
   std::vector<double> s_, xs_;
   std::vector<Scalar> ys_, a_, b_, c_, d_, Is_;
   Scalar end_slope_{0.0};
+};
+
+// Hagan-West MONOTONE CONVEX (Interpolation Methods for Curve Construction, 2006; Methods for Constructing a
+// Yield Curve, 2008). On each interval the forward is fd_i + g(x), x = (t - tau_{i-1})/(tau_i - tau_{i-1}), with g
+// one of four quadratic SHAPES chosen by the signs of g0 = f(tau_{i-1}) - fd_i and g1 = f(tau_i) - fd_i, and
+// breakpoints eta that are RATIOS of the values -- so this is genuinely value-dependent and NOT piecewise-linear
+// in the knots (MonotoneCubic is: its Hyman filter only picks among linear formulas). Its tier is AAD, never the
+// W-cache; curve_module.hpp scheme_is_piecewise_linear is false and the piecewise-linear tier refuses it.
+//
+// FREE VALUES are the DISCRETE forwards fd_i over the intervals, exactly the method's inputs. A FOLLOWING region's n
+// knots bound n intervals (tau_0 = the join time; f_0 = the incoming forward: the engine's C0 join replaces the
+// paper's left endpoint rule). A LEADING region's first value is its flat short end on (0, tau_1] (the engine's
+// leading-region rule; f(tau_1) = that level) and the remaining n-1 are the discrete forwards on (tau_1, tau_2] ..
+// (tau_{n-1}, tau_n]. Interior f_i are the spacing-weighted averages of the adjacent discrete forwards; the far
+// end takes the paper's rule f_m = fd_m - (f_{m-1} - fd_m)/2. AMELIORATION (the paper's positivity guard): f_i is
+// clamped into [0, 2 min(fd_i, fd_{i+1})] when both neighbours are >= 0 and, mirrored, into [2 max, 0] when both
+// are <= 0 (the paper assumes positive rates; the mirror keeps its guarantee under negative ones); no clamp across
+// a sign change, and never on the pinned/flat start. The far end is clamped against 2 fd_m.
+//
+// Defining invariants (tests/monotone_convex_test.cpp): every interval integrates to its discrete forward EXACTLY
+// (G(1) = 0 in every region, so the integral at the knots is linear in the values; only the shape inside an
+// interval is not), f is continuous across knots and breakpoints, inputs of one sign give f of that sign.
+// AAD flows through: every branch compares VALUES, every formula is Scalar arithmetic; width-preserving zeros.
+template <class Scalar>
+class MonotoneConvex {
+ public:
+  explicit MonotoneConvex(std::vector<double> knots) : s_(std::move(knots)) {
+    require_increasing_knots(s_, "MonotoneConvex");
+  }
+  int n_values() const { return static_cast<int>(s_.size()); }
+  double t_end() const { return s_.back(); }
+  static constexpr bool is_linear_map = false;  // value-dependent AND not piecewise-linear -> AAD tier only
+
+  template <class Vec>
+  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
+    const bool lead = !in.has_predecessor;
+    m_ = lead ? n - 1 : n;
+    if (m_ < 0) throw std::invalid_argument("MonotoneConvex: needs >= 1 knot");
+    tau_.resize(m_ + 1);
+    fd_.resize(m_ + 1);
+    f_.resize(m_ + 1);
+    if (lead) {
+      tau_[0] = s_[0];
+      f_[0] = x[off];  // the flat short end on (0, tau_0] -- and the forward AT tau_0
+      for (int i = 1; i <= m_; ++i) { tau_[i] = s_[i]; fd_[i] = x[off + i]; }
+      I0_ = f_[0] * tau_[0];
+    } else {
+      tau_[0] = in.time;
+      f_[0] = in.value;  // C0 join (the paper's left endpoint rule is replaced by the pin)
+      for (int i = 1; i <= m_; ++i) { tau_[i] = s_[i - 1]; fd_[i] = x[off + i - 1]; }
+      I0_ = in.integral;
+    }
+    // Instantaneous forwards at the interior knots and the far end.
+    for (int i = 1; i < m_; ++i) {
+      const double hl = tau_[i] - tau_[i - 1], hr = tau_[i + 1] - tau_[i];
+      f_[i] = (hl * fd_[i + 1] + hr * fd_[i]) / (hl + hr);
+    }
+    if (m_ >= 1) f_[m_] = fd_[m_] - 0.5 * (f_[m_ - 1] - fd_[m_]);
+    // Amelioration, sign-symmetric (see the header).
+    for (int i = 1; i <= m_; ++i) {
+      const Scalar& a = fd_[i];
+      const Scalar& b = (i < m_) ? fd_[i + 1] : fd_[i];
+      if (a >= 0.0 && b >= 0.0) f_[i] = clamp(f_[i], a * 0.0, 2.0 * smin(a, b));
+      else if (a <= 0.0 && b <= 0.0) f_[i] = clamp(f_[i], 2.0 * smax(a, b), a * 0.0);
+    }
+    // Per-interval shape, and the integral at the interval ends (exact: G(1) = 0 in every region).
+    h_.resize(m_ + 1);
+    g0_.resize(m_ + 1); g1_.resize(m_ + 1); eta_.resize(m_ + 1); A_.resize(m_ + 1); reg_.assign(static_cast<std::size_t>(m_ + 1), 0);
+    Iend_.resize(m_ + 1);
+    Iend_[0] = I0_;
+    for (int i = 1; i <= m_; ++i) {
+      h_[i] = tau_[i] - tau_[i - 1];
+      const Scalar g0 = f_[i - 1] - fd_[i], g1 = f_[i] - fd_[i];
+      g0_[i] = g0; g1_[i] = g1;
+      eta_[i] = g0 * 0.0; A_[i] = g0 * 0.0;
+      int r;
+      if (g0 == 0.0 && g1 == 0.0) r = 0;
+      else if ((g0 > 0.0 && g1 <= -0.5 * g0 && g1 >= -2.0 * g0) || (g0 < 0.0 && g1 >= -0.5 * g0 && g1 <= -2.0 * g0)) r = 1;
+      else if ((g0 < 0.0 && g1 > -2.0 * g0) || (g0 > 0.0 && g1 < -2.0 * g0)) r = 2;
+      else if ((g0 > 0.0 && g1 < 0.0 && g1 > -0.5 * g0) || (g0 < 0.0 && g1 > 0.0 && g1 < -0.5 * g0)) r = 3;
+      else r = 4;  // the same sign (one of them possibly zero)
+      reg_[static_cast<std::size_t>(i)] = r;
+      if (r == 2) eta_[i] = (g1 + 2.0 * g0) / (g1 - g0);
+      else if (r == 3) eta_[i] = 3.0 * g1 / (g1 - g0);
+      else if (r == 4) { eta_[i] = g1 / (g0 + g1); A_[i] = -g0 * g1 / (g0 + g1); }
+      Iend_[i] = Iend_[i - 1] + fd_[i] * h_[i];
+    }
+  }
+
+  Scalar forward(double t) const {
+    if (m_ == 0 || t <= tau_[0]) return f_[0];  // the flat short end (leading) / the pinned join (following)
+    if (t >= tau_[m_]) return f_[m_];
+    const int i = seg(t);
+    // AT a knot the forward is that knot's f_i. Shape (iv) is degenerate when g0 == 0 exactly (eta == 1: the
+    // paper's first quadratic covers the whole interval and ends at fd_i, not f_i -- the shapes' limit really is a
+    // jump of g1 at the knot), so without this the knot itself would read fd_i there. A measure-zero
+    // configuration (the join forward equal to the first discrete forward); everywhere else g(i, 1) == g1.
+    if (t == tau_[i]) return f_[i];
+    return fd_[i] + g(i, (t - tau_[i - 1]) / h_[i]);
+  }
+  Scalar forward_d1(double t) const {
+    if (m_ == 0 || t <= tau_[0] || t >= tau_[m_]) return f_[0] * 0.0;
+    const int i = seg(t);
+    return dg(i, (t - tau_[i - 1]) / h_[i]) / h_[i];
+  }
+  Scalar forward_d2(double t) const {
+    if (m_ == 0 || t <= tau_[0] || t >= tau_[m_]) return f_[0] * 0.0;
+    const int i = seg(t);
+    return d2g(i, (t - tau_[i - 1]) / h_[i]) / (h_[i] * h_[i]);
+  }
+  // Analytic pieces: the knots and, inside an interval of shape (ii)/(iii)/(iv), its breakpoint eta (value-dependent,
+  // fixed at build like everything else here).
+  std::vector<double> pieces() const {
+    std::vector<double> bp(tau_.begin(), tau_.end());
+    for (int i = 1; i <= m_; ++i) {
+      const int r = reg_[static_cast<std::size_t>(i)];
+      if (r >= 2) {
+        const double e = dbl(eta_[i]);
+        if (e > 0.0 && e < 1.0) bp.push_back(tau_[i - 1] + e * h_[i]);
+      }
+    }
+    std::sort(bp.begin(), bp.end());
+    return bp;
+  }
+  Scalar integral(double t) const {
+    if (m_ == 0 || t <= tau_[0]) return I0_ - f_[0] * (tau_[0] - t);  // flat pre-segment / flat before the join
+    if (t >= tau_[m_]) return Iend_[m_] + f_[m_] * (t - tau_[m_]);
+    const int i = seg(t);
+    const double x = (t - tau_[i - 1]) / h_[i];
+    return Iend_[i - 1] + h_[i] * (fd_[i] * x + G(i, x));
+  }
+  Boundary<Scalar> out() const {
+    Scalar slope = f_[0] * 0.0;
+    if (m_ > 0) slope = dg(m_, 1.0) / h_[m_];
+    return {tau_[m_], f_[m_], slope, Iend_[m_]};
+  }
+  // Observability for the tests: which of the paper's four shapes interval i (1-based) took (0: g == 0).
+  int region(int interval) const { return reg_[static_cast<std::size_t>(interval)]; }
+  int n_intervals() const { return m_; }
+
+ private:
+  int seg(double t) const {  // the interval i with tau_{i-1} < t <= tau_i
+    auto it = std::lower_bound(tau_.begin() + 1, tau_.end(), t);
+    return static_cast<int>(it - tau_.begin());
+  }
+  static Scalar smin(const Scalar& a, const Scalar& b) { return b < a ? b : a; }
+  static Scalar smax(const Scalar& a, const Scalar& b) { return a < b ? b : a; }
+  static Scalar clamp(const Scalar& v, const Scalar& lo, const Scalar& hi) { return v < lo ? lo : (hi < v ? hi : v); }
+  // The primal double of any scalar the curve is instantiated with: arithmetic types as they are, Eigen's
+  // AutoDiffScalar through value(), a tape/tangent scalar through its primal member `v` (recursively).
+  template <class S>
+  static double dbl(const S& s) {
+    if constexpr (std::is_arithmetic_v<S>) return static_cast<double>(s);
+    else if constexpr (requires { s.value(); }) return dbl(s.value());
+    else return dbl(s.v);
+  }
+  // g(x) on interval i, by shape (x in [0, 1]):
+  //   (i)   g0 (1 - 4x + 3x^2) + g1 (-2x + 3x^2)
+  //   (ii)  g0 for x <= eta;  g0 + (g1 - g0) ((x - eta)/(1 - eta))^2 after,   eta = (g1 + 2 g0)/(g1 - g0)
+  //   (iii) g1 + (g0 - g1) ((eta - x)/eta)^2 for x < eta;  g1 after,         eta = 3 g1/(g1 - g0)
+  //   (iv)  A + (g0 - A) ((eta - x)/eta)^2 for x <= eta;  A + (g1 - A) ((x - eta)/(1 - eta))^2 after,
+  //         eta = g1/(g0 + g1),  A = -g0 g1/(g0 + g1)
+  Scalar g(int i, double x) const {
+    const Scalar& g0 = g0_[i];
+    const Scalar& g1 = g1_[i];
+    switch (reg_[static_cast<std::size_t>(i)]) {
+      case 1: return g0 * (1.0 - 4.0 * x + 3.0 * x * x) + g1 * (-2.0 * x + 3.0 * x * x);
+      case 2: {
+        const Scalar& eta = eta_[i];
+        if (x <= eta) return g0;
+        const Scalar r = (x - eta) / (1.0 - eta);
+        return g0 + (g1 - g0) * r * r;
+      }
+      case 3: {
+        const Scalar& eta = eta_[i];
+        if (x < eta) { const Scalar r = (eta - x) / eta; return g1 + (g0 - g1) * r * r; }
+        return g1;
+      }
+      case 4: {
+        const Scalar& eta = eta_[i];
+        const Scalar& A = A_[i];
+        if (x < eta) { const Scalar r = (eta - x) / eta; return A + (g0 - A) * r * r; }
+        if (eta < 1.0) { const Scalar r = (x - eta) / (1.0 - eta); return A + (g1 - A) * r * r; }
+        return A;  // eta == 1 (g0 == 0): the first shape covers the whole interval
+      }
+      default: return g0 * 0.0;
+    }
+  }
+  Scalar dg(int i, double x) const {  // d g / d x
+    const Scalar& g0 = g0_[i];
+    const Scalar& g1 = g1_[i];
+    switch (reg_[static_cast<std::size_t>(i)]) {
+      case 1: return g0 * (-4.0 + 6.0 * x) + g1 * (-2.0 + 6.0 * x);
+      case 2: {
+        const Scalar& eta = eta_[i];
+        if (x <= eta) return g0 * 0.0;
+        return 2.0 * (g1 - g0) * (x - eta) / ((1.0 - eta) * (1.0 - eta));
+      }
+      case 3: {
+        const Scalar& eta = eta_[i];
+        if (x < eta) return -2.0 * (g0 - g1) * (eta - x) / (eta * eta);
+        return g0 * 0.0;
+      }
+      case 4: {
+        const Scalar& eta = eta_[i];
+        const Scalar& A = A_[i];
+        if (x < eta) return -2.0 * (g0 - A) * (eta - x) / (eta * eta);
+        if (eta < 1.0) return 2.0 * (g1 - A) * (x - eta) / ((1.0 - eta) * (1.0 - eta));
+        return g0 * 0.0;
+      }
+      default: return g0 * 0.0;
+    }
+  }
+  Scalar d2g(int i, double x) const {
+    const Scalar& g0 = g0_[i];
+    const Scalar& g1 = g1_[i];
+    switch (reg_[static_cast<std::size_t>(i)]) {
+      case 1: return 6.0 * (g0 + g1);
+      case 2: { const Scalar& eta = eta_[i]; if (x <= eta) return g0 * 0.0; return 2.0 * (g1 - g0) / ((1.0 - eta) * (1.0 - eta)); }
+      case 3: { const Scalar& eta = eta_[i]; if (x < eta) return 2.0 * (g0 - g1) / (eta * eta); return g0 * 0.0; }
+      case 4: {
+        const Scalar& eta = eta_[i];
+        const Scalar& A = A_[i];
+        if (x < eta) return 2.0 * (g0 - A) / (eta * eta);
+        if (eta < 1.0) return 2.0 * (g1 - A) / ((1.0 - eta) * (1.0 - eta));
+        return g0 * 0.0;
+      }
+      default: return g0 * 0.0;
+    }
+  }
+  // G(x) = integral_0^x g, by shape; G(1) == 0 in every shape (the method's defining property).
+  Scalar G(int i, double x) const {
+    const Scalar& g0 = g0_[i];
+    const Scalar& g1 = g1_[i];
+    switch (reg_[static_cast<std::size_t>(i)]) {
+      case 1: return g0 * (x - 2.0 * x * x + x * x * x) + g1 * (-x * x + x * x * x);
+      case 2: {
+        const Scalar& eta = eta_[i];
+        if (x <= eta) return g0 * x;
+        const Scalar d = x - eta, w = 1.0 - eta;
+        return g0 * x + (g1 - g0) * d * d * d / (3.0 * w * w);
+      }
+      case 3: {
+        const Scalar& eta = eta_[i];
+        if (x < eta) { const Scalar d = eta - x; return g1 * x + (g0 - g1) * (eta * eta * eta - d * d * d) / (3.0 * eta * eta); }
+        return g1 * x + (g0 - g1) * eta / 3.0;
+      }
+      case 4: {
+        const Scalar& eta = eta_[i];
+        const Scalar& A = A_[i];
+        if (x < eta) { const Scalar d = eta - x; return A * x + (g0 - A) * (eta * eta * eta - d * d * d) / (3.0 * eta * eta); }
+        Scalar first = g0 * 0.0;
+        if (eta > 0.0) first = (g0 - A) * eta / 3.0;
+        if (eta < 1.0) { const Scalar d = x - eta, w = 1.0 - eta; return A * x + first + (g1 - A) * d * d * d / (3.0 * w * w); }
+        return A * x + first;
+      }
+      default: return g0 * 0.0;
+    }
+  }
+
+  std::vector<double> s_;
+  int m_ = 0;
+  std::vector<double> tau_, h_;
+  Scalar I0_{0.0};
+  std::vector<Scalar> fd_, f_, g0_, g1_, eta_, A_, Iend_;
+  std::vector<int> reg_;
 };
 
 // Clamped cubic B-SPLINE, CONTROL-POINT parameterization (docs/bezier-and-moments.md, Part A).

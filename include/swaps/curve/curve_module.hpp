@@ -137,23 +137,35 @@ struct TensionHolder final : RegionIface<S> {
 // Tension is the second LINEAR hyperbolic scheme (research note §3): with σ a FIXED hyperparameter its
 // coefficients depend only on knot spacings, so is_linear_map = true -- it rides the W-cache exactly
 // like NaturalCubic/BSpline, unlike the value-dependent MonotoneCubic. σ travels in CurveModule::sigma.
-enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline, Tension };
+// MonotoneConvex (2026-10-06) is the second value-dependent scheme and the first that is NOT piecewise-linear:
+// Hagan-West's four quadratic shapes have breakpoints at RATIOS of the knot values, so no branch cell has a
+// constant W. It rides the AAD tier only (scheme_is_piecewise_linear below is what keeps it off the tier).
+enum class Scheme { Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline, Tension, MonotoneConvex };
 
 // THE static answer to "does this scheme keep the curve a LINEAR MAP of its knot forwards" (so it rides the
-// W-cache): every shipped scheme except MonotoneCubic, whose Hyman filter is value-dependent. The runtime
-// truth is ModularCurve::is_linear_map() (the AND over the built regions' policies); the two are pinned
-// equal per scheme in tests/kernel_pins_test.cpp. E6.1c (2026-09-10): this used to be re-decided by enum
-// in hybrid_residual.hpp and api/bundle_api.cpp.
-inline constexpr bool scheme_is_linear(Scheme s) { return s != Scheme::MonotoneCubic; }
+// W-cache): every shipped scheme except the two value-dependent ones. The runtime truth is
+// ModularCurve::is_linear_map() (the AND over the built regions' policies); the two are pinned equal per
+// scheme in tests/kernel_pins_test.cpp. E6.1c (2026-09-10): this used to be re-decided by enum in
+// hybrid_residual.hpp and api/bundle_api.cpp. Written as an INCLUSION list (2026-10-06): a new scheme is
+// non-linear until it is named here, never the other way round.
+inline constexpr bool scheme_is_linear(Scheme s) {
+  return s == Scheme::Flat || s == Scheme::Linear || s == Scheme::NaturalCubic || s == Scheme::Hermite ||
+         s == Scheme::BSpline || s == Scheme::Tension;
+}
+// Is the curve's integral PIECEWISE-linear in the knot values -- one constant W per branch cell (MonotoneCubic:
+// the Hyman filter picks among linear tangent formulas), so the piecewise-linear W tier can track it? Linear
+// schemes trivially (one cell). MonotoneConvex is not: its W varies continuously inside a shape cell, so a
+// tier that froze W at a state would be silently wrong between syncs. Inclusion list, like scheme_is_linear.
+inline constexpr bool scheme_is_piecewise_linear(Scheme s) { return scheme_is_linear(s) || s == Scheme::MonotoneCubic; }
 
-// The tripwire for adding a scheme (REVIEW FINDING 3, 2026-09-21): appending one moves Tension and breaks
-// this assert, which names what must learn about it. scheme_is_linear above is the subtlest of them -- it
-// answers "does this ride the W-cache" by EXCLUSION, so a new value-dependent scheme would be called
-// linear by default and silently reach the compiled path.
-inline constexpr int kSchemeCount = 7;
-static_assert(static_cast<int>(Scheme::Tension) + 1 == kSchemeCount,
-              "a Scheme was added or reordered: update scheme_is_linear (is it a linear map of the knot "
-              "values?), ModularCurve::add, the codec's to/from string (api/codec.cpp) and kSchemeCount");
+// The tripwire for adding a scheme (REVIEW FINDING 3, 2026-09-21): appending one moves the last enumerator and
+// breaks this assert, which names what must learn about it: scheme_is_linear AND scheme_is_piecewise_linear
+// (both inclusion lists: an unnamed scheme is non-linear and not piecewise-linear), ModularCurve::add, the
+// codec's to/from string (api/codec.cpp), tests/region_combinatorial_test.cpp ALL_SCHEMES and kSchemeCount.
+inline constexpr int kSchemeCount = 8;
+static_assert(static_cast<int>(Scheme::MonotoneConvex) + 1 == kSchemeCount,
+              "a Scheme was added or reordered: update scheme_is_linear / scheme_is_piecewise_linear (inclusion "
+              "lists), ModularCurve::add, the codec's to/from string (api/codec.cpp), ALL_SCHEMES and kSchemeCount");
 
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
@@ -188,6 +200,7 @@ class ModularCurve {
       case Scheme::NaturalCubic: return add<NaturalCubic>(m.knots);
       case Scheme::Hermite: return add<Hermite>(m.knots);
       case Scheme::MonotoneCubic: return add<MonotoneCubic>(m.knots);
+      case Scheme::MonotoneConvex: return add<MonotoneConvex>(m.knots);
       case Scheme::BSpline: return add<BSpline>(m.knots);
       case Scheme::Tension: {
         regions_.push_back(
@@ -403,6 +416,13 @@ inline std::vector<CurveModule> flat_bspline(const std::vector<double>& meeting,
 inline std::vector<CurveModule> flat_monotone(const std::vector<double>& meeting,
                                               const std::vector<double>& back) {
   return two_region_layout(meeting, back, Scheme::MonotoneCubic);
+}
+// Hagan-West MONOTONE CONVEX back end (regions.hpp MonotoneConvex): the back knots' values are the DISCRETE forwards
+// over the intervals between them (the first interval starts at the join). Value-dependent and not piecewise-linear
+// -> the AAD tier only; the layout that exercises the tier's refusal (tests/monotone_convex_test.cpp).
+inline std::vector<CurveModule> flat_monotone_convex(const std::vector<double>& meeting,
+                                                     const std::vector<double>& back) {
+  return two_region_layout(meeting, back, Scheme::MonotoneConvex);
 }
 
 // Tension-spline back end (research note §3): a flat meeting-date front + a spline-under-tension back

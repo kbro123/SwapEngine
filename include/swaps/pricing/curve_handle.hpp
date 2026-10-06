@@ -215,6 +215,16 @@ inline std::vector<double> curve_linear_horizons(const std::vector<CurveStructur
   return h;
 }
 
+// True iff every value-dependent region on the set is PIECEWISE-linear in its knots (curve::scheme_is_piecewise_linear),
+// i.e. the piecewise-linear W tier can track every curve. A MonotoneConvex region anywhere makes this false: its W
+// varies inside a shape cell, so the tier is refused and the horizon partition sends the rows that read it to AAD.
+inline bool curves_piecewise_linear(const std::vector<CurveStructure>& curves) {
+  for (const auto& c : curves)
+    for (const auto& r : c.regions)
+      if (!curve::scheme_is_piecewise_linear(r.scheme)) return false;
+  return true;
+}
+
 // True iff NO time on this curve set is W-cacheable (every curve's horizon is −inf). Retained for the
 // callers that only need the all-or-nothing answer.
 inline bool curves_are_noncacheable(const std::vector<CurveStructure>& curves) {

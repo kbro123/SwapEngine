@@ -18,7 +18,7 @@ Guidance for Claude Code when working in this repository. Read this first, every
 
 - **Generic building blocks, not special cases.** There is ONE curve type — `ModularCurve` = an ordered
   list of interpolation REGIONS. The schemes {Flat, Linear, NaturalCubic, Hermite, MonotoneCubic, BSpline,
-  Tension} compose in ANY order and ANY position — there is **no front/back concept**. Region 0 is LEADING
+  Tension, MonotoneConvex} compose in ANY order and ANY position — there is **no front/back concept**. Region 0 is LEADING
   and flat-extrapolates its first knot; following regions C0-join (`Boundary::has_predecessor`). A "curve
   flavour" is DATA (a module list), not a subclass. Same spirit everywhere: prefer a generic, composable
   abstraction over a per-case branch.
@@ -147,7 +147,7 @@ ORDER-AGNOSTIC** (§0): any scheme leads, follows, or sits in the middle. Region
 (`Boundary::has_predecessor == false`) and flat-extrapolates its first free knot (`forward(t<t1)=v1`,
 symmetric with the far-end flat extrapolation) rather than pinning `f(0)=0`; every following region
 C⁰-joins its predecessor (byte-identical to the old back-region path). `region_combinatorial_test.cpp`
-proves it: 7 singles + 49 ordered pairs + 343 triples off one `ALL_SCHEMES[]` list, C0 at every join.
+proves it: 8 singles + 64 ordered pairs + 512 triples off one `ALL_SCHEMES[]` list, C0 at every join.
 The shipped SOFR curve is just ONE such list (a flat region then a smooth one); the front/back split
 below is a property of THAT layout and the knot strategy, not of the curve engine.
 
@@ -182,6 +182,23 @@ silent NaN; caught at construction).
   `is_linear_map = false`, so `W` is not constant and the W-cache does not apply. Calibration still works
   through the **AAD engine** (the filter branches are piecewise-differentiable, so `AutoDiffScalar` carries
   a valid one-sided gradient); `tests/monotone_cubic_test.cpp` calibrates it and reprices to <1e-9.
+- **`MonotoneConvex` (Hagan–West 2006/2008) is the first scheme that is value-dependent and NOT piecewise-linear
+  (2026-10-06, `regions.hpp MonotoneConvex`, layout `flat_monotone_convex`).** On each interval the forward is one
+  of four quadratic shapes chosen by the signs of `g0 = f(τᵢ₋₁) − fdᵢ`, `g1 = f(τᵢ) − fdᵢ`, with breakpoints at
+  RATIOS of the values — so unlike MonotoneCubic (whose Hyman filter only picks among linear formulas, one
+  constant `W` per branch cell) no cell has a constant `W`. Free values are the DISCRETE forwards over the
+  intervals (the method's inputs; `interpolates_knots` is false like BSpline's control points); a following
+  region takes its join forward from the predecessor (the engine's C0 join replaces the paper's left endpoint
+  rule), a leading region's first value is its flat short end. The amelioration (positivity clamp into
+  `[0, 2·min(fdᵢ, fdᵢ₊₁)]`) is applied MIRRORED when both neighbours are non-positive, so negative rates keep
+  the paper's guarantee. Pinned (`tests/monotone_convex_test.cpp`, no QuantLib oracle exists for it): every
+  interval integrates to its discrete forward exactly, continuity, sign preservation, hand computation of
+  each shape, AAD vs FD, and the ROUTING: `scheme_is_piecewise_linear` is false, so the piecewise-linear tier
+  REFUSES the curve (`CompiledCurveSet::enable_pwl` throws, the router never offers it) and the rows reading it
+  ride the AAD block under the horizon partition — exactly the fallback `router_partition_test` pins. Both
+  `scheme_is_linear` and `scheme_is_piecewise_linear` are INCLUSION lists now: a new scheme is non-linear and
+  not piecewise-linear until named. Not in the shape ladder yet (a rung streams on the AAD tier; add with
+  measured pins).
 - **THE GUARD (detect non-linear → route to AAD, never the W-cache):** `is_linear_map` is now enforced,
   not just documented. (a) Compile-time: `integral_weight_matrix` (`pricing/compiled.hpp`) `static_assert`s
   its curve `is_linear_map`, so a value-dependent scheme can NEVER silently reach the W-cache — it is a
@@ -419,8 +436,8 @@ cmake --build build --target bench && ./tools/verify.sh --bench-only
 ```
 cmake/DetectISA.cmake        automatic AVX-512/AVX2/NEON/SSE2 detection -> packet width
 cmake/simd_config.hpp.in     template for the generated swaps/simd_config.hpp
-include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline region
-                             math; ctors reject duplicate/unsorted knots), curve_module.hpp (THE curve:
+include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/MonotoneCubic/BSpline/Tension/
+                             MonotoneConvex region math; ctors reject duplicate/unsorted knots), curve_module.hpp (THE curve:
                              ModularCurve + make_modular_curve from CurveModule{knots,scheme}, plus the
                              named layouts flat_hermite -- the SHIPPED one -- flat_bspline, flat_monotone),
                              ql_term_structure.hpp (generic CurveTermStructure<Curve>)

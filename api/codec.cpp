@@ -123,6 +123,7 @@ curve::Scheme scheme_from_str(const std::string& s) {
   if (s == "MonotoneCubic") return curve::Scheme::MonotoneCubic;
   if (s == "BSpline") return curve::Scheme::BSpline;
   if (s == "Tension") return curve::Scheme::Tension;
+  if (s == "MonotoneConvex") return curve::Scheme::MonotoneConvex;
   throw std::invalid_argument("unknown interpolation scheme: " + s);
 }
 const char* scheme_to_str(curve::Scheme s) {
@@ -134,6 +135,7 @@ const char* scheme_to_str(curve::Scheme s) {
     case curve::Scheme::MonotoneCubic: return "MonotoneCubic";
     case curve::Scheme::BSpline: return "BSpline";
     case curve::Scheme::Tension: return "Tension";
+    case curve::Scheme::MonotoneConvex: return "MonotoneConvex";
   }
   // REVIEW FINDING 3: as above -- a new Scheme used to serialise as "Hermite", silently changing a curve's
   // interpolation in any document that round-trips through the codec.

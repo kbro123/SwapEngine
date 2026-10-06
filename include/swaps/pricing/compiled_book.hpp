@@ -82,7 +82,17 @@ class CompiledCurveSet {
   // its W at a STATE (integral_weight_matrix_at) instead of refusing times past its linear horizon; the W is
   // then exact throughout that state's branch-pattern cell. The owner re-points the state and re-runs
   // finalize() when the pattern changes. Call before finalize(). Fully linear curves are unaffected.
-  void enable_pwl() { pwl_ = true; }
+  // The piecewise-linear tier: REFUSED (throws) when a value-dependent region is not piecewise-linear in its knots
+  // (curve::scheme_is_piecewise_linear): W taken at a state would be silently wrong between syncs there.
+  void enable_pwl() {
+    bool ok = true;
+    for (const auto& c : specs_)
+      for (const auto& r : c.regions) ok = ok && curve::scheme_is_piecewise_linear(r.scheme);
+    if (!ok)
+      throw std::invalid_argument("CompiledCurveSet: the piecewise-linear W tier cannot track a region that is not "
+                                  "piecewise-linear in its knots (e.g. MonotoneConvex); its rows belong on the AAD tier");
+    pwl_ = true;
+  }
   bool pwl() const { return pwl_; }
   bool value_dependent(int c) const {
     for (const auto& r : specs_[c].regions)

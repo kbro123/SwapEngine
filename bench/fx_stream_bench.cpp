@@ -13,6 +13,9 @@
 #include <benchmark/benchmark.h>
 
 #include <Eigen/Core>
+
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <vector>
 
@@ -62,8 +65,8 @@ cal::Instrument par_inst(double T, int role) {
   return in;
 }
 
-// FX forward wrapped in a 1-component Portfolio: NON-cacheable by construction (an FX/MtM component
-// forces the AAD block -- Instrument::noncacheable).
+// FX forward wrapped in a 1-component Portfolio. Since the compiled row model (8f9343d, 2026-09-22) a Portfolio
+// of FX forwards COMPILES (an FxRatio source on the W-cache), so these rows ride the compiled engine.
 cal::Instrument fx_portfolio_inst(double T) {
   cal::Instrument fx;
   fx.quote = cal::QuoteKind::FxForward;
@@ -77,8 +80,11 @@ cal::Instrument fx_portfolio_inst(double T) {
   return wrap;
 }
 
-// MtM xccy basis whose USD funding leg pays with a LAG: the FX-reset funding bracket is genuinely
-// nonzero, so mtm_funding_term_negligible rejects it and the row rides the AAD block.
+// MtM xccy basis whose USD funding leg pays with a LAG. A plain MtM leg compiles too (the signed-leg batch,
+// 972caab), so to keep an AAD block under test the funding coupons carry the compounded PRODUCT observation
+// (single sub-period: the same value, the AAD route) -- Instrument::noncacheable answers true for these five
+// rows exactly as in tests/aad_block_pooled_test.cpp. Without this the block is EMPTY and the metric measured
+// nothing (it read 1 ns on 2026-10-06; the fixture now aborts on an empty block).
 cal::Instrument mtm_basis_inst(double T) {
   Legs Le = annual(T);                // EUR legs (self + benchmark share the schedule)
   Legs Lu = annual(T, PAY_LAG);       // USD funding leg, payment-lagged
@@ -91,6 +97,7 @@ cal::Instrument mtm_basis_inst(double T) {
   in.mtm.reset_num = EURUSD;
   in.mtm.reset_den = USD;
   in.mtm.fx_spot = FX_SPOT;
+  for (auto& c : in.mtm.coupons) c.obs.compounded = true;
   return in;
 }
 
@@ -144,6 +151,11 @@ struct Fixture {
         nc.push_back(prob.instruments[r]);
         nc_rows.push_back(r);
       }
+    if (nc_rows.size() != 5) {  // the five compounded-funding MtM rows; an empty block would time nothing
+      std::fprintf(stderr, "fx_stream_bench: expected 5 AAD-block rows, got %zu -- the metric would measure nothing\n",
+                   nc_rows.size());
+      std::abort();
+    }
   }
 
   Eigen::VectorXd model_quotes(const Eigen::VectorXd& x) const {
