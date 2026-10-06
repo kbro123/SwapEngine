@@ -110,6 +110,14 @@ class CompiledRows final : public RowEngine {
     const int j = local(row);
     if (j >= 0) eng_.set_market(j, market);
   }
+  void set_mtm_fx_spot(int row, double fx_spot) override {
+    const int j = local(row);
+    if (j >= 0) eng_.set_mtm_fx_spot(j, fx_spot);
+  }
+  void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const override {
+    eng_.directional_into(x, dir, dsub_);
+    scatter(dsub_, out);
+  }
   void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override { scatter(eng_.model_rates(x), out); }
   void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override { scatter(eng_.residuals(x), out); }
   void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const override {
@@ -140,7 +148,7 @@ class CompiledRows final : public RowEngine {
   CompiledBundleResidual eng_;
   std::vector<int> rows_;  // sub-row -> global row
   std::vector<int> pos_;   // global row -> sub-row, or -1
-  mutable Eigen::VectorXd qsub_, rc_;
+  mutable Eigen::VectorXd qsub_, rc_, dsub_;
   mutable Eigen::MatrixXd Jc_;
 };
 
@@ -211,6 +219,17 @@ class HybridBundleResidual {
   void set_market(const Eigen::VectorXd& q) {
     if (q.size() != n_res_) throw std::invalid_argument("HybridBundleResidual::set_market: market length differs");
     for (int r = 0; r < n_res_; ++r) engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(r)])]->set_market(r, q[r]);
+  }
+  // The FX spot of row `row`'s resetting leg (a book of Npv rows under an FX move): the row's owning engine takes it.
+  void set_mtm_fx_spot(int row, double fx_spot) {
+    engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(row)])]->set_mtm_fx_spot(row, fx_spot);
+  }
+  // (J·dir)[row] for every row, each engine the cheapest way it has (row_engine.hpp): the book's parallel PV01 is
+  // this along pricing::parallel_direction, summed.
+  void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const {
+    if (whole_) { compiled_->engine().directional_into(x, dir, out); return; }
+    out.resize(n_res_);
+    for (const auto& e : engines_) e->directional_into(x, dir, out);
   }
 
   const Eigen::VectorXd& model_rates(const Eigen::VectorXd& x) const {

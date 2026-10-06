@@ -25,8 +25,10 @@ Scalar stepped_annuity_pv(const std::vector<pricing::FixedCoupon>& leg, const st
                           const DCurve& dc) {
   assert(!leg.empty() && rates.size() == leg.size());
   Scalar a = dc.discount(leg[0].pay) * (leg[0].tau * leg[0].scale * rates[0]);
-  for (std::size_t i = 1; i < leg.size(); ++i)
-    a += dc.discount(leg[i].pay) * (leg[i].tau * leg[i].scale * rates[i]);
+  for (std::size_t i = 1; i < leg.size(); ++i) {
+    const Scalar term = dc.discount(leg[i].pay) * (leg[i].tau * leg[i].scale * rates[i]);  // materialised: see pricing::annuity
+    a += term;
+  }
   return a;
 }
 
@@ -37,7 +39,10 @@ template <class Scalar, class DCurve>
 Scalar principal_pv(const std::vector<std::pair<double, double>>& flows, const DCurve& dc) {
   assert(!flows.empty());
   Scalar pv = dc.discount(flows[0].first) * flows[0].second;
-  for (std::size_t i = 1; i < flows.size(); ++i) pv += dc.discount(flows[i].first) * flows[i].second;
+  for (std::size_t i = 1; i < flows.size(); ++i) {
+    const Scalar term = dc.discount(flows[i].first) * flows[i].second;  // materialised: a flow dated today has an empty gradient
+    pv += term;
+  }
   return pv;
 }
 
@@ -103,13 +108,14 @@ struct MultiCurveBook {
     // --- optional booked structure (stepped fixed rate + principal exchange) ---
     // Per-coupon fixed rates for a STEP-UP / amortizer-with-step / structured swap. EMPTY (the default) =>
     // the scalar `fixed_rate` applies to every coupon, byte-identical to before; when set, its size MUST
-    // equal fixed_coupons.size() and the fixed leg pays Σ DF·tau·scale·fixed_rates[i]. A stepped position is
-    // NOT W-cacheable (the compiled book's nf_ row-scale is a single scalar per position), so it rides the
-    // templated fallback -- CompiledMultiCurveBook::swap_is_compilable returns false for it.
+    // equal fixed_coupons.size() and the fixed leg pays Σ DF·tau·scale·fixed_rates[i]. As a ROW of the compiled
+    // engine (calibration/book_rows.hpp position_instrument) the rates fold into each fixed coupon's scale, so a
+    // stepped position rides the W-cache like a plain one (2026-10-06; it used to force a templated fallback).
     std::vector<double> fixed_rates;
     // Principal-exchange cashflows (initial / final notional exchange for xccy / resolved trades), as
     // (discount-curve time, signed amount per unit notional) pairs discounted on `disc_curve`. EMPTY => none
-    // (byte-identical). Present => the position rides the fallback (extra dated flows the batch has no row for).
+    // (byte-identical). Present => dated amounts on the row's fixed leg (or, when the fixed leg discounts on another
+    // curve, fully-fixed coupons on its bench leg) -- still the W-cache (2026-10-06).
     std::vector<std::pair<double, double>> principal_flows;
 
     // --- xccy resetting FOREIGN funding leg (Kind::Xccy only) ---

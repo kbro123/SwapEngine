@@ -1,4 +1,5 @@
-// Compiled multi-curve book reprice vs the templated virtual-handle path (audit U2).
+// The book as ROWS of the compiled engine (calibration::BookRows) vs the templated virtual-handle path (audit U2;
+// until 2026-10-06 the CompiledMultiCurveBook twin).
 //
 // The fixture mirrors session_warm_bench.cpp's desk scale: an 8-curve spread chain (1 outright + 7
 // spreads), 26 knots per curve, and a 200-swap multi-curve book spread across all 8 forecast curves --
@@ -17,7 +18,7 @@
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 
 namespace cal = swaps::calibration;
@@ -111,7 +112,7 @@ BENCHMARK(BM_MultiCurveBook_Templated);
 // The COMPILED kernel: DF_all = exp(-W_all x) once, then the role-aware gathered coupon/annuity reduce.
 static void BM_MultiCurveBook_Compiled(benchmark::State& state) {
   const Fixture& f = fx();
-  const pf::CompiledMultiCurveBook cmb(f.curves, f.book);
+  const cal::BookRows cmb(f.curves, f.book);
   bool flip = false;
   for (auto _ : state) {
     double npv = cmb.npv(flip ? f.x1 : f.x0);
@@ -126,7 +127,7 @@ BENCHMARK(BM_MultiCurveBook_Compiled);
 static void BM_MultiCurveBook_CompileCost(benchmark::State& state) {
   const Fixture& f = fx();
   for (auto _ : state) {
-    const pf::CompiledMultiCurveBook cmb(f.curves, f.book);
+    const cal::BookRows cmb(f.curves, f.book);
     benchmark::DoNotOptimize(cmb.n_times());
   }
 }

@@ -99,6 +99,7 @@ const char* quote_to_str(cal::QuoteKind q) {
     case cal::QuoteKind::Portfolio: return "Portfolio";
     case cal::QuoteKind::TurnJump: return "TurnJump";
     case cal::QuoteKind::ZeroCouponRate: return "ZeroCouponRate";
+    case cal::QuoteKind::Npv: return "Npv";
   }
   // REVIEW FINDING 3 (2026-09-21): this fell back to "ParRate", so a new kind SERIALISED as a par rate --
   // a silently wrong document rather than a loud failure. The switch is exhaustive (kQuoteKindCount).
@@ -112,6 +113,7 @@ cal::QuoteKind quote_from_str(const std::string& s) {
   if (s == "Portfolio") return cal::QuoteKind::Portfolio;
   if (s == "TurnJump") return cal::QuoteKind::TurnJump;
   if (s == "ZeroCouponRate") return cal::QuoteKind::ZeroCouponRate;
+  if (s == "Npv") return cal::QuoteKind::Npv;
   if (s == "ParRate") return cal::QuoteKind::ParRate;
   throw std::invalid_argument("unknown quote kind: " + s);
 }

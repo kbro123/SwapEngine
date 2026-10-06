@@ -5,7 +5,7 @@
 // The pricers skip a settled INITIAL exchange (s < 0) but book the final one at any time:
 //   (a) pricing::xccy_mtm_leg_pv adds +DF(e) for e < 0;
 //   (b) MultiCurveBook::position_value's domestic constant-notional leg adds +DF(e_N) for e_N < 0;
-//   (c) CompiledMultiCurveBook's domestic exchange row, which mirrors (b) term for term (T3 parity below).
+//   (c) BookRows's domestic exchange row, which mirrors (b) term for term (T3 parity below).
 // Expected values are written by hand from flat continuously-compounded curves: a settled exchange contributes nothing,
 // an exchange dated today (t = 0) or later is still a flow (the same rule the initial exchange already follows).
 #include <array>
@@ -23,7 +23,7 @@
 #include "swaps/calibration/pnl_explain.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 #include "swaps/pricing/cashflows.hpp"
 
@@ -72,7 +72,7 @@ px::FloatCoupon booked_coupon(double s, double e) {
   return c;
 }
 
-// Three flat-hermite bundle curves at a sloped state (0 EUR-in-USD, 1 ESTR, 2 SOFR): what CompiledMultiCurveBook prices on.
+// Three flat-hermite bundle curves at a sloped state (0 EUR-in-USD, 1 ESTR, 2 SOFR): what BookRows prices on.
 struct World {
   cal::BundleProblem p;
   Eigen::VectorXd x;
@@ -170,7 +170,7 @@ TEST(RollBookSettledEndRepro, CompiledXccyRowSkipsASettledDomesticFinalExchangeL
   p.mtm_reset_num = 0; p.mtm_reset_den = 2; p.fx_spot = 1.10;
   pf::MultiCurveBook book;
   book.positions = {p};
-  const pf::CompiledMultiCurveBook cb(w.p.curves, book);
+  const cal::BookRows cb(w.p.curves, book);
   ASSERT_EQ(cb.n_compiled(), 1) << "premise: the position compiles (its MtM coupons are unseasoned)";
   const double v = pf::MultiCurveBook::position_value<double>(p, w);
   const double dom_want = w(0).discount(0.004) * 0.01;  // interest only: no domestic exchange

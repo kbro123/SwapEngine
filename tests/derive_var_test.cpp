@@ -226,9 +226,9 @@ TEST(Var, RevalPricesEveryMoveAtTheCalibratedStateThroughTheCompiledBookUnderThe
   const auto at_fx = [&P, &book](double factor) {  // the EURUSD spot moved by hand, freshly compiled
     pf::MultiCurveBook moved = book;
     moved.positions[1].fx_spot = 1.10 * factor;
-    return pf::CompiledMultiCurveBook(P.curves, moved);
+    return cal::BookRows(P.curves, moved);
   };
-  EXPECT_EQ(rv.base_npv, pf::CompiledMultiCurveBook(P.curves, book).npv(x)) << "the base is the calibrated state, not the seed";
+  EXPECT_EQ(rv.base_npv, cal::BookRows(P.curves, book).npv(x)) << "the base is the calibrated state, not the seed";
   const auto pnl_at = [&](const std::vector<double>& delta, double factor) {
     return at_fx(factor).npv(cal::shift_interp_forwards(P, x, delta)) - rv.base_npv;
   };
@@ -262,7 +262,7 @@ TEST(Var, WithoutX0TheFlatSeedIsCalibrated) {
   const cal::BundleProblem P = r.reval->bundle;
   const dv::VarResult out = dv::var<SeedSession>(r);
   const Eigen::VectorXd x = (cal::flat_x0(P).array() + kCalibrationShift).matrix();
-  EXPECT_EQ(out.reval->base_npv, pf::CompiledMultiCurveBook(P.curves, r.reval->book).npv(x));
+  EXPECT_EQ(out.reval->base_npv, cal::BookRows(P.curves, r.reval->book).npv(x));
 }
 
 TEST(Var, ChecksItsInputsBeforeCalibrating) {

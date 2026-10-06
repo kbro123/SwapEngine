@@ -23,7 +23,7 @@
 #include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/structure_fingerprint.hpp"
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "tolerances.hpp"
@@ -209,9 +209,9 @@ TEST(FxSpotTimeCompiled, AnXccyPositionWithASpotTimeLeavesTheCompiledBookAndPric
   pf::MultiCurveBook book, book0;
   book.positions = {p};
   book0.positions = {p0};
-  const pf::CompiledMultiCurveBook cb(w.p.curves, book), cb0(w.p.curves, book0);
+  const cal::BookRows cb(w.p.curves, book), cb0(w.p.curves, book0);
   EXPECT_EQ(cb0.n_compiled(), 1) << "control: without a spot time the position compiles";
-  EXPECT_EQ(cb.n_compiled(), 0) << "a spot-time position rides the templated fallback";
+  EXPECT_EQ(cb.n_compiled(), 0) << "a spot-time position rides the AAD tier (Instrument::noncacheable)";
   EXPECT_NEAR(cb.npv(w.x), v, 1e-9 * std::abs(v));
 }
 

@@ -11,7 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "swaps/calibration/bundle_state.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 
 namespace cal = swaps::calibration;
 namespace crv = swaps::curve;
@@ -131,8 +131,8 @@ TEST(ParallelDirection, IsOneOnOutrightInterpolationKnotsOnly) {
   EXPECT_TRUE(px::parallel_direction(p.curves) == want);
 }
 
-// CompiledMultiCurveBook::pv01 is the book's move along the parallel direction -- on a spread curve and across a turn,
-// through both its compiled half and its templated fallback (a compounded observation cannot compile).
+// BookRows::pv01 is the book's move along the parallel direction -- on a spread curve and across a turn,
+// through both the compiled rows and an AAD-tier row (a compounded observation cannot compile).
 TEST(CompiledPv01, IsTheBooksMoveAlongTheParallelDirectionOnSpreadAndTurnedCurves) {
   cal::BundleProblem p;
   cal::BundleCurveSpec outright = flat_curve(0);
@@ -148,7 +148,7 @@ TEST(CompiledPv01, IsTheBooksMoveAlongTheParallelDirectionOnSpreadAndTurnedCurve
   arithmetic.fwd_curve = 1;
   pf::MultiCurveBook::Position compounded = arithmetic;
   compounded.float_coupons[0].obs.compounded = true;
-  const pf::CompiledMultiCurveBook book(p.curves, pf::MultiCurveBook{{arithmetic, compounded}});
+  const cal::BookRows book(p.curves, pf::MultiCurveBook{{arithmetic, compounded}});
   const Eigen::VectorXd u = px::parallel_direction(p.curves);
   const double h = 1e-6;
   const double along = 1e-4 * (book.npv(x + h * u) - book.npv(x - h * u)) / (2.0 * h);

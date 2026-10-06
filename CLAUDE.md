@@ -589,7 +589,14 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   1-curve `CompiledBundleResidual`, and `portfolio/compiled.hpp` `CompiledPortfolio` reprices NPVs off the
   SAME `CompiledCurveSet` + `BundleFloat/Fixed` primitives — one compiled kernel for calibration AND
   analytics, not three. Perf-neutral (measured): `portfolio_analytics` and `warm_recalibration` gates
-  unchanged. NB the batches materialize the per-coupon vector BEFORE the sparse reduction `R * v` — handing
+  unchanged. **And a BOOK is rows of that engine (2026-10-06, `calibration/book_rows.hpp`):** a position is an
+  `Npv` instrument (`QuoteKind::Npv`, `Src::Npv` in the row model: numerator − annuity, no division; the fixed
+  leg a list of dated amounts τ·scale, the notional a Portfolio weight), so the multi-curve book's NPV is
+  `model_rates`, its parallel PV01 the engine's `directional_into` (J·dir formed from the batches' own partials,
+  no J, no second implementation) and per-position key-rate risk its `jacobian`; a seasoned / compounded /
+  spot-time position rides the AAD block because `Instrument::noncacheable` says so, as for any row. The
+  `CompiledMultiCurveBook` twin (its own W, hand-written PV01 partials, `swap_is_compilable` /
+  `xccy_is_compilable`, a whole-set veto and a templated fallback) is DELETED. NB the batches materialize the per-coupon vector BEFORE the sparse reduction `R * v` — handing
   Eigen's sparse×dense an unevaluated gather+divide expression re-does that work per access (~1.28× slower;
   see `BundleFloatLegs::pv`).
 - **The streamed re-cal is problem-generic (`calibration/residual_engine.hpp`).** `StreamingCalibrator`

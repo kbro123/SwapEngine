@@ -1,7 +1,7 @@
 // E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD)
 // SC2 (owner decision 2026-09-14): FX moves are exact per currency pair. portfolio/fx_pairs.hpp (each xccy position's
 // pair and the one place it picks up its factor), derive/fx_move.hpp (a move's bumps -> one factor per pair, and the
-// request-level book_fx_moves) and CompiledMultiCurveBook::set_fx_factors (the in-place rescale), each checked against
+// request-level book_fx_moves) and BookRows::set_fx_factors (the in-place rescale), each checked against
 // hand-scaled books and closed-form factors. Header-only (swaps_tests), so tools/mutate.py reaches them; the verbs end
 // to end are pinned by tests/scenario_fx_pairs_repro_test.cpp.
 #include <cmath>
@@ -15,7 +15,7 @@
 
 #include "swaps/calibration/bundle_state.hpp"
 #include "swaps/derive/fx_move.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 #include "swaps/portfolio/fx_pairs.hpp"
 
 namespace cal = swaps::calibration;
@@ -196,22 +196,22 @@ TEST(SetXccyFx, EachPositionTakesItsSlotsFactorAndTheTemplatedAndCompiledBooksAg
   EXPECT_EQ(cal::book_value_at(moved, p, x), cal::book_value_at(by_hand, p, x));
 
   // The compiled book rescales its rows in place: bitwise a fresh compile of the hand-scaled book, and back again.
-  pf::CompiledMultiCurveBook compiled(p.curves, book);
+  cal::BookRows compiled(p.curves, book);
   const double base = compiled.npv(x);
   compiled.set_fx_factors(slots, f);
-  EXPECT_EQ(compiled.npv(x), pf::CompiledMultiCurveBook(p.curves, by_hand).npv(x));
+  EXPECT_EQ(compiled.npv(x), cal::BookRows(p.curves, by_hand).npv(x));
   const std::vector<double> one{1.0, 1.0};
   compiled.set_fx_factors(slots, one);
   EXPECT_EQ(compiled.npv(x), base) << "factors of 1 restore the constructed rows exactly";
 
-  // A seasoned (fallback) xccy position rides the templated half: its spot moves too.
+  // A seasoned xccy position rides the AAD tier: its spot moves too (the leaf instrument's fx_spot).
   pf::MultiCurveBook seasoned = book;
   seasoned.positions[2].mtm_coupons[0].reset_fx = 1.25;  // a fixed first reset: not compilable
   pf::MultiCurveBook seasoned_by_hand = seasoned;
   seasoned_by_hand.positions[1].fx_spot = 1.10 * 1.02;
   seasoned_by_hand.positions[2].fx_spot = 1.30 * 0.99;
-  pf::CompiledMultiCurveBook with_fallback(p.curves, seasoned);
+  cal::BookRows with_fallback(p.curves, seasoned);
   ASSERT_EQ(with_fallback.n_fallback(), 1);
   with_fallback.set_fx_factors(slots, f);
-  EXPECT_EQ(with_fallback.npv(x), pf::CompiledMultiCurveBook(p.curves, seasoned_by_hand).npv(x));
+  EXPECT_EQ(with_fallback.npv(x), cal::BookRows(p.curves, seasoned_by_hand).npv(x));
 }

@@ -542,7 +542,7 @@ class CompiledCurveSet {
 //
 // WHERE A LEG'S VALUE GOES (2026-09-22): the derivative scatters and the moment direct terms take a LegMap policy that
 // says, per leg (batch instrument), which output row it lands on and with what sign. The two policies:
-//   LegOffset{row0, sign} -- leg i -> row0 + i, one sign for the batch (the book twin, the tests);
+//   LegOffset{row0, sign} -- leg i -> row0 + i, one sign for the batch (the tests);
 //   LegTable{row, sign}   -- leg i -> row[i], sign[i]: several signed legs of ONE quotient row in ONE batch, which is
 //                            how CompiledBundleResidual folds +bench/-fwd/+mtm into a single float batch (no padded
 //                            empty legs, no per-kind batches).
@@ -767,7 +767,7 @@ struct BundleFloatBatch {
   // one divide per sub-period (~7,000). The divide was the dominant per-coupon cost (13-15 cycle latency,
   // 4-cycle throughput); a multiply is 0.5/cycle. a·(1/b) differs from a/b by ≤ 1 ULP, so "bit-identical to
   // the templated kernel" becomes ~1e-16 RELATIVE parity (the T3 tests are at 1e-12). The hot callers
-  // (CompiledBundleResidual, CompiledMultiCurveBook) pass their shared INV; the DF-only overloads below
+  // (CompiledBundleResidual) pass their shared INV; the DF-only overloads below
   // compute it into per-batch scratch for everyone else (still n_times divides, never per coupon).
   //
   // NOTE on vectorisation: these pointer loops are NOT auto-vectorised by clang at -O3 -march=x86-64-v3
@@ -1117,6 +1117,10 @@ struct BundleFloatBatch {
   }
   // The coupon -> leg map, so a caller can build per-coupon row/sign tables once (LegTable).
   const Eigen::VectorXi& coupon_leg() const { return inst; }
+  // Leg `leg`'s coupons are [leg_begin(leg), leg_end(leg)) -- so a per-leg update (an MtM leg's FX spot re-scale)
+  // touches exactly its coupons, not a scan of the batch.
+  int leg_begin(int leg) const { return cpn_begin_[static_cast<std::size_t>(leg)]; }
+  int leg_end(int leg) const { return cpn_begin_[static_cast<std::size_t>(leg) + 1]; }
   // The general form: coupon c's partials land on row m.row(c) with sign m.sgn(c) (LegOffset / LegTable).
   // Runs PER LEG: an MtM leg takes the reset-ratio partials, every other leg the plain ones -- one MtM leg in
   // the batch costs the plain legs nothing (the batch-wide has_mtm_ path used to multiply every partial by R = 1).
@@ -1419,6 +1423,10 @@ struct BundleFixedLegs {
   void d_annuity(Mat& d, int row0) const {
     for (int i = 0; i < static_cast<int>(pay.size()); ++i) d(row0 + inst[i], pay[i]) += tau[i];
   }
+  // Leg `leg`'s coupons are [leg_begin(leg), leg_end(leg)): a per-leg reduction can run a register accumulator over
+  // them instead of a read-modify-write per coupon on the leg's one output (the directional derivative's reduce).
+  int leg_begin(int leg) const { return cpn_begin_[static_cast<std::size_t>(leg)]; }
+  int leg_end(int leg) const { return cpn_begin_[static_cast<std::size_t>(leg) + 1]; }
 
  private:
   std::vector<int> p_, row_;

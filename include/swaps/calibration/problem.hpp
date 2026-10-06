@@ -90,13 +90,25 @@ enum class QuoteKind {
                   // unit vector at δ's state index). Almost always BANDED (target/lower/upper): the band's
                   // target regularises δ so it is always identifiable; bracketing futures then sharpen it.
                   // It IS W-cacheable (linear, no DF), but its Jacobian entry is direct (∂δ/∂x), not via DF.
+  Npv,            // A POSITION'S NET PRESENT VALUE, in PV units (architecture review item 1/4, 2026-10-06): the
+                  // model quote is  pv(fwd) − pv(bench) + fx_spot·pv_bare(mtm) − pv(fixed)  over whichever legs
+                  // carry coupons, with the FIXED leg a list of dated amounts τ·scale (a swap's fixed rate, a
+                  // stepped schedule, a principal exchange, an xccy notional exchange are all DATA in `scale`,
+                  // not fields). A book is a BundleProblem of Npv rows (calibration/book_rows.hpp
+                  // position_instrument / book_problem): the ONE compiled engine then reprices the book
+                  // (model_rates), gives its parallel PV01 (directional_into) and per-position key-rate risk
+                  // (jacobian) -- no book-specific partials, predicates or fallbacks. LINEAR in the DFs (no
+                  // annuity division), so it rides the W-cache as a Src::Npv term; the usual AAD routing
+                  // (Instrument::noncacheable) applies to a compounded or seasoned leg. A position's notional
+                  // is a Portfolio weight. As a CALIBRATION row it is in PV units, not rate units: the caller
+                  // weights it (CLAUDE.md §2) -- the engine does not.
 };
 
 // The tripwire for adding a quote kind: appending one moves TurnJump and breaks this assert, which names
 // every place that must learn about it. A -Wswitch warning alone is not enough -- this build has no
 // -Werror, so a warning scrolls past (REVIEW FINDING 3, 2026-09-21).
-inline constexpr int kQuoteKindCount = 8;
-static_assert(static_cast<int>(QuoteKind::TurnJump) + 1 == kQuoteKindCount,
+inline constexpr int kQuoteKindCount = 9;
+static_assert(static_cast<int>(QuoteKind::Npv) + 1 == kQuoteKindCount,
               "a QuoteKind was added or reordered: update instrument_model_quote / instrument_residual "
               "(problem.hpp), the compiled batches (compiled_bundle.hpp), the codec's to/from string "
               "(api/codec.cpp) and kQuoteKindCount itself");
@@ -227,6 +239,12 @@ void Instrument::for_each_curve_ref(Fn&& fn) const {
         leg(ins.mtm, "mtm forecast", "mtm discount", "mtm reset_num", "mtm reset_den");
       fn(ins.fixed.discount, "fixed discount");
       break;
+    case QuoteKind::Npv:  // reads exactly the legs that carry coupons (a float-only position has no fixed curve)
+      if (!ins.fwd.coupons.empty()) leg(ins.fwd, "forecast", "discount", "reset_num", "reset_den");
+      if (!ins.bench.coupons.empty()) leg(ins.bench, "benchmark forecast", "benchmark discount", "benchmark reset_num", "benchmark reset_den");
+      if (!ins.mtm.coupons.empty()) leg(ins.mtm, "mtm forecast", "mtm discount", "mtm reset_num", "mtm reset_den");
+      if (!ins.fixed.coupons.empty()) fn(ins.fixed.discount, "fixed discount");
+      break;
   }
 }
 
@@ -257,6 +275,13 @@ inline bool Instrument::noncacheable() const {
     for (const auto& c : mtm.coupons)
       if (c.seasoned_mtm()) return true;  // a seasoned coupon prices on the templated kernel
     return false;
+  }
+  if (quote == QuoteKind::Npv && !mtm.coupons.empty()) {
+    // The batch's MtM leg is the bare reset ratio at the reset time: a spot-date roll-back (fx_spot_time != 0, O-X3)
+    // is a curve-dependent factor it does not carry, so such a position prices on the templated kernel.
+    if (!mtm.mtm_complete() || mtm.fx_spot_time != 0.0) return true;
+    for (const auto& c : mtm.coupons)
+      if (c.seasoned_mtm()) return true;
   }
   if (quote == QuoteKind::Portfolio)
     for (const auto& c : combination)
@@ -418,6 +443,22 @@ inline void validate_instrument(const Instrument& ins, const std::string& where)
       if (ins.combination.empty()) fail("a Portfolio quote has no components");
       for (const auto& c : ins.combination) validate_instrument(c.instrument, where + " (portfolio component)");
       break;
+    case QuoteKind::Npv: {
+      const auto flt = [&](const FloatLeg& l, const char* name) {
+        for (const auto& c : l.coupons)
+          if (!(c.obs.tau_index > 0.0)) fail(std::string("a ") + name + " coupon has tau_index <= 0");
+      };
+      flt(ins.fwd, "float");
+      flt(ins.bench, "benchmark");
+      flt(ins.mtm, "mtm");
+      if (ins.fwd.coupons.empty() && ins.bench.coupons.empty() && ins.mtm.coupons.empty() && ins.fixed.coupons.empty())
+        fail("an Npv row has no cashflows on any leg");
+      if (!ins.mtm.coupons.empty()) {
+        if (!ins.mtm.mtm_complete()) fail("an Npv row's MtM leg needs forecast/discount/reset_num/reset_den");
+        if (!(ins.mtm.fx_spot_time >= 0.0) || !std::isfinite(ins.mtm.fx_spot_time)) fail("the MtM leg needs a finite fx_spot_time >= 0");
+      }
+      break;
+    }
   }
 }
 
@@ -486,6 +527,22 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
     case QuoteKind::ParRate:  // E6.1c: the ONE ParRate formula lives in cashflows.hpp
       return pricing::par_rate<Scalar>(ins.fwd.coupons, ins.fixed.coupons, C(ins.fwd.forecast),
                                        C(ins.fwd.discount), C(ins.fixed.discount));
+    case QuoteKind::Npv: {
+      // A position's NPV: + the fwd leg, − the bench leg, + the resetting MtM leg (fx_spot and the spot-date
+      // roll-back inside xccy_mtm_leg_pv), − the fixed leg of dated amounts Σ DF·τ·scale -- each only when it
+      // carries coupons. Accumulated from Scalar(0) like a Portfolio, so an AAD scalar's gradient is seeded by
+      // the first curve-dependent leg (Eigen's make_coherent sizes the empty side).
+      Scalar v(0.0);
+      if (!ins.fwd.coupons.empty())
+        v += pricing::float_leg_pv<Scalar>(ins.fwd.coupons, C(ins.fwd.forecast), C(ins.fwd.discount));
+      if (!ins.bench.coupons.empty())
+        v -= pricing::float_leg_pv<Scalar>(ins.bench.coupons, C(ins.bench.forecast), C(ins.bench.discount));
+      if (!ins.mtm.coupons.empty())
+        v += pricing::xccy_mtm_leg_pv<Scalar>(ins.mtm.coupons, ins.mtm.fx_spot, C(ins.mtm.forecast), C(ins.mtm.discount),
+                                              C(ins.mtm.reset_num), C(ins.mtm.reset_den), ins.mtm.fx_spot_time);
+      if (!ins.fixed.coupons.empty()) v -= pricing::annuity<Scalar>(ins.fixed.coupons, C(ins.fixed.discount));
+      return v;
+    }
   }
   // REVIEW FINDING 3 (2026-09-21): this used to be `case ParRate: default:`, so a NEW QuoteKind priced
   // silently as a par rate. The switch is exhaustive now -- a new kind trips -Wswitch here, the

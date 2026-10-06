@@ -401,11 +401,19 @@ Scalar xccy_mtm_leg_pv(const std::vector<FloatCoupon>& leg, double fx_spot, cons
 }
 
 // Annuity per unit rate and unit notional: Σ DF_dc(pay_i) · tau_i · scale_i (scale = FX spot, default 1).
+// AAD-SAFE accumulation (2026-10-06): every term is materialised as a `Scalar` BEFORE it is added. A coupon dated
+// today (an xccy notional exchange at t = 0, a principal flow at settlement) has DF(0) = exp(-0) whose dual carries
+// an EMPTY gradient (Eigen's "constant" convention); `a += DF * k` with that term still an EXPRESSION adds a size-0
+// gradient to a sized one, which Eigen's coherence rule cannot fix on an expression -- an assert in debug, silent
+// garbage in release (measured: a 1,276 PV01 on a flat row). Two materialised AutoDiffScalars resize the empty side.
 template <class Scalar, class DCurve>
 Scalar annuity(const std::vector<FixedCoupon>& leg, const DCurve& dc) {
   if (leg.empty()) return Scalar(0.0);  // no coupons, no annuity (never dereference leg[0] in release)
   Scalar a = dc.discount(leg[0].pay) * (leg[0].tau * leg[0].scale);
-  for (std::size_t i = 1; i < leg.size(); ++i) a += dc.discount(leg[i].pay) * (leg[i].tau * leg[i].scale);
+  for (std::size_t i = 1; i < leg.size(); ++i) {
+    const Scalar term = dc.discount(leg[i].pay) * (leg[i].tau * leg[i].scale);
+    a += term;
+  }
   return a;
 }
 

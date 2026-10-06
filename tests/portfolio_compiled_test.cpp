@@ -1,7 +1,7 @@
 // E5 taxonomy: T3 cross-path parity (two engine paths, same inputs)
 // Gate for the SESSION-cached compiled portfolio reprice (BundleSession::bind_portfolio /
-// reprice_bound, audit U2 — the amortized streaming path). Where compiled_multi_test.cpp gates the
-// kernel (CompiledMultiCurveBook::npv vs the templated MultiCurveBook at a raw state x), THIS gates the
+// reprice_bound, audit U2 — the amortized streaming path). Where book_rows_test.cpp gates the
+// kernel (BookRows::npv vs the templated MultiCurveBook at a raw state x), THIS gates the
 // PRODUCT seam: a calibrated session's cached compiled reprice must equal the shipped templated path
 // (BundleSession::price_portfolio) in BOTH npv AND the +1bp parallel-shift PV01, to ~1e-10 —
 //   * at the calibrated x,

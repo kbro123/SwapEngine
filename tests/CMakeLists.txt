@@ -71,7 +71,7 @@ add_executable(swaps_tests
   market_scenario_test.cpp
   market_fixing_series_test.cpp
   market_vol_surface_test.cpp
-  compiled_multi_test.cpp
+  book_rows_test.cpp
   schedule_stub_eom_test.cpp
   rfr_lag_test.cpp
   stepped_principal_test.cpp

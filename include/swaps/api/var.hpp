@@ -2,7 +2,7 @@
 #include <boost/json.hpp>
 // Historical / full-revaluation VaR seam (api/var.cpp -> derive/var.hpp): the P&L distribution of a book under a SET of
 // market moves, plus its Value-at-Risk and Expected-Shortfall quantiles. Every move is a real fork of the calibrated
-// market repriced through the cached compiled twin (portfolio::CompiledMultiCurveBook, FX spots set per pair in place), so a 250-day window is 250
+// market repriced through the book as rows of the compiled engine (calibration::BookRows, FX spots set per pair in place), so a 250-day window is 250
 // µs-scale repricings against ONE calibration rather than a Taylor expansion around today.
 //
 // EXACTLY ONE input mode (both, or neither, is refused):

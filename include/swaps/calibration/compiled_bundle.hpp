@@ -14,8 +14,10 @@
 //     r_row = rho_row( Σ_terms weight · xf(value) , q_row )
 //
 // ONE list of TERMS, each `weight × xf(value)` accumulated onto its row, where the VALUE comes from one of
-// four SOURCES (Quotient = a float-numerator / annuity pair in the batches; Rate = a futures row of the
-// rate batch; State = a raw state entry x[i], the turn jump; FxRatio = fx_spot · DF/DF), `xf` is a scalar
+// five SOURCES (Quotient = a float-numerator / annuity pair in the batches; Npv = that pair's DIFFERENCE,
+// numerator − annuity, a position's NPV with its fixed amounts folded into the annuity's τ·scale (2026-10-06:
+// the book is rows of this engine, calibration/book_rows.hpp); Rate = a futures row of the rate batch; State =
+// a raw state entry x[i], the turn jump; FxRatio = fx_spot · DF/DF), `xf` is a scalar
 // per-TERM transform (none, or the zero-coupon compounding r = (1+τq)^(1/τ) − 1), and rho_row is the
 // per-ROW residual map (plain q − market; the Huber bid/offer band; the FX log-basis (ln F − ln q)/T).
 // A Portfolio is then nothing special: its components are terms with the product of weights onto the one
@@ -88,14 +90,12 @@ class CompiledBundleResidual {
     gen_fixed_.finalize();
     gen_rate_.finalize();
     has_moment_ = gen_float_.has_moment() || gen_rate_.has_moment();
+    for (const Term& t : terms_) has_quotient_ = has_quotient_ || t.src == Src::Quotient;
 
-    // Jacobian scratch buffers, sized ONCE here and reused (setZero) every call -- no per-iteration
-    // allocation of the N×T / nq×T / nr×T dense matrices.
+    // Jacobian scratch: the N×T / nq×T / nr×T dense matrices are sized on the FIRST Jacobian call and reused
+    // (setZero) after -- no per-iteration allocation once warm, and nothing at all for an engine that is only
+    // ever asked for values and directionals (a 2,000-position book's N×T would be tens of MB it never reads).
     const int T = cs_.n_times();
-    G_.resize(n_gen_, T);
-    dnum_.resize(static_cast<int>(qterm_.size()), T);
-    dann_.resize(static_cast<int>(qterm_.size()), T);
-    dr_.resize(static_cast<int>(rterm_.size()), T);
     tf_.resize(static_cast<int>(terms_.size()));
     row_scale_.resize(n_gen_);
 
@@ -205,6 +205,17 @@ class CompiledBundleResidual {
   }
   void set_market(int row, double market) { market_[row] = market; }
   double market_of(int row) const { return market_[row]; }
+  // The FX spot of row `row`'s resetting (MtM) leg (an Npv row under an FX move, SC2): the leg's weight in the float
+  // batch IS the spot, so this re-scales that leg and its coupons in place -- bitwise a fresh compile at that spot. A
+  // row without such a term is untouched (an XccyMtmBasis quote is spot-invariant: mtm/(fx·ann) with mtm ∝ fx).
+  void set_mtm_fx_spot(int row, double fx_spot) {
+    for (const Term& t : terms_)
+      if (t.row == row && t.mtm_leg >= 0) {
+        leg_sign_[static_cast<std::size_t>(t.mtm_leg)] = fx_spot;
+        for (int c = gen_float_.leg_begin(t.mtm_leg); c < gen_float_.leg_end(t.mtm_leg); ++c)
+          cpn_sign_[static_cast<std::size_t>(c)] = fx_spot;
+      }
+  }
   // DF = exp(-W_all x) (memoized on x). Exposed for profiling / downstream analytics.
   const Eigen::VectorXd& discount_factors(const Eigen::VectorXd& x) const { return df_at(x); }
 
@@ -236,6 +247,7 @@ class CompiledBundleResidual {
           else out_[t.row] += t.weight * num / (*ann)[t.idx];
           break;
         }
+        case Src::Npv: out_[t.row] += t.weight * (num_[t.idx] - (*ann)[t.idx]); break;  // a position: Σ sign·pv(legs) − Σ τ·scale·DF
         case Src::Rate: out_[t.row] += t.weight * (*rt)[t.idx]; break;
         case Src::State: out_[t.row] += t.weight * x[t.idx]; break;  // a STATE-PIN (the turn jump δ): straight from x, no DF
         case Src::FxRatio: out_[t.row] += t.weight * fx_value(fx_[t.idx], DF); break;
@@ -285,7 +297,135 @@ class CompiledBundleResidual {
     jacobian_core(x, q, J, /*values=*/false);
   }
 
+  // out = J·dir WITHOUT forming J (2026-10-06): the residual rows' derivative along x -> x + ε·dir. The batches'
+  // partials are contracted with the DF tangent t = dDF/dε = −DF ⊙ (W·dir) AS THEY ARE SCATTERED (a DirSink stands
+  // in for the dense G), so the cost is one pass over the contributions -- O(coupons), independent of the knot
+  // count and with no N×T scratch -- which is what makes a 2,000-position book's parallel PV01 a per-tick
+  // quantity. W·dir is memoised on dir (and re-taken when W is), so a fixed direction costs no matvec per call.
+  // Equals jacobian_vs(x, q)·dir to rounding on every source (tests/book_rows_test.cpp).
+  void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const {
+    directional_vs_into(x, dir, market_, out);
+  }
+  void directional_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, const Eigen::VectorXd& q, Eigen::VectorXd& out) const {
+    const Eigen::VectorXd& DF = df_at(x);  // syncs the piecewise-linear tier first (W may move)
+    const Eigen::VectorXd& INV = inv_;
+    if (wdir_stale_ || dir.size() != dir_memo_.size() || (dir.array() != dir_memo_.array()).any()) {
+      wdir_.noalias() = cs_.W() * dir;
+      dir_memo_ = dir;
+      wdir_stale_ = false;
+    }
+    tan_ = (-wdir_.array() * DF.array()).matrix();
+    if (has_moment_) { gen_float_.set_state(x); gen_rate_.set_state(x); }
+    const int nq = static_cast<int>(qterm_.size()), nr = static_cast<int>(rterm_.size());
+    const std::vector<RowMap>& maps = row_maps();
+    // The row VALUES (the quotient numerators and annuities, the row totals) are needed only by a quotient term (its
+    // derivative divides by them) or a mapped row (its slope is taken at the value): a book of Npv rows skips both
+    // value passes -- its directional is the partials alone.
+    const bool values = has_quotient_ || !maps.empty();
+    const Eigen::VectorXd* ann = nullptr;
+    if (nq > 0) {
+      const Eigen::VectorXd& num_cpn = gen_float_.num(DF, INV);
+      if (values) {
+        num_.setZero(nq);
+        gen_float_.pv_from_num_into(num_cpn, DF, num_, leg_q_.data(), leg_sign_.data());
+        ann = &gen_fixed_.annuity(DF);
+      }
+      // Scatter PER COUPON, then reduce per leg with a register accumulator. Scattering straight onto the leg's
+      // one output made every coupon's three read-modify-writes wait on the previous coupon's store (a latency
+      // chain through one memory slot: ~7 ns per coupon on the 2,000-swap book); per-coupon slots carry no chain
+      // and the leg reduction is a plain segment sum (measured: the pass drops from 215 us to the stores' cost).
+      dcpn_dir_.setZero(gen_float_.n_coupons());
+      const DirSink sc{dcpn_dir_.data(), tan_.data()};
+      gen_float_.d_pv_from_num(num_cpn, DF, INV, sc, CouponMap{});
+      dnum_dir_.setZero(nq);
+      for (int leg = 0; leg < gen_float_.size(); ++leg) {
+        double a = 0.0;
+        for (int c = gen_float_.leg_begin(leg); c < gen_float_.leg_end(leg); ++c) a += dcpn_dir_[c];
+        dnum_dir_[leg_q_[static_cast<std::size_t>(leg)]] += leg_sign_[static_cast<std::size_t>(leg)] * a;
+      }
+      dann_dir_.setZero(nq);
+      {  // d(annuity)/dε = Σ_i τ_i·tan[pay_i] over each fixed leg's contiguous coupons, one store per leg
+        const double* __restrict tv = tan_.data();
+        const int* __restrict fp = gen_fixed_.pay.data();
+        const double* __restrict ft = gen_fixed_.tau.data();
+        for (int leg = 0; leg < gen_fixed_.n_inst; ++leg) {
+          double a = 0.0;
+          for (int i = gen_fixed_.leg_begin(leg); i < gen_fixed_.leg_end(leg); ++i) a += ft[i] * tv[fp[i]];
+          dann_dir_[leg] += a;
+        }
+      }
+    }
+    const Eigen::VectorXd* rt = nullptr;
+    if (nr > 0) {
+      dr_dir_.setZero(nr);
+      const DirSink sr{dr_dir_.data(), tan_.data()};
+      gen_rate_.d_rate(DF, INV, sr, 0);
+      if (values) rt = &gen_rate_.rate(DF, INV);
+    }
+    out.setZero(n_gen_);
+    if (values) mrj_.setZero(n_gen_);
+    for (std::size_t k = 0; k < terms_.size(); ++k) {
+      const Term& t = terms_[k];
+      double f = t.weight, d = 0.0, v = 0.0;
+      switch (t.src) {
+        case Src::Quotient: {
+          const int i = t.idx;
+          const double a = (*ann)[i], qv = num_[i] / a;
+          d = dnum_dir_[i] / a - num_[i] * dann_dir_[i] / (a * a);
+          if (t.xf == Xf::ZeroCoupon) { const auto z = zero_coupon_transform_d(qv, t.tau); f *= z.second; v = z.first; }
+          else v = qv;
+          break;
+        }
+        case Src::Npv: d = dnum_dir_[t.idx] - dann_dir_[t.idx]; if (values) v = num_[t.idx] - (*ann)[t.idx]; break;
+        case Src::Rate: d = dr_dir_[t.idx]; if (values) v = (*rt)[t.idx]; break;
+        case Src::State: d = dir[t.idx]; v = x[t.idx]; break;
+        case Src::FxRatio: {
+          const FxRatio& fx = fx_[t.idx];
+          v = fx_value(fx, DF);
+          d = v * (tan_[fx.idx_num] * INV[fx.idx_num] - tan_[fx.idx_den] * INV[fx.idx_den]);
+          if (fx.idx_snum >= 0) d += v * (tan_[fx.idx_sden] * INV[fx.idx_sden] - tan_[fx.idx_snum] * INV[fx.idx_snum]);
+          break;
+        }
+      }
+      out[t.row] += f * d;
+      if (values) mrj_[t.row] += t.weight * v;
+      tf_[static_cast<int>(k)] = f;
+    }
+    if (has_moment_) {  // the direct x-space terms along dir, with the term's chain factor (and no annuity on an Npv term)
+      gen_float_.moment_direct_pv(DF, legs(), [&](int bi, int j, double mv) {
+        const int k = qterm_[bi];
+        const double den = terms_[k].src == Src::Npv ? 1.0 : (*ann)[bi];
+        out[terms_[k].row] += tf_[k] * mv * dir[j] / den;
+      });
+      gen_rate_.moment_direct_rate([&](int bi, int j, double mv) {
+        const int k = rterm_[bi];
+        out[terms_[k].row] += tf_[k] * mv * dir[j];
+      });
+    }
+    for (const RowMap& m : maps) out[m.row] *= row_residual_d(m, mrj_[m.row], q[m.row]).second;  // rho' at the row value
+  }
+
  private:
+  // A derivative SINK in place of a dense (row × time) matrix: `d(r, t) += v` becomes out[r] += v·tan[t] -- the batches'
+  // scatter kernels are templated on the matrix type, so this contracts their partials with the DF tangent as they are
+  // produced, forming no G. (operator-= for the moment brackets' corrections.)
+  struct DirSink {
+    double* out;
+    const double* tan;
+    struct Ref {
+      double& o;
+      double t;
+      void operator+=(double v) const { o += v * t; }
+      void operator-=(double v) const { o -= v * t; }
+    };
+    Ref operator()(int r, int t) const { return Ref{out[r], tan[t]}; }
+  };
+  // A LegMap that lands coupon c's partials on slot c with unit sign (the leg's sign is applied in the reduce).
+  struct CouponMap {
+    int row(int c) const { return c; }
+    double sgn(int) const { return 1.0; }
+  };
+
   // r = rho_row(mr, q): a plain row is mr − q, a mapped row its residual map (band / log).
   void residuals_from(const Eigen::VectorXd& mr, const Eigen::VectorXd& q, Eigen::VectorXd& r) const {
     r = mr - q;
@@ -300,7 +440,16 @@ class CompiledBundleResidual {
     if (has_moment_) { gen_float_.set_state(x); gen_rate_.set_state(x); }
     const std::vector<RowMap>& maps = row_maps();
     values = values || !maps.empty();
-    G_.setZero();  // reuse the scratch buffer (sized once in the ctor)
+    {
+      const int T = cs_.n_times();
+      if (G_.rows() != n_gen_ || G_.cols() != T) {  // first call: size the dense scratch (see the ctor)
+        G_.resize(n_gen_, T);
+        dnum_.resize(static_cast<int>(qterm_.size()), T);
+        dann_.resize(static_cast<int>(qterm_.size()), T);
+        dr_.resize(static_cast<int>(rterm_.size()), T);
+      }
+    }
+    G_.setZero();  // reuse the scratch buffer
     pricing::RowMatrixXd& G = G_;
     row_scale_.setOnes();  // the per-row residual-map slope rho' (1 for a plain row)
 
@@ -352,6 +501,12 @@ class CompiledBundleResidual {
               if (t.xf == Xf::ZeroCoupon) mrj_[t.row] += t.weight * zero_coupon_transform_d(num[i] / (*ann)[i], t.tau).first;
               else mrj_[t.row] += t.weight * num[i] / (*ann)[i];
             }
+            break;
+          }
+          case Src::Npv: {  // linear in the DFs: the numerator's partials minus the annuity's, no quotient rule
+            const int i = t.idx;
+            G.row(t.row) += f * (dnum.row(i) - dann.row(i));
+            if (values) mrj_[t.row] += t.weight * (num[i] - (*ann)[i]);
             break;
           }
           case Src::Rate:  // `Rate` rows ARE the futures batch's rate rows (convexity is a constant -> zero row)
@@ -418,7 +573,8 @@ class CompiledBundleResidual {
     if (has_moment_) {
       const auto add_q = [&](int bi, int j, double v) {
         const int k = qterm_[bi];
-        J(terms_[k].row, j) += tf_[k] * row_scale_[terms_[k].row] * v / ann_keep_[bi];
+        const double den = terms_[k].src == Src::Npv ? 1.0 : ann_keep_[bi];  // an Npv term is not divided by its annuity
+        J(terms_[k].row, j) += tf_[k] * row_scale_[terms_[k].row] * v / den;
       };
       gen_float_.moment_direct_pv(DF, legs(), add_q);
       gen_rate_.moment_direct_rate([&](int bi, int j, double v) {
@@ -433,11 +589,12 @@ class CompiledBundleResidual {
   }
 
   // ---- the row model ------------------------------------------------------------------------------
-  enum class Src : unsigned char { Quotient, Rate, State, FxRatio };  // where a term's value comes from
-  enum class Xf : unsigned char { None, ZeroCoupon };                 // the per-term scalar transform
+  enum class Src : unsigned char { Quotient, Rate, State, FxRatio, Npv };  // where a term's value comes from
+  enum class Xf : unsigned char { None, ZeroCoupon };                      // the per-term scalar transform
   // One contribution weight·xf(value) to residual row `row`. `idx` indexes the source: the quotient batch
-  // position (Quotient), the rate batch position (Rate), the global state entry (State), or fx_ (FxRatio).
-  struct Term { int row; double weight; Src src; Xf xf; int idx; double tau; };
+  // position (Quotient / Npv), the rate batch position (Rate), the global state entry (State), or fx_ (FxRatio).
+  // `mtm_leg`: an Npv term's resetting leg in the float batch (its weight there IS the FX spot), else -1.
+  struct Term { int row; double weight; Src src; Xf xf; int idx; double tau; int mtm_leg = -1; };
   // F = fx_spot·DF[idx_num]/DF[idx_den] (· DF[idx_sden]/DF[idx_snum] when a spot time is set, O-X3).
   struct FxRatio { int idx_num, idx_den; double fx_spot; int idx_snum = -1, idx_sden = -1; };
   static double fx_value(const FxRatio& f, const Eigen::VectorXd& DF) {
@@ -502,6 +659,7 @@ class CompiledBundleResidual {
     cs_.finalize();
     build_wt();
     df_stale_ = true;  // the memo keyed on x alone is stale: the same x now maps through a new W
+    wdir_stale_ = true;
   }
   void mirror_delta(int pc) {  // the last CompiledCurveSet delta into W^T and the spans
     const auto& P = cs_.pwl_curve(pc);
@@ -512,6 +670,7 @@ class CompiledBundleResidual {
       whi_[g] = std::max(whi_[g], P.off + P.ni);
     }
     df_stale_ = true;
+    wdir_stale_ = true;
   }
 
   const Eigen::VectorXd& df_at(const Eigen::VectorXd& x) const {
@@ -599,6 +758,28 @@ class CompiledBundleResidual {
       terms_.push_back({row, weight, Src::State, Xf::None, state_index, 0.0});
       return;
     }
+    if (ins.quote == QuoteKind::Npv) {
+      // A position's NPV as ONE term: Σ sign·pv(leg) − Σ τ·scale·DF over the legs that carry coupons (+fwd, −bench,
+      // +fx_spot·mtm; the fixed leg's amounts ride its τ·scale), the same batches a quotient uses, no annuity division.
+      // The MtM leg's batch value is the BARE reset ratio, so its leg weight is the FX spot (set_mtm_fx_spot re-scales
+      // it under an FX move). A spot-date roll-back / seasoned leg never reaches here (Instrument::noncacheable).
+      const int q = static_cast<int>(qterm_.size());
+      int mtm_leg = -1;
+      if (!ins.fwd.coupons.empty()) add_leg(q, +1.0, ins.fwd);
+      if (!ins.bench.coupons.empty()) add_leg(q, -1.0, ins.bench);
+      if (!ins.mtm.coupons.empty()) {
+        if (!ins.mtm.mtm_complete() || ins.mtm.fx_spot_time != 0.0)
+          throw std::invalid_argument("CompiledBundleResidual: an Npv row's MtM leg must be complete with fx_spot_time 0 (else it rides the AAD tier)");
+        mtm_leg = gen_float_.size();
+        leg_q_.push_back(q);
+        leg_sign_.push_back(ins.mtm.fx_spot);
+        gen_float_.add_mtm(cs_, ins.mtm.forecast, ins.mtm.discount, ins.mtm.reset_num, ins.mtm.reset_den, ins.mtm.coupons);
+      }
+      gen_fixed_.add(cs_, ins.fixed.discount, ins.fixed.coupons);  // an empty fixed leg is an annuity of exactly 0
+      qterm_.push_back(static_cast<int>(terms_.size()));
+      terms_.push_back({row, weight, Src::Npv, Xf::None, q, 0.0, mtm_leg});
+      return;
+    }
     // Every remaining kind is a QUOTIENT term: Σ sign·pv(leg) / annuity over its signed legs in the ONE float
     // batch (leg_q_/leg_sign_ map each batch leg back to this term's quotient position and sign).
     Xf xf = Xf::None;
@@ -679,9 +860,13 @@ class CompiledBundleResidual {
   mutable Eigen::VectorXd df_, df_x_, inv_;
   mutable bool df_stale_ = false;  // EXPERIMENT: W changed under an unchanged x (pwl re-take)
   bool has_moment_ = false;                    // any batch carries moment-path coupons (set_state + direct terms)
+  bool has_quotient_ = false;                  // any Quotient term (its derivative needs the row VALUES; an Npv-only book does not)
   mutable Eigen::VectorXd row_scale_, tf_, ann_keep_, num_keep_;  // jacobian_vs scratch: row slopes, term chain factors, the moment direct terms' quotient factors
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
   mutable Eigen::VectorXd mrj_, num_;  // jacobian_vs scratch: the pass's own row values, the quotient numerators
+  // directional_into: W·dir memoised on dir (re-taken when W moves), the DF tangent, and the per-source contractions.
+  mutable Eigen::VectorXd dir_memo_, wdir_, tan_, dcpn_dir_, dnum_dir_, dann_dir_, dr_dir_;
+  mutable bool wdir_stale_ = true;
   // ROW-MAJOR: every fill site (the d_* scatters, the per-row G assembly, the row-map scaling) and the
   // product's G(r,t) reads are row-local, so row-major makes them contiguous (a col-major .row()
   // expression is strided by n_res -- it dominated the fill cost).

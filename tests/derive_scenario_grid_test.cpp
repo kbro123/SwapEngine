@@ -174,9 +174,9 @@ TEST(ScenarioGrid, EveryCellIsTheCompiledBookAtItsForkAndItsFxFactor) {
   const auto at_fx = [&P, &book](double factor) {  // the EURUSD spot moved by hand, freshly compiled
     pf::MultiCurveBook moved = book;
     moved.positions[1].fx_spot = 1.10 * factor;
-    return pf::CompiledMultiCurveBook(P.curves, moved);
+    return cal::BookRows(P.curves, moved);
   };
-  EXPECT_EQ(out.base_npv, pf::CompiledMultiCurveBook(P.curves, book).npv(x0));
+  EXPECT_EQ(out.base_npv, cal::BookRows(P.curves, book).npv(x0));
   const double par[] = {-36.0, 0.0, 34.5}, rel[] = {-0.05, 0.0, 0.05};
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) {
@@ -194,7 +194,7 @@ TEST(ScenarioGrid, AShiftCurveAxisAfterAParallelAddsAndOneAxisIsAColumn) {
   r.axes = {parallel({42.0}), shift_curve(1, {-31.75, 36.75})};
   const cal::BundleProblem P = r.bundle;
   const Eigen::VectorXd x0 = *r.x0;
-  const pf::CompiledMultiCurveBook compiled(P.curves, *r.book);
+  const cal::BookRows compiled(P.curves, *r.book);
   const dv::ScenarioGridResult out = dv::scenario_grid<SeedSession>(r);
   ASSERT_EQ(out.n0, 1);
   ASSERT_EQ(out.n1, 2);

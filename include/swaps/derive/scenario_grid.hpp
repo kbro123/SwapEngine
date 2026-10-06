@@ -4,7 +4,7 @@
 //
 // Calibrate the base ONCE; for every cell, fork the fitted state by the cell's shifts and reprice the book through its
 // compiled twin, built ONCE (an fx cell sets the xccy rows' spots per pair in place:
-// CompiledMultiCurveBook::set_fx_factors). An N x M grid costs one calibration plus N x M compiled repricings.
+// BookRows::set_fx_factors). An N x M grid costs one calibration plus N x M compiled repricings.
 //
 // The GRID RULE: every axis ADDS its shift (bp / 1e4) to the curves it moves, and a cell's fx axes are one FX move.
 // So a shift_curve axis on top of a parallel axis moves that curve by both -- the rule `scenario` and `var` share
@@ -30,7 +30,7 @@
 #include "swaps/calibration/regularize.hpp"
 #include "swaps/derive/scenario.hpp"  // add_parallel_shock, add_curve_shock: the one shock-combining rule
 #include "swaps/portfolio/portfolio.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 
 namespace swaps::derive {
 
@@ -131,7 +131,7 @@ ScenarioGridResult scenario_grid(ScenarioGridRequest r) {
   out.has_book = r.book.has_value();
   if (!out.has_book) return out;
 
-  portfolio::CompiledMultiCurveBook book(P.curves, *r.book);
+  calibration::BookRows book(P.curves, *r.book);
   out.n_positions = static_cast<int>(r.book->positions.size());
   out.base_npv = book.npv(out.x_base);
   out.npv.reserve(static_cast<std::size_t>(out.n0));

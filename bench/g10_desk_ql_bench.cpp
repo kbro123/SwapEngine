@@ -42,6 +42,7 @@
 #include <vector>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/calibration/book_rows.hpp"
 #include "swaps/build/conventions.hpp"
 #include "swaps/build/instruments.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
@@ -414,6 +415,27 @@ void BM_G10_Book_Ours(benchmark::State& state) {
   for (auto _ : state) benchmark::DoNotOptimize(sess.reprice_bound().npv);
 }
 BENCHMARK(BM_G10_Book_Ours);
+
+// The two halves of a bound reprice in isolation (context for the gated metric above, not gated): the NPV pass and
+// the parallel PV01 (the engine's directional derivative) on the same bound book.
+void BM_G10_Book_NpvOnly(benchmark::State& state) {
+  Fixture& f = fx();
+  api::BundleSession sess(f.prob);
+  sess.calibrate(f.x0);
+  const cal::BookRows rows(f.prob.curves, f.book);
+  const Eigen::VectorXd x = sess.x();
+  for (auto _ : state) benchmark::DoNotOptimize(rows.npv(x));
+}
+BENCHMARK(BM_G10_Book_NpvOnly);
+void BM_G10_Book_Pv01Only(benchmark::State& state) {
+  Fixture& f = fx();
+  api::BundleSession sess(f.prob);
+  sess.calibrate(f.x0);
+  const cal::BookRows rows(f.prob.curves, f.book);
+  const Eigen::VectorXd x = sess.x();
+  for (auto _ : state) benchmark::DoNotOptimize(rows.pv01(x));
+}
+BENCHMARK(BM_G10_Book_Pv01Only);
 
 }  // namespace
 

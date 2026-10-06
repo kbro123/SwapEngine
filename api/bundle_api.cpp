@@ -422,7 +422,7 @@ PortfolioReprice BundleSession::price_portfolio_json(const std::string& book_jso
 }
 
 // ---- CACHED (warm/streaming) portfolio reprice ---------------------------------------------------
-// bind_portfolio builds the compiled W-cache twin ONCE; reprice_bound reuses it every call. The one-time
+// bind_portfolio builds the book's rows on the compiled engine ONCE; reprice_bound reuses them every call. The one-time
 // W build is amortized across ticks (a live book repriced against the recalibrating curve), which is the
 // ONLY regime where the compiled kernel wins — a single cold reprice keeps paying the templated path
 // (price_portfolio), so this is a SEPARATE entry point, not a swap-in.
@@ -437,7 +437,7 @@ void BundleSession::bind_portfolio(const pf::MultiCurveBook& book) {
 void BundleSession::rebuild_cbook() const {
   const auto resolved = resolve_book(*bound_book_);  // seasoned coupons: realized part from the fixings
   resolved_book_ = std::make_unique<pf::MultiCurveBook>(resolved ? *resolved : *bound_book_);
-  cbook_ = std::make_unique<pf::CompiledMultiCurveBook>(prob_.curves, *resolved_book_);
+  cbook_ = std::make_unique<cal::BookRows>(prob_.curves, *resolved_book_);
 }
 
 PortfolioReprice BundleSession::reprice_bound() const {
@@ -457,8 +457,8 @@ PortfolioReprice BundleSession::reprice_bound() const {
   last_price_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
   out.price_us = last_price_us_;
 
-  // PV01: +1bp parallel-knot-shift directional derivative (analytic on the compiled half, one AAD pass on
-  // any fallback) — outside the pricing clock, matching how price_portfolio times only the NPV pass.
+  // PV01: +1bp parallel-knot-shift directional derivative (the engine's directional_into: analytic on the compiled
+  // rows, a width-one dual on an AAD-tier row) — outside the pricing clock, matching how price_portfolio times only the NPV pass.
   out.pv01 = cbook_->pv01(x_);
   return out;
 }

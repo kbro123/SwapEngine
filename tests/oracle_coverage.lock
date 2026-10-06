@@ -34,7 +34,7 @@ swaps/conventions_db.hpp
 swaps/curve/curve_module.hpp
 swaps/curve/regions.hpp
 swaps/portfolio/bond_universe.hpp
-swaps/portfolio/compiled_multi.hpp
+swaps/calibration/book_rows.hpp
 swaps/portfolio/portfolio.hpp
 swaps/pricing/bond.hpp
 swaps/pricing/bond_future.hpp

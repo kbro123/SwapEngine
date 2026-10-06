@@ -5,7 +5,7 @@
 // MATRIX of shocks — the outer product of one or two shock AXES — and returns a P&L SURFACE for a book.
 // It is the "do what QuantLib is too slow to do interactively" primitive: the base bundle is calibrated
 // ONCE, and every grid cell is a µs market fork (market::Scenario) repriced through the cached compiled
-// reprice twin (portfolio::CompiledMultiCurveBook, the reprice_bound kernel) — so an N×M grid costs one
+// book as rows of the compiled engine (calibration::BookRows, the reprice_bound kernel) — so an N×M grid costs one
 // calibration + N·M compiled repricings, not N·M calibrations.
 //
 //   scenario_grid  {"scenario_grid": {

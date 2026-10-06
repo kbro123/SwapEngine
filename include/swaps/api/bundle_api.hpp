@@ -35,7 +35,7 @@
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/calibration/structure_fingerprint.hpp"  // StampedBundle / structural_stamp (E8)
 #include "swaps/portfolio/portfolio.hpp"  // MultiCurveBook — the batched reprice kernel
-#include "swaps/portfolio/compiled_multi.hpp"  // CompiledMultiCurveBook — the cached streaming reprice twin
+#include "swaps/calibration/book_rows.hpp"  // BookRows — the bound book as rows of the compiled engine
 #include "swaps/pricing/fixings.hpp"
 #include "swaps/api/codec.hpp"  // the JSON <-> object-graph codecs (E7)
 
@@ -289,8 +289,8 @@ class BundleSession {
   PortfolioReprice price_portfolio_json(const std::string& book_json) const;
 
   // ---- CACHED (warm/streaming) portfolio reprice --------------------------------------------------
-  // Bind a book for REPEATED repricing: build & cache a portfolio::CompiledMultiCurveBook — the multi-curve
-  // W-cache twin of price_portfolio's templated kernel — ONCE, so every reprice_bound() reuses it. This is
+  // Bind a book for REPEATED repricing: build & cache a calibration::BookRows — the book as Npv ROWS of the
+  // one compiled engine (2026-10-06; until then a separate W-cache twin) — ONCE, so every reprice_bound() reuses it. This is
   // the AMORTIZED path for a live book repriced every streaming tick against the recalibrating curve: the
   // one-time W build (DF = exp(-W_all x) compiled once from the bundle's curve structures) pays for itself
   // across ticks, exactly as the session already amortizes engine_/reg_R_ and VolSurface amortizes a fixed
@@ -300,9 +300,9 @@ class BundleSession {
   // earlier net regression), so the compiled twin is reserved for THIS cached path.
   void bind_portfolio(const swaps::portfolio::MultiCurveBook& book);
   // Reprice the CURRENTLY BOUND book off the current calibrated x through the cached compiled kernel and
-  // report {npv, pv01, price_us, n}. NPV rides the compiled W-cache (with the non-cacheable minority — Xccy
-  // / compounded / moment — on the templated fallback, the hybrid split); PV01 is the +1bp parallel-knot-
-  // shift directional derivative (ANALYTIC on the compiled half, one AAD pass on any fallback). price_us
+  // report {npv, pv01, price_us, n}. NPV is the rows' model_rates (the W-cache; a compounded or seasoned
+  // position rides the AAD block, as any row would); PV01 is the +1bp parallel-knot-shift directional
+  // derivative (the engine's directional_into: the batches' partials contracted with the DF tangent, no J). price_us
   // times the NPV pass ONLY, exactly as price_portfolio does (also cached in last_price_us()). Allocation-
   // free on an all-compilable book — the streaming hot path. Throws if no book is bound.
   PortfolioReprice reprice_bound() const;
@@ -479,7 +479,7 @@ class BundleSession {
   // drops it (a structural bundle change moves W). Mutable so the const reprice_bound() can rebuild lazily.
   mutable std::unique_ptr<swaps::portfolio::MultiCurveBook> bound_book_;     // the UNRESOLVED book as bound
   mutable std::unique_ptr<swaps::portfolio::MultiCurveBook> resolved_book_;  // its fixings-resolved copy (the twin's source)
-  mutable std::unique_ptr<swaps::portfolio::CompiledMultiCurveBook> cbook_;
+  mutable std::unique_ptr<swaps::calibration::BookRows> cbook_;
   // Streaming session state (the streamer itself may be dropped by invalidate_engine and rebuilt lazily).
   RegSpec stream_reg_;
   double stream_step_tol_ = 0.0;

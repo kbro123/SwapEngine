@@ -41,7 +41,7 @@
 #include "swaps/calibration/regularize.hpp"
 #include "swaps/derive/scenario.hpp"           // ScenarioMove, ResolvedMove, resolve_scenario_move
 #include "swaps/portfolio/portfolio.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 
 namespace swaps::derive {
 
@@ -155,7 +155,7 @@ VarRevalResult var_reval(VarRevalRequest r) {
   out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "var"), r.reg);
   const Eigen::VectorXd x_base = sess.x();  // the anchor every move forks from; never mutated
 
-  portfolio::CompiledMultiCurveBook book(P.curves, r.book);
+  calibration::BookRows book(P.curves, r.book);
   out.n_positions = static_cast<int>(r.book.positions.size());
   out.base_npv = book.npv(x_base);
   const std::vector<double> ones(static_cast<std::size_t>(fx.slots.n_slots()), 1.0);

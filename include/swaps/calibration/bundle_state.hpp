@@ -9,7 +9,7 @@
 //     interpolation forwards. A turn's jump (the state entries after a curve's interpolation knots) is left alone:
 //     a shift moves the level of the forward curve, not a localized turn.
 //   * book_value_at — a MultiCurveBook's value at x through the templated curve handles (the kernel
-//     BundleSession::price_portfolio uses; CompiledMultiCurveBook is its compiled twin).
+//     BundleSession::price_portfolio uses; calibration::BookRows prices the same book as rows of the compiled engine).
 //
 // The arithmetic is the verbs' own, one addition or evaluation per entry, so moving them here is bitwise
 // (tests/scenario_golden_test.cpp).

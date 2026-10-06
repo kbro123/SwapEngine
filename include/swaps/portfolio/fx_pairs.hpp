@@ -10,7 +10,7 @@
 //   * fx_pair_slots(curves, book)            -- once per (bundle, book): the distinct (base tag, quote tag) pairs and
 //                                              each position's slot (-1 for a position with no FX spot).
 //   * fx_spot_under(fx_spot, slot, factors)  -- a position's spot under a move. The templated book (set_xccy_fx) and the
-//                                              compiled book (CompiledMultiCurveBook::set_fx_factors) both call it.
+//                                              book rows (calibration::BookRows::set_fx_factors) both call it.
 //   * set_xccy_fx(moved, base, slots, f)     -- overwrite a pre-made copy's spots in place; allocation-free.
 //
 // Bitwise with scaling one position: fx_spot · factor, and a factor of 1 gives the spot back exactly.

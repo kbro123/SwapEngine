@@ -3,9 +3,9 @@
 // STEPPED fixed rate (fixed_rates) and PRINCIPAL-EXCHANGE cashflows (principal_flows) -- plus the guarantee
 // that these ride the templated fallback so the compiled hot path (nf_ = notional⊙fixed_rate scalar) is
 // untouched. Assertions: (1) a constant stepped schedule reproduces the scalar fixed_rate; (2) a genuinely
-// stepped schedule moves the NPV; (3) principal exchange adds exactly Σ amount·DF; (4) CompiledMultiCurveBook
+// stepped schedule moves the NPV; (3) principal exchange adds exactly Σ amount·DF; (4) BookRows
 // routes stepped/principal positions to the fallback AND its npv still equals the templated value. Hand-built
-// bundle mirroring compiled_multi_test.cpp. QuantLib-free (swaps_tests).
+// bundle mirroring book_rows_test.cpp. QuantLib-free (swaps_tests).
 #include <gtest/gtest.h>
 
 #include <Eigen/Core>
@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
-#include "swaps/portfolio/compiled_multi.hpp"
+#include "swaps/calibration/book_rows.hpp"
 #include "swaps/portfolio/portfolio.hpp"
 
 namespace cal = swaps::calibration;
@@ -147,9 +147,9 @@ TEST(SteppedPrincipal, PrincipalExchangeAddsNotionalFlows) {
   EXPECT_LE(std::abs(got_delta - expect_delta), 1e-8 * (std::abs(expect_delta) + 1.0));
 }
 
-// (4) The compiled book routes stepped/principal positions to the FALLBACK, and npv still matches the
-// templated value -- proving the hot path stays a scalar-nf_ book while the new structure prices correctly.
-TEST(SteppedPrincipal, CompiledRoutesToFallbackAndMatches) {
+// (4) A stepped fixed rate and a principal exchange are DATA in an Npv row's fixed leg (2026-10-06: the book is rows
+// of the one engine), so every position here COMPILES -- no fallback -- and the book matches the templated value.
+TEST(SteppedPrincipal, SteppedAndPrincipalPositionsCompileAsRowsAndMatch) {
   const auto specs = make_curves();
   const Eigen::VectorXd x = base_state();
 
@@ -158,20 +158,20 @@ TEST(SteppedPrincipal, CompiledRoutesToFallbackAndMatches) {
   pf::MultiCurveBook::Position stepped = swap_position(5.0, 1, 0, 0.027, 1e7);
   for (std::size_t i = 0; i < stepped.fixed_coupons.size(); ++i)
     stepped.fixed_rates.push_back(0.020 + 0.003 * double(i));
-  book.positions.push_back(stepped);  // stepped -> fallback
+  book.positions.push_back(stepped);  // stepped: the rates fold into the fixed coupons' scale
   pf::MultiCurveBook::Position withpx = swap_position(3.0, 1, 0, 0.025, 5e6);
   withpx.principal_flows = {{0.0, 1.0}, {3.0, -1.0}};
-  book.positions.push_back(withpx);  // principal exchange -> fallback
+  book.positions.push_back(withpx);  // principal exchange: two more dated amounts on the fixed leg
+  // ... and one whose fixed leg discounts on ANOTHER curve than its principal flows: those ride the bench leg.
+  pf::MultiCurveBook::Position withpx2 = withpx;
+  withpx2.fixed_curve = 1;  // the fixture has two curves: the flows stay on curve 0, the fixed leg moves to curve 1
+  book.positions.push_back(withpx2);
 
-  EXPECT_FALSE(pf::CompiledMultiCurveBook::swap_is_compilable(stepped));
-  EXPECT_FALSE(pf::CompiledMultiCurveBook::swap_is_compilable(withpx));
-  EXPECT_TRUE(pf::CompiledMultiCurveBook::swap_is_compilable(book.positions[0]));
+  const cal::BookRows cmb(specs, book);
+  EXPECT_EQ(cmb.n_fallback(), 0) << "stepped / principal positions are rows on the W-cache, not a fallback";
+  EXPECT_EQ(cmb.n_compiled(), 4);
 
-  const pf::CompiledMultiCurveBook cmb(specs, book);
-  EXPECT_EQ(cmb.n_fallback(), 2);
-  EXPECT_EQ(cmb.n_compiled(), 1);
-
-  // Compiled total (compiled + fallback halves) == templated book value.
+  // The rows == the templated book value.
   pf::MultiCurveBook whole = book;
   std::vector<int> off(specs.size(), 0);
   for (std::size_t c = 1; c < specs.size(); ++c) off[c] = off[c - 1] + specs[c - 1].n_knots();

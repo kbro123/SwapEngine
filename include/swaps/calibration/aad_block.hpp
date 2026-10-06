@@ -119,6 +119,10 @@ class AadBlock final : public RowEngine {
     for (int j = 0; j < size(); ++j)
       if (rows_[j] == global_row) { sub_.instruments[j].market = market; return; }
   }
+  void set_mtm_fx_spot(int global_row, double fx_spot) override {
+    for (int j = 0; j < size(); ++j)
+      if (rows_[j] == global_row) { set_fx_spot_leaves(sub_.instruments[j], fx_spot); return; }
+  }
 
   // True when the AAD sweep runs on the pooled (allocation-free) dual; false = the heap-Dual fallback
   // (touched width > ad::kPooledMaxW, or forced for testing).
@@ -188,6 +192,25 @@ class AadBlock final : public RowEngine {
     const auto curve_of = [this](int i) -> const CurveHandle<double>& { return *resolve_[i]; };
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of);
+  }
+
+  // (J·dir)[global_row] by ONE width-one directional dual pass (ad::DualDir seeded with dir): the derivative of each
+  // row's residual along dir, heap-free, regardless of the block's touched width. The DualDir curve set is built on
+  // first use (a block that is never asked for a directional pays nothing).
+  void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const override {
+    if (rows_.empty()) return;
+    if (!dir_built_) { dir_.xd.resize(n_knots_); dir_.curves.build(sub_.curves); dir_built_ = true; }
+    for (int k = 0; k < n_knots_; ++k) {
+      ad::DualDir::DerType der(1);
+      der[0] = dir[k];
+      dir_.xd[k] = ad::DualDir(x[k], der);
+    }
+    dir_.curves.update([&](int c, int i) { return dir_.xd[off_[c] + i]; });
+    const auto curve_of = [this](int i) -> const CurveHandle<ad::DualDir>& { return dir_.curves[i]; };
+    for (int j = 0; j < size(); ++j) {
+      const ad::DualDir rj = instrument_residual<ad::DualDir>(sub_.instruments[j], curve_of);
+      out[rows_[j]] = rj.derivatives().size() ? rj.derivatives()[0] : 0.0;
+    }
   }
 
   // Jacobian rows d(residual)/dx via WIDTH-REDUCED AAD, into J.row(global_row) of an (n_res x n_knots) J.
@@ -269,6 +292,12 @@ class AadBlock final : public RowEngine {
       if (g.size() == w)
         for (int t = 0; t < w; ++t) J(rows_[j], touched_[t]) = g[t];
     }
+  }
+
+  // The FX spot of every resetting leg under `ins` (an Npv leaf, nested in a Portfolio or not).
+  static void set_fx_spot_leaves(Instrument& ins, double fx_spot) {
+    if (ins.quote == QuoteKind::Npv && !ins.mtm.coupons.empty()) ins.mtm.fx_spot = fx_spot;
+    for (auto& c : ins.combination) set_fx_spot_leaves(c.instrument, fx_spot);
   }
 
   // Curve roles an instrument reads (for_each_curve_ref: the one encoding; Portfolio components included).
@@ -360,6 +389,8 @@ class AadBlock final : public RowEngine {
   bool pooled_ = false;  // AAD scalar selected at init: pooled (width <= kPooledMaxW) vs heap fallback
   mutable AadState<ad::DualPooled<ad::kPooledMaxW>> pool_;  // the allocation-free sweep (built iff pooled_)
   mutable AadState<ad::Dual> heap_;                         // the heap-Dual fallback (built iff !pooled_)
+  mutable AadState<ad::DualDir> dir_;                        // the width-one directional pass (built on first use)
+  mutable bool dir_built_ = false;
   mutable BundleCurveSet<double> dcurves_;  // reusable double curves: built once, forwards updated in place
 
   // ---- vectorised discount cache (per curve; only for curves the block prices off) ----

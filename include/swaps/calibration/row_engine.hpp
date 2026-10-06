@@ -30,6 +30,13 @@ struct RowEngine {
   // engine's rows into *r -- consistent with J by construction (S2).
   virtual void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J,
                                 Eigen::VectorXd* r) const = 0;
+  // The residual rows' derivative ALONG a state direction, out[row] = (J·dir)[row], without forming J (the book's
+  // parallel PV01; 2026-10-06). An engine computes it the cheapest way it has: the compiled one contracts its
+  // partials with the DF tangent as it scatters them, the AAD block runs a width-one directional dual.
+  virtual void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const = 0;
+  // The FX spot of a row's resetting (MtM) leg -- a market datum like its quote (SC2 FX moves on a book of Npv rows).
+  // A row without such a leg ignores it.
+  virtual void set_mtm_fx_spot(int global_row, double fx_spot) = 0;
 };
 
 }  // namespace swaps::calibration
