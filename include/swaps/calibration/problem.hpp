@@ -116,6 +116,7 @@ static_assert(static_cast<int>(QuoteKind::Npv) + 1 == kQuoteKindCount,
 // Forward declarations for the recursive Portfolio components (each component is itself an Instrument).
 struct Instrument;
 struct WeightedInstrument;
+struct PenaltyMap;  // the row's piecewise-linear residual map (defined below, after the instrument)
 
 // One calibration instrument.
 //
@@ -198,6 +199,10 @@ struct Instrument {
   // The curve this instrument primarily PINS: its FIRST curve reference (an FX forward its numerator, a turn its
   // curve, a leg-based quote its fwd leg's forecast, a Portfolio its first component's). Defined out-of-line.
   int primary_curve() const;
+  // This row's penalty shape (PenaltyMap, defined below): the Huber band from the four quote numbers, or plain. A
+  // standalone FX forward NEVER carries one (its residual is the log-basis map; the band is ignored there) -- that
+  // exclusion lives HERE and nowhere else now.
+  PenaltyMap penalty() const;
   // Any COMPOUNDED (RFR lookback/lockout product) observation anywhere in this instrument (components included).
   bool has_compounded_obs() const;
   // True iff this instrument is a SHAPE the compiled batch cannot express, so it must ride the AAD tier: a
@@ -298,6 +303,154 @@ struct has_turn_jump : std::false_type {};
 template <class C>
 struct has_turn_jump<C, std::void_t<decltype(std::declval<const C&>().turn_jump(0))>> : std::true_type {};
 
+// A PIECEWISE-LINEAR RESIDUAL MAP (constraint rows, architecture review item 3, 2026-10-07). A row's residual is a
+// continuous piecewise-linear function of its model value q that is ZERO at the target m: breakpoints b_0 < .. <
+// b_{n-1} cut the line into n+1 pieces with slopes s_0 .. s_n. A plain row is {no breakpoints, slope 1}; the Huber
+// bid/offer band is {{lower, upper}, {1, decay, 1}}; a one-sided bound would be {{edge}, {1, 0}}; a stiff pin is
+// {{}, {w}} at target = edge. This is THE description every layer reads -- the AAD residual (residual<Scalar>), the
+// compiled row map (residual_d), the streamer's edge walk (piece_of / invert / at_break), the risk scale
+// (target_slope) and the diagnostics (slope_at) -- so a row's penalty shape is defined ONCE. Until 2026-10-07 the
+// band's shape was written in four places (band_residual / band_residual_d / band_slope / the streamer's inline
+// `side == 0 ? decay : 1`), each excluding FX forwards by name.
+// Two numeric forms, each the association its tier always had (so every pinned number is bit for bit unchanged):
+// residual<Scalar> keeps q the plain operand (q + k, (q − m)·s: one dual op), residual_d accumulates from the
+// nearest breakpoint (r(b) + (q − b)·s). Equality ON a breakpoint resolves toward the target's piece (the band's
+// convention: an edge is inside). Fixed storage: no heap on the hot path.
+struct PenaltyMap {
+  static constexpr int kMaxBreaks = 3;
+  int n = 0;                                        // breakpoints
+  double b[kMaxBreaks] = {0.0, 0.0, 0.0};           // ascending
+  double s[kMaxBreaks + 1] = {1.0, 1.0, 1.0, 1.0};  // the n + 1 piece slopes
+
+  static PenaltyMap plain() { return {}; }
+  static PenaltyMap band(double lower, double upper, double decay) {
+    if (!(upper > lower)) return {};
+    PenaltyMap m;
+    m.n = 2;
+    m.b[0] = lower;
+    m.b[1] = upper;
+    m.s[0] = 1.0;
+    m.s[1] = decay;
+    m.s[2] = 1.0;
+    return m;
+  }
+  bool is_plain() const { return n == 0 && s[0] == 1.0; }
+  bool operator==(const PenaltyMap& o) const {
+    if (n != o.n) return false;
+    for (int j = 0; j < n; ++j) if (b[j] != o.b[j]) return false;
+    for (int i = 0; i <= n; ++i) if (s[i] != o.s[i]) return false;
+    return true;
+  }
+  // The piece the target m lies in: a breakpoint equal to m joins the piece with the SMALLER slope (a target on a
+  // band edge is inside the band; one on a bound's edge is on its dead side).
+  int target_piece(double m) const {
+    int tp = 0;
+    while (tp < n && b[tp] < m) ++tp;
+    if (tp < n && b[tp] == m && s[tp + 1] < s[tp]) ++tp;
+    return tp;
+  }
+  // The piece a value q lies in, given the target's piece: equality on a breakpoint resolves toward the target.
+  template <class Q>
+  int piece_of(const Q& q, int tp) const {
+    int i = tp;
+    while (i > 0 && q < Q(b[i - 1])) --i;
+    while (i < n && q > Q(b[i])) ++i;
+    return i;
+  }
+  // r at breakpoint j (between pieces j and j+1), walked from the target in piece tp.
+  double at_break(int j, double m, int tp) const {
+    if (j >= tp) {
+      double r = (b[tp] - m) * s[tp];
+      for (int t = tp; t < j; ++t) r += (b[t + 1] - b[t]) * s[t + 1];
+      return r;
+    }
+    double r = (b[tp - 1] - m) * s[tp];
+    for (int t = tp - 1; t > j; --t) r += (b[t - 1] - b[t]) * s[t];
+    return r;
+  }
+  // The piece a RESIDUAL value r lies in (the map is monotone, every slope >= 0): the streamer reads a row's side off
+  // its residual without re-pricing the quote.
+  int piece_from_residual(double r, double m, int tp) const {
+    int i = tp;
+    while (i < n && r > at_break(i, m, tp)) ++i;
+    while (i > 0 && r < at_break(i - 1, m, tp)) --i;
+    return i;
+  }
+  // AAD form: q stays the plain operand of ONE op (bit for bit the pre-2026-10-07 band_residual).
+  template <class Scalar>
+  Scalar residual(const Scalar& q, double m) const {
+    const int tp = n == 0 ? 0 : target_piece(m);
+    const int i = n == 0 ? 0 : piece_of(q, tp);
+    if (i == tp) {
+      if (s[i] == 1.0) return q - Scalar(m);
+      return (q - Scalar(m)) * s[i];
+    }
+    const int j = i > tp ? i - 1 : i;
+    const double k = at_break(j, m, tp) - s[i] * b[j];
+    if (s[i] == 1.0) return q + Scalar(k);
+    return q * s[i] + Scalar(k);
+  }
+  // THE TWO-EDGE VIEW: the map specialised to the band shape (two breakpoints around the target, the shape every
+  // streamed band has), as five flat doubles -- what the hot consumers hold (the compiled row map per banded row per
+  // Newton step, the streamer's walk per step per tracked row). Its evaluators are the general ones UNROLLED (three
+  // comparisons, no loops, no target-piece search): the general map carried 88 bytes and a piece walk onto a 2.3 us
+  // tick (+6..20 %, measured 2026-10-07). penalty_map_test pins the view against the general walk and against the
+  // pre-2026-10-07 expressions verbatim. The view is DERIVED from the map (two_edge()), never written by hand.
+  struct TwoEdge {
+    double lo = 0.0, hi = 0.0, s_lo = 1.0, s_in = 1.0, s_hi = 1.0;
+    std::pair<double, double> residual_d(double q, double m) const {
+      if (q > hi) return {(hi - m) * s_in + s_hi * (q - hi), s_hi};  // s == 1: ×1.0 is exact, the old form bit for bit
+      if (q < lo) return {(lo - m) * s_in + s_lo * (q - lo), s_lo};
+      return {s_in * (q - m), s_in};
+    }
+    double r_at_edge(int side, double m) const { return ((side > 0 ? hi : lo) - m) * s_in; }
+    int side_from_residual(double r, double m) const {
+      if (r > (hi - m) * s_in) return +1;
+      if (r < (lo - m) * s_in) return -1;
+      return 0;
+    }
+    int side_from_value(double v) const { return v > hi ? +1 : (v < lo ? -1 : 0); }
+    double invert(int side, double r, double m) const {
+      if (side > 0) return hi + (r - (hi - m) * s_in);
+      if (side < 0) return lo + (r - (lo - m) * s_in);
+      return m + r / s_in;
+    }
+    double edge(int side) const { return side > 0 ? hi : lo; }
+    double slope(int side) const { return side == 0 ? s_in : (side > 0 ? s_hi : s_lo); }
+    double width() const { return hi - lo; }
+  };
+  bool is_two_edge(double m) const { return n == 2 && b[0] <= m && m <= b[1]; }
+  TwoEdge two_edge() const {
+    if (n != 2) throw std::logic_error("PenaltyMap::two_edge: not a two-edge (band) map -- the general row map is stage B");
+    return TwoEdge{b[0], b[1], s[0], s[1], s[2]};
+  }
+  // Double form {r, dr/dq} (bit for bit the pre-2026-10-07 band_residual_d): the two-edge view when the shape is a
+  // band with the target inside, else the general piece walk. residual_d_general is the general path, exposed so a
+  // test can pin the two agree.
+  std::pair<double, double> residual_d(double q, double m) const {
+    if (is_two_edge(m)) return two_edge().residual_d(q, m);
+    return residual_d_general(q, m);
+  }
+  std::pair<double, double> residual_d_general(double q, double m) const {
+    const int tp = n == 0 ? 0 : target_piece(m);
+    const int i = n == 0 ? 0 : piece_of(q, tp);
+    if (i == tp) return {s[i] == 1.0 ? q - m : s[i] * (q - m), s[i]};
+    const int j = i > tp ? i - 1 : i;
+    const double rb = at_break(j, m, tp);
+    return {s[i] == 1.0 ? rb + (q - b[j]) : rb + s[i] * (q - b[j]), s[i]};
+  }
+  double slope_at(double q, double m) const { return s[n == 0 ? 0 : piece_of(q, target_piece(m))]; }
+  double target_slope(double m) const { return s[n == 0 ? 0 : target_piece(m)]; }
+  // q on piece i from its residual r (the piece's slope must be > 0): the target piece from m, any other from its
+  // breakpoint on the target side (the streamer's side_of inversion, bit for bit).
+  double invert(int i, double r, double m, int tp) const {
+    if (i == tp) return s[i] == 1.0 ? m + r : m + r / s[i];
+    const int j = i > tp ? i - 1 : i;
+    const double rb = at_break(j, m, tp);
+    return s[i] == 1.0 ? b[j] + (r - rb) : b[j] + (r - rb) / s[i];
+  }
+};
+
 // Bid/offer band residual for a model quote q against market mid m (see the Instrument band fields).
 // The band exists so that OVERLAPPING instruments that cannot all be reconciled exactly (1M vs 3M futures,
 // a future vs a swap at the same pillar) can each sit off their mid within a bid/offer tolerance. The
@@ -319,29 +472,21 @@ struct has_turn_jump<C, std::void_t<decltype(std::declval<const C&>().turn_jump(
 // weight: continuity at the edge forces that, and it is the right reading of a bid/offer tolerance.
 // No band (upper <= lower): the plain residual q − m. AAD-safe: branch selection on q (one-sided
 // derivative exactly at an edge), constants folded so `q` is always the plain-scalar operand.
+// The three band forms are the PenaltyMap's band instance (2026-10-07): the shape is written once, above.
 template <class Scalar>
 Scalar band_residual(const Scalar& q, double market, double lower, double upper, double decay) {
-  if (!(upper > lower)) return q - Scalar(market);
-  if (q > Scalar(upper)) return q + Scalar(decay * (upper - market) - upper);
-  if (q < Scalar(lower)) return q + Scalar(decay * (lower - market) - lower);
-  return (q - Scalar(market)) * decay;
+  return PenaltyMap::band(lower, upper, decay).residual<Scalar>(q, market);
 }
-
-// Plain-double (r, dr/dq) of band_residual, for the compiled path's residual + ANALYTIC Jacobian. MUST
-// match band_residual() above term-for-term (the compiled-vs-AAD band parity test pins the equality).
-inline std::pair<double, double> band_residual_d(double q, double market, double lower, double upper,
-                                                 double decay) {
-  if (!(upper > lower)) return {q - market, 1.0};
-  if (q > upper) return {decay * (upper - market) + (q - upper), 1.0};
-  if (q < lower) return {decay * (lower - market) + (q - lower), 1.0};
-  return {decay * (q - market), decay};
+inline std::pair<double, double> band_residual_d(double q, double market, double lower, double upper, double decay) {
+  return PenaltyMap::band(lower, upper, decay).residual_d(q, market);
 }
-
-// The residual's slope dr/dq at model quote q: `decay` inside the band, 1 outside, 1 with no band. This is
-// the "effective weight" quote diagnostics report, and the per-row scale the streamer tracks.
 inline double band_slope(double q, double lower, double upper, double decay) {
-  if (!(upper > lower)) return 1.0;
-  return (q > upper || q < lower) ? 1.0 : decay;
+  return PenaltyMap::band(lower, upper, decay).slope_at(q, 0.5 * (lower + upper));  // a band's target piece is the band
+}
+
+inline PenaltyMap Instrument::penalty() const {
+  if (quote == QuoteKind::FxForward) return PenaltyMap::plain();
+  return PenaltyMap::band(band_lower, band_upper, band_decay);
 }
 
 // ZeroCouponRate: the annually-compounded rate r with (1+r)^τ − 1 == τ·q, i.e. r = (1+τq)^(1/τ) − 1, and
@@ -578,14 +723,13 @@ Scalar instrument_residual(const Instrument& ins, const CurveOf& C, double marke
     using std::log;
     return (log(instrument_model_quote<Scalar>(ins, C)) - std::log(market)) / ins.fx_time;
   }
-  const bool banded = ins.band_upper > ins.band_lower;
+  const PenaltyMap pm = ins.penalty();
   // Rate keeps its bit-exact `rate + (convexity - market)` association when there is NO band (design §2's
   // backward-compatibility invariant); a banded Rate uses the general q·weight form.
-  if (ins.quote == QuoteKind::Rate && !banded)
+  if (ins.quote == QuoteKind::Rate && pm.is_plain())
     return pricing::rate<Scalar>(ins.obs, C(ins.forecast)) + (ins.convexity - market);
   const Scalar q = instrument_model_quote<Scalar>(ins, C);
-  if (banded) return band_residual<Scalar>(q, market, ins.band_lower, ins.band_upper, ins.band_decay);
-  return q - market;
+  return pm.residual<Scalar>(q, market);  // plain: q − market, bit for bit
 }
 // Calibration default: residual against the instrument's stored mid. Bit-identical to the pre-override
 // code (same value flows into the same expressions), so every existing caller is unchanged.
@@ -645,7 +789,7 @@ inline Eigen::VectorXd residual_market_scale(const std::vector<Instrument>& inst
   for (int i = 0; i < d.size(); ++i) {
     const Instrument& ins = instruments[static_cast<std::size_t>(i)];
     if (ins.quote == QuoteKind::FxForward) d[i] = 1.0 / (ins.market * ins.fx_time);
-    else if (ins.band_upper > ins.band_lower) d[i] = ins.band_decay;
+    else d[i] = ins.penalty().target_slope(ins.market);  // the slope at the target: decay inside a band, 1 plain
   }
   return d;
 }

@@ -13,6 +13,7 @@ add_executable(swaps_tests
   compiled_generic_test.cpp
   generic_instrument_test.cpp
   portfolio_instrument_test.cpp
+  penalty_map_test.cpp
   fixings_test.cpp
   smoothing_operator_test.cpp
   smoothing_preset_test.cpp

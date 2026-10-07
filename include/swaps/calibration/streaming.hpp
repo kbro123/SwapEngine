@@ -295,12 +295,17 @@ class StreamingCalibrator {
       const Instrument& ins = prob.instruments[i];
       quote_lo_[i] = ins.band_lower;
       quote_up_[i] = ins.band_upper;
-      band_eligible_[i] = ins.quote != QuoteKind::FxForward;
+      band_eligible_[i] = ins.quote != QuoteKind::FxForward;  // (Instrument::penalty is plain for an FX forward)
     }
     for (int i = 0; i < n_res_; ++i) {
       const Instrument& ins = prob.instruments[i];
-      if (ins.band_upper > ins.band_lower && ins.quote != QuoteKind::FxForward && ins.band_decay > 0.0)
-        bands_.push_back({i, ins.band_lower, ins.band_upper, ins.band_decay});
+      const PenaltyMap pm = ins.penalty();
+      if (BandRow::trackable(pm, ins.market)) {
+        BandRow b;
+        b.row = i;
+        b.bind(pm, pm.target_piece(ins.market));
+        bands_.push_back(b);
+      }
     }
     slope_ref_.assign(bands_.size(), 1.0);
     slope_cur_.assign(bands_.size(), 1.0);
@@ -337,10 +342,9 @@ class StreamingCalibrator {
       quote_up_[i] = upper[i];
       if (k < bands_.size() && bands_[k].row == i) {
         BandRow& b = bands_[k];
-        if (b.lower != lower[i] || b.upper != upper[i] || b.decay != decay[i]) {
-          b.lower = lower[i];
-          b.upper = upper[i];
-          b.decay = decay[i];
+        const PenaltyMap pm = PenaltyMap::band(lower[i], upper[i], decay[i]);
+        if (!(b.map == pm)) {
+          b.bind(pm, b.tp);
           if (state_[k] != 0) {  // pinned on an edge that has moved: release (track_bands re-scales it off the pin weight)
             state_[k] = 0;
             --n_pinned_;
@@ -382,9 +386,33 @@ class StreamingCalibrator {
   }
 
  private:
+  // A TRACKED row: its penalty map (problem.hpp PenaltyMap, the one description of the row's piecewise-linear residual)
+  // and the piece its target lies in. The walk below is the two-edge (Huber band) walk, so a tracked row has exactly
+  // the band shape -- two breakpoints around the target, every slope > 0 -- and a SIDE ∈ {−1, 0, +1} is the piece
+  // relative to the target's: side = piece − tp. Everything the walk needs (an edge, a slope, the residual at an
+  // edge, a model value from a residual) is read off the map; nothing here spells the band's shape (2026-10-07).
   struct BandRow {
     int row;
-    double lower, upper, decay;
+    PenaltyMap map;
+    int tp = 1;  // the target's piece (the band)
+    PenaltyMap::TwoEdge v;  // the map's two-edge view: what every per-step helper reads (problem.hpp)
+    void bind(const PenaltyMap& m, int target_piece) {
+      map = m;
+      tp = target_piece;
+      v = m.two_edge();
+    }
+    double edge(int side) const { return v.edge(side); }
+    double slope(int side) const { return v.slope(side); }
+    double width() const { return v.width(); }
+    double r_at_edge(int side, double m) const { return v.r_at_edge(side, m); }
+    int side_from_residual(double r, double m) const { return v.side_from_residual(r, m); }
+    int side_from_value(double x) const { return v.side_from_value(x); }
+    double invert(int side, double r, double m) const { return v.invert(side, r, m); }
+    static bool trackable(const PenaltyMap& m, double target) {
+      if (m.n != 2 || m.target_piece(target) != 1) return false;
+      for (int i = 0; i <= m.n; ++i) if (!(m.s[i] > 0.0)) return false;
+      return true;
+    }
   };
 
   // EXACT: frozen-Newton to step_tol, reusing M; recompute J only when the iteration stalls.
@@ -608,16 +636,9 @@ class StreamingCalibrator {
   int side_of(std::size_t k, const Eigen::VectorXd& q, double* q_out) const {
     const BandRow& b = bands_[k];
     const double m = q[b.row], r = r_[b.row];
-    if (r > b.decay * (b.upper - m)) {
-      if (q_out) *q_out = b.upper + (r - b.decay * (b.upper - m));
-      return +1;
-    }
-    if (r < b.decay * (b.lower - m)) {
-      if (q_out) *q_out = b.lower + (r - b.decay * (b.lower - m));
-      return -1;
-    }
-    if (q_out) *q_out = m + r / b.decay;
-    return 0;
+    const int side = b.side_from_residual(r, m);
+    if (q_out) *q_out = b.invert(side, r, m);
+    return side;
   }
 
   // Pinned rows are EQUALITY CONSTRAINTS q_model = edge, imposed as a stiff penalty row
@@ -636,7 +657,7 @@ class StreamingCalibrator {
       const BandRow& b = bands_[k];
       double qm = 0.0;
       side_of(k, q, &qm);
-      const double edge = state_[k] > 0 ? b.upper : b.lower;
+      const double edge = b.edge(state_[k]);
       r_[b.row] = kPinWeight * (qm - edge);
     }
   }
@@ -656,12 +677,12 @@ class StreamingCalibrator {
       double a = 2.0;
       int into = 0;
       if (side == 0) {
-        if (dq > 0.0 && qm < b.upper) { a = (b.upper - qm) / dq; into = +1; }
-        if (dq < 0.0 && qm > b.lower) { a = (b.lower - qm) / dq; into = -1; }
+        if (dq > 0.0 && qm < b.edge(+1)) { a = (b.edge(+1) - qm) / dq; into = +1; }
+        if (dq < 0.0 && qm > b.edge(-1)) { a = (b.edge(-1) - qm) / dq; into = -1; }
       } else if (side > 0 && dq < 0.0) {
-        a = (b.upper - qm) / dq;
+        a = (b.edge(+1) - qm) / dq;
       } else if (side < 0 && dq > 0.0) {
-        a = (b.lower - qm) / dq;
+        a = (b.edge(-1) - qm) / dq;
       }
       if (a > 0.0 && a < alpha) {
         alpha = a;
@@ -693,7 +714,7 @@ class StreamingCalibrator {
       rescale_row(k, kPinWeight);
       return;
     }
-    const double slope = side == 0 ? b.decay : 1.0;
+    const double slope = b.slope(side);
     rescale_row(k, slope);
     if (side != 0) last_side_[k] = side;
   }
@@ -711,12 +732,12 @@ class StreamingCalibrator {
       const BandRow& b = bands_[k];
       double qm = 0.0;
       const int side = side_of(k, q, &qm);
-      const double slope = side == 0 ? b.decay : 1.0;
+      const double slope = b.slope(side);
       // On-edge rows: the installed slope is the side we are ENTERING; the actual side may still read as
       // the side we came from by a rounding hair. Treat "within kink_tol of the edge" as on the edge.
       if (onedge_[k]) {
-        const double kink_tol = 1e-3 * (b.upper - b.lower);
-        if (std::abs(qm - b.upper) < kink_tol || std::abs(qm - b.lower) < kink_tol) continue;
+        const double kink_tol = 1e-3 * b.width();
+        if (std::abs(qm - b.edge(+1)) < kink_tol || std::abs(qm - b.edge(-1)) < kink_tol) continue;
         onedge_[k] = false;  // moved clearly off the edge: back to plain side tracking
       }
       if (slope == slope_cur_[k]) continue;
@@ -751,10 +772,10 @@ class StreamingCalibrator {
       const BandRow& b = bands_[k];
       double qm = 0.0;
       side_of(k, q, &qm);
-      const double edge = state_[k] > 0 ? b.upper : b.lower;
+      const double edge = b.edge(state_[k]);
       const double gap = qm - edge;
       const double lambda = kPinWeight * kPinWeight * gap;
-      const double r_edge = b.decay * (edge - q[b.row]);
+      const double r_edge = b.r_at_edge(state_[k], q[b.row]);  // the residual AT the edge: (edge − m)·decay
       double sj;
       if (std::abs(r_edge) > 1e-14) {
         sj = lambda / r_edge;
@@ -764,12 +785,13 @@ class StreamingCalibrator {
         sj = (state_[k] * lambda > 0.0) ? 2.0 : 0.0;
       }
       s_pin_[k] = sj;
-      SWAPS_TRACE("  verify row %d state %d s=%.4f (decay %.2f) gap=%.2e lambda=%.3e\n", b.row, state_[k], sj, b.decay, gap, lambda);
+      const double inside = b.slope(0), outside = b.slope(state_[k]);  // the two slopes that meet at this edge
+      SWAPS_TRACE("  verify row %d state %d s=%.4f (decay %.2f) gap=%.2e lambda=%.3e\n", b.row, state_[k], sj, inside, gap, lambda);
       // Hysteresis: the multiplier is read off a frozen-J solve, so a hair outside [decay, 1] is noise,
       // not a side (the old 1e-6 released at s = decay − 9e-4 and cycled).
       const double tol = 1e-3;
-      if ((sj < b.decay - tol || sj > 1.0 + tol) && releases_[k] == 0) {
-        const double slope = (sj < b.decay) ? b.decay : 1.0;
+      if ((sj < inside - tol || sj > outside + tol) && releases_[k] == 0) {
+        const double slope = (sj < inside) ? inside : outside;
         state_[k] = 0;
         --n_pinned_;
         ++release_count_;
@@ -844,12 +866,11 @@ class StreamingCalibrator {
         const BandRow& b = bands_[k];
         int side = 0;
         if (mr) {
-          side = ((*mr)[b.row] > b.upper) ? +1 : ((*mr)[b.row] < b.lower ? -1 : 0);
+          side = b.side_from_value((*mr)[b.row]);
         } else {
-          const double m = q[b.row], r = r_anchor_[b.row];
-          side = r > b.decay * (b.upper - m) ? +1 : (r < b.decay * (b.lower - m) ? -1 : 0);
+          side = b.side_from_residual(r_anchor_[b.row], q[b.row]);
         }
-        slope_ref_[k] = side == 0 ? b.decay : 1.0;  // band_slope; > 0: tracked rows have decay > 0
+        slope_ref_[k] = b.slope(side);  // > 0: tracked rows have every slope > 0
         slope_cur_[k] = slope_ref_[k];
         last_side_[k] = side < 0 ? -1 : +1;
       }

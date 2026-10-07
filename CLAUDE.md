@@ -508,6 +508,12 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   (the Huber band, `problem.hpp band_residual`), so a crossing re-scales that frozen row and re-factorises
   `M` (tens of µs, `StreamTick::rescales`) instead of leaving `J` a 10x moving target. A tick that hits its
   refresh cap reports `converged = false` and is NOT committed. Pinned in `tests/streaming_band_test.cpp`.
+  **The band's shape is written ONCE (2026-10-07, constraint rows stage A):** `problem.hpp` `PenaltyMap` is a row's
+  piecewise-linear residual map (breakpoints + piece slopes, zero at the target; the Huber band is the instance
+  `{{lower, upper}, {1, decay, 1}}`, an FX forward carries none) and the AAD residual, the compiled row map, the
+  streamer's edge walk (`BandRow` reads edges, slopes, edge residuals and residual inversions off it), the risk
+  scale and the diagnostics all read it -- the four copies and the FX-by-name exclusions in each are gone. A dead-zone
+  piece (a forward bound) is representable but the walk is still the two-edge walk (ASSUMPTIONS K41).
 - **The Jacobian is recomputed only on genuine staleness** — when frozen-Newton needs more than
   `max_frozen` steps — NOT on a drift envelope. That staleness envelope is ~30 bp of curve move (a
   level move; `tools/jacobian_staleness.cpp` measures `ρ` vs move size) vs the linear path's 0.35 bp,

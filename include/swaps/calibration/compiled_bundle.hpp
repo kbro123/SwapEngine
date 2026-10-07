@@ -196,12 +196,20 @@ class CompiledBundleResidual {
   // band (the templated instrument_residual applies the log map first; see register_generic).
   void set_quote(int row, double market, double lower, double upper, double decay) {
     market_[row] = market;
-    if (instruments_[static_cast<std::size_t>(row)].quote != QuoteKind::FxForward) {
-      band_lo_[row] = lower;
-      band_up_[row] = upper;
-      band_dc_[row] = decay;
+    if (instruments_[static_cast<std::size_t>(row)].quote == QuoteKind::FxForward) return;
+    // The common tick re-sends every row's band with a new target: an UNCHANGED band touches nothing (2026-10-07 --
+    // rebuilding the row-map list per tick cost 0.7 us on the banded rung once a map was a PenaltyMap, not three
+    // doubles). A changed band updates its map in place while the row stays banded; a band appearing or
+    // disappearing rebuilds the list.
+    if (lower == band_lo_[row] && upper == band_up_[row] && decay == band_dc_[row]) return;
+    const bool was = band_up_[row] > band_lo_[row], now = upper > lower;
+    band_lo_[row] = lower;
+    band_up_[row] = upper;
+    band_dc_[row] = decay;
+    if (was && now && !maps_dirty_ && map_pos_[static_cast<std::size_t>(row)] >= 0)
+      maps_[static_cast<std::size_t>(map_pos_[static_cast<std::size_t>(row)])].v = PenaltyMap::band(lower, upper, decay).two_edge();
+    else
       maps_dirty_ = true;
-    }
   }
   void set_market(int row, double market) { market_[row] = market; }
   double market_of(int row) const { return market_[row]; }
@@ -605,13 +613,16 @@ class CompiledBundleResidual {
   // The per-ROW residual map rho(q_model, q): a Huber bid/offer band {lower, upper, decay} (problem.hpp
   // band_residual) or the FX log-basis (ln q_model − ln q)/T (RATE units, CLAUDE.md §2: a 1bp basis error
   // maps to ~1bp regardless of tenor). A plain row has no entry. Returns {r, dr/dq_model}.
-  struct RowMap { int row; bool log; double a, b, c; };  // log: a = T; band: a = lower, b = upper, c = decay
+  // log: the FX tenor T; else the row's penalty map as its TWO-EDGE VIEW (problem.hpp PenaltyMap::TwoEdge -- the hot
+  // path holds five doubles, not the general map; a non-band shape is refused by two_edge() until the general row map
+  // lands, stage B).
+  struct RowMap { int row; bool log; double T; PenaltyMap::TwoEdge v; };
   static std::pair<double, double> row_residual_d(const RowMap& m, double mr, double q) {
     if (m.log) {
       using std::log;
-      return {(log(mr) - log(q)) / m.a, 1.0 / (mr * m.a)};
+      return {(log(mr) - log(q)) / m.T, 1.0 / (mr * m.T)};
     }
-    return band_residual_d(mr, q, m.a, m.b, m.c);
+    return m.v.residual_d(mr, q);
   }
 
   // DF = exp(-W_all x), memoized on x. model_rates(x) and jacobian(x) are called at the SAME x within
@@ -842,13 +853,17 @@ class CompiledBundleResidual {
   std::vector<double> band_lo_, band_up_, band_dc_;  // per-row band (upper <= lower: none)
   mutable std::vector<RowMap> maps_;
   mutable bool maps_dirty_ = false;
+  mutable std::vector<int> map_pos_;  // row -> its RowMap position, or -1 (valid whenever maps_dirty_ is false)
   const std::vector<RowMap>& row_maps() const {
     if (maps_dirty_) {
       maps_.clear();
+      map_pos_.assign(static_cast<std::size_t>(n_gen_), -1);
       for (int row = 0; row < n_gen_; ++row) {
         const Instrument& ins = instruments_[static_cast<std::size_t>(row)];
-        if (ins.quote == QuoteKind::FxForward) maps_.push_back({row, true, ins.fx_time, 0.0, 0.0});
-        else if (band_up_[row] > band_lo_[row]) maps_.push_back({row, false, band_lo_[row], band_up_[row], band_dc_[row]});
+        if (ins.quote == QuoteKind::FxForward) maps_.push_back({row, true, ins.fx_time, PenaltyMap::TwoEdge{}});
+        else if (band_up_[row] > band_lo_[row]) maps_.push_back({row, false, 0.0, PenaltyMap::band(band_lo_[row], band_up_[row], band_dc_[row]).two_edge()});
+        else continue;
+        map_pos_[static_cast<std::size_t>(row)] = static_cast<int>(maps_.size()) - 1;
       }
       maps_dirty_ = false;
     }

@@ -54,7 +54,7 @@ inline QuoteDiagnostic quote_diagnostic(const Instrument& ins, double model) {
     d.upper = ins.band_upper;
     d.decay = ins.band_decay;
     d.in_band = ins.band_lower <= model && model <= ins.band_upper;
-    d.weight = band_slope(model, ins.band_lower, ins.band_upper, ins.band_decay);
+    d.weight = ins.penalty().slope_at(model, ins.market);
   }
   return d;
 }
