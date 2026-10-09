@@ -134,6 +134,12 @@ struct PenaltyMap {
   double s[kMaxBreaks + 1] = {1.0, 1.0, 1.0, 1.0};  // the n + 1 piece slopes
 
   static PenaltyMap plain() { return {}; }
+  // A STIFF one-piece map {∅, {w}}: r = w·(q − m) -- the streamer's pin (an equality constraint as a penalty row).
+  static PenaltyMap stiff(double w) {
+    PenaltyMap m;
+    m.s[0] = w;
+    return m;
+  }
   static PenaltyMap band(double lower, double upper, double decay) {
     if (!(upper > lower)) return {};
     PenaltyMap m;

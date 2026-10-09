@@ -69,7 +69,7 @@ MUTATIONS = [
      "",
      ["streaming_walk_guard_test.cpp"], "*", "the one post-convergence refresh per drift refresh is unpinned (G2)"),
     ("drift_refresh_on_square", "include/swaps/calibration/streaming.hpp",
-     "    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || op_.regularised();\n",  # re-anchored 2026-09-22 (NormalOp)
+     "    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || R_.rows() > 0;\n",  # re-anchored 2026-10-09 (constraint rows)
      "    drift_refresh_ = true;\n",
      ["streaming_walk_guard_test.cpp"], "*", "a square rung's 25 bp tick refreshing is unpinned (G2)"),
     ("tick_state_copied_per_tick", "include/swaps/calibration/streaming.hpp",
@@ -87,15 +87,15 @@ MUTATIONS = [
      ["api/bundle_api.cpp", "session_stream_commit_repro_test.cpp"], "*", "the shared engine keeping the old targets after a tick is unpinned (P3)"),
     # 2026-09-15 C6a: a refresh writes J in place and reuses one decomposition.
     ("refresh_jacobian_by_value", "include/swaps/calibration/streaming.hpp",
-     "    if (!sides_from_j) engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)\n",
-     "    if (!sides_from_j) J_ref_ = engine_->jacobian_vs(x, q);\n",
+     "    else engine_->jacobian_vs_into(x, q, Jq_);\n",
+     "    else Jq_ = engine_->jacobian_vs(x, q);\n",
      ["streaming_refresh_alloc_repro_test.cpp"], "*", "a refresh writing J in place is unpinned (C6)"),
     ("decomposition_rebuilt_per_refresh", "include/swaps/calibration/normal_op.hpp",
      "    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
      "    cod_ = Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>();\n    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
      ["streaming_refresh_alloc_repro_test.cpp"], "*", "reusing the refresh's decomposition storage is unpinned (C6)"),
-    ("stacked_regulariser_rows_not_written", "include/swaps/calibration/normal_op.hpp",
-     "      S_.bottomRows(R.rows()) = R;\n",
+    ("stacked_regulariser_rows_not_written", "include/swaps/calibration/streaming.hpp",
+     "    if (R_.rows() > 0) J.bottomRows(R_.rows()) = R_;\n",
      "",
      ["jacobian_into_parity_test.cpp"], "*", "the regularised refresh's R rows are unpinned (C6)"),
     # 2026-09-15 C8: a tick reports the drift it refreshed on.

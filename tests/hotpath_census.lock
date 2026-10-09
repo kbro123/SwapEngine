@@ -39,7 +39,7 @@ set_anchor         8
 factor             4
 rescale_row        5
 residuals_vs       3
-jacobian_vs_into   4  # set_anchor: + the residuals-returning call and its compile-time requires-check (S2) -- the same refresh stage and census scenarios
+jacobian_vs_into   3  # take_jacobian: the residuals-returning call and the plain one, + set_anchor's compile-time requires-check (S2); the regulariser rows are stacked under the engine's rows there (constraint rows, 2026-10-09)
 model_rates        2  # set_anchor (sides from the model values when a tracked map has a zero-slope piece) + eval()'s fallback for an engine without the joint residuals_vs(x, q, &model) form (stage B 2026-10-09: the same evaluation, not a new refresh)
 request            1
 update_exact       2

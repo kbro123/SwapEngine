@@ -525,6 +525,15 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   the two adjacent slopes). The LM's seed anchor is centred regulariser rows (`RegularizedEngine(base, w·I, x0)`), not
   a second hand-stacked engine. Pinned: `streaming_dead_zone_test` (compiled == templated on every piece; a move into
   and out of the dead zone streams to the cold answer; anchored-in-dead-zone), every band / soak test unchanged.
+  **The last half (2026-10-09): the regulariser is CONSTRAINT ROWS everywhere and `NormalOp` is the pseudo-inverse of
+  a row stack, nothing more.** The streamer's frozen system is `r = [r_instruments; R·x]`, `J = [J; R]`
+  (`take_jacobian`, `eval`), the risk operator stacks `[J; R]` and reads its instrument columns, the LM composes
+  `RegularizedEngine` (centred rows for the seed anchor), generate_risk stacks its null pillars -- one row kind, one
+  stack, one pseudo-inverse. The operator's regulariser BLOCK (`RᵀR`, the stacked scratch `S`, the `B = G·RᵀR` pull
+  added to every step, the block's own term in the rank-one re-scale) is deleted: the same algebra written a second
+  way. A PIN is the stiff one-piece map `PenaltyMap::stiff(w)` centred on its breakpoint (`apply_pins`), so a pinned
+  row's residual and installed slope are a map and its slope like any free row's; when to pin and release is the
+  active-set walk's control flow and stays so (ASSUMPTIONS K44).
 - **The Jacobian is recomputed only on genuine staleness** — when frozen-Newton needs more than
   `max_frozen` steps — NOT on a drift envelope. That staleness envelope is ~30 bp of curve move (a
   level move; `tools/jacobian_staleness.cpp` measures `ρ` vs move size) vs the linear path's 0.35 bp,

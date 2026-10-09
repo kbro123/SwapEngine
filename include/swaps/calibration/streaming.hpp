@@ -33,12 +33,14 @@
 // and a caller never reads a half-solved curve as the answer.
 
 #include <Eigen/Dense>
+#include <Eigen/Sparse>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -190,10 +192,12 @@ class StreamingCalibrator {
     bool prefetch = false;
     double prefetch_drift = 5e-4;  // request a background M once drift from the anchor exceeds this (5bp)
     // SMOOTHNESS REGULARISER (empty = off). R = λ·D, the second-difference operator over the chosen
-    // curves' knots (swaps::calibration::second_difference_operator). When set, the frozen-Newton
-    // operator becomes M = (JᵀJ + RᵀR)⁻¹Jᵀ and each step gains a B·x curvature-pull term, so a
-    // RANK-DEFICIENT (basis-only) build streams directly -- selecting the smoothest curve consistent
-    // with the market every tick, instead of a singular M. Empty keeps the exact previous behaviour.
+    // curves' knots (swaps::calibration::second_difference_operator). When set, its rows are CONSTRAINT ROWS of
+    // the frozen system (2026-10-09): r = [r_instruments; R·x], J = [J; R], and the one operator is the
+    // pseudo-inverse of that stack -- so a RANK-DEFICIENT (basis-only) build streams directly, selecting the
+    // smoothest curve consistent with the market every tick, instead of a singular M. (Until 2026-10-09 the same
+    // algebra was carried as an operator block, M = (JᵀJ + RᵀR)⁻¹Jᵀ plus a B·x pull per step.) Empty keeps the
+    // exact previous behaviour.
     Eigen::MatrixXd regularizer;
   };
 
@@ -220,7 +224,7 @@ class StreamingCalibrator {
       if constexpr (requires(Engine& e, const Problem& p) { e.set_quotes(p); }) owned_engine_->set_quotes(prob);
     }
     collect_bands(prob);
-    drift_refresh_ = (n_res_ != static_cast<int>(x.size())) || !bands_.empty() || op_.regularised();
+    drift_refresh_ = (n_res_ != static_cast<int>(x.size())) || !bands_.empty() || R_.rows() > 0;
     if (!set_anchor(x, q)) throw std::invalid_argument("StreamingCalibrator::resync: the Jacobian at the anchor is non-finite");
     x_cur_ = x;
     q_cur_ = q;
@@ -238,10 +242,19 @@ class StreamingCalibrator {
     }
     if (!x0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor state x0 contains a non-finite value");
     if (!q0.allFinite()) throw std::invalid_argument("StreamingCalibrator: the anchor market q0 contains a non-finite quote");
-    op_.reset(n_res_, static_cast<int>(x0.size()), opt_.regularizer);  // THE operator (normal_op.hpp): sized once, R rows written once
+    // The regulariser's rows are constraint rows of the frozen system: n_rows_ = instrument rows + R rows, the
+    // residual carries R·x below the instrument residuals, the frozen Jacobian carries R below J (take_jacobian).
+    R_ = opt_.regularizer;
+    if (R_.rows() > 0 && R_.cols() != x0.size())
+      throw std::invalid_argument("StreamingCalibrator: the regulariser has " + std::to_string(R_.cols()) + " columns for " + std::to_string(x0.size()) + " states");
+    Rs_ = R_.sparseView();  // the per-step R·x reads the operator's few nonzeros per row, not a dense block (see eval)
+    Rs_.makeCompressed();
+    n_rows_ = n_res_ + static_cast<int>(R_.rows());
+    r_.resize(n_rows_);
+    op_.reset(n_rows_, static_cast<int>(x0.size()));  // THE operator (normal_op.hpp): the pseudo-inverse of the stacked rows, sized once
     collect_bands(prob);
     // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0.
-    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || op_.regularised();
+    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || R_.rows() > 0;
     // The background worker hands over M ONLY (no B, no band re-scaling, and its private engine copy never
     // sees a later set_quotes), which is exact for a SQUARE, unbanded, unregularised problem and wrong for
     // the rest (E3 register S3 / G5): a regularised or banded stream would mix an un-regularised M with a
@@ -272,7 +285,7 @@ class StreamingCalibrator {
       }
       for (int rep = 0; rep < (measure ? 2 : 1); ++rep) {
         const auto t1 = std::chrono::steady_clock::now();
-        engine_->jacobian_vs_into(x0, q0, J_cur_);
+        take_jacobian(x0, q0, J_cur_, nullptr);
         factor(J_cur_);
         const auto t2 = std::chrono::steady_clock::now();
         refresh_ns = std::min(refresh_ns, std::chrono::duration<double, std::nano>(t2 - t1).count());
@@ -367,8 +380,9 @@ class StreamingCalibrator {
   const Eigen::VectorXd& current() const { return x_cur_; }
   // The engine residual the last corrector step was taken from: evaluated at the state ONE converged step
   // (||dx||_inf < step_tol) before current(), so it reads the committed curve's fit to O(||J||·step_tol) --
-  // a report, not a re-evaluation; nothing on the tick is spent on it. Stale after a failed tick.
-  const Eigen::VectorXd& last_residual() const { return r_; }
+  // a report, not a re-evaluation; nothing on the tick is spent on it. Stale after a failed tick. The INSTRUMENT
+  // rows only (the regulariser's constraint rows sit below them in r_).
+  Eigen::Ref<const Eigen::VectorXd> last_residual() const { return r_.head(n_res_); }
   const Eigen::VectorXd& anchor_market() const { return q_anchor_; }
   const Eigen::MatrixXd& sensitivity() const { return op_.M(); }
   int refresh_count() const { return refresh_count_; }
@@ -503,8 +517,7 @@ class StreamingCalibrator {
           have_last_step_ = false;  // an active-set change legitimately turns the step
         }
       }
-      dx_.noalias() = op_.M() * r_;
-      if (op_.regularised()) dx_.noalias() += op_.B() * x;  // curvature pull toward the smoothest market-consistent curve
+      dx_.noalias() = op_.M() * r_;  // over every row: the instrument residuals and the regulariser's R·x
       double alpha = 1.0;
       std::size_t hit = 0;
       int hit_piece = 0;
@@ -646,12 +659,29 @@ class StreamingCalibrator {
   static constexpr bool kJointEval = requires(const Engine& e, const Eigen::VectorXd& v, Eigen::VectorXd* m) { e.residuals_vs(v, v, m); };
   void eval(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
     if constexpr (kJointEval) {
-      r_ = engine_->residuals_vs(x, q, bands_.empty() ? nullptr : &qm_);  // THE tick's residual evaluation (census: one site)
+      r_.head(n_res_) = engine_->residuals_vs(x, q, bands_.empty() ? nullptr : &qm_);  // THE tick's residual evaluation (census: one site)
     } else {
-      r_ = engine_->residuals_vs(x, q);
+      r_.head(n_res_) = engine_->residuals_vs(x, q);
       if (!bands_.empty()) qm_ = engine_->model_rates(x);  // the generic engine has no joint form: a second evaluation
     }
+    // The regulariser's constraint rows: R·x − 0. SPARSE: a second-difference row has three nonzeros, and reading the
+    // dense R here on top of the operator's R columns in M·r cost the regularised rebind 13 % (measured 2026-10-09).
+    if (R_.rows() > 0) r_.tail(R_.rows()).noalias() = Rs_ * x;
     for (BandRow& b : bands_) b.q = qm_[b.row];
+  }
+  // The frozen Jacobian at (x, q): the engine's instrument rows (and, when `r` is given, their residuals from the
+  // same pass, S2) stacked over the regulariser's constant rows. The constant rows are written ONCE (stack_rows, at
+  // construction / when the stack's shape changes): a refresh copies the instrument block only -- copying the R
+  // block too, into J_ref_ and again into J_cur_, cost 13 % on the regularised rebind (measured 2026-10-09).
+  void take_jacobian(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) {
+    if (r) engine_->jacobian_vs_into(x, q, Jq_, r);
+    else engine_->jacobian_vs_into(x, q, Jq_);
+    if (J.rows() != n_rows_ || J.cols() != Jq_.cols()) stack_rows(J, static_cast<int>(Jq_.cols()));
+    J.topRows(n_res_) = Jq_;
+  }
+  void stack_rows(Eigen::MatrixXd& J, int nk) {
+    J.resize(n_rows_, nk);
+    if (R_.rows() > 0) J.bottomRows(R_.rows()) = R_;
   }
 
   // Pinned rows are EQUALITY CONSTRAINTS q_model = breakpoint, imposed as a stiff penalty row
@@ -663,10 +693,13 @@ class StreamingCalibrator {
   // fixed-point/secant iteration in the multiplier slope s that wandered without closing the gap and
   // left the tick 14 % above the optimum (probe C-band-crossing, 0.6 bp at decay 0.1).
   static constexpr double kPinWeight = 1e3;  // gap ≈ λ/w² ~ 1e-11 (1e-7 bp); λ resolved to ~1e-8 relative
+  // While pinned, a row's residual IS a penalty map: the stiff one-piece map {∅, {w}} centred on its breakpoint
+  // (PenaltyMap::stiff), and its installed slope w (rescale_row) is that map's slope -- the same map/slope pair every
+  // free row has, with the breakpoint for a target.
   void apply_pins() {
     if (n_pinned_ == 0) return;
     for (const BandRow& b : bands_)
-      if (b.pin >= 0) r_[b.row] = kPinWeight * (b.q - b.b(b.pin));
+      if (b.pin >= 0) r_[b.row] = PenaltyMap::stiff(kPinWeight).residual_d(b.q, b.b(b.pin)).first;
   }
 
   // The first breakpoint the full step x − dx would cross, predicted from the frozen quote rows
@@ -847,11 +880,10 @@ class StreamingCalibrator {
     bool sides_from_j = false;  // S2: the band sides below come from the Jacobian pass's residuals, when the engine returns them
     if constexpr (requires(const Engine& e, const Eigen::VectorXd& v, Eigen::MatrixXd& m, Eigen::VectorXd* p) { e.jacobian_vs_into(v, v, m, p); }) {
       sides_from_j = !bands_.empty() && opt_.anchor_sides_from_jacobian;
-      if (sides_from_j) engine_->jacobian_vs_into(x, q, J_ref_, &r_anchor_);
     }
-    if (!sides_from_j) engine_->jacobian_vs_into(x, q, J_ref_);  // in place (C6); band term consistent with residuals_vs(·,q)
+    take_jacobian(x, q, J_ref_, sides_from_j ? &r_anchor_ : nullptr);  // in place (C6); band term consistent with residuals_vs(·,q)
     if (!J_ref_.allFinite()) {
-      if (have_J_) J_ref_ = J_cur_;  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
+      if (have_J_) J_ref_.topRows(n_res_) = J_cur_.topRows(n_res_);  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
       return false;
     }
     x_anchor_ = x;
@@ -870,7 +902,8 @@ class StreamingCalibrator {
       }
       clear_pins();
     }
-    J_cur_ = J_ref_;
+    if (J_cur_.rows() != n_rows_ || J_cur_.cols() != J_ref_.cols()) stack_rows(J_cur_, static_cast<int>(J_ref_.cols()));
+    J_cur_.topRows(n_res_) = J_ref_.topRows(n_res_);  // the R rows below are the same constants in both
     have_J_ = true;
     factor(J_cur_);
     ++refresh_count_;
@@ -924,7 +957,11 @@ class StreamingCalibrator {
   }
 
   int n_res_;
-  NormalOp op_;                             // THE operator: M, G, B, the rank-one re-scale (normal_op.hpp)
+  int n_rows_ = 0;                          // n_res_ + the regulariser's rows: the frozen system's row count
+  Eigen::MatrixXd R_;                       // the regulariser's constraint rows (empty: none), stacked under J
+  Eigen::SparseMatrix<double> Rs_;          // the same rows, sparse, for the per-step R·x
+  Eigen::MatrixXd Jq_;                      // the engine's instrument-row Jacobian (take_jacobian stacks R under it)
+  NormalOp op_;                             // THE operator: M, G, the rank-one re-scale (normal_op.hpp)
   const Engine* engine_ = nullptr;          // the residual engine driven every tick (borrowed or owned)
   std::unique_ptr<Engine> owned_engine_;    // set only by the (prob, ...) constructor
   Options opt_;

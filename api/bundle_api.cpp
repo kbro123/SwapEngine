@@ -282,7 +282,7 @@ const cal::CalibrationResult& BundleSession::warm_solve(const RegSpec& reg) {
   return result_;
 }
 
-void BundleSession::stamp_streamed(const cal::StreamTick& tick, const Eigen::VectorXd& r) {
+void BundleSession::stamp_streamed(const cal::StreamTick& tick, Eigen::Ref<const Eigen::VectorXd> r) {
   x_ = stream_->current();
   result_.x = x_;
   result_.converged = true;
@@ -347,10 +347,21 @@ Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   // THE operator (normal_op.hpp): the IFT on min ||r||² + ||Rx||² reads [J; R]ᵀ[J; R] dx = Jᵀ D dq, rank-safe at the ONE
   // kRankThreshold the streamer and LM use. The R block comes from the session cache (ensure_reg_R: structure-only, built
   // once per reg) -- E3-D6: rebuilding it here cost 4,449 allocations per risk_operator call.
-  cal::NormalOp op(static_cast<int>(J.rows()), static_cast<int>(J.cols()));
-  if (reg.on()) op.reset(static_cast<int>(J.rows()), static_cast<int>(J.cols()), ensure_reg_R(reg));
-  op.factor(J);
-  return op.quote_sensitivity(residual_market_scale());  // n_knots x n_res = dx/dq
+  const int n_res = static_cast<int>(J.rows()), nk = static_cast<int>(J.cols());
+  if (!reg.on()) {
+    cal::NormalOp op(n_res, nk);
+    op.factor(J);
+    return op.quote_sensitivity(residual_market_scale());  // n_knots x n_res = dx/dq
+  }
+  // The regulariser's rows are CONSTRAINT ROWS stacked under the instrument rows (2026-10-09): the operator is the
+  // pseudo-inverse of [J; R], and dx/dq reads its instrument columns.
+  const Eigen::MatrixXd& R = ensure_reg_R(reg);
+  Eigen::MatrixXd S(n_res + R.rows(), nk);
+  S.topRows(n_res) = J;
+  S.bottomRows(R.rows()) = R;
+  cal::NormalOp op(static_cast<int>(S.rows()), nk);
+  op.factor(S);
+  return op.quote_sensitivity(residual_market_scale(), n_res);  // n_knots x n_res = dx/dq
 }
 
 std::optional<pf::MultiCurveBook> BundleSession::resolve_book(const pf::MultiCurveBook& book) const {

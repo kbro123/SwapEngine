@@ -456,7 +456,7 @@ class BundleSession {
   // and make result_ report THIS solve, with `r` as its residual. warm_solve passes a re-evaluation at x_ (its
   // callers read rms to 1e-10); stream_update passes the streamer's last corrector residual -- no evaluation on
   // the gated tick, a report at the O(||J||·step_tol) level (~4e-8 vs 3e-9 exact, ApiState test).
-  void stamp_streamed(const cal::StreamTick& tick, const Eigen::VectorXd& r);
+  void stamp_streamed(const cal::StreamTick& tick, Eigen::Ref<const Eigen::VectorXd> r);
   void rebuild_cbook() const;
   cal::HybridBundleResidual& ensure_engine() const {
     if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);
