@@ -87,8 +87,8 @@
       "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only. 2026-10-06: fixture re-pointed (5 MtM rows back on the AAD block); target unchanged.. 2026-10-06: fixture re-pointed to the 5 compounded-funding MtM rows (the block had emptied and read 1 ns); target unchanged."
     },
     "usd_eur_xccy_3c8k_stream_tick": {
-      "target_ns": 114000,
-      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only"
+      "target_ns": 19600,
+      "note": "initial = 2026-09-08 like-for-like baseline x1.3; ratchets DOWN only. 2026-10-09: ratcheted 114.0 us -> 19.6 us (15.0 us x1.3) -- the fixture became over-determined and identified (fixture_identifiability_test; USD/EUR gained an overnight front pin + 0.25y/0.5y rows), so a tick is 3 frozen steps and no refresh instead of 9-10 steps + 1 refresh spent on a weak direction"
     },
     "shape_ois_nolag_stream_tick": {
       "target_ns": 2200,

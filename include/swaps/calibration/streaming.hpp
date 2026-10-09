@@ -59,6 +59,11 @@ namespace swaps::calibration {
 // DEFAULT: past this many frozen steps a refresh is worth its cost on any shape measured here.
 inline constexpr double kBreakevenCap = 64.0;
 
+// The WALK rank threshold (two-threshold operator, factor()): a direction below kWalkRankThreshold x sigma_max is WEAK --
+// kept when the anchor already had it (structural), dropped when it appears mid-walk. Namespace scope so a fixture gate
+// (tests/fixture_identifiability_test.cpp) can require that no calibration fixture is weak at its own solution.
+inline constexpr double kWalkRankThreshold = 1e-4;
+
 // Why a tick ended. Anything but Converged is a FAILED tick: reported, never committed (current() keeps
 // the last converged solution) and the anchor is restored to that solution, so the next tick starts from a
 // valid state and cannot report a stale curve as converged (probe C-divergent-repeat, 2026-09-09).
@@ -969,7 +974,6 @@ class StreamingCalibrator {
   bool have_last_step_ = false;
   // Two-threshold operator (see factor): the walk drops weak directions the anchor did not have; a tick that converged on a
   // truncated operator re-converges at the shared threshold before committing (update_exact).
-  static constexpr double kWalkRankThreshold = 1e-4;
   bool full_rank_ = false;   // this tick has re-anchored at the shared threshold
   bool truncated_ = false;   // the current operator dropped a weak direction
   bool in_walk_ = false;     // inside update_exact (a factorisation here is not an anchor)

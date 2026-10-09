@@ -23,6 +23,7 @@ target_link_libraries(compiled_multi_bench PRIVATE swaps benchmark::benchmark_ma
 # streaming tick on a mixed bundle (ours-only, R11 pooled-dual retype; not a fingerprint gate metric).
 add_executable(fx_stream_bench fx_stream_bench.cpp)
 target_link_libraries(fx_stream_bench PRIVATE swaps benchmark::benchmark_main)
+target_include_directories(fx_stream_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)  # fx_stream_fixture.hpp (shared with the identifiability test)
 
 # Curve-space gamma via the reverse-mode AAD tape: 2nd-order Hessian vs the 1st-order delta ladder.
 add_executable(gamma_bench gamma_bench.cpp)
