@@ -202,6 +202,12 @@ class CompiledBundleResidual {
     // doubles). A changed band updates its map in place while the row stays banded; a band appearing or
     // disappearing rebuilds the list.
     if (lower == band_lo_[row] && upper == band_up_[row] && decay == band_dc_[row]) return;
+    if (instruments_[static_cast<std::size_t>(row)].penalty_map) {  // a general map is the row's shape: the band numbers are not read
+      band_lo_[row] = lower;
+      band_up_[row] = upper;
+      band_dc_[row] = decay;
+      return;
+    }
     const bool was = band_up_[row] > band_lo_[row], now = upper > lower;
     band_lo_[row] = lower;
     band_up_[row] = upper;
@@ -275,6 +281,9 @@ class CompiledBundleResidual {
     residuals_from(model_rates(x), q, res_);  // model_rates fills out_; res_ (a distinct member) holds r
     return res_;
   }
+  // The model values the last residuals_vs / model_rates call computed (the streamer's walk reads a tracked row's
+  // model value here instead of inverting its residual, which a zero-slope piece would not allow; stage B 2026-10-09).
+  const Eigen::VectorXd& last_model_rates() const { return out_; }
 
   // Analytic block Jacobian J = dr/dx = -(dr/dDF diag(DF)) W_all. dr/dDF (G) is the per-instrument
   // pricing sensitivity scattered into the global DF columns; the W_all matmul maps DF-space back to
@@ -613,15 +622,16 @@ class CompiledBundleResidual {
   // The per-ROW residual map rho(q_model, q): a Huber bid/offer band {lower, upper, decay} (problem.hpp
   // band_residual) or the FX log-basis (ln q_model − ln q)/T (RATE units, CLAUDE.md §2: a 1bp basis error
   // maps to ~1bp regardless of tenor). A plain row has no entry. Returns {r, dr/dq_model}.
-  // log: the FX tenor T; else the row's penalty map as its TWO-EDGE VIEW (problem.hpp PenaltyMap::TwoEdge -- the hot
-  // path holds five doubles, not the general map; a non-band shape is refused by two_edge() until the general row map
-  // lands, stage B).
-  struct RowMap { int row; bool log; double T; PenaltyMap::TwoEdge v; };
-  static std::pair<double, double> row_residual_d(const RowMap& m, double mr, double q) {
+  // log: the FX tenor T; else the row's penalty map -- as its TWO-EDGE VIEW (problem.hpp PenaltyMap::TwoEdge: the hot
+  // path holds five doubles) for every band, or by index into gen_maps_ (the general piece walk) for a row that
+  // carries a general map as data (Instrument::penalty_map, stage B 2026-10-09).
+  struct RowMap { int row; bool log; double T; PenaltyMap::TwoEdge v; int gen = -1; };
+  std::pair<double, double> row_residual_d(const RowMap& m, double mr, double q) const {
     if (m.log) {
       using std::log;
       return {(log(mr) - log(q)) / m.T, 1.0 / (mr * m.T)};
     }
+    if (m.gen >= 0) return gen_maps_[static_cast<std::size_t>(m.gen)].residual_d_general(mr, q);
     return m.v.residual_d(mr, q);
   }
 
@@ -852,17 +862,28 @@ class CompiledBundleResidual {
   // Empty for a plain bundle, so the fast path is untouched when no row is mapped.
   std::vector<double> band_lo_, band_up_, band_dc_;  // per-row band (upper <= lower: none)
   mutable std::vector<RowMap> maps_;
+  mutable std::vector<PenaltyMap> gen_maps_;  // the general (non-band) maps the RowMaps index
   mutable bool maps_dirty_ = false;
   mutable std::vector<int> map_pos_;  // row -> its RowMap position, or -1 (valid whenever maps_dirty_ is false)
   const std::vector<RowMap>& row_maps() const {
     if (maps_dirty_) {
       maps_.clear();
+      gen_maps_.clear();
       map_pos_.assign(static_cast<std::size_t>(n_gen_), -1);
       for (int row = 0; row < n_gen_; ++row) {
         const Instrument& ins = instruments_[static_cast<std::size_t>(row)];
-        if (ins.quote == QuoteKind::FxForward) maps_.push_back({row, true, ins.fx_time, PenaltyMap::TwoEdge{}});
-        else if (band_up_[row] > band_lo_[row]) maps_.push_back({row, false, 0.0, PenaltyMap::band(band_lo_[row], band_up_[row], band_dc_[row]).two_edge()});
-        else continue;
+        if (ins.quote == QuoteKind::FxForward) {
+          maps_.push_back({row, true, ins.fx_time, PenaltyMap::TwoEdge{}});
+        } else if (ins.penalty_map) {
+          const PenaltyMap& pm = *ins.penalty_map;
+          if (pm.is_plain()) continue;
+          gen_maps_.push_back(pm);  // always the general path: its target piece follows the live target
+          maps_.push_back({row, false, 0.0, PenaltyMap::TwoEdge{}, static_cast<int>(gen_maps_.size()) - 1});
+        } else if (band_up_[row] > band_lo_[row]) {
+          maps_.push_back({row, false, 0.0, PenaltyMap::band(band_lo_[row], band_up_[row], band_dc_[row]).two_edge()});
+        } else {
+          continue;
+        }
         map_pos_[static_cast<std::size_t>(row)] = static_cast<int>(maps_.size()) - 1;
       }
       maps_dirty_ = false;

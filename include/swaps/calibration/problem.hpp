@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -112,196 +113,6 @@ static_assert(static_cast<int>(QuoteKind::Npv) + 1 == kQuoteKindCount,
               "a QuoteKind was added or reordered: update instrument_model_quote / instrument_residual "
               "(problem.hpp), the compiled batches (compiled_bundle.hpp), the codec's to/from string "
               "(api/codec.cpp) and kQuoteKindCount itself");
-
-// Forward declarations for the recursive Portfolio components (each component is itself an Instrument).
-struct Instrument;
-struct WeightedInstrument;
-struct PenaltyMap;  // the row's piecewise-linear residual map (defined below, after the instrument)
-
-// One calibration instrument.
-//
-// Which members a given `quote` reads (the others are ignored and may stay default-constructed):
-//   ParRate   : `fwd` (the float leg, enters POSITIVELY) and `fixed` (the annuity).
-//   ParSpread : `fwd` (the SPREAD/quoted leg, enters NEGATIVELY), `bench` (the benchmark leg, enters
-//               POSITIVELY) and `fixed`. The two float legs are INDEPENDENT — different frequency,
-//               day count, spread and forecast curve are all fine (design §6.7).
-//   Rate      : `obs`, `forecast` and `convexity`.
-//
-// Sign convention for ParSpread: the quoted spread s satisfies pv(fwd) + s·annuity = pv(bench), hence
-// s = (pv_bench − pv_fwd)/annuity.
-struct Instrument {
-  QuoteKind quote = QuoteKind::ParRate;
-  FloatLeg fwd;
-  FloatLeg bench;
-  FixedLeg fixed;
-  pricing::RateObservation obs;  // Rate only
-  int forecast = 0;              // Rate only: the curve that forecasts `obs`
-  // Rate only. An INPUT NUMBER (design §3): the convexity MODEL (Hull-White etc.) lives in tests.
-  double convexity = 0.0;
-  double market = 0.0;  // the market quote, in the units of `quote` (always rate units)
-
-  // Bid/offer BAND (soft calibration target). When `band_upper > band_lower` (bounds in the quote's rate
-  // units) the residual is the HUBER band residual (band_residual()): a `band_decay`-slope pull to the mid
-  // inside [lower, upper], a unit-slope pull to the nearer EDGE outside it, continuous at the edges. So
-  // the solver treats any model value within [lower, upper] as ~satisfied and spends its freedom on the
-  // hard targets, while an overlapping instrument that cannot be hit exactly settles inside its band. The
-  // default (band_upper <= band_lower, band_decay = 1) leaves the residual as the plain (q − market).
-  double band_lower = 0.0, band_upper = 0.0, band_decay = 1.0;
-
-  // Portfolio (QuoteKind::Portfolio) components: model quote = Σ weight·model_quote(component). Ignored
-  // for every other quote kind. Defined out-of-line below (recursive type).
-  std::vector<WeightedInstrument> combination;
-
-  // The currency the quote/residual is expressed in (multi-currency). Consulted ONLY by a cross-
-  // currency quote that mixes legs of different currencies (to name the PV numeraire); every single-
-  // currency quote ignores it. Default 0 keeps existing instruments byte-identical.
-  int pv_currency = 0;
-
-  // FxForward only: F = fx_spot · DF[fx_num](fx_time) / DF[fx_den](fx_time). fx_num is the FOREIGN
-  // (collateral) curve this pins (e.g. EUR-in-USD), fx_den the DOMESTIC (e.g. SOFR). `market` is the
-  // outright forward. The residual is in rate/implied-basis units: (ln F_model − ln F_market)/fx_time.
-  int fx_num = -1, fx_den = -1;
-  double fx_spot = 1.0;
-  double fx_time = 0.0;
-  double fx_spot_time = 0.0;  // O-X3: curve time of the spot date fx_spot is quoted for (0 = today): F(fx_spot_time) = fx_spot
-  // XccyMtmBasis only: the resetting-notional funding leg (its reset_num/reset_den/fx_spot on the leg
-  // define the FX-forward notional). fwd = the pinned curve's self-forecast leg, bench = the other-
-  // currency forecast leg, fixed = the annuity — all discounted on the pinned (collateral) curve.
-  FloatLeg mtm;
-
-  // TurnJump only: which turn this instrument pins. `turn_curve` is the curve carrying the turn and
-  // `turn_index` its position in that curve's `turns` list. The model quote is that turn's jump δ; the
-  // residual is (banded) δ − market, with `market` the target jump (rate units). See QuoteKind::TurnJump.
-  int turn_curve = 0, turn_index = 0;
-
-  // Set the FULL quote RHS -- target and soft-quote band -- from any target-shaped object exposing
-  // {target, band_lower, band_upper, band_decay}. This is THE one hand-off from a market quote into a
-  // calibration instrument: market::Quote::to_target() (market/quote.hpp CalibrationTarget) and the
-  // API compiler's wire quote (api/compile.cpp) both feed THIS setter, so the band semantics above are
-  // defined exactly once -- here. Duck-typed on purpose: the calibration layer sits BELOW the market
-  // layer and must not include it; any POD with those four fields is a valid source.
-  template <class Target>
-  void set_target(const Target& t) {
-    market = t.target;
-    band_lower = t.band_lower;
-    band_upper = t.band_upper;
-    band_decay = t.band_decay;
-  }
-
-  // ---- what the instrument SAYS of itself (2026-09-22): every consumer asks these, none re-derives them ----
-  // The curve references this quote kind READS, in the order it reads them -- the one encoding of "which members
-  // a given `quote` reads" (the comment above). fn(curve_index, role) per role; a Portfolio walks its components.
-  // Behind validate_problem's range check, bundle_adjacency's dependency edges, the AAD block's touched set and
-  // primary_curve. (The four copies it replaced disagreed: the staged solver read a TurnJump's and a Portfolio's
-  // DEFAULT fwd/fixed legs as curve 0, the AAD block seeded a ParRate's unused bench/mtm legs.)
-  template <class Fn>
-  void for_each_curve_ref(Fn&& fn) const;
-  // The curve this instrument primarily PINS: its FIRST curve reference (an FX forward its numerator, a turn its
-  // curve, a leg-based quote its fwd leg's forecast, a Portfolio its first component's). Defined out-of-line.
-  int primary_curve() const;
-  // This row's penalty shape (PenaltyMap, defined below): the Huber band from the four quote numbers, or plain. A
-  // standalone FX forward NEVER carries one (its residual is the log-basis map; the band is ignored there) -- that
-  // exclusion lives HERE and nowhere else now.
-  PenaltyMap penalty() const;
-  // Any COMPOUNDED (RFR lookback/lockout product) observation anywhere in this instrument (components included).
-  bool has_compounded_obs() const;
-  // True iff this instrument is a SHAPE the compiled batch cannot express, so it must ride the AAD tier: a
-  // compounded observation anywhere, or an incomplete / SEASONED MtM funding leg. Every other kind, nested in a
-  // Portfolio or not, compiles (hybrid_residual.hpp is the router; this is the instrument's own answer).
-  bool noncacheable() const;
-};
-
-// A weighted component of a Portfolio instrument. Holds a full Instrument by value, so portfolios nest.
-struct WeightedInstrument {
-  double weight = 1.0;
-  Instrument instrument;
-};
-
-template <class Fn>
-void Instrument::for_each_curve_ref(Fn&& fn) const {
-  const Instrument& ins = *this;
-  const auto leg = [&](const FloatLeg& l, const char* fc, const char* dc, const char* rn, const char* rd) {
-    fn(l.forecast, fc);
-    fn(l.discount, dc);
-    if (l.reset_num >= 0) fn(l.reset_num, rn);
-    if (l.reset_den >= 0) fn(l.reset_den, rd);
-  };
-  switch (ins.quote) {
-    case QuoteKind::Rate: fn(ins.forecast, "forecast"); break;
-    case QuoteKind::FxForward: fn(ins.fx_num, "fx_num"); fn(ins.fx_den, "fx_den"); break;
-    case QuoteKind::TurnJump: fn(ins.turn_curve, "turn"); break;  // the δ state lives on the turn's curve
-    case QuoteKind::Portfolio:
-      for (const auto& c : ins.combination) c.instrument.for_each_curve_ref(fn);
-      break;
-    case QuoteKind::ParRate:
-    case QuoteKind::ZeroCouponRate:
-    case QuoteKind::ParSpread:
-    case QuoteKind::XccyMtmBasis:
-      leg(ins.fwd, "forecast", "discount", "reset_num", "reset_den");
-      if (ins.quote == QuoteKind::ParSpread || ins.quote == QuoteKind::XccyMtmBasis)
-        leg(ins.bench, "benchmark forecast", "benchmark discount", "benchmark reset_num", "benchmark reset_den");
-      if (ins.quote == QuoteKind::XccyMtmBasis)
-        leg(ins.mtm, "mtm forecast", "mtm discount", "mtm reset_num", "mtm reset_den");
-      fn(ins.fixed.discount, "fixed discount");
-      break;
-    case QuoteKind::Npv:  // reads exactly the legs that carry coupons (a float-only position has no fixed curve)
-      if (!ins.fwd.coupons.empty()) leg(ins.fwd, "forecast", "discount", "reset_num", "reset_den");
-      if (!ins.bench.coupons.empty()) leg(ins.bench, "benchmark forecast", "benchmark discount", "benchmark reset_num", "benchmark reset_den");
-      if (!ins.mtm.coupons.empty()) leg(ins.mtm, "mtm forecast", "mtm discount", "mtm reset_num", "mtm reset_den");
-      if (!ins.fixed.coupons.empty()) fn(ins.fixed.discount, "fixed discount");
-      break;
-  }
-}
-
-inline int Instrument::primary_curve() const {
-  int first = 0;
-  bool seen = false;
-  for_each_curve_ref([&](int c, const char*) { if (!seen) { first = c; seen = true; } });
-  return first;  // an empty Portfolio pins nothing: 0, as before
-}
-
-inline bool Instrument::has_compounded_obs() const {
-  const auto leg = [](const FloatLeg& l) {
-    for (const auto& c : l.coupons)
-      if (c.obs.compounded) return true;
-    return false;
-  };
-  if (quote == QuoteKind::Rate && obs.compounded) return true;
-  if (leg(fwd) || leg(bench) || leg(mtm)) return true;
-  for (const auto& c : combination)
-    if (c.instrument.has_compounded_obs()) return true;
-  return false;
-}
-
-inline bool Instrument::noncacheable() const {
-  if (has_compounded_obs()) return true;
-  if (quote == QuoteKind::XccyMtmBasis) {
-    if (!mtm.mtm_complete()) return true;
-    for (const auto& c : mtm.coupons)
-      if (c.seasoned_mtm()) return true;  // a seasoned coupon prices on the templated kernel
-    return false;
-  }
-  if (quote == QuoteKind::Npv && !mtm.coupons.empty()) {
-    // The batch's MtM leg is the bare reset ratio at the reset time: a spot-date roll-back (fx_spot_time != 0, O-X3)
-    // is a curve-dependent factor it does not carry, so such a position prices on the templated kernel.
-    if (!mtm.mtm_complete() || mtm.fx_spot_time != 0.0) return true;
-    for (const auto& c : mtm.coupons)
-      if (c.seasoned_mtm()) return true;
-  }
-  if (quote == QuoteKind::Portfolio)
-    for (const auto& c : combination)
-      if (c.instrument.noncacheable()) return true;
-  return false;
-}
-
-// Compile-time detection: does the curve object a CurveOf accessor returns expose turn_jump(int)? True
-// for the bundle's CurveHandle, false for a bare ModularCurve (single-curve CalibrationProblem, which
-// never carries a TurnJump instrument). Lets instrument_model_quote's TurnJump branch stay well-formed
-// for BOTH curve types via `if constexpr`.
-template <class C, class = void>
-struct has_turn_jump : std::false_type {};
-template <class C>
-struct has_turn_jump<C, std::void_t<decltype(std::declval<const C&>().turn_jump(0))>> : std::true_type {};
 
 // A PIECEWISE-LINEAR RESIDUAL MAP (constraint rows, architecture review item 3, 2026-10-07). A row's residual is a
 // continuous piecewise-linear function of its model value q that is ZERO at the target m: breakpoints b_0 < .. <
@@ -451,6 +262,199 @@ struct PenaltyMap {
   }
 };
 
+// Forward declarations for the recursive Portfolio components (each component is itself an Instrument).
+struct Instrument;
+struct WeightedInstrument;
+
+// One calibration instrument.
+//
+// Which members a given `quote` reads (the others are ignored and may stay default-constructed):
+//   ParRate   : `fwd` (the float leg, enters POSITIVELY) and `fixed` (the annuity).
+//   ParSpread : `fwd` (the SPREAD/quoted leg, enters NEGATIVELY), `bench` (the benchmark leg, enters
+//               POSITIVELY) and `fixed`. The two float legs are INDEPENDENT — different frequency,
+//               day count, spread and forecast curve are all fine (design §6.7).
+//   Rate      : `obs`, `forecast` and `convexity`.
+//
+// Sign convention for ParSpread: the quoted spread s satisfies pv(fwd) + s·annuity = pv(bench), hence
+// s = (pv_bench − pv_fwd)/annuity.
+struct Instrument {
+  QuoteKind quote = QuoteKind::ParRate;
+  FloatLeg fwd;
+  FloatLeg bench;
+  FixedLeg fixed;
+  pricing::RateObservation obs;  // Rate only
+  int forecast = 0;              // Rate only: the curve that forecasts `obs`
+  // Rate only. An INPUT NUMBER (design §3): the convexity MODEL (Hull-White etc.) lives in tests.
+  double convexity = 0.0;
+  double market = 0.0;  // the market quote, in the units of `quote` (always rate units)
+
+  // Bid/offer BAND (soft calibration target). When `band_upper > band_lower` (bounds in the quote's rate
+  // units) the residual is the HUBER band residual (band_residual()): a `band_decay`-slope pull to the mid
+  // inside [lower, upper], a unit-slope pull to the nearer EDGE outside it, continuous at the edges. So
+  // the solver treats any model value within [lower, upper] as ~satisfied and spends its freedom on the
+  // hard targets, while an overlapping instrument that cannot be hit exactly settles inside its band. The
+  // default (band_upper <= band_lower, band_decay = 1) leaves the residual as the plain (q − market).
+  double band_lower = 0.0, band_upper = 0.0, band_decay = 1.0;
+
+  // Portfolio (QuoteKind::Portfolio) components: model quote = Σ weight·model_quote(component). Ignored
+  // for every other quote kind. Defined out-of-line below (recursive type).
+  std::vector<WeightedInstrument> combination;
+
+  // The currency the quote/residual is expressed in (multi-currency). Consulted ONLY by a cross-
+  // currency quote that mixes legs of different currencies (to name the PV numeraire); every single-
+  // currency quote ignores it. Default 0 keeps existing instruments byte-identical.
+  int pv_currency = 0;
+
+  // FxForward only: F = fx_spot · DF[fx_num](fx_time) / DF[fx_den](fx_time). fx_num is the FOREIGN
+  // (collateral) curve this pins (e.g. EUR-in-USD), fx_den the DOMESTIC (e.g. SOFR). `market` is the
+  // outright forward. The residual is in rate/implied-basis units: (ln F_model − ln F_market)/fx_time.
+  int fx_num = -1, fx_den = -1;
+  double fx_spot = 1.0;
+  double fx_time = 0.0;
+  double fx_spot_time = 0.0;  // O-X3: curve time of the spot date fx_spot is quoted for (0 = today): F(fx_spot_time) = fx_spot
+  // XccyMtmBasis only: the resetting-notional funding leg (its reset_num/reset_den/fx_spot on the leg
+  // define the FX-forward notional). fwd = the pinned curve's self-forecast leg, bench = the other-
+  // currency forecast leg, fixed = the annuity — all discounted on the pinned (collateral) curve.
+  FloatLeg mtm;
+
+  // TurnJump only: which turn this instrument pins. `turn_curve` is the curve carrying the turn and
+  // `turn_index` its position in that curve's `turns` list. The model quote is that turn's jump δ; the
+  // residual is (banded) δ − market, with `market` the target jump (rate units). See QuoteKind::TurnJump.
+  int turn_curve = 0, turn_index = 0;
+
+  // Set the FULL quote RHS -- target and soft-quote band -- from any target-shaped object exposing
+  // {target, band_lower, band_upper, band_decay}. This is THE one hand-off from a market quote into a
+  // calibration instrument: market::Quote::to_target() (market/quote.hpp CalibrationTarget) and the
+  // API compiler's wire quote (api/compile.cpp) both feed THIS setter, so the band semantics above are
+  // defined exactly once -- here. Duck-typed on purpose: the calibration layer sits BELOW the market
+  // layer and must not include it; any POD with those four fields is a valid source.
+  template <class Target>
+  void set_target(const Target& t) {
+    market = t.target;
+    band_lower = t.band_lower;
+    band_upper = t.band_upper;
+    band_decay = t.band_decay;
+  }
+
+  // ---- what the instrument SAYS of itself (2026-09-22): every consumer asks these, none re-derives them ----
+  // The curve references this quote kind READS, in the order it reads them -- the one encoding of "which members
+  // a given `quote` reads" (the comment above). fn(curve_index, role) per role; a Portfolio walks its components.
+  // Behind validate_problem's range check, bundle_adjacency's dependency edges, the AAD block's touched set and
+  // primary_curve. (The four copies it replaced disagreed: the staged solver read a TurnJump's and a Portfolio's
+  // DEFAULT fwd/fixed legs as curve 0, the AAD block seeded a ParRate's unused bench/mtm legs.)
+  template <class Fn>
+  void for_each_curve_ref(Fn&& fn) const;
+  // The curve this instrument primarily PINS: its FIRST curve reference (an FX forward its numerator, a turn its
+  // curve, a leg-based quote its fwd leg's forecast, a Portfolio its first component's). Defined out-of-line.
+  int primary_curve() const;
+  // A GENERAL penalty map as DATA (constraint rows stage B, 2026-10-09): when set it IS the row's residual map and the
+  // four band numbers are ignored -- a one-sided band, a bound with a dead zone, any monotone piecewise-linear
+  // penalty (validate_instrument: breakpoints ascending, every slope >= 0). JSON "penalty": {breaks, slopes}.
+  std::optional<PenaltyMap> penalty_map;
+  // This row's penalty shape: penalty_map when set, else the Huber band from the four quote numbers, else plain. A
+  // standalone FX forward NEVER carries one (its residual is the log-basis map; the band is ignored there) -- that
+  // exclusion lives HERE and nowhere else now.
+  PenaltyMap penalty() const;
+  // Any COMPOUNDED (RFR lookback/lockout product) observation anywhere in this instrument (components included).
+  bool has_compounded_obs() const;
+  // True iff this instrument is a SHAPE the compiled batch cannot express, so it must ride the AAD tier: a
+  // compounded observation anywhere, or an incomplete / SEASONED MtM funding leg. Every other kind, nested in a
+  // Portfolio or not, compiles (hybrid_residual.hpp is the router; this is the instrument's own answer).
+  bool noncacheable() const;
+};
+
+// A weighted component of a Portfolio instrument. Holds a full Instrument by value, so portfolios nest.
+struct WeightedInstrument {
+  double weight = 1.0;
+  Instrument instrument;
+};
+
+template <class Fn>
+void Instrument::for_each_curve_ref(Fn&& fn) const {
+  const Instrument& ins = *this;
+  const auto leg = [&](const FloatLeg& l, const char* fc, const char* dc, const char* rn, const char* rd) {
+    fn(l.forecast, fc);
+    fn(l.discount, dc);
+    if (l.reset_num >= 0) fn(l.reset_num, rn);
+    if (l.reset_den >= 0) fn(l.reset_den, rd);
+  };
+  switch (ins.quote) {
+    case QuoteKind::Rate: fn(ins.forecast, "forecast"); break;
+    case QuoteKind::FxForward: fn(ins.fx_num, "fx_num"); fn(ins.fx_den, "fx_den"); break;
+    case QuoteKind::TurnJump: fn(ins.turn_curve, "turn"); break;  // the δ state lives on the turn's curve
+    case QuoteKind::Portfolio:
+      for (const auto& c : ins.combination) c.instrument.for_each_curve_ref(fn);
+      break;
+    case QuoteKind::ParRate:
+    case QuoteKind::ZeroCouponRate:
+    case QuoteKind::ParSpread:
+    case QuoteKind::XccyMtmBasis:
+      leg(ins.fwd, "forecast", "discount", "reset_num", "reset_den");
+      if (ins.quote == QuoteKind::ParSpread || ins.quote == QuoteKind::XccyMtmBasis)
+        leg(ins.bench, "benchmark forecast", "benchmark discount", "benchmark reset_num", "benchmark reset_den");
+      if (ins.quote == QuoteKind::XccyMtmBasis)
+        leg(ins.mtm, "mtm forecast", "mtm discount", "mtm reset_num", "mtm reset_den");
+      fn(ins.fixed.discount, "fixed discount");
+      break;
+    case QuoteKind::Npv:  // reads exactly the legs that carry coupons (a float-only position has no fixed curve)
+      if (!ins.fwd.coupons.empty()) leg(ins.fwd, "forecast", "discount", "reset_num", "reset_den");
+      if (!ins.bench.coupons.empty()) leg(ins.bench, "benchmark forecast", "benchmark discount", "benchmark reset_num", "benchmark reset_den");
+      if (!ins.mtm.coupons.empty()) leg(ins.mtm, "mtm forecast", "mtm discount", "mtm reset_num", "mtm reset_den");
+      if (!ins.fixed.coupons.empty()) fn(ins.fixed.discount, "fixed discount");
+      break;
+  }
+}
+
+inline int Instrument::primary_curve() const {
+  int first = 0;
+  bool seen = false;
+  for_each_curve_ref([&](int c, const char*) { if (!seen) { first = c; seen = true; } });
+  return first;  // an empty Portfolio pins nothing: 0, as before
+}
+
+inline bool Instrument::has_compounded_obs() const {
+  const auto leg = [](const FloatLeg& l) {
+    for (const auto& c : l.coupons)
+      if (c.obs.compounded) return true;
+    return false;
+  };
+  if (quote == QuoteKind::Rate && obs.compounded) return true;
+  if (leg(fwd) || leg(bench) || leg(mtm)) return true;
+  for (const auto& c : combination)
+    if (c.instrument.has_compounded_obs()) return true;
+  return false;
+}
+
+inline bool Instrument::noncacheable() const {
+  if (has_compounded_obs()) return true;
+  if (quote == QuoteKind::XccyMtmBasis) {
+    if (!mtm.mtm_complete()) return true;
+    for (const auto& c : mtm.coupons)
+      if (c.seasoned_mtm()) return true;  // a seasoned coupon prices on the templated kernel
+    return false;
+  }
+  if (quote == QuoteKind::Npv && !mtm.coupons.empty()) {
+    // The batch's MtM leg is the bare reset ratio at the reset time: a spot-date roll-back (fx_spot_time != 0, O-X3)
+    // is a curve-dependent factor it does not carry, so such a position prices on the templated kernel.
+    if (!mtm.mtm_complete() || mtm.fx_spot_time != 0.0) return true;
+    for (const auto& c : mtm.coupons)
+      if (c.seasoned_mtm()) return true;
+  }
+  if (quote == QuoteKind::Portfolio)
+    for (const auto& c : combination)
+      if (c.instrument.noncacheable()) return true;
+  return false;
+}
+
+// Compile-time detection: does the curve object a CurveOf accessor returns expose turn_jump(int)? True
+// for the bundle's CurveHandle, false for a bare ModularCurve (single-curve CalibrationProblem, which
+// never carries a TurnJump instrument). Lets instrument_model_quote's TurnJump branch stay well-formed
+// for BOTH curve types via `if constexpr`.
+template <class C, class = void>
+struct has_turn_jump : std::false_type {};
+template <class C>
+struct has_turn_jump<C, std::void_t<decltype(std::declval<const C&>().turn_jump(0))>> : std::true_type {};
+
 // Bid/offer band residual for a model quote q against market mid m (see the Instrument band fields).
 // The band exists so that OVERLAPPING instruments that cannot all be reconciled exactly (1M vs 3M futures,
 // a future vs a swap at the same pillar) can each sit off their mid within a bid/offer tolerance. The
@@ -486,6 +490,7 @@ inline double band_slope(double q, double lower, double upper, double decay) {
 
 inline PenaltyMap Instrument::penalty() const {
   if (quote == QuoteKind::FxForward) return PenaltyMap::plain();
+  if (penalty_map) return *penalty_map;
   return PenaltyMap::band(band_lower, band_upper, band_decay);
 }
 
@@ -549,6 +554,18 @@ inline void validate_quote(double target, double lower, double upper, double dec
 inline void validate_instrument(const Instrument& ins, const std::string& where) {
   validate_quote(ins.market, ins.band_lower, ins.band_upper, ins.band_decay, where.c_str(), -1);
   const auto fail = [&](const std::string& what) { throw std::invalid_argument(where + ": " + what); };
+  if (ins.penalty_map) {
+    const PenaltyMap& m = *ins.penalty_map;
+    if (ins.quote == QuoteKind::FxForward) fail("an FX forward's residual is the log basis; it cannot carry a penalty map");
+    if (m.n < 0 || m.n > PenaltyMap::kMaxBreaks) fail("a penalty map has 0.." + std::to_string(PenaltyMap::kMaxBreaks) + " breakpoints");
+    for (int j = 0; j < m.n; ++j) {
+      if (!std::isfinite(m.b[j])) fail("a penalty map breakpoint is not finite");
+      if (j > 0 && !(m.b[j] > m.b[j - 1])) fail("penalty map breakpoints must be strictly ascending");
+    }
+    for (int i = 0; i <= m.n; ++i)
+      if (!(m.s[i] >= 0.0) || !std::isfinite(m.s[i])) fail("a penalty map slope must be finite and >= 0 (a monotone penalty)");
+    if (!std::isfinite(ins.market)) fail("a non-finite target");
+  }
   const auto leg = [&](const FloatLeg& l, const char* name) {
     if (l.coupons.empty()) fail(std::string("the ") + name + " leg has no coupons");
     for (const auto& c : l.coupons)
@@ -715,6 +732,18 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
 // the market INSIDE the log (ln F_model − ln market), so a live feed cannot be applied by subtracting
 // afterward; threading it through here keeps FX (and the band `q − market` term) exact per tick. The band
 // bounds stay absolute bid/offer levels, independent of the live market.
+// The residual MAP applied to an already-priced model quote q: the FX log basis, or the row's penalty map (plain:
+// q − market). What instrument_residual computes after pricing; exposed so a caller that needs BOTH the quote and
+// the residual (the AAD block under the streamer's walk) prices once.
+template <class Scalar>
+Scalar instrument_residual_of_quote(const Instrument& ins, const Scalar& q, double market) {
+  if (ins.quote == QuoteKind::FxForward) {
+    using std::log;
+    return (log(q) - std::log(market)) / ins.fx_time;
+  }
+  return ins.penalty().residual<Scalar>(q, market);
+}
+
 template <class Scalar, class CurveOf>
 Scalar instrument_residual(const Instrument& ins, const CurveOf& C, double market) {
   if (ins.quote == QuoteKind::FxForward) {

@@ -606,3 +606,36 @@ TEST(CodecCalibrationStatus, IsTheCalibrateObjectsKeysInOrderWithoutTiming) {
             R"({"iterations":12,"rms_residual":5E-1,"stationarity":2.5E-1,"info":2,"converged":true,)"
             R"("status":"relative error too small","rank_deficiency":0})");
 }
+
+// Constraint rows stage B (2026-10-09): a general penalty map round-trips through the instrument codec.
+TEST(Codec, APenaltyMapRoundTrips) {
+  swaps::calibration::Instrument ins;
+  ins.quote = swaps::calibration::QuoteKind::ParRate;
+  swaps::pricing::FloatCoupon c;
+  c.obs.sub_start = {0.0};
+  c.obs.sub_end = {1.0};
+  c.obs.tau_index = 1.0;
+  c.pay = 1.0;
+  c.tau_pay = 1.0;
+  ins.fwd.coupons = {c};
+  ins.fixed.coupons = {{1.0, 1.0, 1.0}};
+  ins.market = 0.03;
+  swaps::calibration::PenaltyMap pm;
+  pm.n = 3;
+  pm.b[0] = 0.029; pm.b[1] = 0.031; pm.b[2] = 0.034;
+  pm.s[0] = 1.0; pm.s[1] = 0.1; pm.s[2] = 0.0; pm.s[3] = 1.0;
+  ins.penalty_map = pm;
+  const boost::json::value v = swaps::api::instrument_to_json(ins);
+  ASSERT_TRUE(v.as_object().contains("penalty"));
+  const swaps::calibration::Instrument back = swaps::api::instrument_from_json(v);
+  ASSERT_TRUE(back.penalty_map.has_value());
+  EXPECT_TRUE(*back.penalty_map == pm);
+  EXPECT_EQ(back.penalty().residual_d(0.0325, 0.03).second, 0.0) << "the dead zone survives the round trip";
+  // validation: slopes must be >= 0, breakpoints ascending
+  swaps::calibration::Instrument bad = ins;
+  bad.penalty_map->s[2] = -0.5;
+  EXPECT_THROW(swaps::calibration::validate_instrument(bad, "test"), std::invalid_argument);
+  bad = ins;
+  bad.penalty_map->b[1] = 0.028;
+  EXPECT_THROW(swaps::calibration::validate_instrument(bad, "test"), std::invalid_argument);
+}

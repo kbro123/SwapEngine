@@ -25,6 +25,9 @@ struct RowEngine {
   virtual void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const = 0;
   virtual void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const = 0;
   virtual void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const = 0;
+  // The same, and the rows' MODEL VALUES into *model when non-null (the streamer's walk carries model values, stage B).
+  virtual void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out,
+                                 Eigen::VectorXd* model) const = 0;
   virtual void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const = 0;
   // The streaming Jacobian against a live market q, and (when r is non-null) the residuals_vs values of the
   // engine's rows into *r -- consistent with J by construction (S2).

@@ -124,6 +124,10 @@ class CompiledRows final : public RowEngine {
     gather(q);
     scatter(eng_.residuals_vs(x, qsub_), out);
   }
+  void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out, Eigen::VectorXd* model) const override {
+    residuals_vs_into(x, q, out);
+    if (model) scatter(eng_.last_model_rates(), *model);
+  }
   void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const override {
     const Eigen::MatrixXd Jc = eng_.jacobian(x);
     for (std::size_t j = 0; j < rows_.size(); ++j) J.row(rows_[j]) = Jc.row(static_cast<int>(j));
@@ -251,6 +255,21 @@ class HybridBundleResidual {
     if (whole_) return compiled_->engine().residuals_vs(x, q);
     res_.resize(n_res_);
     for (const auto& e : engines_) e->residuals_vs_into(x, q, res_);
+    return res_;
+  }
+  // The same, and every row's MODEL VALUE into *model (the streamer's walk reads a tracked row's model value, not an
+  // inversion of its residual -- a zero-slope piece has none; stage B 2026-10-09). On the direct delegate the values
+  // are the compiled engine's own scratch, copied once.
+  const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd* model) const {
+    if (!model) return residuals_vs(x, q);
+    if (whole_) {
+      const Eigen::VectorXd& r = compiled_->engine().residuals_vs(x, q);
+      *model = compiled_->engine().last_model_rates();
+      return r;
+    }
+    res_.resize(n_res_);
+    model->resize(n_res_);
+    for (const auto& e : engines_) e->residuals_vs_into(x, q, res_, model);
     return res_;
   }
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {

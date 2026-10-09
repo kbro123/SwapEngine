@@ -14,6 +14,7 @@ add_executable(swaps_tests
   generic_instrument_test.cpp
   portfolio_instrument_test.cpp
   penalty_map_test.cpp
+  streaming_dead_zone_test.cpp
   fixings_test.cpp
   smoothing_operator_test.cpp
   smoothing_preset_test.cpp

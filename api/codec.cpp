@@ -447,6 +447,18 @@ cal::Instrument instrument_from_json(const json::value& v) {
   into(o, "band_lower", ins.band_lower);
   into(o, "band_upper", ins.band_upper);
   into(o, "band_decay", ins.band_decay);
+  if (o.contains("penalty")) {  // a general monotone piecewise-linear penalty map: {breaks: [...], slopes: [...]} (n+1 slopes)
+    const json::object& pm = o.at("penalty").as_object();
+    cal::PenaltyMap m;
+    const json::array& br = pm.at("breaks").as_array();
+    const json::array& sl = pm.at("slopes").as_array();
+    if (br.size() > static_cast<std::size_t>(cal::PenaltyMap::kMaxBreaks) || sl.size() != br.size() + 1)
+      throw std::invalid_argument("instrument.penalty: up to " + std::to_string(cal::PenaltyMap::kMaxBreaks) + " breaks and exactly breaks+1 slopes");
+    m.n = static_cast<int>(br.size());
+    for (std::size_t j = 0; j < br.size(); ++j) m.b[j] = json::value_to<double>(br[j]);
+    for (std::size_t i = 0; i < sl.size(); ++i) m.s[i] = json::value_to<double>(sl[i]);
+    ins.penalty_map = m;
+  }
   into(o, "turn_curve", ins.turn_curve);  // TurnJump only: (curve, index) of the pinned turn
   into(o, "turn_index", ins.turn_index);
   if (o.contains("combination"))  // Portfolio components (recursive)
@@ -480,6 +492,12 @@ json::value instrument_to_json(const cal::Instrument& ins) {
   o["band_lower"] = ins.band_lower;
   o["band_upper"] = ins.band_upper;
   o["band_decay"] = ins.band_decay;
+  if (ins.penalty_map) {
+    json::array br, sl;
+    for (int j = 0; j < ins.penalty_map->n; ++j) br.push_back(ins.penalty_map->b[j]);
+    for (int i = 0; i <= ins.penalty_map->n; ++i) sl.push_back(ins.penalty_map->s[i]);
+    o["penalty"] = json::object{{"breaks", br}, {"slopes", sl}};
+  }
   o["turn_curve"] = ins.turn_curve;  // TurnJump only: (curve, index) of the pinned turn
   o["turn_index"] = ins.turn_index;
   if (!ins.combination.empty()) {

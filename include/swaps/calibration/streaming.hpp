@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -265,7 +266,7 @@ class StreamingCalibrator {
       for (int rep = 0; rep < (measure ? 4 : 1); ++rep) {
         const Eigen::VectorXd xp = x0.array() + 1e-9 * (rep + 1);  // a NEW state each time (no memo hit)
         const auto t0 = std::chrono::steady_clock::now();
-        r_ = engine_->residuals_vs(xp, q0);
+        eval(xp, q0);  // r_ (and qm_ when rows are tracked): sized here, reused by every tick
         const auto t1 = std::chrono::steady_clock::now();
         step_ns = std::min(step_ns, std::chrono::duration<double, std::nano>(t1 - t0).count());
       }
@@ -303,19 +304,22 @@ class StreamingCalibrator {
       if (BandRow::trackable(pm, ins.market)) {
         BandRow b;
         b.row = i;
-        b.bind(pm, pm.target_piece(ins.market));
+        b.map = pm;
+        b.tp = pm.target_piece(ins.market);
+        b.general = ins.penalty_map.has_value();
         bands_.push_back(b);
       }
     }
-    slope_ref_.assign(bands_.size(), 1.0);
-    slope_cur_.assign(bands_.size(), 1.0);
-    flips_.assign(bands_.size(), 0);
-    state_.assign(bands_.size(), 0);
-    s_pin_.assign(bands_.size(), 0.0);
-    last_side_.assign(bands_.size(), +1);
-    releases_.assign(bands_.size(), 0);
-    onedge_.assign(bands_.size(), 0);
     n_pinned_ = 0;
+    refresh_strictness();
+  }
+  // Every tracked map strictly monotone (every slope > 0): then a residual names its piece and the anchor sides come
+  // from the Jacobian pass (S2); a zero-slope piece anywhere makes the anchor read the model values instead.
+  void refresh_strictness() {
+    all_strict_ = true;
+    for (const BandRow& b : bands_)
+      for (int i = 0; i <= b.map.n; ++i)
+        if (!(b.map.s[i] > 0.0)) all_strict_ = false;
   }
 
  public:
@@ -330,9 +334,10 @@ class StreamingCalibrator {
       throw std::invalid_argument("StreamingCalibrator::set_bands: lengths must equal the instrument count");
     std::size_t k = 0;
     for (int i = 0; i < n_res_; ++i) {
+      const bool was_tracked = k < bands_.size() && bands_[k].row == i;
+      if (was_tracked && bands_[k].general) { ++k; continue; }  // its map is data, not the four numbers
       const bool banded = upper[i] > lower[i];
       const bool tracked = banded && band_eligible_[i] && decay[i] > 0.0;
-      const bool was_tracked = k < bands_.size() && bands_[k].row == i;
       if (tracked != was_tracked || banded != (quote_up_[i] > quote_lo_[i])) return false;
       if (was_tracked) ++k;
     }
@@ -342,18 +347,20 @@ class StreamingCalibrator {
       quote_up_[i] = upper[i];
       if (k < bands_.size() && bands_[k].row == i) {
         BandRow& b = bands_[k];
+        if (b.general) { ++k; continue; }
         const PenaltyMap pm = PenaltyMap::band(lower[i], upper[i], decay[i]);
         if (!(b.map == pm)) {
-          b.bind(pm, b.tp);
-          if (state_[k] != 0) {  // pinned on an edge that has moved: release (track_bands re-scales it off the pin weight)
-            state_[k] = 0;
+          b.map = pm;  // a band's target piece is the band: unchanged
+          if (b.pin >= 0) {  // pinned on a breakpoint that has moved: release (track_bands re-scales it off the pin weight)
+            b.pin = -1;
             --n_pinned_;
           }
-          onedge_[k] = 0;
+          b.onedge = false;
         }
         ++k;
       }
     }
+    refresh_strictness();
     return true;
   }
 
@@ -386,32 +393,39 @@ class StreamingCalibrator {
   }
 
  private:
-  // A TRACKED row: its penalty map (problem.hpp PenaltyMap, the one description of the row's piecewise-linear residual)
-  // and the piece its target lies in. The walk below is the two-edge (Huber band) walk, so a tracked row has exactly
-  // the band shape -- two breakpoints around the target, every slope > 0 -- and a SIDE ∈ {−1, 0, +1} is the piece
-  // relative to the target's: side = piece − tp. Everything the walk needs (an edge, a slope, the residual at an
-  // edge, a model value from a residual) is read off the map; nothing here spells the band's shape (2026-10-07).
+  // A TRACKED row (constraint rows, stage B 2026-10-09): its penalty map (problem.hpp PenaltyMap), the target's piece,
+  // and the walk's state on it -- ONE record per row where twelve parallel arrays and three state encodings used to
+  // be. The walk is over the map's PIECES: the model value's piece decides the installed slope; a breakpoint step walks
+  // a row onto the breakpoint between two pieces; a row walked onto a breakpoint for the SECOND time in a tick is
+  // pinned there (a kink optimum: the walks meet); the KKT check at convergence releases a pin whose multiplier leaves the interval of the two
+  // adjacent slopes. A zero-slope (dead-zone) piece -- a one-sided bound -- is walked like any other: its residual
+  // row is zero while the model value sits in it. The one restriction: a row ANCHORED on a zero-slope piece is not
+  // tracked until the next refresh (`active`), because its frozen residual row carries no quote row to predict a
+  // crossing from (the quote row is J_ref / slope_ref).
   struct BandRow {
-    int row;
+    int row = 0;
     PenaltyMap map;
-    int tp = 1;  // the target's piece (the band)
-    PenaltyMap::TwoEdge v;  // the map's two-edge view: what every per-step helper reads (problem.hpp)
-    void bind(const PenaltyMap& m, int target_piece) {
-      map = m;
-      tp = target_piece;
-      v = m.two_edge();
-    }
-    double edge(int side) const { return v.edge(side); }
-    double slope(int side) const { return v.slope(side); }
-    double width() const { return v.width(); }
-    double r_at_edge(int side, double m) const { return v.r_at_edge(side, m); }
-    int side_from_residual(double r, double m) const { return v.side_from_residual(r, m); }
-    int side_from_value(double x) const { return v.side_from_value(x); }
-    double invert(int side, double r, double m) const { return v.invert(side, r, m); }
+    int tp = 0;              // the target's piece
+    bool general = false;    // the map is the instrument's own data (penalty_map): a requote's band numbers do not touch it
+    bool active = true;      // tracked under the current anchor
+    int piece = 0;           // the piece the model value is on (free rows: its slope is the installed slope)
+    int pin = -1;            // the breakpoint the row is pinned on, or -1
+    int flips = 0;           // breakpoint hits by the breakpoint step this tick (the second pins the row where it is)
+    int releases = 0;        // pin releases by the KKT check this tick (budget 1: a re-pin is final)
+    bool onedge = false;     // walked onto a breakpoint by the breakpoint step (the installed slope is the piece entered)
+    double slope_ref = 1.0;  // the residual row's slope at the anchor (> 0 while active)
+    double slope_cur = 1.0;  // the installed slope now (kPinWeight while pinned)
+    double s_pin = 0.0;      // pinned rows: the multiplier slope read at the last KKT check
+    double q = 0.0;          // the model value at the last residual evaluation
+    double b(int j) const { return map.b[j]; }
+    double s(int piece_) const { return map.s[piece_]; }
+    double span() const { return map.b[map.n - 1] - map.b[0]; }
+    // Tracked: a monotone map (every slope >= 0) whose target piece has a positive slope -- a band with decay > 0, a
+    // bound with the target on its live side. A decay-0 band is not tracked (as before: the stall refresh handles it).
     static bool trackable(const PenaltyMap& m, double target) {
-      if (m.n != 2 || m.target_piece(target) != 1) return false;
-      for (int i = 0; i <= m.n; ++i) if (!(m.s[i] > 0.0)) return false;
-      return true;
+      if (m.n < 1) return false;
+      for (int i = 0; i <= m.n; ++i) if (!(m.s[i] >= 0.0)) return false;
+      return m.s[m.target_piece(target)] > 0.0;
     }
   };
 
@@ -429,9 +443,9 @@ class StreamingCalibrator {
     int frozen = 0;
     const bool drift_refreshed = t.refreshes > 0;
     bool final_refresh_done = false;
-    for (std::size_t k = 0; k < flips_.size(); ++k) {
-      flips_[k] = 0;
-      releases_[k] = 0;  // the per-tick release budget (verify_pins) starts fresh every tick
+    for (BandRow& b : bands_) {  // the per-tick walk memory (breakpoint hits, the release budget) starts fresh
+      b.flips = 0;
+      b.releases = 0;
     }
     double r0_inf = -1.0;  // the tick's first residual size: the divergence yardstick
     double dx_prev = -1.0;  // |dx| of the previous FULL step under the same operator (-1: none)
@@ -443,7 +457,7 @@ class StreamingCalibrator {
       // The residual is engine-defined against the live market q_new: model_rates - q_new for hard
       // instruments, the Huber band residual for soft (banded) ones. Driving THIS (not the raw reprice)
       // is what makes frozen-Newton solve the soft least-squares -- dx = J⁺·r -> 0 at the soft minimum.
-      r_ = engine_->residuals_vs(x, q_new);
+      eval(x, q_new);  // r_ and, for the tracked rows, the model values
       if (!r_.allFinite()) return fail(t, StreamStatus::NonFinite);
       const double r_inf = r_.cwiseAbs().maxCoeff();
       if (r0_inf < 0.0) r0_inf = r_inf;
@@ -464,16 +478,16 @@ class StreamingCalibrator {
         //             would cross an edge (predicted from its frozen quote row), the row's slope switches
         //             there, and the iteration continues. That is the exact minimiser walk for a convex
         //             piecewise quadratic and it never invents a crossing.
-        //   PINNED -- a row that sits ON its edge and wants to cross back is at a kink optimum (generic
+        //   PINNED -- a row that sits ON a breakpoint and wants to cross back is at a kink optimum (generic
         //             for a piecewise-linear penalty; no fixed-slope Gauss-Newton converges to a kink). It
-        //             is pinned: its residual becomes the linear extension through the edge at the
-        //             MULTIPLIER slope s ∈ [decay, 1], and at convergence s is re-solved from the other
+        //             is pinned: its residual becomes the linear extension through the breakpoint at the
+        //             MULTIPLIER slope s between the two adjacent slopes, and at convergence s is re-solved from the other
         //             rows' gradient (KKT); the row lands exactly on the edge for the right s, and is
         //             released to a side only if s leaves [decay, 1] -- at most once per tick per row
         //             (a row that walks back onto its edge after a release is a kink optimum the
         //             linearised multiplier misjudged by a hair: it is re-pinned for good, s clamped).
-        apply_pins(q_new);
-        if (track_bands(q_new)) {
+        apply_pins();
+        if (track_bands()) {
           if (need_full_) {
             stamp(StreamStage::TrackRefresh);
             if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
@@ -493,8 +507,8 @@ class StreamingCalibrator {
       if (op_.regularised()) dx_.noalias() += op_.B() * x;  // curvature pull toward the smoothest market-consistent curve
       double alpha = 1.0;
       std::size_t hit = 0;
-      int hit_side = 0;
-      if (!bands_.empty() && have_J_) alpha = breakpoint(q_new, &hit, &hit_side);
+      int hit_piece = 0;
+      if (!bands_.empty() && have_J_) alpha = breakpoint(&hit, &hit_piece);
       // KINK 2-CYCLE (FLK2, 2026-09-14). On a piecewise-smooth residual (MonotoneCubic's Hyman filter) a Newton step can
       // jump a kink and the step from the far side jumps straight back: dx_{k+1} = -dx_k, |r| unchanged, and a refresh at
       // either point reproduces it until max_refresh fails the tick (desk_mixed: knot 11 alternating 0.0341513 / 0.0342819
@@ -521,7 +535,7 @@ class StreamingCalibrator {
       SWAPS_TRACE("  step %d |dx|=%.2e alpha=%.3f pinned=%d rescales=%d refreshes=%d\n", t.newton_steps, dx_.cwiseAbs().maxCoeff(), alpha, n_pinned_, t.rescales, t.refreshes);
       if (alpha < 1.0) {  // stopped on a band edge: switch that row there and carry on
         stamp(StreamStage::Breakpoint);
-        switch_row(hit, hit_side);  // (updates the operator in place, rescale_row)
+        switch_row(hit, hit_piece);  // (updates the operator in place, rescale_row)
         ++t.rescales;
         ++rescale_count_;
         frozen = 0;
@@ -626,178 +640,163 @@ class StreamingCalibrator {
     return t;
   }
 
-  // Which side of its band is each banded row on, read off the residual r_ (monotone in the model quote:
-  // r > decay·(upper − m) means above, r < decay·(lower − m) means below, m = the live market). Updates
-  // J_cur_ rows whose side changed; returns true if M must be rebuilt. Sets need_full_ when a row cannot
-  // be re-scaled (anchor slope 0 => the frozen row is all zeros; or no J behind M).
-  // Which side of its band is row k's model quote on, from the residual value (Huber, monotone in q).
-  // Returns +1 above, -1 below, 0 inside; `q_out` receives the model quote recovered by inverting the
-  // residual (decay > 0 for every tracked row, so the inside branch is invertible).
-  int side_of(std::size_t k, const Eigen::VectorXd& q, double* q_out) const {
-    const BandRow& b = bands_[k];
-    const double m = q[b.row], r = r_[b.row];
-    const int side = b.side_from_residual(r, m);
-    if (q_out) *q_out = b.invert(side, r, m);
-    return side;
+  // The residuals against q at x and, when rows are tracked, every tracked row's MODEL VALUE and its piece -- read
+  // from the engine's evaluation (the compiled scratch, the AAD block priced once), never recovered by inverting the
+  // residual: a zero-slope piece is flat in r. An engine without the joint form (the generic AAD engine) prices twice.
+  static constexpr bool kJointEval = requires(const Engine& e, const Eigen::VectorXd& v, Eigen::VectorXd* m) { e.residuals_vs(v, v, m); };
+  void eval(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
+    if constexpr (kJointEval) {
+      r_ = engine_->residuals_vs(x, q, bands_.empty() ? nullptr : &qm_);  // THE tick's residual evaluation (census: one site)
+    } else {
+      r_ = engine_->residuals_vs(x, q);
+      if (!bands_.empty()) qm_ = engine_->model_rates(x);  // the generic engine has no joint form: a second evaluation
+    }
+    for (BandRow& b : bands_) b.q = qm_[b.row];
   }
 
-  // Pinned rows are EQUALITY CONSTRAINTS q_model = edge, imposed as a stiff penalty row
-  //     r = w·(q_model − edge),  J row = w·(quote row),  w = kPinWeight,
+  // Pinned rows are EQUALITY CONSTRAINTS q_model = breakpoint, imposed as a stiff penalty row
+  //     r = w·(q_model − b_j),  J row = w·(quote row),  w = kPinWeight,
   // so the frozen-Newton solve is the constrained Gauss-Newton step to O(1/w²) and the Lagrange
   // multiplier is read off the converged gap for free: λ = w²·gap (stationarity of the penalised least
-  // squares: g_rest + Σ w²·gap_i·∇q_i = 0). The kink test is then s = λ / r_edge ∈ [decay, 1] with
-  // r_edge = decay·(edge − m) the Huber residual AT the edge (verify_pins). This replaced (2026-09-10) a
+  // squares: g_rest + Σ w²·gap_i·∇q_i = 0). The kink test is then s = λ / r_edge between the two adjacent
+  // slopes, with r_edge the map's residual AT the breakpoint (verify_pins). This replaced (2026-09-10) a
   // fixed-point/secant iteration in the multiplier slope s that wandered without closing the gap and
   // left the tick 14 % above the optimum (probe C-band-crossing, 0.6 bp at decay 0.1).
   static constexpr double kPinWeight = 1e3;  // gap ≈ λ/w² ~ 1e-11 (1e-7 bp); λ resolved to ~1e-8 relative
-  void apply_pins(const Eigen::VectorXd& q) {
+  void apply_pins() {
     if (n_pinned_ == 0) return;
-    for (std::size_t k = 0; k < bands_.size(); ++k) {
-      if (state_[k] == 0) continue;
-      const BandRow& b = bands_[k];
-      double qm = 0.0;
-      side_of(k, q, &qm);
-      const double edge = b.edge(state_[k]);
-      r_[b.row] = kPinWeight * (qm - edge);
-    }
+    for (const BandRow& b : bands_)
+      if (b.pin >= 0) r_[b.row] = kPinWeight * (b.q - b.b(b.pin));
   }
 
-  // The first band edge the full step x − dx would cross, predicted from the frozen quote rows
-  // (Δq_k = −Jq_k·dx). Returns the fraction α ∈ (0, 1] of the step to take (1 = no crossing); on a
-  // crossing `*hit` is the row and `*hit_side` the side it is entering (0 inside, ±1 outside).
-  double breakpoint(const Eigen::VectorXd& q, std::size_t* hit, int* hit_side) {
+  // The first breakpoint the full step x − dx would cross, predicted from the frozen quote rows
+  // (Δq_k = −Jq_k·dx, Jq = J_ref / slope_ref). Returns the fraction α ∈ (0, 1] of the step to take (1 = no
+  // crossing); on a crossing `*hit` is the row and `*hit_piece` the piece it is entering.
+  double breakpoint(std::size_t* hit, int* hit_piece) {
     double alpha = 1.0;
     for (std::size_t k = 0; k < bands_.size(); ++k) {
-      if (state_[k] != 0 || onedge_[k]) continue;  // pinned, or sitting on its edge (handled by track_bands)
       const BandRow& b = bands_[k];
-      double qm = 0.0;
-      const int side = side_of(k, q, &qm);
-      const double dq = -(J_ref_.row(b.row).dot(dx_)) / slope_ref_[k];  // predicted move of the model quote
+      if (!b.active || b.pin >= 0 || b.onedge) continue;  // pinned, or sitting on a breakpoint (handled by track_bands)
+      const double dq = -(J_ref_.row(b.row).dot(dx_)) / b.slope_ref;  // predicted move of the model value
       if (dq == 0.0) continue;
       double a = 2.0;
-      int into = 0;
-      if (side == 0) {
-        if (dq > 0.0 && qm < b.edge(+1)) { a = (b.edge(+1) - qm) / dq; into = +1; }
-        if (dq < 0.0 && qm > b.edge(-1)) { a = (b.edge(-1) - qm) / dq; into = -1; }
-      } else if (side > 0 && dq < 0.0) {
-        a = (b.edge(+1) - qm) / dq;
-      } else if (side < 0 && dq > 0.0) {
-        a = (b.edge(-1) - qm) / dq;
-      }
+      int into = b.piece;
+      if (dq > 0.0 && b.piece < b.map.n && b.q < b.b(b.piece)) { a = (b.b(b.piece) - b.q) / dq; into = b.piece + 1; }
+      if (dq < 0.0 && b.piece > 0 && b.q > b.b(b.piece - 1)) { a = (b.b(b.piece - 1) - b.q) / dq; into = b.piece - 1; }
       if (a > 0.0 && a < alpha) {
         alpha = a;
         *hit = k;
-        *hit_side = into;
+        *hit_piece = into;
       }
     }
     return alpha;
   }
 
-  // Row k has just been walked onto its edge (by the breakpoint step) and is entering `side`: switch its
-  // slope there. A row walked onto an edge for the SECOND time in a tick, from the other side, is at a
-  // kink optimum: pin it on that edge (the kink is where the two walks meet).
-  void switch_row(std::size_t k, int side) {
-    const BandRow& b = bands_[k];
-    ++flips_[k];
-    onedge_[k] = true;
-    const bool pin = flips_[k] >= 2;  // twice onto the same edge in one tick: a kink optimum
-    SWAPS_TRACE("  row %d walked onto edge, entering side %d, flips=%d pin=%d\n", b.row, side, flips_[k], (int)pin);
+  // Row k has just been walked onto a breakpoint (by the breakpoint step) and is entering piece `into`: switch its
+  // slope there. A row walked onto a breakpoint for the SECOND time in a tick is at a kink optimum: pin it on the
+  // breakpoint it is on now (the kink is where the two walks meet).
+  void switch_row(std::size_t k, int into) {
+    BandRow& b = bands_[k];
+    const int j = std::min(b.piece, into);  // the breakpoint between the two pieces
+    ++b.flips;
+    const bool pin = b.flips >= 2;
+    b.onedge = true;
+    SWAPS_TRACE("  row %d walked onto breakpoint %d, entering piece %d, flips=%d pin=%d\n", b.row, j, into, b.flips, (int)pin);
     if (pin) {
-      // The edge it is on: the one it is crossing now (entering outside => that side's edge; entering
-      // inside => the edge on the side it came from).
-      const int edge_side = (side != 0) ? side : last_side_[k];
-      state_[k] = edge_side > 0 ? +1 : -1;
+      b.pin = j;
       ++n_pinned_;
       ++pin_count_;
       stamp(StreamStage::Pin);
-      s_pin_[k] = 0.0;  // the multiplier slope is known only at convergence (verify_pins)
+      b.s_pin = 0.0;  // the multiplier slope is known only at convergence (verify_pins)
       rescale_row(k, kPinWeight);
       return;
     }
-    const double slope = b.slope(side);
-    rescale_row(k, slope);
-    if (side != 0) last_side_[k] = side;
+    b.piece = into;
+    rescale_row(k, b.s(into));
   }
 
-  // FREE rows: reconcile the installed slope with the side the model quote is ACTUALLY on (the breakpoint
-  // prediction is linear; the true quote map is not, so a walked-onto edge can land a hair either side --
-  // and a row not on an edge can still change side under a full step). Updates J_cur_ rows whose slope
+  // FREE rows: reconcile the installed slope with the piece the model value is ACTUALLY on (the breakpoint
+  // prediction is linear; the true quote map is not, so a walked-onto breakpoint can land a hair either side --
+  // and a row not on a breakpoint can still change piece under a full step). Updates J_cur_ rows whose slope
   // changed; returns true if M must be rebuilt. Sets need_full_ when a row cannot be re-scaled (no J
   // behind M: it came from the background worker).
-  bool track_bands(const Eigen::VectorXd& q) {
+  bool track_bands() {
     bool changed = false;
     need_full_ = false;
     for (std::size_t k = 0; k < bands_.size(); ++k) {
-      if (state_[k] != 0) continue;  // pinned: handled by apply_pins / verify_pins
-      const BandRow& b = bands_[k];
-      double qm = 0.0;
-      const int side = side_of(k, q, &qm);
-      const double slope = b.slope(side);
-      // On-edge rows: the installed slope is the side we are ENTERING; the actual side may still read as
-      // the side we came from by a rounding hair. Treat "within kink_tol of the edge" as on the edge.
-      if (onedge_[k]) {
-        const double kink_tol = 1e-3 * b.width();
-        if (std::abs(qm - b.edge(+1)) < kink_tol || std::abs(qm - b.edge(-1)) < kink_tol) continue;
-        onedge_[k] = false;  // moved clearly off the edge: back to plain side tracking
+      BandRow& b = bands_[k];
+      if (!b.active || b.pin >= 0) continue;  // pinned: handled by apply_pins / verify_pins
+      // On-edge rows: the installed slope is the piece we are ENTERING; the actual piece may still read as
+      // the one we came from by a rounding hair. Treat "within kink_tol of a breakpoint" as on it.
+      if (b.onedge) {
+        const double kink_tol = 1e-3 * b.span();
+        bool near = false;
+        for (int j = 0; j < b.map.n; ++j) near = near || std::abs(b.q - b.b(j)) < kink_tol;
+        if (near) continue;
+        b.onedge = false;  // moved clearly off the breakpoint: back to plain piece tracking
       }
-      if (slope == slope_cur_[k]) continue;
+      b.piece = b.map.piece_of(b.q, b.tp);
+      const double slope = b.s(b.piece);
+      if (slope == b.slope_cur) continue;
       changed = true;
       if (!have_J_) {
         need_full_ = true;
-        slope_cur_[k] = slope;
+        b.slope_cur = slope;
         continue;
       }
-      SWAPS_TRACE("  row %d actual side %d slope %.2f->%.2f\n", b.row, side, slope_cur_[k], slope);
+      SWAPS_TRACE("  row %d actual piece %d slope %.2f->%.2f\n", b.row, b.piece, b.slope_cur, slope);
       rescale_row(k, slope);
-      if (side != 0) last_side_[k] = side;
     }
     return changed;
   }
 
   // KKT check of every pinned row at a converged point. The penalised least squares is stationary:
-  //     g_rest + Σ_i λ_i ∇q_i = 0,   λ_i = w²·gap_i,   gap_i = q_model_i − edge_i,
+  //     g_rest + Σ_i λ_i ∇q_i = 0,   λ_i = w²·gap_i,   gap_i = q_model_i − b_i,
   // the constrained problem's multipliers. Along the constrained-optimal path a move δ of q_i changes the
-  // rest of the objective by −λ_i·δ and the row's own Huber term by r_edge·slope·δ (slope = decay on the
-  // inside of the edge, 1 outside), so the edge is a kink optimum iff s_i = λ_i / r_edge_i ∈ [decay, 1]
-  // (both edges, either sign of r_edge). Otherwise the true optimum lies on the side the multiplier
-  // points to: release the row there (slope decay if s < decay, 1 if s > 1) and iterate on -- once per
-  // row per tick; a row that walks back onto its edge after a release is re-pinned for good.
-  // Returns true if any row was released (M must be rebuilt).
+  // rest of the objective by −λ_i·δ and the row's own penalty term by r_edge·slope·δ (slope = the piece below
+  // or above the breakpoint), so the breakpoint is a kink optimum iff s_i = λ_i / r_edge_i lies between the two
+  // adjacent slopes (both breakpoints, either sign of r_edge). Otherwise the true optimum lies on the side the
+  // multiplier points to: release the row onto the piece whose slope it passed (the smaller if s < min, the
+  // larger if s > max) and iterate on -- once per row per tick; a row that walks back onto its breakpoint after
+  // a release is re-pinned for good. Returns true if any row was released (M must be rebuilt).
   bool verify_pins(const Eigen::VectorXd& x, const Eigen::VectorXd& q) {
-    (void)x;
-    r_ = engine_->residuals_vs(x, q);  // the engine's (Huber) residuals: pinned rows' q_model read off these
+    eval(x, q);  // the engine's (map) residuals and the pinned rows' model values
     bool changed = false;
     for (std::size_t k = 0; k < bands_.size(); ++k) {
-      if (state_[k] == 0) continue;
-      const BandRow& b = bands_[k];
-      double qm = 0.0;
-      side_of(k, q, &qm);
-      const double edge = b.edge(state_[k]);
-      const double gap = qm - edge;
+      BandRow& b = bands_[k];
+      if (b.pin < 0) continue;
+      const int j = b.pin;
+      const double m = q[b.row];
+      const double gap = b.q - b.b(j);
       const double lambda = kPinWeight * kPinWeight * gap;
-      const double r_edge = b.r_at_edge(state_[k], q[b.row]);  // the residual AT the edge: (edge − m)·decay
+      const double r_edge = b.map.at_break(j, m, b.tp);
+      const double s_below = b.s(j), s_above = b.s(j + 1);  // the two slopes that meet at this breakpoint
+      const double lo = std::min(s_below, s_above), hi = std::max(s_below, s_above);
+      int release_to = -1;
       double sj;
       if (std::abs(r_edge) > 1e-14) {
         sj = lambda / r_edge;
+        // Hysteresis: the multiplier is read off a frozen-J solve, so a hair outside [lo, hi] is noise,
+        // not a side (the old 1e-6 released at s = decay − 9e-4 and cycled).
+        const double tol = 1e-3;
+        if (sj < lo - tol) release_to = (s_below <= s_above) ? j : j + 1;
+        else if (sj > hi + tol) release_to = (s_below > s_above) ? j : j + 1;
       } else {
-        // Market ON the edge: no kink (the Huber term is C1 there). Release toward the side the rest of
-        // the objective pulls to: λ > 0 means it wants q_i higher (the + side of the edge).
-        sj = (state_[k] * lambda > 0.0) ? 2.0 : 0.0;
+        // Market ON the breakpoint: no kink (the penalty is C1 there). Release toward the side the rest of
+        // the objective pulls to: λ > 0 means it wants q_i higher (the piece above).
+        sj = lambda > 0.0 ? hi + 1.0 : lo - 1.0;
+        release_to = lambda > 0.0 ? j + 1 : j;
       }
-      s_pin_[k] = sj;
-      const double inside = b.slope(0), outside = b.slope(state_[k]);  // the two slopes that meet at this edge
-      SWAPS_TRACE("  verify row %d state %d s=%.4f (decay %.2f) gap=%.2e lambda=%.3e\n", b.row, state_[k], sj, inside, gap, lambda);
-      // Hysteresis: the multiplier is read off a frozen-J solve, so a hair outside [decay, 1] is noise,
-      // not a side (the old 1e-6 released at s = decay − 9e-4 and cycled).
-      const double tol = 1e-3;
-      if ((sj < inside - tol || sj > outside + tol) && releases_[k] == 0) {
-        const double slope = (sj < inside) ? inside : outside;
-        state_[k] = 0;
+      b.s_pin = sj;
+      SWAPS_TRACE("  verify row %d pin %d s=%.4f [%.2f, %.2f] gap=%.2e lambda=%.3e\n", b.row, j, sj, lo, hi, gap, lambda);
+      if (release_to >= 0 && b.releases == 0) {
+        b.pin = -1;
         --n_pinned_;
         ++release_count_;
         stamp(StreamStage::Release);
-        ++releases_[k];  // one release per row per tick; a re-pin after it is final (termination)
-        rescale_row(k, slope);
+        ++b.releases;  // one release per row per tick; a re-pin after it is final (termination)
+        b.piece = release_to;
+        rescale_row(k, b.s(release_to));
         changed = true;
       }
     }
@@ -808,11 +807,11 @@ class StreamingCalibrator {
   int max_rescales() const { return 8 + 4 * static_cast<int>(bands_.size()); }
 
   void clear_pins() {
-    for (std::size_t k = 0; k < bands_.size(); ++k) {
-      state_[k] = 0;
-      flips_[k] = 0;
-      releases_[k] = 0;
-      onedge_[k] = false;
+    for (BandRow& b : bands_) {
+      b.pin = -1;
+      b.flips = 0;
+      b.releases = 0;
+      b.onedge = false;
     }
     n_pinned_ = 0;
   }
@@ -858,21 +857,16 @@ class StreamingCalibrator {
     x_anchor_ = x;
     q_anchor_ = q;
     if (!bands_.empty()) {
-      // Each tracked row's side at the anchor. From the Jacobian pass's residuals (S2): the Huber residual is monotone in the model quote,
-      // so r above the upper edge's residual decay·(upper − m) is above the band and below the lower edge's is below -- the tick's own
-      // side_of test, read at (x, q). The reference (anchor_sides_from_jacobian = false) re-prices every model quote.
-      const Eigen::VectorXd* mr = sides_from_j ? nullptr : &engine_->model_rates(x);
-      for (std::size_t k = 0; k < bands_.size(); ++k) {
-        const BandRow& b = bands_[k];
-        int side = 0;
-        if (mr) {
-          side = b.side_from_value((*mr)[b.row]);
-        } else {
-          side = b.side_from_residual(r_anchor_[b.row], q[b.row]);
-        }
-        slope_ref_[k] = b.slope(side);  // > 0: tracked rows have every slope > 0
-        slope_cur_[k] = slope_ref_[k];
-        last_side_[k] = side < 0 ? -1 : +1;
+      // Each tracked row's piece at the anchor. From the Jacobian pass's residuals (S2) when every tracked map is
+      // strictly monotone (a residual then names its piece: the penalty is monotone in the model value); from the
+      // model values when some map has a zero-slope piece (flat in r). The reference (anchor_sides_from_jacobian =
+      // false) re-prices every model quote.
+      const Eigen::VectorXd* mr = (sides_from_j && all_strict_) ? nullptr : &engine_->model_rates(x);
+      for (BandRow& b : bands_) {
+        b.piece = mr ? b.map.piece_of((*mr)[b.row], b.tp) : b.map.piece_from_residual(r_anchor_[b.row], q[b.row], b.tp);
+        b.slope_ref = b.s(b.piece);
+        b.slope_cur = b.slope_ref;
+        b.active = b.slope_ref > 0.0;  // anchored on a zero-slope piece: no quote row to predict from until the next refresh
       }
       clear_pins();
     }
@@ -914,15 +908,17 @@ class StreamingCalibrator {
   // re-factorisation is O(n³) (300 µs on the desk rung and 1.75 MB of temporaries, 12–16 times per 25 bp tick).
   // Rounding in G moves no fixed point (any non-singular preconditioner leaves the stationarity condition alone).
   void rescale_row(std::size_t k, double new_slope) {
-    const int row = bands_[k].row;
-    const double c = new_slope / slope_cur_[k];
-    if (have_J_ && c != 1.0 && opt_.rescale_update && op_.rank_one_update(row, c, J_cur_)) {  // J_cur_ is still the OLD J here
-      J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
-      slope_cur_[k] = new_slope;
+    BandRow& b = bands_[k];
+    const int row = b.row;
+    // c = new/old: a row leaving a zero-slope piece has no finite ratio (its row was zero) -- the full factorisation below.
+    const double c = b.slope_cur != 0.0 ? new_slope / b.slope_cur : std::numeric_limits<double>::infinity();
+    if (have_J_ && c != 1.0 && std::isfinite(c) && opt_.rescale_update && op_.rank_one_update(row, c, J_cur_)) {  // J_cur_ is still the OLD J here
+      J_cur_.row(row) = J_ref_.row(row) * (new_slope / b.slope_ref);
+      b.slope_cur = new_slope;
       return;
     }
-    J_cur_.row(row) = J_ref_.row(row) * (new_slope / slope_ref_[k]);
-    slope_cur_[k] = new_slope;
+    J_cur_.row(row) = J_ref_.row(row) * (new_slope / b.slope_ref);
+    b.slope_cur = new_slope;
     if (have_J_) stamp(StreamStage::RescaleFallback);
     if (have_J_) factor(J_cur_);  // degenerate update: fall back to a full factorisation
   }
@@ -942,14 +938,9 @@ class StreamingCalibrator {
   void stamp(StreamStage s) { tick_stages_ |= 1u << static_cast<unsigned>(s); }
   // Band-edge tracking: the frozen anchor Jacobian, its current re-scaled copy, and per banded row the
   // slope at the anchor / now. have_J_ is false when M was adopted from the background worker.
-  std::vector<BandRow> bands_;  // tracked banded rows (decay > 0; a decay-0 band is left to the stall refresh)
-  std::vector<double> slope_ref_, slope_cur_;
-  std::vector<int> flips_;      // per banded row: side flips within the current tick
-  std::vector<int> state_;      // 0 free, +1 pinned on upper, -1 pinned on lower
-  std::vector<double> s_pin_;   // pinned rows: the multiplier slope s = λ/r_edge read at the last KKT check
-  std::vector<int> last_side_;  // last OUTSIDE side seen (+1 above / -1 below): which edge a flip crosses
-  std::vector<int> releases_;   // pin releases by the KKT check this tick (budget 1: a re-pin is final)
-  std::vector<char> onedge_;    // row was walked onto its edge by the breakpoint step (side = installed slope)
+  std::vector<BandRow> bands_;  // the tracked rows and the walk's state on each (one record per row)
+  bool all_strict_ = true;      // every tracked map strictly monotone (anchor sides from residuals, S2)
+  Eigen::VectorXd qm_;          // the model values the last eval() read (sized once; tracked rows copy theirs)
   std::vector<double> quote_lo_, quote_up_;  // per row: the band every tick's target must lie in (upper <= lower: none)
   std::vector<char> band_eligible_;          // per row: may carry a tracked band (FX forwards never do)
   int n_pinned_ = 0;

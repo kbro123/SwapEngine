@@ -512,8 +512,19 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   piecewise-linear residual map (breakpoints + piece slopes, zero at the target; the Huber band is the instance
   `{{lower, upper}, {1, decay, 1}}`, an FX forward carries none) and the AAD residual, the compiled row map, the
   streamer's edge walk (`BandRow` reads edges, slopes, edge residuals and residual inversions off it), the risk
-  scale and the diagnostics all read it -- the four copies and the FX-by-name exclusions in each are gone. A dead-zone
-  piece (a forward bound) is representable but the walk is still the two-edge walk (ASSUMPTIONS K41).
+  scale and the diagnostics all read it -- the four copies and the FX-by-name exclusions in each are gone.
+  **Stage B (2026-10-09): the walk is over the map's PIECES and a map is DATA.** `Instrument::penalty_map` (JSON
+  `penalty: {breaks, slopes}`, any monotone shape up to three breakpoints) overrides the four band numbers; the
+  streamer's `BandRow` is ONE record per tracked row (its map, the model value's piece, a pin on a breakpoint, the
+  anchor and installed slopes) where twelve parallel arrays and three state encodings were; the walk reads the
+  MODEL VALUE from the engine's evaluation (`residuals_vs(x, q, &model)` on every engine; the AAD block prices a row
+  once for both) instead of inverting the residual, so a ZERO-slope piece -- a one-sided bound, a band with no pull
+  beyond an edge -- is walked like any other (its residual row is zero inside the dead zone, re-scaled from zero on the
+  way out; a row ANCHORED in a dead zone is untracked until the next refresh: its frozen row carries no quote row).
+  The pin rule is unchanged (the second breakpoint hit in a tick pins the row where it is; the KKT release interval is
+  the two adjacent slopes). The LM's seed anchor is centred regulariser rows (`RegularizedEngine(base, w·I, x0)`), not
+  a second hand-stacked engine. Pinned: `streaming_dead_zone_test` (compiled == templated on every piece; a move into
+  and out of the dead zone streams to the cold answer; anchored-in-dead-zone), every band / soak test unchanged.
 - **The Jacobian is recomputed only on genuine staleness** — when frozen-Newton needs more than
   `max_frozen` steps — NOT on a drift envelope. That staleness envelope is ~30 bp of curve move (a
   level move; `tools/jacobian_staleness.cpp` measures `ρ` vs move size) vs the linear path's 0.35 bp,

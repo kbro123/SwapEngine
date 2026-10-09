@@ -70,17 +70,22 @@ class AadResidualEngine {
 // routed the whole solve to the generic AAD engine, were deleted) -- the instrument rows keep their
 // compiled W-cache residual/Jacobian, and the regulariser costs a GEMV + a block copy. R and the base
 // engine are held by reference; both must outlive the composition (BundleSession owns both).
+// With a CENTRE x_c the rows are R·(x − x_c) (constraint rows, stage B 2026-10-09): the LM's seed anchor is
+// this composition with R = w·I and x_c = the seed -- it used to be its own hand-stacked engine in lm.hpp.
 template <class Engine>
 class RegularizedEngine {
  public:
   RegularizedEngine(const Engine& base, const Eigen::MatrixXd& R) : base_(&base), R_(&R) {}
+  RegularizedEngine(const Engine& base, const Eigen::MatrixXd& R, const Eigen::VectorXd& centre)
+      : base_(&base), R_(&R), centre_(&centre) {}
 
   int n_residuals() const { return base_->n_residuals() + static_cast<int>(R_->rows()); }
   Eigen::VectorXd residuals(const Eigen::VectorXd& x) const {
     const auto& r0 = base_->residuals(x);
     Eigen::VectorXd r(r0.size() + R_->rows());
     r.head(r0.size()) = r0;
-    r.tail(R_->rows()).noalias() = (*R_) * x;
+    if (centre_) r.tail(R_->rows()).noalias() = (*R_) * (x - *centre_);
+    else r.tail(R_->rows()).noalias() = (*R_) * x;
     return r;
   }
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
@@ -94,6 +99,7 @@ class RegularizedEngine {
  private:
   const Engine* base_;
   const Eigen::MatrixXd* R_;
+  const Eigen::VectorXd* centre_ = nullptr;  // rows R·(x − centre) when set
 };
 
 // CalibrationProblem -> the single-curve analytic CompiledResidual; BundleProblem -> the multi-curve

@@ -171,28 +171,12 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
     // genuine direction by parts-per-billion of its value. For a WARM re-solve x0 is the previous
     // solution, so unconstrained states stay put tick to tick.
     const double w = 1e-8 * std::abs(op.max_pivot());
-    struct Anchored {
-      const Engine* base;
-      const Eigen::VectorXd* x0;
-      double w;
-      int nk;
-      Eigen::VectorXd residuals(const Eigen::VectorXd& x) const {
-        const auto& r0 = base->residuals(x);
-        Eigen::VectorXd r(r0.size() + nk);
-        r.head(r0.size()) = r0;
-        r.tail(nk) = w * (x - *x0);
-        return r;
-      }
-      Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
-        const Eigen::MatrixXd J0 = base->jacobian(x);
-        Eigen::MatrixXd J(J0.rows() + nk, nk);
-        J.topRows(J0.rows()) = J0;
-        J.bottomRows(nk) = w * Eigen::MatrixXd::Identity(nk, nk);
-        return J;
-      }
-    } anchored{&engine, &x0, w, n_knots};
-    AnyEngineFunctor<Anchored> af(anchored, n_knots, n_residuals + n_knots);
-    Eigen::LevenbergMarquardt<AnyEngineFunctor<Anchored>> alm(af);
+    // The anchor rows ARE regulariser rows centred on the seed: R = w·I, r = R·(x − x0) (constraint rows, stage B
+    // 2026-10-09 -- the same composition a smoothing R enters a calibrate by, not a second hand-stacked engine).
+    const Eigen::MatrixXd R_anchor = w * Eigen::MatrixXd::Identity(n_knots, n_knots);
+    const RegularizedEngine<Engine> anchored(engine, R_anchor, x0);
+    AnyEngineFunctor<RegularizedEngine<Engine>> af(anchored, n_knots, n_residuals + n_knots);
+    Eigen::LevenbergMarquardt<AnyEngineFunctor<RegularizedEngine<Engine>>> alm(af);
     alm.parameters.xtol = 1e-14;
     alm.parameters.ftol = 1e-14;
     alm.parameters.maxfev = 4000;

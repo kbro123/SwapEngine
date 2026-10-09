@@ -235,6 +235,20 @@ class AadBlock final : public RowEngine {
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of, q[rows_[j]]);
   }
+  // The same, plus each row's model value: the quote priced once, the residual map applied to it (the one
+  // instrument_residual_of_quote definition), so the pair is consistent and the block prices each row ONCE.
+  void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out, Eigen::VectorXd* model) const override {
+    if (!model) { residuals_vs_into(x, q, out); return; }
+    if (rows_.empty()) return;
+    refresh_curves(x);
+    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return *resolve_[i]; };
+    for (int j = 0; j < size(); ++j) {
+      const int row = rows_[j];
+      const double mq = instrument_model_quote<double>(sub_.instruments[j], curve_of);
+      (*model)[row] = mq;
+      out[row] = instrument_residual_of_quote<double>(sub_.instruments[j], mq, q[row]);
+    }
+  }
 
   // Jacobian of residuals_vs_into via WIDTH-REDUCED AAD, into the touched columns of J.row(global_row).
   // Consistent with residuals_vs_into by construction: AAD differentiates the SAME instrument_residual
