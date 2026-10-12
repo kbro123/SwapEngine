@@ -249,22 +249,30 @@ inline cal::Instrument par_swap(const Date& vd, const SwapConv& conv, const Date
 // Basis swap (compile._basis_swap): quoted leg `fc` vs benchmark leg `bench`, ParSpread. Optional:
 // `fwd_spread` (contractual spread on the quoted/fwd leg) and `notionals` (amortizing schedule applied to
 // both float legs and the annuity). Defaults reproduce the old swap byte-for-byte.
-inline cal::Instrument basis_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int bench,
+// Each leg on ITS OWN conventions (BasisConv, 2026-10-12): the spread leg (quoted index) and the flat leg (benchmark)
+// from the DB basis product's spread_leg / flat_leg -- frequency, day count and compounding per leg.
+inline cal::Instrument basis_swap(const Date& vd, const BasisConv& bc, const Date& mat, int fc, int bench,
                                   int disc, double market, double fwd_spread = 0.0,
                                   const std::vector<double>& notionals = {}) {
   cal::Instrument ins;
   ins.quote = cal::QuoteKind::ParSpread;
-  ins.fwd = float_leg(vd, conv, mat, fc, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, fwd_spread,
-                      notionals);
-  ins.bench = float_leg(vd, conv, mat, bench, disc, conv.float_freq_tok, conv.float_dc, -1, -1, 1.0, 0.0,
+  ins.fwd = float_leg(vd, bc.spread, mat, fc, disc, bc.spread.float_freq_tok, bc.spread.float_dc, -1, -1, 1.0,
+                      fwd_spread, notionals);
+  ins.bench = float_leg(vd, bc.flat, mat, bench, disc, bc.flat.float_freq_tok, bc.flat.float_dc, -1, -1, 1.0, 0.0,
                         notionals);
   // The spread annuity is on the QUOTED leg's schedule and day count (it used to be a hard-wired annual
   // fixed leg — wrong for every non-annual basis; audit item E29 / build M6).
-  SwapConv qc = conv;
-  qc.fixed_dc = conv.float_dc;
-  ins.fixed = fixed_coupons(vd, qc, mat, disc, conv.float_freq_tok, notionals);
+  SwapConv qc = bc.spread;
+  qc.fixed_dc = bc.spread.float_dc;
+  ins.fixed = fixed_coupons(vd, qc, mat, disc, bc.spread.float_freq_tok, notionals);
   ins.market = market;
   return ins;
+}
+// ONE convention on both legs (a caller without a basis product): byte-identical to the pre-2026-10-12 builder.
+inline cal::Instrument basis_swap(const Date& vd, const SwapConv& conv, const Date& mat, int fc, int bench,
+                                  int disc, double market, double fwd_spread = 0.0,
+                                  const std::vector<double>& notionals = {}) {
+  return basis_swap(vd, BasisConv{conv, conv, conv.product_id}, mat, fc, bench, disc, market, fwd_spread, notionals);
 }
 
 // MtM cross-currency OIS basis swap (compile._xccy_mtm_basis).

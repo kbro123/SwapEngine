@@ -179,6 +179,29 @@ void expect_json_eq(const json::value& a, const json::value& b, double tol, cons
         }
         break;
       }
+      // THE FIFTH DELIBERATE DIVERGENCE (2026-10-12, the two-leg basis product; TASKS-API §A0.5): an AVERAGED basis leg
+      // (the FF leg of USD-FF-SOFR-BASIS) is built on the MOMENT path in C++ -- one bracket plus the calendar's day-count
+      // moments fixing_step / fixing_step3 -- while compile.py's _ois_coupon knows no compounding and emits the plain
+      // bracket (both normalise to fixing_step 0). The moments must be positive and small (a daily step squared, ~1e-5),
+      // then the two keys are neutralised and the bracket compares normally.
+      if (ao.contains("fixing_step") && bo.contains("fixing_step") && ao.at("fixing_step").to_number<double>() > 0.0 &&
+          bo.at("fixing_step").to_number<double>() == 0.0) {
+        json::object a2 = ao;
+        const double st = a2.at("fixing_step").to_number<double>(), st3 = a2.at("fixing_step3").to_number<double>();
+        EXPECT_GT(st, 0.0) << "at " << path << ".fixing_step";
+        EXPECT_LT(st, 1e-2) << "at " << path << ".fixing_step: a daily step's second moment";
+        EXPECT_GT(st3, 0.0) << "at " << path << ".fixing_step3";
+        EXPECT_LT(st3, st) << "at " << path << ".fixing_step3";
+        a2["fixing_step"] = bo.at("fixing_step");
+        a2["fixing_step3"] = bo.at("fixing_step3");
+        ASSERT_EQ(a2.size(), bo.size()) << "object key count mismatch at " << path;
+        for (const auto& kv : a2) {
+          const std::string key(kv.key());
+          ASSERT_TRUE(bo.contains(key)) << "missing key '" << key << "' at " << path;
+          expect_json_eq(kv.value(), bo.at(key), tol, path + "." + key);
+        }
+        break;
+      }
       ASSERT_EQ(ao.size(), bo.size()) << "object key count mismatch at " << path;
       for (const auto& kv : ao) {
         const std::string key(kv.key());

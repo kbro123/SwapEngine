@@ -5,6 +5,8 @@
 // windows and the OIS swap schedule. QuantLib-free (swaps_tests).
 #include <gtest/gtest.h>
 
+#include <optional>
+
 #include <cmath>
 
 #include "swaps/build/calendar.hpp"
@@ -172,6 +174,46 @@ TEST(BuildInstruments, OisSwapScheduleMatchesPython) {
 // FF/SOFR basis leg is the H.15 ARITHMETIC AVERAGE — and until now every overnight leg the builders produced
 // was compounded, so an averaged product priced as a compounded one. The two must differ by Jensen's gap and
 // no more: over one 3M period on a 4 % flat-forward curve, compounding gains ~r²τ²/2 ≈ 0.1 bp of rate.
+// A basis swap's two legs each carry THEIR OWN conventions from the DB basis product (build::BasisConv, 2026-10-12):
+// USD-FF-SOFR-BASIS is quarterly on both legs, the FF leg AVERAGED and the SOFR leg COMPOUNDED, pay lag 2; the EUR 3s6s
+// basis has a quarterly 3M leg and a semiannual 6M leg. Until now both legs took the quoted index's par product -- an
+// annual, compounded FF leg against an annual SOFR leg -- which is what the compile verb built for every basis row.
+TEST(BuildInstruments, BasisSwapLegsCarryTheProductsOwnConventions) {
+  const b::Date vd = b::Date::from_iso("2026-07-08");
+  const b::Date mat = b::resolve("2Y", vd, "NONE", "Unadjusted", 0);
+  const std::optional<b::BasisConv> ff = b::basis_conv_for("USD-FEDFUNDS", "USD-SOFR");
+  ASSERT_TRUE(ff.has_value()) << "the DB catalogues USD-FF-SOFR-BASIS for (FF, SOFR)";
+  EXPECT_EQ(ff->product_id, "USD-FF-SOFR-BASIS");
+  EXPECT_EQ(ff->spread.float_compounding, "averaged");
+  EXPECT_EQ(ff->flat.float_compounding, "compounded");
+  EXPECT_EQ(ff->spread.float_freq_tok, "3M");
+  EXPECT_EQ(ff->flat.float_freq_tok, "3M");
+  EXPECT_EQ(ff->spread.pay_lag, 2);
+  const swaps::calibration::Instrument bas = b::basis_swap(vd, *ff, mat, 1, 0, 0, 0.0010);
+  EXPECT_EQ(bas.fwd.coupons.size(), 8u) << "quarterly FF leg over 2y";
+  EXPECT_EQ(bas.bench.coupons.size(), 8u) << "quarterly SOFR leg over 2y";
+  EXPECT_EQ(bas.fixed.coupons.size(), 8u) << "the spread annuity on the quoted leg's schedule";
+  EXPECT_GT(bas.fwd.coupons[0].obs.fixing_step, 0.0) << "the FF leg averages: the moment path";
+  EXPECT_EQ(bas.bench.coupons[0].obs.fixing_step, 0.0) << "the SOFR leg compounds: one telescoped bracket";
+  // the same row from the ONE-convention overload (the quoted index's OIS product): what every basis row used to be
+  const swaps::calibration::Instrument old_form = b::basis_swap(vd, b::swap_conv("USD", "USD-FEDFUNDS"), mat, 1, 0, 0, 0.0010);
+  EXPECT_EQ(old_form.fwd.coupons.size(), 2u) << "annual";
+  EXPECT_EQ(old_form.fwd.coupons[0].obs.fixing_step, 0.0) << "compounded";
+  // EUR 3s6s: the flat 6M leg is semiannual, the quoted 3M leg quarterly
+  const std::optional<b::BasisConv> e36 = b::basis_conv_for("EUR-EURIBOR-3M", "EUR-EURIBOR-6M");
+  ASSERT_TRUE(e36.has_value());
+  const swaps::calibration::Instrument b36 = b::basis_swap(vd, *e36, mat, 1, 0, 0, 0.0005);
+  EXPECT_EQ(b36.fwd.coupons.size(), 8u);
+  EXPECT_EQ(b36.bench.coupons.size(), 4u);
+  EXPECT_EQ(b36.fixed.coupons.size(), 8u);
+  // an uncatalogued pair: each leg from its own index's par product, never the quoted leg's on both
+  EXPECT_FALSE(b::basis_conv_for("USD-SOFR", "USD-FEDFUNDS").has_value()) << "the reverse pair is not a product";
+  const b::BasisConv mixed = b::basis_conv_for_curves("EUR", "EUR-EURIBOR-6M", "EUR", "EUR-ESTR");
+  EXPECT_TRUE(mixed.product_id.empty());
+  EXPECT_EQ(mixed.spread.float_freq_tok, "6M");
+  EXPECT_EQ(mixed.flat.float_freq_tok, b::swap_conv("EUR", "EUR-ESTR").float_freq_tok);
+}
+
 TEST(BuildInstruments, FloatLegHonoursTheProductsCompoundingConvention) {
   const b::Date vd = b::Date::from_iso("2026-07-08");
   const b::Date s = b::Date::from_iso("2026-09-01"), e = b::Date::from_iso("2026-12-01");

@@ -10,6 +10,7 @@
 #define SWAPS_BUILD_CONVENTIONS_HPP
 
 #include <cctype>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -87,6 +88,68 @@ inline SwapConv swap_conv(const std::string& currency, const std::string& index)
   }
   const cvd::CurrencyConv cc = cvd::require_currency(upper(currency));
   return conv_from_product(cvd::require_product(cvd::require_field(cc.default_swap_product, "default_swap_product", cc.code)));
+}
+
+// A TWO-LEG basis product (DB type "basis": USD-FF-SOFR-BASIS, EUR-3S6S-BASIS, ...): the SPREAD leg (the quoted index,
+// carries the spread) and the FLAT leg (the benchmark index), EACH with its own frequency, day count and compounding
+// from the product's spread_leg / flat_leg rows, over the product's calendar / bdc / lags. Until 2026-10-12 a basis
+// swap was built from ONE SwapConv -- the quoted index's par product -- so the FF/SOFR basis had an annual, compounded
+// FF leg (the market: quarterly, arithmetic average) and the SOFR leg took the FF leg's conventions; a 3s6s basis built
+// both legs quarterly. The spread annuity stays on the spread leg's schedule and day count (E29).
+struct BasisConv {
+  SwapConv spread, flat;
+  std::string product_id;  // the DB basis product, or "" when the legs came from the two indices' par products
+};
+
+// One leg of a two-leg product as a SwapConv: the product's calendar / bdc / lags with the leg's own frequency, day
+// count and compounding (the fixed slots mirror the leg: a basis annuity is built on the quoted leg).
+inline SwapConv leg_conv_from_product(const cvd::ProductConv& p, const cvd::LegConv& leg, const char* which) {
+  SwapConv c;
+  c.product_id = sv_str(p.id);
+  c.calendar = sv_str(cvd::require_field(p.calendar, "calendar", p.id));
+  c.bdc = sv_str(cvd::require_field(p.bdc, "bdc", p.id));
+  c.spot_lag = cvd::require_lag(p.spot_lag, "spot_lag", p.id);
+  c.pay_lag = cvd::require_lag(p.payment_lag, "payment_lag", p.id);
+  c.float_dc = sv_str(cvd::require_field(leg.day_count, (std::string(which) + " day_count").c_str(), p.id));
+  c.float_freq_tok = sv_str(cvd::require_field(leg.frequency, (std::string(which) + " frequency").c_str(), p.id));
+  c.float_compounding = sv_str(leg.compounding);  // "" => compounded
+  if (!c.float_compounding.empty() && c.float_compounding != "compounded" && c.float_compounding != "averaged")
+    throw std::invalid_argument("conventions DB: product '" + sv_str(p.id) + "' " + which + " compounding '" +
+                                c.float_compounding + "' is neither 'compounded' nor 'averaged'");
+  c.fixed_dc = c.float_dc;
+  c.fixed_freq_tok = c.float_freq_tok;
+  return c;
+}
+
+inline BasisConv basis_conv(const cvd::ProductConv& p) {
+  if (p.type != "basis")
+    throw std::invalid_argument("conventions DB: '" + sv_str(p.id) + "' is a '" + sv_str(p.type) + "' product, not a basis");
+  BasisConv b;
+  b.product_id = sv_str(p.id);
+  b.spread = leg_conv_from_product(p, p.floating, "spread_leg");
+  b.flat = leg_conv_from_product(p, p.other, "flat_leg");
+  return b;
+}
+inline BasisConv basis_conv(const std::string& product_id) { return basis_conv(cvd::require_product(product_id)); }
+
+// The DB basis product whose spread leg is `spread_index` and flat leg `flat_index`, if one is catalogued.
+inline std::optional<BasisConv> basis_conv_for(const std::string& spread_index, const std::string& flat_index) {
+  if (spread_index.empty() || flat_index.empty()) return std::nullopt;
+  for (const cvd::ProductConv& p : cvd::kProducts)
+    if (p.type == "basis" && p.floating.index == spread_index && p.other.index == flat_index) return basis_conv(p);
+  return std::nullopt;
+}
+
+// The conventions of a basis row between a quoted curve and a benchmark curve: the catalogued basis product for the
+// two indices when there is one, else each leg from ITS OWN index's par product (the currency default when a curve
+// names no index) -- never the quoted leg's conventions on the benchmark leg.
+inline BasisConv basis_conv_for_curves(const std::string& spread_currency, const std::string& spread_index,
+                                       const std::string& flat_currency, const std::string& flat_index) {
+  if (auto bc = basis_conv_for(spread_index, flat_index)) return *bc;
+  BasisConv b;
+  b.spread = swap_conv(spread_currency, spread_index);
+  b.flat = swap_conv(flat_currency, flat_index);
+  return b;
 }
 
 // MtM xccy basis conventions for a currency PAIR (DB product "XCCY-MTM-<PAIR>", e.g. EURUSD).

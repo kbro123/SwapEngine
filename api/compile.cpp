@@ -584,7 +584,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     const std::string cid = get_s(c, "id");
     const std::string cname = get_s(c, "name", "?");
     const int ci = idx.at(cid);
-    const int my_ccy = ccy_index(get_s(c, "currency"));
+    const std::string ccy = get_s(c, "currency"), ix = get_s(c, "index");  // the curve's currency / index, read once
+    const int my_ccy = ccy_index(ccy);
     const int disc = ccy_root.count(my_ccy) ? ccy_root.at(my_ccy) : root_outright;
     const int spread_base = (get_s(c, "kind") == "spread" && present(c, "base")) ? idx.at(get_s(c, "base")) : disc;
 
@@ -607,7 +608,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
       const std::string iid = ins_key(ins, j);
 
       if (get_s(ins, "type") == "portfolio") {
-        const b::SwapConv pconv = b::swap_conv(get_s(c, "currency"), get_s(c, "index"));
+        const b::SwapConv pconv = b::swap_conv(ccy, ix);
         cal::Instrument obj;
         obj.quote = cal::QuoteKind::Portfolio;
         if (ins.contains("components") && ins.at("components").is_array())
@@ -646,12 +647,17 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         if (T <= a)
           throw CompileError("Rate instrument on '" + cname + "' needs end after start.");
         obj = b::rate_instrument(ci,
-                                 rate_obs(ins, r, a, T, value_date, b::index_day_count(get_s(c, "index")),
-                                          b::index_calendar(get_s(c, "index")), get_s(c, "index")),
+                                 rate_obs(ins, r, a, T, value_date, b::index_day_count(ix),
+                                          b::index_calendar(ix), ix),
                                  mkt);
       } else if (kind == "ParSpread") {
-        obj = b::basis_swap(value_date, b::swap_conv(get_s(c, "currency"), get_s(c, "index")), mat_date,
-                            ci, bench_of(ins), disc, mkt);
+        // Each leg on its own conventions: the DB basis product for (quoted index, benchmark index), else each index's
+        // par product (build::basis_conv_for_curves, 2026-10-12; until then both legs took the quoted index's).
+        const int bi = bench_of(ins);
+        obj = b::basis_swap(value_date,
+                            b::basis_conv_for_curves(ccy, ix, get_s(*order[static_cast<std::size_t>(bi)], "currency"),
+                                                     get_s(*order[static_cast<std::size_t>(bi)], "index")),
+                            mat_date, ci, bi, disc, mkt);
       } else if (kind == "FxForward") {
         const std::string den = get_s(ins, "fx_den");
         if (den.empty() || !idx.count(den))
@@ -684,13 +690,13 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
           throw CompileError("Turn on '" + cname + "' has no resolved window (internal).");
         obj = b::turn_jump(ci, it->second, mkt);
       } else if (kind == "ZeroCouponRate") {
-        const b::SwapConv zc = b::swap_conv(get_s(c, "currency"), get_s(c, "index"));
+        const b::SwapConv zc = b::swap_conv(ccy, ix);
         if (!zc.zero_coupon)
           throw CompileError("ZeroCouponRate on '" + cname + "': product '" + zc.product_id + "' is not a zero_coupon product (DB products[].zero_coupon).");
         obj = b::zero_coupon_swap(value_date, zc, mat_date, ci, disc, mkt);
       } else {  // ParRate (a zero_coupon product dispatches to the zero-coupon swap: the DB row decides the shape)
         obj = b::par_swap(value_date,
-                          b::swap_conv(get_s(c, "currency"), get_s(c, "index")),  // float_freq: the DB product decides
+                          b::swap_conv(ccy, ix),  // float_freq: the DB product decides
                           mat_date, ci, disc, mkt);
       }
       apply_band(obj, ins, unit);

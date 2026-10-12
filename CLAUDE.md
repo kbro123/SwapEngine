@@ -62,7 +62,10 @@ perf-gate integrity). The historical statement that QuantLib "IS a linked depend
 > QuantLib objects through `tests/conventions_ql.hpp`; the Python web layer pulls from the same JSON via
 > `server/conventions_db.py`. New instruments add a product entry to the JSON **first**; don't hardcode
 > conventions inline. `tests/conventions_test.cpp` asserts the DB agrees with QuantLib's own index
-> conventions so the two can't silently drift.
+> conventions so the two can't silently drift. A TWO-LEG product (a basis: `spread_leg` + `flat_leg`) gives
+> EACH leg its own frequency / day count / compounding (`build::BasisConv`, 2026-10-12, ASSUMPTIONS K46):
+> the FF/SOFR basis is quarterly with an averaged FF leg against a compounded SOFR leg, not two copies of
+> the quoted index's OIS leg.
 - **Ours (hot path, templated on `Scalar`, differentiable, vectorized):** the curve interpolation,
   the discount/forward math, the residual vector, and the batched portfolio kernels. QuantLib is not
   templated, so AAD cannot flow through `OvernightIndexedSwap::NPV()`; the differentiable kernel must
