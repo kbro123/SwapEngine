@@ -167,6 +167,14 @@ static_assert(static_cast<int>(Scheme::MonotoneConvex) + 1 == kSchemeCount,
               "a Scheme was added or reordered: update scheme_is_linear / scheme_is_piecewise_linear (inclusion "
               "lists), ModularCurve::add, the codec's to/from string (api/codec.cpp), ALL_SCHEMES and kSchemeCount");
 
+// Sort a region's knot times and drop duplicates: two instruments maturing on ONE date share ONE knot (a knot is a
+// time, an instrument a row). A region constructor refuses a duplicate (a zero-length segment is a silent NaN), so
+// whoever assembles knots from instruments -- the compile verb, a test fixture -- calls this (2026-10-12).
+inline void sort_distinct_knots(std::vector<double>& knots) {
+  std::sort(knots.begin(), knots.end());
+  knots.erase(std::unique(knots.begin(), knots.end()), knots.end());
+}
+
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
   std::vector<double> knots;  // knot times (year fractions), ascending, within this region

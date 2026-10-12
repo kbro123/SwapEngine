@@ -260,6 +260,43 @@ TEST(CompileParity, AllGoldenSpecsMatchPython) {
 // bundle is under-determined or banded, the penalty spanning the named curves (else every bundle curve). A spec
 // still asking for the retired operator (reg_op "tension", or a non-zero tension_sigma) is REFUSED, not silently
 // given the curvature penalty.
+// Two instruments maturing on ONE date share ONE knot (2026-10-12): a 1w deposit from spot landing on the first
+// meeting date used to emit the front knot twice, and a region constructor refuses a duplicate (a zero-length
+// segment is a silent NaN). Both the classic Flat+Hermite layout and an explicit-regions layout dedupe per region;
+// server/compile.py does the same.
+TEST(CompileLayout, InstrumentsOnOneDateShareOneKnot) {
+  const char* classic = R"({"value_date": "2026-09-08", "smoothness": "off", "curves": [{
+    "id": "c", "name": "C", "currency": "USD", "index": "USD-SOFR", "instruments": [
+      {"id": "m1", "type": "meeting", "end": "2026-09-17", "adds_knot": true, "knot_region": "front"},
+      {"id": "m2", "type": "meeting", "end": "2026-09-17", "adds_knot": true, "knot_region": "front"},
+      {"id": "s2", "type": "swap", "end": "2y", "adds_knot": true, "knot_region": "back", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.9},
+      {"id": "s2b", "type": "swap", "end": "2y", "adds_knot": true, "knot_region": "back", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.95},
+      {"id": "s5", "type": "swap", "end": "5y", "adds_knot": true, "knot_region": "back", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.8}]}]})";
+  const swaps::api::CompileResult r = compile_spec(json::parse(classic));
+  ASSERT_EQ(r.bundle.curves.size(), 1u);
+  ASSERT_EQ(r.bundle.curves[0].regions.size(), 2u);
+  EXPECT_EQ(r.bundle.curves[0].regions[0].knots.size(), 1u) << "one meeting knot, not two";
+  EXPECT_EQ(r.bundle.curves[0].regions[1].knots.size(), 2u) << "2y once and 5y";
+  EXPECT_EQ(r.bundle.instruments.size(), 3u) << "the rows are all kept: a knot is a time, an instrument a row";
+  const char* regions = R"({"value_date": "2026-09-08", "smoothness": "off", "curves": [{
+    "id": "c", "name": "C", "currency": "USD", "index": "USD-SOFR",
+    "regions": [{"id": "r1", "name": "front", "policy": "Flat"}, {"id": "r2", "name": "back", "policy": "Hermite"}],
+    "instruments": [
+      {"id": "m1", "type": "meeting", "end": "2026-09-17", "adds_knot": true, "region": "r1"},
+      {"id": "m2", "type": "meeting", "end": "2026-09-17", "adds_knot": true, "region": "r1"},
+      {"id": "s2", "type": "swap", "end": "2y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.9},
+      {"id": "s5", "type": "swap", "end": "5y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.8}]}]})";
+  const swaps::api::CompileResult r2 = compile_spec(json::parse(regions));
+  ASSERT_EQ(r2.bundle.curves[0].regions.size(), 2u);
+  EXPECT_EQ(r2.bundle.curves[0].regions[0].knots.size(), 1u);
+  EXPECT_EQ(r2.bundle.curves[0].regions[1].knots.size(), 2u);
+}
+
 TEST(CompileRegSpec, ReadsTheOneSmoothingTable) {
   swaps::api::CompileResult r;
   r.smoothness = "light";

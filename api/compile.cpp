@@ -270,8 +270,10 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
   if (!regions) {  // legacy: front(Flat) + back(Hermite) by knot_region (default "back")
     for (const auto& k : knot_items)
       (k.knot_region.value_or("back") == "front" ? L.front : L.back).push_back(k.t);
-    std::sort(L.front.begin(), L.front.end());
-    std::sort(L.back.begin(), L.back.end());
+    // DISTINCT knot times per region: two instruments maturing on one date (a 1w deposit landing on the first meeting)
+    // share ONE knot -- a region constructor refuses a duplicate (a zero-length segment is a silent NaN), 2026-10-12.
+    curve::sort_distinct_knots(L.front);
+    curve::sort_distinct_knots(L.back);
     L.classic = true;
     L.policies = "Flat+Hermite";
     return L;
@@ -299,7 +301,7 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
   for (const auto& rid : order_ids) {
     auto& ks = buckets[rid];
     if (ks.empty()) continue;
-    std::sort(ks.begin(), ks.end());
+    curve::sort_distinct_knots(ks);  // distinct times (see the classic layout above)
     curve::CurveModule m;
     m.scheme = policy[rid];
     m.knots = ks;
