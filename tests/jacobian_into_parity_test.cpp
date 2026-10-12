@@ -43,21 +43,29 @@ TEST(JacobianIntoParity, ARegularisedStreamLandsOnTheRegularisedColdSolve) {
     if (s.name != "ois_nolag") continue;
     std::vector<int> curves(s.prob.curves.size());
     for (std::size_t c = 0; c < curves.size(); ++c) curves[c] = static_cast<int>(c);
-    const Eigen::MatrixXd R = cal::second_difference_operator(s.prob, 0.02, curves);
-    ASSERT_GT(R.rows(), 0) << "premise: a non-empty regulariser";
+    // The regulariser is CONSTRAINT ROWS of the problem (2026-10-12): the streamer and the cold solve read the same rows.
+    cal::BundleProblem pr = s.prob;
+    cal::RegSpec reg;
+    reg.lambda = 0.02;
+    reg.curves = curves;
+    cal::add_smoothing_rows(pr, reg);
+    ASSERT_GT(pr.n_constraints(), 0) << "premise: a non-empty regulariser";
+    const auto full = [&](const Eigen::VectorXd& q) {  // the streamer's market is every row's target: the quotes, then the rows' 0
+      Eigen::VectorXd f = pr.market();
+      f.head(q.size()) = q;
+      return f;
+    };
     const auto cold = [&](const Eigen::VectorXd& q) {
-      cal::BundleProblem p = s.prob;
-      for (int i = 0; i < p.n_residuals(); ++i) p.instruments[static_cast<std::size_t>(i)].market = q[i];
+      cal::BundleProblem p = pr;
+      for (int i = 0; i < q.size(); ++i) p.instruments[static_cast<std::size_t>(i)].market = q[i];
       const cal::HybridBundleResidual eng(p);
-      const cal::RegularizedEngine<cal::HybridBundleResidual> composed(eng, R);
-      return cal::calibrate_with(composed, p.n_knots(), p.n_residuals() + static_cast<int>(R.rows()), s.x0).x;
+      return cal::calibrate_with(eng, p.n_knots(), p.n_residuals(), s.x0).x;
     };
     cal::StreamingCalibrator<cal::BundleProblem>::Options o;
-    o.regularizer = R;
     o.breakeven_steps = 64;
-    cal::StreamingCalibrator<cal::BundleProblem> st(s.prob, cold(s.q0), s.q0, o);
+    cal::StreamingCalibrator<cal::BundleProblem> st(pr, cold(s.q0), full(s.q0), o);
     for (const Eigen::VectorXd* q : {&s.q_small, &s.q_big, &s.q0}) {
-      const cal::StreamTick t = st.update(*q);
+      const cal::StreamTick t = st.update(full(*q));
       ASSERT_TRUE(t.converged) << t.reason();
       EXPECT_LT((st.current() - cold(*q)).cwiseAbs().maxCoeff(), 1e-8) << "the regularised stream is not the regularised solution";
     }

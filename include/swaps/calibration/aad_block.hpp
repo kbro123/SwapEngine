@@ -63,6 +63,7 @@ struct CachedDisc : CurveHandle<double> {
   // A TurnJump row reads the turn's δ off the curve (E3-B11: without this forward the base handle threw
   // "this curve has no turns" whenever a MonotoneCubic region sent a turned bundle to the block).
   double turn_jump(int j) const override { return real->turn_jump(j); }
+  double state(int i) const override { return real->state(i); }  // a StateLinear row reads the raw state through the cache
   void pieces_into(std::vector<double>& out) const override { real->pieces_into(out); }
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}  // real curve owns knots
 };
@@ -76,6 +77,7 @@ struct RecordingCurve : CurveHandle<double> {
   double integral(double t) const override { return real->integral(t); }
   double forward(double t) const override { return real->forward(t); }
   double turn_jump(int j) const override { return real->turn_jump(j); }
+  double state(int i) const override { return real->state(i); }
   void pieces_into(std::vector<double>& out) const override { real->pieces_into(out); }
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}
 };
@@ -95,7 +97,7 @@ class AadBlock final : public RowEngine {
   void set_quotes(const BundleProblem& p) {
     for (int j = 0; j < size(); ++j) {
       Instrument& dst = sub_.instruments[j];
-      const Instrument& src = p.instruments[rows_[j]];
+      const Instrument& src = p.row(rows_[j]);
       dst.market = src.market;
       dst.band_lower = src.band_lower;
       dst.band_upper = src.band_upper;
@@ -123,6 +125,10 @@ class AadBlock final : public RowEngine {
     for (int j = 0; j < size(); ++j)
       if (rows_[j] == global_row) { set_fx_spot_leaves(sub_.instruments[j], fx_spot); return; }
   }
+  // The block keeps no unscaled quote rows (its residual dual folds the map's slope in): a block row anchored in a dead
+  // zone stays untracked for that anchor (the stall refresh handles it, as before 2026-10-12).
+  const std::vector<int>& dead_rows() const override { return no_dead_rows_; }
+  void dead_row_into(int, Eigen::Ref<Eigen::RowVectorXd, 0, Eigen::InnerStride<>>) const override { throw std::logic_error("AadBlock keeps no dead rows"); }
 
   // True when the AAD sweep runs on the pooled (allocation-free) dual; false = the heap-Dual fallback
   // (touched width > ad::kPooledMaxW, or forced for testing).
@@ -396,6 +402,7 @@ class AadBlock final : public RowEngine {
   }
 
   BundleProblem sub_;          // the non-cacheable instruments over the SAME curves (built once)
+  std::vector<int> no_dead_rows_;  // dead_rows(): always empty
   std::vector<int> rows_;      // block index -> global residual row
   std::vector<int> off_;       // per-curve global state offset (== sub_.offset(c)), hoisted at init
   std::vector<int> touched_;   // global knot indices these instruments differentiate w.r.t. (sorted)

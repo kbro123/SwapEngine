@@ -86,14 +86,12 @@ cal::BundleProblem banded_bundle(double half_bp, double noise_bp, unsigned seed 
   return p;
 }
 
-// Cold least-squares at market q, optionally regularised, from seed x0.
+// Cold least-squares at market q (every row's target: the quotes, then any constraint rows) from seed x0. A regularised
+// problem carries its smoothing as constraint rows (2026-10-12), so the same solve covers both.
 Eigen::VectorXd cold(cal::BundleProblem p, const Eigen::VectorXd& q, const Eigen::VectorXd& x0,
-                     const Eigen::MatrixXd* R) {
-  for (int i = 0; i < q.size(); ++i) p.instruments[i].market = q[i];
-  if (!R) return cal::calibrate(p, x0).x;
-  const cal::HybridBundleResidual eng(p);
-  const cal::RegularizedEngine<cal::HybridBundleResidual> composed(eng, *R);
-  return cal::calibrate_with(composed, p.n_knots(), p.n_residuals() + static_cast<int>(R->rows()), x0).x;
+                     const Eigen::MatrixXd* = nullptr) {
+  for (int i = 0; i < q.size(); ++i) p.row(i).market = q[i];
+  return cal::calibrate(p, x0).x;
 }
 
 }  // namespace
@@ -165,13 +163,16 @@ TEST(StreamingBand, RescaledOperatorEqualsARefactorisation) {
     for (double decay : {0.1, 0.5}) {
       cal::BundleProblem p = banded_bundle(0.25, 2.0);  // inconsistent quotes: pins and releases happen
       for (int i = 1; i < 10; i += 2) p.instruments[i].band_decay = decay;
-      const Eigen::VectorXd q0 = p.market();
-      Eigen::MatrixXd R;
       cal::StreamingCalibrator<cal::BundleProblem>::Options upd, ref;
-      const Eigen::MatrixXd* Rp = nullptr;
-      if (lambda > 0.0) { R = cal::second_difference_operator(p, lambda, {0}); upd.regularizer = R; ref.regularizer = R; Rp = &R; }
+      if (lambda > 0.0) {  // the regulariser as the problem's constraint rows (2026-10-12), target 0
+        cal::RegSpec reg;
+        reg.lambda = lambda;
+        reg.curves = {0};
+        cal::add_smoothing_rows(p, reg);
+      }
+      const Eigen::VectorXd q0 = p.market();  // every row: the quotes, then the constraint rows' 0
       ref.rescale_update = false;
-      const Eigen::VectorXd x0 = cold(p, q0, Eigen::VectorXd::Constant(6, 0.03), Rp);
+      const Eigen::VectorXd x0 = cold(p, q0, Eigen::VectorXd::Constant(6, 0.03));
       cal::StreamingCalibrator<cal::BundleProblem> a(p, x0, q0, upd), b(p, x0, q0, ref);
       int rescales = 0;
       double worst_m = 0.0, worst_x = 0.0;

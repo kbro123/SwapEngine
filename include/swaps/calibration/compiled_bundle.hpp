@@ -68,13 +68,14 @@ class CompiledBundleResidual {
   // `pwl` (EXPERIMENT, exp/piecewise-linear-w): accept value-dependent (piecewise-linear) curves at any time;
   // their W is taken at a state and the OWNER must call rebuild_W(x) whenever x's branch pattern changes.
   explicit CompiledBundleResidual(const BundleProblem& p, bool pwl = false)
-      : n_gen_(static_cast<int>(p.instruments.size())), instruments_(p.instruments), market_(p.market()) {
+      : n_gen_(p.n_residuals()), instruments_(all_rows(p)), market_(p.market()) {
     cs_.init(p.curves);  // p.curves ARE pricing::CurveStructure now (BundleCurveSpec is an alias), no copy
     if (pwl) cs_.enable_pwl();
     band_lo_.assign(n_gen_, 0.0);
     band_up_.assign(n_gen_, 0.0);
     band_dc_.assign(n_gen_, 1.0);
     maps_.reserve(n_gen_);  // row_maps() never allocates after this
+    dead_rows_.reserve(static_cast<std::size_t>(n_gen_));  // jacobian_core never allocates for them after this
 
     register_generic(p);
 
@@ -98,6 +99,16 @@ class CompiledBundleResidual {
     const int T = cs_.n_times();
     tf_.resize(static_cast<int>(terms_.size()));
     row_scale_.resize(n_gen_);
+    {  // the UNSCALED quote rows of rows evaluated on a zero-slope piece (see jacobian_core): at most one per row whose
+       // map has such a piece, sized here so a refresh that finds one allocates nothing (a zero-slope map installed later
+       // by set_quote grows it once, in that refresh).
+      int cap = 0;
+      for (const Instrument& ins : instruments_) {
+        const PenaltyMap pm = ins.penalty();
+        for (int i = 0; i <= pm.n; ++i) if (pm.s[i] == 0.0) { ++cap; break; }
+      }
+      dead_J_.resize(cap, cs_.n_knots());
+    }
 
     // ---- the support-blocked Jacobian's STRUCTURE (built once; see jacobian_vs) --------------------
     // G is structurally BLOCK-SPARSE: row r is nonzero only at the DF times instrument r's legs actually
@@ -140,6 +151,13 @@ class CompiledBundleResidual {
         sup[r].erase(std::unique(sup[r].begin(), sup[r].end()), sup[r].end());
       }
       // ROW-MAJOR CSR (r -> its support times): what the row-map scaling walks (it scales G on the support only).
+      // G's row index per residual row: only rows WITH support get one (a StateLinear / constraint row touches no DF
+      // and would only cost a zeroed T-wide row per refresh -- on the 8x26 chain under Light smoothing ~190 such rows,
+      // 6 MB of memset per refresh, measured +47 % on the regularised rebind, 2026-10-12).
+      grow_.assign(static_cast<std::size_t>(n_gen_), -1);
+      n_grow_ = 0;
+      for (int r = 0; r < n_gen_; ++r)
+        if (!sup[r].empty()) grow_[static_cast<std::size_t>(r)] = n_grow_++;
       rsup_ptr_.assign(n_gen_ + 1, 0);
       for (int r = 0; r < n_gen_; ++r) rsup_ptr_[r + 1] = rsup_ptr_[r] + static_cast<int>(sup[r].size());
       rsup_t_.resize(rsup_ptr_[n_gen_]);
@@ -186,7 +204,7 @@ class CompiledBundleResidual {
     if (p.n_residuals() != n_gen_)
       throw std::invalid_argument("CompiledBundleResidual::set_quotes: instrument count differs");
     for (int row = 0; row < n_gen_; ++row) {
-      const Instrument& ins = p.instruments[row];
+      const Instrument& ins = p.row(row);
       set_quote(row, ins.market, ins.band_lower, ins.band_upper, ins.band_decay);
     }
     // The DF memo (df_x_) keys on x alone -- DF = exp(-Wx) is quote-independent -- so it stays valid.
@@ -271,6 +289,10 @@ class CompiledBundleResidual {
   }
 
   const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const { return residuals_vs(x, market_); }
+  // After a Jacobian pass: the rows it evaluated on a zero-slope piece (their J rows are zero) and, as row k of dead_J,
+  // each one's UNSCALED quote row ∂model/∂x (jacobian_core; the streamer tracks a dead-zone anchor through it).
+  const std::vector<int>& dead_rows() const { return dead_rows_; }
+  const Eigen::MatrixXd& dead_J() const { return dead_J_; }
 
   // Residual against an ARBITRARY market q -- the live streaming feed, not the stored anchor market. A plain
   // row is model_rates(x) - q; a mapped row applies its residual map rho_row (the Huber band residual
@@ -459,8 +481,8 @@ class CompiledBundleResidual {
     values = values || !maps.empty();
     {
       const int T = cs_.n_times();
-      if (G_.rows() != n_gen_ || G_.cols() != T) {  // first call: size the dense scratch (see the ctor)
-        G_.resize(n_gen_, T);
+      if (G_.rows() != n_grow_ || G_.cols() != T) {  // first call: size the dense scratch (see the ctor)
+        G_.resize(n_grow_, T);  // the rows WITH DF support only (grow_): a StateLinear / constraint row has no G row
         dnum_.resize(static_cast<int>(qterm_.size()), T);
         dann_.resize(static_cast<int>(qterm_.size()), T);
         dr_.resize(static_cast<int>(rterm_.size()), T);
@@ -513,7 +535,7 @@ class CompiledBundleResidual {
             // Zero-coupon chain rule: xf' at the term's OWN quotient num/ann, folded into the chain factor.
             if (t.xf == Xf::ZeroCoupon) f *= zero_coupon_transform_d(num[i] / (*ann)[i], t.tau).second;
             // d(num/ann) = dnum/ann - num·dann/ann²
-            G.row(t.row) += f * (dnum.row(i) / (*ann)[i] - num[i] * dann.row(i) / ((*ann)[i] * (*ann)[i]));
+            G.row(grow_[t.row]) += f * (dnum.row(i) / (*ann)[i] - num[i] * dann.row(i) / ((*ann)[i] * (*ann)[i]));
             if (values) {
               if (t.xf == Xf::ZeroCoupon) mrj_[t.row] += t.weight * zero_coupon_transform_d(num[i] / (*ann)[i], t.tau).first;
               else mrj_[t.row] += t.weight * num[i] / (*ann)[i];
@@ -522,12 +544,12 @@ class CompiledBundleResidual {
           }
           case Src::Npv: {  // linear in the DFs: the numerator's partials minus the annuity's, no quotient rule
             const int i = t.idx;
-            G.row(t.row) += f * (dnum.row(i) - dann.row(i));
+            G.row(grow_[t.row]) += f * (dnum.row(i) - dann.row(i));
             if (values) mrj_[t.row] += t.weight * (num[i] - (*ann)[i]);
             break;
           }
           case Src::Rate:  // `Rate` rows ARE the futures batch's rate rows (convexity is a constant -> zero row)
-            G.row(t.row) += f * dr.row(t.idx);
+            G.row(grow_[t.row]) += f * dr.row(t.idx);
             if (values) mrj_[t.row] += t.weight * (*rt)[t.idx];
             break;
           case Src::State:  // no DF dependence: the direct ∂/∂x entry is added after the W product
@@ -539,11 +561,11 @@ class CompiledBundleResidual {
             const FxRatio& fx = fx_[t.idx];
             const double v = fx_value(fx, DF);
             const double F = f * v;
-            G(t.row, fx.idx_num) += F * INV[fx.idx_num];
-            G(t.row, fx.idx_den) += -F * INV[fx.idx_den];
+            G(grow_[t.row], fx.idx_num) += F * INV[fx.idx_num];
+            G(grow_[t.row], fx.idx_den) += -F * INV[fx.idx_den];
             if (fx.idx_snum >= 0) {  // O-X3: F gains DF_den(t_s)/DF_num(t_s)
-              G(t.row, fx.idx_sden) += F * INV[fx.idx_sden];
-              G(t.row, fx.idx_snum) += -F * INV[fx.idx_snum];
+              G(grow_[t.row], fx.idx_sden) += F * INV[fx.idx_sden];
+              G(grow_[t.row], fx.idx_snum) += -F * INV[fx.idx_snum];
             }
             if (values) mrj_[t.row] += t.weight * v;
             break;
@@ -556,9 +578,11 @@ class CompiledBundleResidual {
     // log row -- at the row value this pass accumulated. Scale each mapped row's dr/dDF (G) by that slope
     // before the W matmul (the matmul is linear, so scaling commutes), and keep it in row_scale_ for the
     // DIRECT entries (moment and State terms).
+    dead_rows_.clear();
     for (const RowMap& m : maps) {
       const double sc = row_residual_d(m, mrj_[m.row], q[m.row]).second;
-      for (int s = rsup_ptr_[m.row]; s < rsup_ptr_[m.row + 1]; ++s) G(m.row, rsup_t_[s]) *= sc;  // its support only: the product reads nothing else
+      if (sc == 0.0) { dead_rows_.push_back(m.row); continue; }  // a dead-zone piece: compute the row UNSCALED, zero it after (below)
+      for (int s = rsup_ptr_[m.row]; s < rsup_ptr_[m.row + 1]; ++s) G(grow_[m.row], rsup_t_[s]) *= sc;  // its support only: the product reads nothing else
       row_scale_[m.row] *= sc;
     }
     // SUPPORT-BLOCKED product replacing the dense -(G·diag(DF))·W GEMM: J.row(r) = -Σ_{t ∈ sup(r)}
@@ -578,7 +602,7 @@ class CompiledBundleResidual {
       const double dft = DF[t];
       for (int s = tsup_ptr_[t]; s < tsup_ptr_[t + 1]; ++s) {
         const int r = tsup_row_[s];
-        const double c = G(r, t) * dft;
+        const double c = G(grow_[r], t) * dft;
         if (c != 0.0) Jt_.col(r).segment(lo, len).noalias() -= c * w;
       }
     }
@@ -603,9 +627,33 @@ class CompiledBundleResidual {
     // DIRECT entry weight·rho' at the state index, not part of the W matmul (matches residuals_vs).
     for (const Term& t : terms_)
       if (t.src == Src::State) J(t.row, t.idx) += t.weight * row_scale_[t.row];
+    // Rows on a ZERO-slope piece (a dead zone): their Jacobian row IS zero -- the residual is flat there -- and that is
+    // what J carries. The unscaled row just computed (∂model/∂x, the QUOTE row) is kept aside (dead_rows / dead_row) so
+    // the streamer can keep tracking a row ANCHORED in a dead zone: without it the row has no quote row to predict a
+    // crossing from until the next refresh (2026-10-12; until then such a row was untracked for its anchor).
+    if (static_cast<Eigen::Index>(dead_rows_.size()) > dead_J_.rows())  // a dead-zone map installed AFTER construction (a
+      dead_J_.conservativeResize(static_cast<Eigen::Index>(dead_rows_.size()), J.cols());  // decay-0 band by set_quote): grow once
+    for (std::size_t k = 0; k < dead_rows_.size(); ++k) {
+      const int row = dead_rows_[k];
+      dead_J_.row(static_cast<int>(k)) = J.row(row);
+      J.row(row).setZero();
+    }
   }
 
   // ---- the row model ------------------------------------------------------------------------------
+  // The problem's rows in residual order: the quotes, then the constraint rows (the flat source this engine keeps).
+  static std::vector<Instrument> all_rows(const BundleProblem& p) {
+    std::vector<Instrument> rows;
+    rows.reserve(static_cast<std::size_t>(p.n_residuals()));
+    for (int i = 0; i < p.n_residuals(); ++i) rows.push_back(p.row(i));
+    return rows;
+  }
+  // Curve `c`'s local state `i` (interp knots, then δ's) in the stacked x: the ONE encoding a State term uses.
+  static int global_state_index(const std::vector<BundleCurveSpec>& curves, int c, int i) {
+    int off = 0;
+    for (int k = 0; k < c; ++k) off += curves[static_cast<std::size_t>(k)].n_knots();
+    return off + i;
+  }
   enum class Src : unsigned char { Quotient, Rate, State, FxRatio, Npv };  // where a term's value comes from
   enum class Xf : unsigned char { None, ZeroCoupon };                      // the per-term scalar transform
   // One contribution weight·xf(value) to residual row `row`. `idx` indexes the source: the quotient batch
@@ -715,8 +763,8 @@ class CompiledBundleResidual {
   // ParRate contributing an EMPTY `neg` leg (a leg with no coupons has no entries in R_cpn, so its
   // pv row is exactly 0.0 and its d_pv contributes nothing).
   void register_generic(const BundleProblem& p) {
-    for (int row = 0; row < static_cast<int>(p.instruments.size()); ++row) {
-      const Instrument& ins = p.instruments[row];
+    for (int row = 0; row < p.n_residuals(); ++row) {  // the quotes, then the constraint rows (BundleProblem::row)
+      const Instrument& ins = p.row(row);
       // The row's residual map is decided by the TOP-LEVEL quote kind, exactly as instrument_residual does:
       // a standalone FX forward is the log-basis row (never banded -- the templated residual applies the log
       // map first); everything else takes the bid/offer band when one is set (r = w(q)·(q − market), a per-
@@ -771,12 +819,19 @@ class CompiledBundleResidual {
     if (ins.quote == QuoteKind::TurnJump) {
       // State-pin on turn δ. δ lives at the END of its curve's state block: global offset of the curve +
       // its interpolation-knot count + the turn's index. No DF is touched -- model_rates/jacobian read x.
-      int off = 0;
-      for (int k = 0; k < ins.turn_curve; ++k) off += curves[k].n_knots();
-      const int state_index = off + curves[ins.turn_curve].n_interp_knots() + ins.turn_index;
       if (ins.turn_index < 0 || ins.turn_index >= static_cast<int>(curves[ins.turn_curve].turns.size()))
         throw std::invalid_argument("CompiledBundleResidual: TurnJump turn_index out of range");
-      terms_.push_back({row, weight, Src::State, Xf::None, state_index, 0.0});
+      terms_.push_back({row, weight, Src::State, Xf::None, global_state_index(curves, ins.turn_curve, curves[ins.turn_curve].n_interp_knots() + ins.turn_index), 0.0});
+      return;
+    }
+    if (ins.quote == QuoteKind::StateLinear) {
+      // Σ coeff·x[state]: one Src::State term per ref, each the ref's coefficient (times the row weight) at the global
+      // state index -- the Jacobian row IS the coefficient pattern (a curvature row: three entries). No DF is touched.
+      for (const StateRef& s : ins.state) {
+        if (s.index < 0 || s.index >= curves[s.curve].n_knots())
+          throw std::invalid_argument("CompiledBundleResidual: StateLinear state index out of range");
+        terms_.push_back({row, weight * s.coeff, Src::State, Xf::None, global_state_index(curves, s.curve, s.index), 0.0});
+      }
       return;
     }
     if (ins.quote == QuoteKind::Npv) {
@@ -898,6 +953,8 @@ class CompiledBundleResidual {
   bool has_moment_ = false;                    // any batch carries moment-path coupons (set_state + direct terms)
   bool has_quotient_ = false;                  // any Quotient term (its derivative needs the row VALUES; an Npv-only book does not)
   mutable Eigen::VectorXd row_scale_, tf_, ann_keep_, num_keep_;  // jacobian_vs scratch: row slopes, term chain factors, the moment direct terms' quotient factors
+  mutable std::vector<int> dead_rows_;  // rows the last Jacobian pass found on a zero-slope piece (dead_rows())
+  mutable Eigen::MatrixXd dead_J_;      // their unscaled quote rows, one per dead row in order (dead_row(k)); sized once
   mutable Eigen::VectorXd out_, res_;  // model_rates / residuals result scratch (const-ref returns)
   mutable Eigen::VectorXd mrj_, num_;  // jacobian_vs scratch: the pass's own row values, the quotient numerators
   // directional_into: W·dir memoised on dir (re-taken when W moves), the DF tangent, and the per-source contractions.
@@ -912,6 +969,8 @@ class CompiledBundleResidual {
   // the transposed-accumulation scratch.
   std::vector<int> tsup_ptr_, tsup_row_;
   std::vector<int> rsup_ptr_, rsup_t_;  // the same support, row-major (the row-map scaling)
+  std::vector<int> grow_;               // residual row -> its row of G (-1: no DF support, no G row)
+  int n_grow_ = 0;                      // rows of G
   std::vector<int> wlo_, whi_;
   Eigen::MatrixXd Wt_;
   mutable Eigen::MatrixXd Jt_;

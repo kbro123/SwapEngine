@@ -162,6 +162,9 @@ inline bool instrument_equal(const Instrument& a, const Instrument& b) {
   if (a.fx_num != b.fx_num || a.fx_den != b.fx_den || a.fx_spot != b.fx_spot || a.fx_time != b.fx_time) return false;
   if (a.fx_spot_time != b.fx_spot_time) return false;
   if (a.turn_curve != b.turn_curve || a.turn_index != b.turn_index || a.convexity != b.convexity) return false;
+  if (a.state.size() != b.state.size()) return false;
+  for (std::size_t i = 0; i < a.state.size(); ++i)
+    if (a.state[i].curve != b.state[i].curve || a.state[i].index != b.state[i].index || a.state[i].coeff != b.state[i].coeff) return false;
   if (!obs_equal(a.obs, b.obs) || !float_equal(a.fwd, b.fwd) || !float_equal(a.bench, b.bench) || !float_equal(a.mtm, b.mtm)) return false;
   if (!fixed_equal(a.fixed, b.fixed)) return false;
   if (a.combination.size() != b.combination.size()) return false;
@@ -196,6 +199,10 @@ inline void hash_instrument(FnvHasher& H, const Instrument& ins) {
   H.i(ins.turn_curve);
   H.i(ins.turn_index);
   H.d(ins.convexity);
+  if (!ins.state.empty()) {  // a StateLinear row's refs; absent on every other kind so older hashes are unchanged
+    H.i(static_cast<long long>(ins.state.size()));
+    for (const auto& r : ins.state) { H.i(r.curve); H.i(r.index); H.d(r.coeff); }
+  }
   hash_obs(H, ins.obs);
   hash_float(H, ins.fwd);
   hash_float(H, ins.bench);
@@ -232,6 +239,10 @@ inline std::uint64_t structure_fingerprint(const BundleProblem& p) {
   }
   H.i(static_cast<long long>(p.instruments.size()));
   for (const auto& ins : p.instruments) fp_detail::hash_instrument(H, ins);
+  if (!p.constraints.empty()) {  // constraint rows are structure too; absent, the hash is the pre-2026-10-12 one
+    H.i(static_cast<long long>(p.constraints.size()));
+    for (const auto& ins : p.constraints) fp_detail::hash_instrument(H, ins);
+  }
   return H.h;
 }
 
@@ -321,6 +332,10 @@ inline void stamp_instrument(FnvHasher& H, const Instrument& ins) {
   H.i(ins.turn_curve);
   H.i(ins.turn_index);
   H.d(ins.convexity);
+  if (!ins.state.empty()) {
+    H.i(static_cast<long long>(ins.state.size()));
+    for (const auto& r : ins.state) { H.i(r.curve); H.i(r.index); H.d(r.coeff); }
+  }
   stamp_obs(H, ins.obs);
   stamp_float(H, ins.fwd);
   stamp_float(H, ins.bench);
@@ -361,6 +376,10 @@ inline std::uint64_t structural_stamp(const BundleProblem& p) {
   }
   H.i(static_cast<long long>(p.instruments.size()));
   for (const auto& ins : p.instruments) fp_detail::stamp_instrument(H, ins);
+  if (!p.constraints.empty()) {
+    H.i(static_cast<long long>(p.constraints.size()));
+    for (const auto& ins : p.constraints) fp_detail::stamp_instrument(H, ins);
+  }
   return H.h;
 }
 
@@ -405,12 +424,18 @@ inline StampedBundle make_stamped(BundleProblem p) {
   return b;
 }
 
-inline bool structure_equal(const BundleProblem& a, const BundleProblem& b) {
+// `a_tail_constraints`: that many of a's LAST constraint rows are a's own (a session's installed smoothing rows) and
+// are not compared -- b must carry exactly a's other constraint rows.
+inline bool structure_equal(const BundleProblem& a, const BundleProblem& b, int a_tail_constraints = 0) {
   if (a.curves.size() != b.curves.size() || a.instruments.size() != b.instruments.size()) return false;
+  const std::size_t nca = a.constraints.size() - static_cast<std::size_t>(a_tail_constraints);
+  if (nca != b.constraints.size()) return false;
   for (std::size_t c = 0; c < a.curves.size(); ++c)
     if (!fp_detail::curve_equal(a.curves[c], b.curves[c])) return false;
   for (std::size_t i = 0; i < a.instruments.size(); ++i)
     if (!fp_detail::instrument_equal(a.instruments[i], b.instruments[i])) return false;
+  for (std::size_t i = 0; i < nca; ++i)
+    if (!fp_detail::instrument_equal(a.constraints[i], b.constraints[i])) return false;
   return true;
 }
 

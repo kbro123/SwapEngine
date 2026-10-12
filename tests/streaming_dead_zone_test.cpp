@@ -144,7 +144,10 @@ TEST(StreamingDeadZone, AMoveIntoAndOutOfTheDeadZoneStreamsToTheColdAnswer) {
   }
 }
 
-TEST(StreamingDeadZone, ARowAnchoredInItsDeadZoneIsUntrackedForThatAnchorAndStillConvergesWhenItLeaves) {
+// Since 2026-10-12 such a row IS tracked: the engine keeps the unscaled quote row of a row it evaluated on a zero-slope
+// piece (RowEngine::dead_rows), the anchor takes it as the reference row at unit slope, and the move out of the dead zone
+// is a walk step (a re-scale from 0: one full factorisation), not a stall-triggered Jacobian refresh.
+TEST(StreamingDeadZone, ARowAnchoredInItsDeadZoneIsTrackedThroughItsQuoteRowAndWalksOut) {
   cal::BundleProblem p = bundle(0.5, false);
   const Eigen::VectorXd q0 = p.market();
   Eigen::VectorXd qz = q0;
@@ -158,7 +161,23 @@ TEST(StreamingDeadZone, ARowAnchoredInItsDeadZoneIsUntrackedForThatAnchorAndStil
   }
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
   cal::StreamingCalibrator<cal::BundleProblem> sc(p, xz, qz, opt);  // the anchor Jacobian has a ZERO row for the 4y
+  {
+    cal::HybridBundleResidual eng(p);  // the engine's pass keeps the 4y's unscaled quote row aside
+    Eigen::MatrixXd J;
+    eng.jacobian_vs_into(xz, qz, J);
+    ASSERT_EQ(eng.dead_rows().size(), 1u);
+    EXPECT_EQ(eng.dead_rows()[0], 3);
+    EXPECT_EQ(J.row(3).cwiseAbs().sum(), 0.0) << "the Jacobian row of a dead-zone row is zero";
+    Eigen::RowVectorXd qr(p.n_knots());
+    eng.dead_row_into(0, qr);
+    cal::BundleProblem pp = p;  // the quote row == the plain row's Jacobian (the same instrument without its map)
+    pp.instruments[3].penalty_map.reset();
+    const cal::HybridBundleResidual plain(pp);
+    EXPECT_LT((qr - plain.jacobian(xz).row(3)).cwiseAbs().maxCoeff(), 1e-14);
+  }
   const cal::StreamTick t = sc.update(q0);  // the move back pulls the 4y out of its dead zone
   EXPECT_TRUE(t.converged) << t.reason();
+  EXPECT_GT(t.rescales, 0) << "the crossing out of the dead zone is a walk step on the tracked row";
+  EXPECT_EQ(t.refreshes, 0) << "no stall-triggered Jacobian refresh";
   EXPECT_LT(bp(sc.current(), cold(p, q0, xz)), 0.05);
 }

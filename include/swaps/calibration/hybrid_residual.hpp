@@ -39,6 +39,7 @@ struct MaxTimeProbe : pricing::CurveHandle<double> {
   double integral(double t) const override { note(t); return real->integral(t); }
   double discount(double t) const override { note(t); return real->discount(t); }
   double turn_jump(int j) const override { return real->turn_jump(j); }
+  double state(int i) const override { return real->state(i); }  // no time: a StateLinear row never moves the horizon
   void pieces_into(std::vector<double>& out) const override { real->pieces_into(out); }
   void set_forwards(const Eigen::VectorXd&) override {}
 };
@@ -114,6 +115,13 @@ class CompiledRows final : public RowEngine {
     const int j = local(row);
     if (j >= 0) eng_.set_mtm_fx_spot(j, fx_spot);
   }
+  const std::vector<int>& dead_rows() const override {  // the compiled engine's local dead rows, as global rows
+    const std::vector<int>& loc = eng_.dead_rows();
+    dead_global_.resize(loc.size());
+    for (std::size_t k = 0; k < loc.size(); ++k) dead_global_[k] = rows_[static_cast<std::size_t>(loc[k])];
+    return dead_global_;
+  }
+  void dead_row_into(int k, Eigen::Ref<Eigen::RowVectorXd, 0, Eigen::InnerStride<>> out) const override { out = eng_.dead_J().row(k); }
   void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const override {
     eng_.directional_into(x, dir, dsub_);
     scatter(dsub_, out);
@@ -154,13 +162,14 @@ class CompiledRows final : public RowEngine {
   std::vector<int> pos_;   // global row -> sub-row, or -1
   mutable Eigen::VectorXd qsub_, rc_, dsub_;
   mutable Eigen::MatrixXd Jc_;
+  mutable std::vector<int> dead_global_;  // dead_rows() scratch (sized to the compiled engine's list; empty on most refreshes)
 };
 
 class HybridBundleResidual {
  public:
   // `pwl` (default ON): rows that read past a value-dependent region's start stay on the COMPILED engine, whose
   // W is re-taken at x whenever x's branch pattern changes -- instead of going to the AAD block.
-  explicit HybridBundleResidual(const BundleProblem& p, bool pwl = true) : n_res_(static_cast<int>(p.instruments.size())) {
+  explicit HybridBundleResidual(const BundleProblem& p, bool pwl = true) : n_res_(p.n_residuals()) {  // the quotes, then the constraint rows
     validate_problem(p, "HybridBundleResidual");  // E1/E2/B12: refuse a malformed bundle before compiling it
     // ONE partition pass. Each instrument's cacheability is decided once (Instrument::noncacheable walks real
     // cashflows, so it is not free -- do not re-ask per consumer). Per-curve LINEAR HORIZONS replace the old
@@ -211,7 +220,7 @@ class HybridBundleResidual {
     if (p.n_residuals() != n_res_)
       throw std::invalid_argument("HybridBundleResidual::set_quotes: instrument count differs");
     for (int r = 0; r < n_res_; ++r) {
-      const Instrument& ins = p.instruments[r];
+      const Instrument& ins = p.row(r);
       set_quote(r, ins.market, ins.band_lower, ins.band_upper, ins.band_decay);
     }
   }
@@ -224,12 +233,32 @@ class HybridBundleResidual {
     if (q.size() != n_res_) throw std::invalid_argument("HybridBundleResidual::set_market: market length differs");
     for (int r = 0; r < n_res_; ++r) engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(r)])]->set_market(r, q[r]);
   }
+  void set_market(int row, double market) {  // one row's target (a session's quote block under a constraint block)
+    engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(row)])]->set_market(row, market);
+  }
   // The FX spot of row `row`'s resetting leg (a book of Npv rows under an FX move): the row's owning engine takes it.
   void set_mtm_fx_spot(int row, double fx_spot) {
     engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(row)])]->set_mtm_fx_spot(row, fx_spot);
   }
   // (J·dir)[row] for every row, each engine the cheapest way it has (row_engine.hpp): the book's parallel PV01 is
   // this along pricing::parallel_direction, summed.
+  // After jacobian_vs_into: the rows that pass found on a zero-slope piece and their unscaled quote rows (row_engine.hpp);
+  // the streamer reads them at a refresh to keep a dead-zone-anchored row tracked. Each engine's own list, concatenated.
+  const std::vector<int>& dead_rows() const {
+    if (whole_) return compiled_->engine().dead_rows();
+    dead_all_.clear();
+    for (const auto& e : engines_) { const auto& d = e->dead_rows(); dead_all_.insert(dead_all_.end(), d.begin(), d.end()); }
+    return dead_all_;
+  }
+  void dead_row_into(int k, Eigen::Ref<Eigen::RowVectorXd, 0, Eigen::InnerStride<>> out) const {
+    if (whole_) { out = compiled_->engine().dead_J().row(k); return; }
+    for (const auto& e : engines_) {
+      const int n = static_cast<int>(e->dead_rows().size());
+      if (k < n) { e->dead_row_into(k, out); return; }
+      k -= n;
+    }
+    throw std::out_of_range("HybridBundleResidual::dead_row_into: index past the dead rows");
+  }
   void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const {
     if (whole_) { compiled_->engine().directional_into(x, dir, out); return; }
     out.resize(n_res_);
@@ -307,13 +336,14 @@ class HybridBundleResidual {
     std::vector<Instrument> nc;
     std::vector<int> nc_rows, rows;
     for (int r = 0; r < n_res_; ++r) {
-      const bool off_cache = p.instruments[r].noncacheable() ||
-                             (use_horizons && !instrument_within_horizons(p.instruments[r], p.curves, horizons));
+      const Instrument& ins = p.row(r);  // a constraint row is partitioned like any other row
+      const bool off_cache = ins.noncacheable() ||
+                             (use_horizons && !instrument_within_horizons(ins, p.curves, horizons));
       if (off_cache) {
-        nc.push_back(p.instruments[r]);
+        nc.push_back(ins);
         nc_rows.push_back(r);
       } else {
-        c.instruments.push_back(p.instruments[r]);
+        c.instruments.push_back(ins);
         rows.push_back(r);
       }
     }
@@ -350,6 +380,7 @@ class HybridBundleResidual {
   int n_res_;
   std::vector<std::unique_ptr<RowEngine>> engines_;  // in tier order: the compiled W-cache, then the AAD block
   std::vector<int> owner_;                            // global row -> index into engines_
+  mutable std::vector<int> dead_all_;  // dead_rows() scratch over every engine (empty on most refreshes)
   CompiledRows* compiled_ = nullptr;                  // the compiled engine, if any (typed access for the observability)
   AadBlock* aad_ = nullptr;                           // the AAD block, if any
   bool whole_ = false;                                // ONE compiled engine owns every row: direct delegate, no stitch

@@ -100,6 +100,7 @@ const char* quote_to_str(cal::QuoteKind q) {
     case cal::QuoteKind::TurnJump: return "TurnJump";
     case cal::QuoteKind::ZeroCouponRate: return "ZeroCouponRate";
     case cal::QuoteKind::Npv: return "Npv";
+    case cal::QuoteKind::StateLinear: return "StateLinear";
   }
   // REVIEW FINDING 3 (2026-09-21): this fell back to "ParRate", so a new kind SERIALISED as a par rate --
   // a silently wrong document rather than a loud failure. The switch is exhaustive (kQuoteKindCount).
@@ -114,6 +115,7 @@ cal::QuoteKind quote_from_str(const std::string& s) {
   if (s == "TurnJump") return cal::QuoteKind::TurnJump;
   if (s == "ZeroCouponRate") return cal::QuoteKind::ZeroCouponRate;
   if (s == "Npv") return cal::QuoteKind::Npv;
+  if (s == "StateLinear") return cal::QuoteKind::StateLinear;
   if (s == "ParRate") return cal::QuoteKind::ParRate;
   throw std::invalid_argument("unknown quote kind: " + s);
 }
@@ -461,6 +463,15 @@ cal::Instrument instrument_from_json(const json::value& v) {
   }
   into(o, "turn_curve", ins.turn_curve);  // TurnJump only: (curve, index) of the pinned turn
   into(o, "turn_index", ins.turn_index);
+  if (o.contains("state"))  // StateLinear only: [{curve, index, coeff}] -- the state entries the row combines
+    for (const auto& e : o.at("state").as_array()) {
+      const auto& r = e.as_object();
+      cal::StateRef ref;
+      into(r, "curve", ref.curve);
+      into(r, "index", ref.index);
+      into(r, "coeff", ref.coeff);
+      ins.state.push_back(ref);
+    }
   if (o.contains("combination"))  // Portfolio components (recursive)
     for (const auto& e : o.at("combination").as_array()) {
       const auto& c = e.as_object();
@@ -500,6 +511,11 @@ json::value instrument_to_json(const cal::Instrument& ins) {
   }
   o["turn_curve"] = ins.turn_curve;  // TurnJump only: (curve, index) of the pinned turn
   o["turn_index"] = ins.turn_index;
+  if (!ins.state.empty()) {  // StateLinear only
+    json::array st;
+    for (const auto& r : ins.state) st.push_back(json::object{{"curve", r.curve}, {"index", r.index}, {"coeff", r.coeff}});
+    o["state"] = std::move(st);
+  }
   if (!ins.combination.empty()) {
     json::array combo;
     for (const auto& c : ins.combination) {
@@ -520,6 +536,8 @@ cal::BundleProblem bundle_from_json(const json::value& v) {
     for (const auto& e : o.at("curves").as_array()) p.curves.push_back(spec_from(e.as_object()));
   if (o.contains("instruments"))
     for (const auto& e : o.at("instruments").as_array()) p.instruments.push_back(instrument_from_json(e));
+  if (o.contains("constraints"))  // rows with no market feed (a bound, a penalty): the same instrument document
+    for (const auto& e : o.at("constraints").as_array()) p.constraints.push_back(instrument_from_json(e));
   if (o.contains("currency_codes"))
     for (const auto& e : o.at("currency_codes").as_array()) p.currency_codes.push_back(str(e));
   return p;
@@ -533,6 +551,11 @@ json::value bundle_to_json(const cal::BundleProblem& p) {
   json::array is;
   for (const auto& ins : p.instruments) is.push_back(instrument_to_json(ins));
   o["instruments"] = is;
+  if (!p.constraints.empty()) {
+    json::array cs;
+    for (const auto& ins : p.constraints) cs.push_back(instrument_to_json(ins));
+    o["constraints"] = std::move(cs);
+  }
   if (!p.currency_codes.empty()) o["currency_codes"] = json::array(p.currency_codes.begin(), p.currency_codes.end());
   return o;
 }

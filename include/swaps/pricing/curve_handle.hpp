@@ -36,6 +36,10 @@ struct CurveHandle {
   // The jump size δⱼ of this curve's j-th turn (docs/turns-calibration.md). Only a TurnedCurve overrides
   // it; every other handle has no turns. It is the model quote of a TurnJump calibration instrument.
   virtual S turn_jump(int) const { throw std::logic_error("turn_jump: this curve has no turns"); }
+  // This curve's i-th STATE entry as the bundle lays it out (CurveStructure::n_knots: the interpolation values first,
+  // then one δ per turn) -- the raw free variable, with its AAD gradient when S is a dual. It is the model quote a
+  // StateLinear row reads (problem.hpp): a curvature constraint, a bound on a knot forward, a turn pin.
+  virtual S state(int) const { throw std::logic_error("state: this curve handle exposes no state"); }
   // Append the breakpoints between which forward(t) is ONE analytic piece (region knots, de Boor
   // breakpoints, turn edges, the base chain's pieces): the moment path's knot-aligned quadrature splits
   // its windows there (cashflows.hpp moment_gauss_nodes). Unknown by default (an empty append).
@@ -49,6 +53,7 @@ struct OutrightHandle : CurveHandle<S> {
   S integral(double t) const override { return c.integral(t); }
   S discount(double t) const override { return c.discount(t); }
   void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { c.set_forwards(x); }
+  S state(int i) const override { return c.value(i); }
   void pieces_into(std::vector<double>& out) const override { const auto p = c.pieces(); out.insert(out.end(), p.begin(), p.end()); }
 };
 // forward = base + spread ; integral = base + spread ; DF = base_DF * exp(-int spread).
@@ -64,6 +69,7 @@ struct SpreadHandle : CurveHandle<S> {
     return exp(-integral(t));
   }
   void set_forwards(const Eigen::Matrix<S, Eigen::Dynamic, 1>& x) override { spread.set_forwards(x); }
+  S state(int i) const override { return spread.value(i); }  // the SPREAD's own free values (its block of x)
   void pieces_into(std::vector<double>& out) const override {
     base->pieces_into(out);
     const auto p = spread.pieces();
@@ -113,6 +119,7 @@ struct TurnedCurve : CurveHandle<S> {
     for (int j = 0; j < deltas.size(); ++j) deltas[j] = x[n_interp + j];
   }
   S turn_jump(int j) const override { return deltas[j]; }
+  S state(int i) const override { return i < n_interp ? base->state(i) : deltas[i - n_interp]; }  // [ interp | δ ]
   void pieces_into(std::vector<double>& out) const override {
     base->pieces_into(out);
     for (const auto& w : windows) { out.push_back(w.start); out.push_back(w.end); }  // the forward steps there

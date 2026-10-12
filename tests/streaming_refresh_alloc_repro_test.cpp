@@ -26,13 +26,16 @@ using SC = cal::StreamingCalibrator<cal::BundleProblem>;
 
 namespace {
 // Allocations of ONE warm refresh (the second resync at the same state: every workspace already sized).
-unsigned long refresh_allocs(const Shape& s, const SC::Options& o) {
+unsigned long refresh_allocs(const Shape& s, const SC::Options& o, const cal::BundleProblem* pr = nullptr) {
+  const cal::BundleProblem& p = pr ? *pr : s.prob;  // `pr`: the rung with its regulariser as constraint rows
   const Eigen::VectorXd x = cal::calibrate(s.prob, s.x0).x;
-  cal::HybridBundleResidual eng(s.prob);
-  SC st(eng, s.prob, x, s.q0, o);
-  st.resync(s.prob, st.current(), s.q0);
+  Eigen::VectorXd q0 = p.market();
+  q0.head(s.q0.size()) = s.q0;
+  cal::HybridBundleResidual eng(p);
+  SC st(eng, p, x, q0, o);
+  st.resync(p, st.current(), q0);
   swaps::testing::AllocScope a;
-  st.resync(s.prob, st.current(), s.q0);
+  st.resync(p, st.current(), q0);
   return a.allocs();
 }
 }  // namespace
@@ -67,9 +70,13 @@ TEST(StreamingRefreshAllocRepro, ARegularisedRefreshReusesItsStackedMatrix) {
       for (std::size_t c = 0; c < curves.size(); ++c) curves[c] = static_cast<int>(c);
       SC::Options o;
       o.breakeven_steps = 64;
-      o.regularizer = cal::second_difference_operator(s.prob, 0.02, curves);
-      ASSERT_GT(o.regularizer.rows(), 0) << "premise: a non-empty regulariser";
-      const unsigned long n = refresh_allocs(s, o);
+      cal::BundleProblem pr = s.prob;  // the regulariser as constraint rows (2026-10-12)
+      cal::RegSpec reg;
+      reg.lambda = 0.02;
+      reg.curves = curves;
+      cal::add_smoothing_rows(pr, reg);
+      ASSERT_GT(pr.n_constraints(), 0) << "premise: a non-empty regulariser";
+      const unsigned long n = refresh_allocs(s, o, &pr);
       std::printf("  [refresh] %-20s regularised allocs %lu (pin %lu)\n", s.name.c_str(), n, p.refresh);
       EXPECT_LE(n, p.refresh) << s.name << ": a regularised refresh allocates more than its pin";
     }

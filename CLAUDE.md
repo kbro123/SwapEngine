@@ -520,7 +520,8 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   MODEL VALUE from the engine's evaluation (`residuals_vs(x, q, &model)` on every engine; the AAD block prices a row
   once for both) instead of inverting the residual, so a ZERO-slope piece -- a one-sided bound, a band with no pull
   beyond an edge -- is walked like any other (its residual row is zero inside the dead zone, re-scaled from zero on the
-  way out; a row ANCHORED in a dead zone is untracked until the next refresh: its frozen row carries no quote row).
+  way out; a row ANCHORED in a dead zone is tracked through the engine's unscaled quote row, kept aside by the Jacobian
+  pass -- `RowEngine::dead_rows`, 2026-10-12 -- except on the AAD block, which keeps none).
   The pin rule is unchanged (the second breakpoint hit in a tick pins the row where it is; the KKT release interval is
   the two adjacent slopes). The LM's seed anchor is centred regulariser rows (`RegularizedEngine(base, w·I, x0)`), not
   a second hand-stacked engine. Pinned: `streaming_dead_zone_test` (compiled == templated on every piece; a move into
@@ -534,6 +535,17 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   way. A PIN is the stiff one-piece map `PenaltyMap::stiff(w)` centred on its breakpoint (`apply_pins`), so a pinned
   row's residual and installed slope are a map and its slope like any free row's; when to pin and release is the
   active-set walk's control flow and stays so (ASSUMPTIONS K44).
+  **The regulariser is ROWS OF THE PROBLEM (2026-10-12, ASSUMPTIONS K45).** `QuoteKind::StateLinear` is a row whose
+  model quote is Σ coeff·x[state] (`Instrument::state`, a list of `StateRef{curve, index, coeff}`; JSON `"state"`):
+  the curvature penalty is one such row per interior knot (`regularize.hpp smoothing_rows`, target 0), a bound on a
+  knot forward is one coefficient with a one-sided penalty map, a `TurnJump` is one coefficient on a turn's δ. Rows
+  without a market feed live in `BundleProblem::constraints` (JSON `"constraints"`), below the quotes in residual
+  order, so `n_residuals = n_quotes + n_constraints` and the ONE engine prices them (three `Src::State` terms); the
+  streamer's frozen system, the LM and the risk operator read the engine's rows and stack NOTHING (`Options::
+  regularizer` and the session's cached `R` are gone; `second_difference_operator` is the dense VIEW of the rows).
+  `BundleSession` installs the `RegSpec` a verb passes as the tail of its problem's constraints (`install_smoothing`:
+  the same reg is a no-op, a different one replaces the tail and recompiles -- the row set is structure); every
+  client surface stays quote-indexed and the client's stamp / rebind are unchanged by the installed rows.
 - **The Jacobian is recomputed only on genuine staleness** — when frozen-Newton needs more than
   `max_frozen` steps — NOT on a drift envelope. That staleness envelope is ~30 bp of curve move (a
   level move; `tools/jacobian_staleness.cpp` measures `ρ` vs move size) vs the linear path's 0.35 bp,

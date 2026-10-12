@@ -153,9 +153,13 @@ class BundleSession {
  public:
   explicit BundleSession(cal::BundleProblem prob);
 
-  // Cold-calibrate from x0. Engine is chosen automatically: the compiled W-cache analytic path for an
-  // all-linear bundle (ParRate/ParSpread/Rate), the AAD analytic path when an FX-forward / MtM-xccy
-  // instrument is present (the compiled engine rejects those) or when a regulariser is requested.
+  // Cold-calibrate from x0 on the one hybrid engine (compiled W-cache rows + the AAD block for the rows it cannot
+  // express). `reg` -- here and on every verb below that takes one -- is the SMOOTHING the session runs under: it is
+  // installed as CONSTRAINT ROWS of the session's problem (BundleProblem::constraints, regularize.hpp smoothing_rows,
+  // one StateLinear row per interior knot) and so becomes rows of the engine, the streamer's frozen system and the
+  // risk operator's stack alike (2026-10-12). A verb that passes a DIFFERENT reg from the installed one re-installs
+  // (the engine recompiles: structure changed); the same reg is a no-op. problem() shows the installed rows at the
+  // tail of constraints; the client's own structure (its stamp, its instrument count) is unchanged by them.
   const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0, const RegSpec& reg = {});
 
   // ---- the object model (E4.A, 2026-09-10): ONE compiled engine, scalar inputs, structure immutable ----
@@ -255,18 +259,18 @@ class BundleSession {
   boost::json::array quote_diagnostics() const;   // the document itself (E6.3: callers stopped re-parsing it)
   std::string quote_diagnostics_json() const;     // == serialize(quote_diagnostics())
 
-  // The calibration Jacobian J = dq/dx (n_residuals x n_knots): ROWS are calibration instruments, COLUMNS
-  // are the fitted knot forwards, so J(i,j) = ∂(model quote of instrument i)/∂x_j. This is the SAME J that
-  // risk_operator() builds M from (risk_operator() calls this, so the two can never desync). One forward-AAD
-  // pass over the stacked residual (residual = q − market for the linear ParRate/ParSpread/Rate instruments,
-  // so d(residual)/dx == dq/dx). A Python layer transforms a risk ladder from bundle A to bundle B via
-  // T = J_A · M_B (n_res_A x n_res_B), delta_B = delta_A · T. `reg` is accepted for signature symmetry with
-  // risk_operator() but does not affect J (a regulariser changes M through RᵀR, never the quote Jacobian).
+  // The calibration Jacobian J = dq/dx (n_quotes x n_knots): ROWS are the calibration INSTRUMENTS (the quote rows,
+  // never the constraint rows), COLUMNS are the fitted knot forwards, so J(i,j) = ∂(model quote of instrument
+  // i)/∂x_j -- the quote block of the engine's row Jacobian (the SAME one risk_operator() stacks, so the two can
+  // never desync). A Python layer transforms a risk ladder from bundle A to bundle B via T = J_A · M_B
+  // (n_res_A x n_res_B), delta_B = delta_A · T. `reg` is accepted for signature symmetry with risk_operator() but
+  // does not affect J (a regulariser is constraint rows below the quote block, never a change to it).
   Eigen::MatrixXd jacobian(const RegSpec& reg = {}) const;
 
-  // The analytic risk operator M = dx/dq (n_knots x n_residuals) by the implicit-function theorem on the
-  // (regularised) least-squares condition: M = pinv([J; R]) restricted to the J rows, times
-  // D = diag(−∂r/∂q). Two things the naive (JᵀJ + RᵀR)⁻¹ Jᵀ got wrong: (1) D -- a residual is NOT always
+  // The analytic risk operator M = dx/dq (n_knots x n_quotes) by the implicit-function theorem on the
+  // (regularised) least-squares condition: M = pinv([J; R]) restricted to the quote columns, times
+  // D = diag(−∂r/∂q) -- [J; R] being the engine's row Jacobian with `reg` installed as its constraint rows.
+  // Two things the naive (JᵀJ + RᵀR)⁻¹ Jᵀ got wrong: (1) D -- a residual is NOT always
   // q_model − q: a banded row is w(q_model)·(q_model − q) (−∂r/∂q = w, i.e. `decay` inside the band) and
   // an FX forward is (ln F − ln q)/T (−∂r/∂q = 1/(q·T)); without D those columns were overstated by 1/decay
   // and by q·T. (2) The pseudo-inverse is a rank-thresholded COD, so a rank-deficient bundle gives the
@@ -293,7 +297,7 @@ class BundleSession {
   // one compiled engine (2026-10-06; until then a separate W-cache twin) — ONCE, so every reprice_bound() reuses it. This is
   // the AMORTIZED path for a live book repriced every streaming tick against the recalibrating curve: the
   // one-time W build (DF = exp(-W_all x) compiled once from the bundle's curve structures) pays for itself
-  // across ticks, exactly as the session already amortizes engine_/reg_R_ and VolSurface amortizes a fixed
+  // across ticks, exactly as the session already amortizes engine_ and VolSurface amortizes a fixed
   // cell set. The book is COPIED. The cache is dropped on any STRUCTURAL bundle change (invalidate_engine)
   // and rebuilt lazily on the next reprice_bound(). NB: the one-shot price_portfolio() deliberately stays
   // on the templated path — building the W-cache does NOT pay off on a single cold reprice (that was an
@@ -448,7 +452,7 @@ class BundleSession {
   // that is fixings resolution (it rewrites observation times/realized in place). The streamer is rebuilt
   // lazily by the next stream_update/resolve when the session is armed. Mutable + const ensure: the engine
   // is a pure cache of prob_'s structure, so const queries (jacobian) may build it lazily.
-  void invalidate_engine() { engine_.reset(); reg_R_valid_ = false; cbook_.reset(); resolved_book_.reset(); stream_.reset(); }
+  void invalidate_engine() { engine_.reset(); cbook_.reset(); resolved_book_.reset(); stream_.reset(); }
   // The warm re-solve behind resolve/recalibrate/rebind (one streamed tick, LM fallback).
   const cal::CalibrationResult& warm_solve(const RegSpec& reg);
   void record_tick(const cal::StreamTick& tick, double solve_us);
@@ -462,9 +466,17 @@ class BundleSession {
     if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);
     return *engine_;
   }
-  const Eigen::MatrixXd& ensure_reg_R(const RegSpec& reg) const;  // cached curvature block R (structure-only)
+  // Install `reg` as the problem's smoothing rows -- the TAIL n_smoothing_ rows of prob_.constraints (regularize.hpp
+  // smoothing_rows). A no-op when `reg` is the installed one; otherwise the tail is replaced and the engine (and with
+  // it the streamer, the bound book) is dropped: the row set is structure. Const because every verb may ask for it
+  // (risk_operator, price_portfolio_risk, transform_matrix are const), exactly as the engine is built lazily by const
+  // queries: the smoothing rows are state DERIVED from (prob_'s curves, reg), never from quotes or x.
+  void install_smoothing(const RegSpec& reg) const;
+  int n_client_constraints() const { return prob_.n_constraints() - n_smoothing_; }
 
-  cal::BundleProblem prob_;
+  mutable cal::BundleProblem prob_;  // the client's problem + the installed smoothing rows at the tail of constraints
+  mutable RegSpec reg_installed_;    // the smoothing those tail rows carry (RegSpec{}: none installed)
+  mutable int n_smoothing_ = 0;      // how many tail rows of prob_.constraints are the session's own
   std::uint64_t fingerprint_ = 0;  // structure hash at compile time (the warm-vs-recompile switch)
   Eigen::VectorXd x_;
   Eigen::VectorXd parallel_dir_;  // pricing::parallel_direction(prob_.curves): the PV01 direction, fixed per structure
@@ -473,7 +485,7 @@ class BundleSession {
   bool has_modular_ = false;
   bool has_nonlinear_ = false;
   bool has_band_ = false;
-  std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;
+  mutable std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;  // dropped by install_smoothing (const: a derived cache, like engine_)
   // The cached warm/streaming reprice twin (bind_portfolio/reprice_bound). bound_book_ is the copied book;
   // cbook_ is its compiled W-cache twin, built once on bind and rebuilt lazily after invalidate_engine()
   // drops it (a structural bundle change moves W). Mutable so the const reprice_bound() can rebuild lazily.
@@ -486,16 +498,12 @@ class BundleSession {
   bool stream_armed_ = false;
   bool bands_changed_ = false;  // a set_band/rebind changed a band since the streamer last anchored
   Eigen::VectorXd q_scratch_;   // the live market gathered from prob_ (reused; no per-solve allocation)
-  // The cached hybrid engine + R-block cache (see ensure_engine/ensure_reg_R above).
+  // The cached hybrid engine (see ensure_engine above).
   std::uint64_t stamp_ = 0;  // E8: the structural stamp of the compiled document (resolution-insensitive)
   // The quote-RHS half of a rebind (targets + bands + resolve), shared by both rebind overloads once the
   // caller's structural check -- O(n) equality or the stamp -- has passed.
   const cal::CalibrationResult& rebind_quotes(const cal::BundleProblem& p, const RegSpec& reg);
   mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
-  mutable Eigen::MatrixXd reg_R_;
-  mutable bool reg_R_valid_ = false;
-  mutable double reg_R_lambda_ = 0;
-  mutable std::vector<int> reg_R_curves_;
   swaps::pricing::FixingTable fixings_;
   int eval_date_ = 0;
   int n_unresolved_ = 0;

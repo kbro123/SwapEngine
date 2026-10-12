@@ -40,6 +40,11 @@ struct RowEngine {
   // The FX spot of a row's resetting (MtM) leg -- a market datum like its quote (SC2 FX moves on a book of Npv rows).
   // A row without such a leg ignores it.
   virtual void set_mtm_fx_spot(int global_row, double fx_spot) = 0;
+  // After jacobian_vs_into: the GLOBAL rows the pass evaluated on a zero-slope (dead-zone) piece of their penalty map,
+  // whose Jacobian rows are therefore zero, and each one's UNSCALED quote row ∂model/∂x into `out` (2026-10-12: what lets
+  // the streamer track a row anchored in a dead zone). An engine that keeps none reports an empty list.
+  virtual const std::vector<int>& dead_rows() const = 0;
+  virtual void dead_row_into(int k, Eigen::Ref<Eigen::RowVectorXd, 0, Eigen::InnerStride<>> out) const = 0;
 };
 
 }  // namespace swaps::calibration

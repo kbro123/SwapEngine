@@ -14,6 +14,7 @@
 
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/codec.hpp"
+#include "swaps/calibration/structure_fingerprint.hpp"
 #include "swaps/derive/bond_rv.hpp"
 #include "swaps/derive/scenario.hpp"
 #include "swaps/derive/var.hpp"
@@ -605,6 +606,40 @@ TEST(CodecCalibrationStatus, IsTheCalibrateObjectsKeysInOrderWithoutTiming) {
   EXPECT_EQ(json::serialize(api::calibration_status_to_json(c)),
             R"({"iterations":12,"rms_residual":5E-1,"stationarity":2.5E-1,"info":2,"converged":true,)"
             R"("status":"relative error too small","rank_deficiency":0})");
+}
+
+// Constraint rows, the last part (2026-10-12): a StateLinear row's refs and a bundle's constraint rows round-trip.
+TEST(Codec, AStateLinearRowAndTheConstraintBlockRoundTrip) {
+  swaps::calibration::Instrument ins;
+  ins.quote = swaps::calibration::QuoteKind::StateLinear;
+  ins.state = {{0, 1, 0.5}, {0, 2, -1.25}, {1, 0, 0.75}};
+  ins.market = 0.0;
+  const boost::json::value v = swaps::api::instrument_to_json(ins);
+  ASSERT_TRUE(v.as_object().contains("state"));
+  EXPECT_EQ(v.as_object().at("quote").as_string(), "StateLinear");
+  const swaps::calibration::Instrument back = swaps::api::instrument_from_json(v);
+  EXPECT_EQ(back.quote, swaps::calibration::QuoteKind::StateLinear);
+  ASSERT_EQ(back.state.size(), 3u);
+  EXPECT_EQ(back.state[1].curve, 0);
+  EXPECT_EQ(back.state[1].index, 2);
+  EXPECT_EQ(back.state[1].coeff, -1.25);
+  EXPECT_EQ(back.state[2].curve, 1);
+  EXPECT_TRUE(swaps::calibration::fp_detail::instrument_equal(ins, back));
+  // the bundle's constraint block
+  swaps::calibration::BundleProblem p;
+  p.curves.push_back({.base = -1, .regions = crv::flat_hermite({}, {1.0, 2.0, 3.0})});
+  p.constraints.push_back(ins);
+  const boost::json::value bv = swaps::api::bundle_to_json(p);
+  ASSERT_TRUE(bv.as_object().contains("constraints"));
+  const swaps::calibration::BundleProblem pb = swaps::api::bundle_from_json(bv);
+  ASSERT_EQ(pb.n_constraints(), 1);
+  EXPECT_EQ(pb.n_quotes(), 0);
+  EXPECT_TRUE(swaps::calibration::structure_equal(p, pb));
+  EXPECT_EQ(swaps::calibration::structural_stamp(p), swaps::calibration::structural_stamp(pb));
+  // an empty constraint block is not written
+  swaps::calibration::BundleProblem q;
+  q.curves = p.curves;
+  EXPECT_FALSE(swaps::api::bundle_to_json(q).as_object().contains("constraints"));
 }
 
 // Constraint rows stage B (2026-10-09): a general penalty map round-trips through the instrument codec.

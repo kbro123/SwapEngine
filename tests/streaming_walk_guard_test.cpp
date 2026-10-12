@@ -212,18 +212,24 @@ TEST(StreamingWalkGuard, ARegularisedTickIsAllocationFree) {
     std::vector<int> curves(s.prob.curves.size());
     for (std::size_t c = 0; c < curves.size(); ++c) curves[c] = static_cast<int>(c);
     SC::Options o = pinned();
-    o.regularizer = cal::second_difference_operator(s.prob, 0.02, curves);
-    ASSERT_GT(o.regularizer.rows(), 0) << "premise: a non-empty regulariser";
+    cal::BundleProblem pr = s.prob;  // the regulariser as constraint rows of the streamed problem (2026-10-12)
+    cal::RegSpec reg;
+    reg.lambda = 0.02;
+    reg.curves = curves;
+    cal::add_smoothing_rows(pr, reg);
+    ASSERT_GT(pr.n_constraints(), 0) << "premise: a non-empty regulariser";
+    const auto full = [&](const Eigen::VectorXd& q) { Eigen::VectorXd fq = pr.market(); fq.head(q.size()) = q; return fq; };
+    const Eigen::VectorXd q0 = full(s.q0), q_small = full(s.q_small);
     const Eigen::VectorXd x = cal::calibrate(s.prob, s.x0).x;
-    cal::HybridBundleResidual eng(s.prob);
-    SC st(eng, s.prob, x, s.q0, o);
+    cal::HybridBundleResidual eng(pr);
+    SC st(eng, pr, x, q0, o);
     bool f = false;
-    for (int i = 0; i < 6; ++i) { f = !f; st.update(f ? s.q_small : s.q0); }
+    for (int i = 0; i < 6; ++i) { f = !f; st.update(f ? q_small : q0); }
     int failed = 0;
     unsigned long allocs = 0;
     {
       AllocScope a;
-      for (int i = 0; i < 20; ++i) { f = !f; failed += !st.update(f ? s.q_small : s.q0).converged; }
+      for (int i = 0; i < 20; ++i) { f = !f; failed += !st.update(f ? q_small : q0).converged; }
       allocs = a.allocs();
     }
     std::printf("  [reg] %-10s allocs/20 %lu\n", name, allocs);

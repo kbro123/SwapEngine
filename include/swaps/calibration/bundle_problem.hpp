@@ -65,6 +65,13 @@ class BundleProblem {
   // spreads, mixed day counts are all THIS type with different DATA -- there is no index-flavoured
   // shorthand and no per-shape engine type.
   std::vector<Instrument> instruments;
+  // CONSTRAINT ROWS (review item 3, 2026-10-12): rows of the same Instrument type that carry NO market feed -- a
+  // curvature (smoothness) penalty row (regularize.hpp smoothing_rows), a bound on a knot forward, any row whose
+  // target is a property of the problem, not a quote. They are rows of the ONE engine like the quotes (residual,
+  // Jacobian, penalty map, tier routing), stacked BELOW the instruments in residual order, so n_residuals() counts
+  // both; the client-facing surfaces (set_market, stream_update, the risk ladder, quote diagnostics) index the
+  // instruments alone. A BundleSession installs the regulariser it is asked for HERE (its tail rows).
+  std::vector<Instrument> constraints;
   // The ISO code of each curve currency TAG (index = BundleCurveSpec::currency), e.g. {"USD", "EUR"}. Optional: only
   // an FX move on a book with cross-currency positions needs it, to know which pair each position's spot quotes (SC2).
   std::vector<std::string> currency_codes;
@@ -75,24 +82,33 @@ class BundleProblem {
     for (const auto& c : curves) n += c.n_knots();
     return n;
   }
-  int n_residuals() const { return static_cast<int>(instruments.size()); }
+  int n_quotes() const { return static_cast<int>(instruments.size()); }
+  int n_constraints() const { return static_cast<int>(constraints.size()); }
+  int n_residuals() const { return n_quotes() + n_constraints(); }  // every row: the quotes, then the constraints
+  // Row i of the residual: instruments first, then constraints (THE residual order below).
+  const Instrument& row(int i) const { return i < n_quotes() ? instruments[static_cast<std::size_t>(i)] : constraints[static_cast<std::size_t>(i - n_quotes())]; }
+  Instrument& row(int i) { return i < n_quotes() ? instruments[static_cast<std::size_t>(i)] : constraints[static_cast<std::size_t>(i - n_quotes())]; }
   int offset(int k) const {
     int o = 0;
     for (int i = 0; i < k; ++i) o += curves[i].n_knots();
     return o;
   }
 
-  // THE RESIDUAL ORDER is the instruments' INSERTION order (deterministic and DOCUMENTED — the
-  // Jacobian rows, the W-cache batches in CompiledBundleResidual, market(), the risk ladder and the
-  // warm/streaming feeds all index off it). The compiled engine batches by quote kind internally and
-  // scatters each batch back to its instrument's insertion-order row.
+  // THE RESIDUAL ORDER is the instruments' INSERTION order, then the constraints' (deterministic and
+  // DOCUMENTED — the Jacobian rows, the W-cache batches in CompiledBundleResidual, market(), the risk ladder
+  // and the warm/streaming feeds all index off it). The compiled engine batches by quote kind internally and
+  // scatters each batch back to its row.
 
-  // Target quotes in residual order — lets the generic AadResidualEngine recover
-  // model_rates = residuals + market.
+  // Target quotes in residual order (a constraint row's target below the quotes) — lets the generic
+  // AadResidualEngine recover model_rates = residuals + market.
   Eigen::VectorXd market() const {
     Eigen::VectorXd m(n_residuals());
-    for (int i = 0; i < static_cast<int>(instruments.size()); ++i) m[i] = instruments[i].market;
+    market_into(m);
     return m;
+  }
+  void market_into(Eigen::VectorXd& m) const {  // allocation-free form for a per-solve scratch
+    m.resize(n_residuals());
+    for (int i = 0; i < n_residuals(); ++i) m[i] = row(i).market;
   }
 
   template <class Scalar, class Vec>
@@ -108,8 +124,9 @@ class BundleProblem {
     // Each generic leg resolves its OWN role, so forecast != discount and cross-curve legs need no
     // special case here — the role indices are just lookups into the built curve handles.
     const auto curve_of = [&C](int i) -> const CurveHandle<Scalar>& { return *C[i]; };
-    int row = 0;
-    for (const auto& ins : instruments) r[row++] = instrument_residual<Scalar>(ins, curve_of);
+    int k = 0;
+    for (const auto& ins : instruments) r[k++] = instrument_residual<Scalar>(ins, curve_of);
+    for (const auto& ins : constraints) r[k++] = instrument_residual<Scalar>(ins, curve_of);
     return r;
   }
 };
@@ -141,10 +158,14 @@ inline void validate_problem(const BundleProblem& p, const std::string& where = 
     ins.for_each_curve_ref([&](int c, const char* role) { idx(c, role, row); });
     if (ins.quote == QuoteKind::TurnJump && ins.turn_index >= static_cast<int>(p.curves[ins.turn_curve].turns.size()))
       fail("instrument " + std::to_string(row) + " pins turn " + std::to_string(ins.turn_index) + " but curve " + std::to_string(ins.turn_curve) + " has " + std::to_string(p.curves[ins.turn_curve].turns.size()) + " turns");
+    if (ins.quote == QuoteKind::StateLinear)
+      for (const auto& s : ins.state)
+        if (s.index >= p.curves[s.curve].n_knots())
+          fail("instrument " + std::to_string(row) + " reads state " + std::to_string(s.index) + " of curve " + std::to_string(s.curve) + ", which has " + std::to_string(p.curves[s.curve].n_knots()) + " states");
     if (ins.quote == QuoteKind::Portfolio)
       for (const auto& c : ins.combination) check(c.instrument, row);  // each component's own validate_instrument + turn check
   };
-  for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) check(p.instruments[i], i);
+  for (int i = 0; i < p.n_residuals(); ++i) check(p.row(i), i);  // the quotes, then the constraint rows
 }
 
 // A flat starting guess sized to the problem: outright curves at `level`, spread curves at 0.

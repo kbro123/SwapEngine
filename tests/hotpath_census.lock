@@ -38,8 +38,8 @@ prefetch_ois                  -       -
 set_anchor         8
 factor             4
 rescale_row        5
-residuals_vs       3
-jacobian_vs_into   3  # take_jacobian: the residuals-returning call and the plain one, + set_anchor's compile-time requires-check (S2); the regulariser rows are stacked under the engine's rows there (constraint rows, 2026-10-09)
-model_rates        2  # set_anchor (sides from the model values when a tracked map has a zero-slope piece) + eval()'s fallback for an engine without the joint residuals_vs(x, q, &model) form (stage B 2026-10-09: the same evaluation, not a new refresh)
+residuals_vs       2  # eval()'s one call + the static_assert's requires-check (2026-10-12: the no-joint-form fallback was unreachable and is gone)
+jacobian_vs_into   3  # take_jacobian: the residuals-returning call and the plain one, + set_anchor's compile-time requires-check (S2); the regulariser is rows of the engine (constraint rows of the problem, 2026-10-12), nothing is stacked there
+model_rates        1  # set_anchor (sides from the model values when a tracked map has a zero-slope piece); eval()'s fallback for an engine without the joint form was unreachable and is gone (2026-10-12)
 request            1
 update_exact       2

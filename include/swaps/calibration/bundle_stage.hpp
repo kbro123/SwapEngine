@@ -41,7 +41,8 @@ inline std::vector<std::vector<int>> bundle_adjacency(const BundleProblem& p) {
   // for_each_curve_ref, the one encoding of which members a kind reads (a Rate instrument references only
   // its own forecast curve -> no edge; a MtM basis's resetting funding leg couples the collateral curve to
   // the funding curve; a Portfolio's components each contribute their references).
-  for (const auto& ins : p.instruments) {
+  for (int i = 0; i < p.n_residuals(); ++i) {  // the quotes and the constraint rows alike
+    const Instrument& ins = p.row(i);
     const int c = ins.primary_curve();
     ins.for_each_curve_ref([&](int d, const char*) { add(c, d); });
   }
@@ -90,8 +91,8 @@ class BundleBlockProblem {
   BundleBlockProblem(const BundleProblem& p, const std::vector<int>& block, const Eigen::VectorXd& solved)
       : p_(&p), block_(block), solved_(solved), free_(p.n_curves(), 0) {
     for (int c : block_) { free_[c] = 1; nk_ += p.curves[c].n_knots(); }
-    for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i)
-      if (free_[p.instruments[i].primary_curve()]) gen_.push_back(i);
+    for (int i = 0; i < p.n_residuals(); ++i)  // a block takes its curves' constraint rows with its quotes
+      if (free_[p.row(i).primary_curve()]) gen_.push_back(i);
   }
 
   int n_knots() const { return nk_; }
@@ -112,7 +113,7 @@ class BundleBlockProblem {
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
     int row = 0;
     const auto curve_of = [&C](int i) -> const CurveHandle<Scalar>& { return *C[i]; };
-    for (int i : gen_) r[row++] = instrument_residual<Scalar>(p_->instruments[i], curve_of);
+    for (int i : gen_) r[row++] = instrument_residual<Scalar>(p_->row(i), curve_of);
     return r;
   }
 

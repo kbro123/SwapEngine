@@ -69,7 +69,7 @@ MUTATIONS = [
      "",
      ["streaming_walk_guard_test.cpp"], "*", "the one post-convergence refresh per drift refresh is unpinned (G2)"),
     ("drift_refresh_on_square", "include/swaps/calibration/streaming.hpp",
-     "    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty() || R_.rows() > 0;\n",  # re-anchored 2026-10-09 (constraint rows)
+     "    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty();\n",  # re-anchored 2026-10-12 (the regulariser is rows of the problem)
      "    drift_refresh_ = true;\n",
      ["streaming_walk_guard_test.cpp"], "*", "a square rung's 25 bp tick refreshing is unpinned (G2)"),
     ("tick_state_copied_per_tick", "include/swaps/calibration/streaming.hpp",
@@ -82,22 +82,23 @@ MUTATIONS = [
      "",
      ["api/bundle_api.cpp", "session_stream_commit_repro_test.cpp"], "*", "a streamed tick leaving the session's quotes at the old market is unpinned (P3)"),
     ("commit_targets_skips_engine", "include/swaps/calibration/streaming.hpp",
-     "  if (engine) engine->set_market(target);\n",
-     "",
+     "    for (std::size_t i = 0; i < ins.size(); ++i) engine->set_market(static_cast<int>(i), target[static_cast<Eigen::Index>(i)]);\n",  # re-anchored 2026-10-12 (row by row under constraint rows)
+     "    (void)engine;\n",
      ["api/bundle_api.cpp", "session_stream_commit_repro_test.cpp"], "*", "the shared engine keeping the old targets after a tick is unpinned (P3)"),
     # 2026-09-15 C6a: a refresh writes J in place and reuses one decomposition.
     ("refresh_jacobian_by_value", "include/swaps/calibration/streaming.hpp",
-     "    else engine_->jacobian_vs_into(x, q, Jq_);\n",
-     "    else Jq_ = engine_->jacobian_vs(x, q);\n",
+     "    else engine_->jacobian_vs_into(x, q, J);\n",
+     "    else J = engine_->jacobian_vs(x, q);\n",
      ["streaming_refresh_alloc_repro_test.cpp"], "*", "a refresh writing J in place is unpinned (C6)"),
     ("decomposition_rebuilt_per_refresh", "include/swaps/calibration/normal_op.hpp",
      "    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
      "    cod_ = Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>();\n    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd>& cod = cod_;\n",
      ["streaming_refresh_alloc_repro_test.cpp"], "*", "reusing the refresh's decomposition storage is unpinned (C6)"),
-    ("stacked_regulariser_rows_not_written", "include/swaps/calibration/streaming.hpp",
-     "    if (R_.rows() > 0) J.bottomRows(R_.rows()) = R_;\n",
-     "",
-     ["jacobian_into_parity_test.cpp"], "*", "the regularised refresh's R rows are unpinned (C6)"),
+    # 2026-10-12: the regulariser is StateLinear rows of the problem; a row's coefficients ARE its Jacobian entries.
+    ("state_linear_coefficient_dropped", "include/swaps/calibration/compiled_bundle.hpp",
+     "        terms_.push_back({row, weight * s.coeff, Src::State, Xf::None, global_state_index(curves, s.curve, s.index), 0.0});\n",
+     "        terms_.push_back({row, weight, Src::State, Xf::None, global_state_index(curves, s.curve, s.index), 0.0});\n",
+     ["jacobian_into_parity_test.cpp", "state_linear_test.cpp"], "*", "a StateLinear row's coefficients are unpinned"),
     # 2026-09-15 C8: a tick reports the drift it refreshed on.
     ("tick_drift_zeroed_after_refresh", "include/swaps/calibration/streaming.hpp",
      "      if (!refresh(x, q_new, t)) return fail(t, StreamStatus::NonFinite);\n    }\n    int frozen = 0;\n",

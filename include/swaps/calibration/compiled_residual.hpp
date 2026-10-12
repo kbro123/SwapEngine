@@ -35,6 +35,8 @@ class CompiledResidual {
   const Eigen::VectorXd& residuals_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     return impl_.residuals_vs(x, q);
   }
+  const std::vector<int>& dead_rows() const { return impl_.dead_rows(); }  // dead-zone quote rows (row_engine.hpp)
+  void dead_row_into(int k, Eigen::Ref<Eigen::RowVectorXd, 0, Eigen::InnerStride<>> out) const { out = impl_.dead_J().row(k); }
   Eigen::MatrixXd jacobian_vs(const Eigen::VectorXd& x, const Eigen::VectorXd& q) const {
     return impl_.jacobian_vs(x, q);
   }

@@ -113,6 +113,8 @@ struct RebasedHandle : CurveHandle<double> {
   double forward(double t) const override { return base->forward(t); }
   double integral(double t) const override { return base->integral(t) - idt; }
   double discount(double t) const override { using std::exp; return exp(-(base->integral(t) - idt)); }
+  double turn_jump(int j) const override { return base->turn_jump(j); }
+  double state(int i) const override { return base->state(i); }
   void set_forwards(const Eigen::Matrix<double, Eigen::Dynamic, 1>&) override {}
 };
 

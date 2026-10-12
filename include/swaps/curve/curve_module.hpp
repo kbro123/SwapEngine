@@ -240,6 +240,15 @@ class ModularCurve {
     }
   }
 
+  // The i-th free value this curve was last built from (set_forwards' x[i]): a region's knot forward, a B-spline
+  // control point, a MonotoneConvex discrete forward -- whatever the region's own parameterisation is. It is the
+  // STATE a StateLinear calibration row reads (problem.hpp), with its AAD gradient when S is a dual. Requires
+  // set_forwards() to have run (build_bundle_curves always does).
+  S value(int i) const {
+    if (i < 0 || i >= static_cast<int>(buf_.size())) throw std::out_of_range("ModularCurve::value: index out of range (call set_forwards first)");
+    return buf_[static_cast<std::size_t>(i)];
+  }
+
   S forward(double t) const {
     return locate(t, [](const RegionIface<S>& r, double u) { return r.forward(u); });
   }

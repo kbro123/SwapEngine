@@ -103,13 +103,20 @@ enum class QuoteKind {
                   // (Instrument::noncacheable) applies to a compounded or seasoned leg. A position's notional
                   // is a Portfolio weight. As a CALIBRATION row it is in PV units, not rate units: the caller
                   // weights it (CLAUDE.md §2) -- the engine does not.
+  StateLinear,    // A LINEAR COMBINATION OF STATE ENTRIES (constraint rows, review item 3, 2026-10-12): the model
+                  // quote is Σ coeff · x[curve's state `index`] over `state` (StateRef: curve, index, coeff; index
+                  // 0..n_interp-1 the interpolation values, then one per turn). No DF, no cashflow: the Jacobian row
+                  // is the coefficient pattern itself. It is how a curvature (smoothness) penalty is a ROW of the
+                  // problem (regularize.hpp smoothing_rows: three coefficients, target 0), how a bound on a knot
+                  // forward is a row (one coefficient, a one-sided penalty map), and -- with one coefficient on a
+                  // turn's δ -- what a TurnJump is. Always W-cacheable: three Src::State terms. In the units of x.
 };
 
 // The tripwire for adding a quote kind: appending one moves TurnJump and breaks this assert, which names
 // every place that must learn about it. A -Wswitch warning alone is not enough -- this build has no
 // -Werror, so a warning scrolls past (REVIEW FINDING 3, 2026-09-21).
-inline constexpr int kQuoteKindCount = 9;
-static_assert(static_cast<int>(QuoteKind::Npv) + 1 == kQuoteKindCount,
+inline constexpr int kQuoteKindCount = 10;
+static_assert(static_cast<int>(QuoteKind::StateLinear) + 1 == kQuoteKindCount,
               "a QuoteKind was added or reordered: update instrument_model_quote / instrument_residual "
               "(problem.hpp), the compiled batches (compiled_bundle.hpp), the codec's to/from string "
               "(api/codec.cpp) and kQuoteKindCount itself");
@@ -272,6 +279,14 @@ struct PenaltyMap {
 struct Instrument;
 struct WeightedInstrument;
 
+// One state entry a StateLinear row reads: curve `curve`'s state `index` (the bundle's per-curve layout: interpolation
+// values first, then one δ per turn) with coefficient `coeff`. The row's model quote is Σ coeff·x over its refs.
+struct StateRef {
+  int curve = 0;
+  int index = 0;
+  double coeff = 1.0;
+};
+
 // One calibration instrument.
 //
 // Which members a given `quote` reads (the others are ignored and may stay default-constructed):
@@ -327,6 +342,10 @@ struct Instrument {
   // `turn_index` its position in that curve's `turns` list. The model quote is that turn's jump δ; the
   // residual is (banded) δ − market, with `market` the target jump (rate units). See QuoteKind::TurnJump.
   int turn_curve = 0, turn_index = 0;
+
+  // StateLinear only: the state entries this row combines (QuoteKind::StateLinear). Non-empty; validate_problem
+  // checks each index against its curve's state count.
+  std::vector<StateRef> state;
 
   // Set the FULL quote RHS -- target and soft-quote band -- from any target-shaped object exposing
   // {target, band_lower, band_upper, band_decay}. This is THE one hand-off from a market quote into a
@@ -388,6 +407,9 @@ void Instrument::for_each_curve_ref(Fn&& fn) const {
     case QuoteKind::Rate: fn(ins.forecast, "forecast"); break;
     case QuoteKind::FxForward: fn(ins.fx_num, "fx_num"); fn(ins.fx_den, "fx_den"); break;
     case QuoteKind::TurnJump: fn(ins.turn_curve, "turn"); break;  // the δ state lives on the turn's curve
+    case QuoteKind::StateLinear:
+      for (const auto& s : ins.state) fn(s.curve, "state");  // each ref's curve, in order (the first is primary_curve)
+      break;
     case QuoteKind::Portfolio:
       for (const auto& c : ins.combination) c.instrument.for_each_curve_ref(fn);
       break;
@@ -460,6 +482,11 @@ template <class C, class = void>
 struct has_turn_jump : std::false_type {};
 template <class C>
 struct has_turn_jump<C, std::void_t<decltype(std::declval<const C&>().turn_jump(0))>> : std::true_type {};
+// Likewise for state(int): the raw free variable a StateLinear row reads (bundle handles only).
+template <class C, class = void>
+struct has_state : std::false_type {};
+template <class C>
+struct has_state<C, std::void_t<decltype(std::declval<const C&>().state(0))>> : std::true_type {};
 
 // Bid/offer band residual for a model quote q against market mid m (see the Instrument band fields).
 // The band exists so that OVERLAPPING instruments that cannot all be reconciled exactly (1M vs 3M futures,
@@ -607,6 +634,13 @@ inline void validate_instrument(const Instrument& ins, const std::string& where)
     case QuoteKind::TurnJump:
       if (ins.turn_curve < 0 || ins.turn_index < 0) fail("a TurnJump needs turn_curve and turn_index >= 0");
       break;
+    case QuoteKind::StateLinear:
+      if (ins.state.empty()) fail("a StateLinear row has no state refs");
+      for (const auto& s : ins.state) {
+        if (s.curve < 0 || s.index < 0) fail("a StateLinear ref needs curve and index >= 0");
+        if (!std::isfinite(s.coeff)) fail("a StateLinear ref has a non-finite coefficient");
+      }
+      break;
     case QuoteKind::Portfolio:
       if (ins.combination.empty()) fail("a Portfolio quote has no components");
       for (const auto& c : ins.combination) validate_instrument(c.instrument, where + " (portfolio component)");
@@ -651,6 +685,19 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
         return C(ins.turn_curve).turn_jump(ins.turn_index);
       else
         throw std::logic_error("TurnJump instrument requires a turned bundle curve handle");
+    }
+    case QuoteKind::StateLinear: {
+      // Σ coeff·state: the raw free variables off the handle (CurveHandle::state -- an outright's knot values, a
+      // spread's spread values, a turned curve's δ's), each carrying its AAD gradient. LINEAR in x. Only the bundle's
+      // handles expose state; a bare ModularCurve (single-curve CalibrationProblem) never carries this kind.
+      using CurveT = std::decay_t<decltype(C(0))>;
+      if constexpr (has_state<CurveT>::value) {
+        Scalar acc(0.0);
+        for (const auto& s : ins.state) acc += Scalar(s.coeff) * C(s.curve).state(s.index);
+        return acc;
+      } else {
+        throw std::logic_error("StateLinear instrument requires a bundle curve handle");
+      }
     }
     case QuoteKind::ParSpread:  // E6.1c: the ONE ParSpread formula lives in cashflows.hpp
       return pricing::par_spread<Scalar>(ins.fwd.coupons, ins.bench.coupons, ins.fixed.coupons,

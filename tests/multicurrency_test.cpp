@@ -841,12 +841,18 @@ TEST(EurCurves, SmoothnessRegulariserRecoversTheCoupledTrio) {
 // reprices the market exactly and tracks the smooth true curve, staying on the fast path.
 TEST(EurCurves, RegularisedStreamingTracksTheCoupledTrio) {
   const rb::MultiCcyBundle b = rb::build_eur_curves();
-  cal::CompiledBundleResidual engine(b.prob);
+  cal::CompiledBundleResidual engine(b.prob);  // the quotes' model values (the market feed)
   using SC = cal::StreamingCalibrator<cal::BundleProblem>;
   SC::Options opt;
-  opt.regularizer = cal::second_difference_operator(b.prob, 1.0, {b.EUR3M, b.EUR6M});
+  // The regulariser is constraint rows of the streamed problem (2026-10-12); their target stays 0 while the quotes move.
+  cal::BundleProblem pr = b.prob;
+  cal::RegSpec reg;
+  reg.lambda = 1.0;
+  reg.curves = {b.EUR3M, b.EUR6M};
+  cal::add_smoothing_rows(pr, reg);
+  const auto full = [&](const Eigen::VectorXd& q) { Eigen::VectorXd f = pr.market(); f.head(q.size()) = q; return f; };
   const Eigen::VectorXd q0 = engine.model_rates(b.x_true);
-  SC sc(b.prob, b.x_true, q0, opt);
+  SC sc(pr, b.x_true, full(q0), opt);
 
   // Drive the market with SMOOTH moves (level + slope) so the true curve stays smooth; the regularised
   // stream should then reprice every tick AND stay on the smooth true curve (no null-space wander).
@@ -863,7 +869,7 @@ TEST(EurCurves, RegularisedStreamingTracksTheCoupledTrio) {
       for (const int nk = b.prob.curves[c].n_knots(); i < nk; ++i) x[b.off[c] + i] += dL;
     }
     const Eigen::VectorXd q = engine.model_rates(x);
-    sc.update(q);
+    sc.update(full(q));
     worst_rt = std::max(worst_rt, (engine.model_rates(sc.current()) - q).cwiseAbs().maxCoeff());
     worst_dev = std::max(worst_dev, (sc.current() - x).cwiseAbs().maxCoeff());
   }

@@ -33,11 +33,13 @@ TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
   p.curves.push_back(spec);
 
   const Eigen::MatrixXd R = cal::second_difference_operator(p, /*default lambda*/ 1.0, {0});
-  ASSERT_EQ(R.rows(), 4);  // 6 interp knots -> interior rows i=1..4
+  // 6 interp knots -> interior knots i=1..4; knot 1 is a Flat step level and emits NO row (since 2026-10-12 the rows are
+  // StateLinear instruments of the problem, smoothing_rows: a skipped knot is no row, not a zero row), so 3 rows.
+  ASSERT_EQ(R.rows(), 3);
   ASSERT_EQ(R.cols(), 6);
-  EXPECT_NEAR(R.row(0).cwiseAbs().sum(), 0.0, 1e-15);  // knot i=1 in the lambda=0 front region: zero row
-  for (int r = 1; r <= 3; ++r) {                        // knots i=2,3,4 in the lambda=5 back region
-    const int i = r + 1;
+  ASSERT_EQ(cal::smoothing_rows(p, 1.0, {0}).size(), 3u);
+  for (int r = 0; r <= 2; ++r) {  // knots i=2,3,4 in the lambda=5 back region
+    const int i = r + 2;
     EXPECT_NEAR(R(r, i - 1), 5.0, 1e-12);
     EXPECT_NEAR(R(r, i), -10.0, 1e-12);
     EXPECT_NEAR(R(r, i + 1), 5.0, 1e-12);
@@ -60,11 +62,9 @@ TEST(RegionSmoothing, UniformLambdaOnSmoothKnotsAndNoRowOnFlatOnes) {
   p.curves.push_back(spec);
 
   const Eigen::MatrixXd R = cal::second_difference_operator(p, /*global lambda*/ 0.7, {0});
-  ASSERT_EQ(R.rows(), 4);
-  EXPECT_NEAR(R.row(0).cwiseAbs().sum(), 0.0, 1e-15) << "knot 1 is a Flat step level";
-  EXPECT_NEAR(R.row(1).cwiseAbs().sum(), 0.0, 1e-15) << "knot 2 is a Flat step level";
-  for (int r = 2; r < 4; ++r) {
-    const int i = r + 1;
+  ASSERT_EQ(R.rows(), 2) << "knots 1 and 2 are Flat step levels: no row (2026-10-12: a skipped knot is no row)";
+  for (int r = 0; r < 2; ++r) {
+    const int i = r + 3;
     EXPECT_NEAR(R(r, i - 1), 0.7, 1e-12);
     EXPECT_NEAR(R(r, i), -1.4, 1e-12);
     EXPECT_NEAR(R(r, i + 1), 0.7, 1e-12);
@@ -81,10 +81,11 @@ TEST(RegionSmoothing, ATrailingFlatKnotHasNoRowReachingIt) {
   spec.regions.push_back(curve::CurveModule{{15.0}, curve::Scheme::Flat});
   p.curves.push_back(spec);
   const Eigen::MatrixXd R = cal::second_difference_operator(p, 0.5, {0});
-  ASSERT_EQ(R.rows(), 4);
+  ASSERT_EQ(R.rows(), 3) << "the last Hermite knot's row would reach into the Flat tail: no row (2026-10-12)";
   EXPECT_NEAR(R.col(5).cwiseAbs().sum(), 0.0, 1e-15) << "nothing couples the Flat tail knot";
-  EXPECT_NEAR(R.row(3).cwiseAbs().sum(), 0.0, 1e-15) << "the last Hermite knot's row would reach into the Flat tail: dropped";
   for (int r = 0; r < 3; ++r) EXPECT_GT(R.row(r).cwiseAbs().sum(), 0.0);
+  for (const auto& row : cal::smoothing_rows(p, 0.5, {0}))
+    for (const auto& ref : row.state) EXPECT_LT(ref.index, 5) << "no ref reaches the Flat tail knot";
 }
 
 // NON-UNIFORM spacing: the row is the divided second difference scaled by the trapezoid weight, so an AFFINE-in-time
