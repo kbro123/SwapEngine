@@ -261,7 +261,23 @@ inline px::RateObservation rfr_observation(const Date& vd, const Date& s, const 
     const Date ee = advance_obs_bd(lag.cal, e, -lag.days);
     o.sub_start = {curve_time(vd, ss)};
     o.sub_end = {curve_time(vd, ee)};
-    o.tau_index = year_frac(dc, ss, ee, accr_cal);  // obs-shift accrues on the shifted window
+    // THE SHIFTED WINDOW SUPPLIES THE FIXINGS; THE INTEREST PERIOD SUPPLIES THE ACCRUAL.
+    //
+    // `tau_index` is the period the compounded rate is ANNUALISED over, and `float_coupon_pv` then
+    // applies it over `tau_pay`, so tau_index = tau(ss,ee) pays (prod-1)*d_c/d_o. That is the ARRC's
+    // option (2), which it labels an "interest-period weighted shift", records as "widely used in
+    // FRNs", and does NOT recommend ("not the principle recommendation"; it "can at times result in
+    // a negative daily accrual even if SOFR rates are positive" -- An Updated User's Guide to SOFR,
+    // 2021, Appendix 4). ISDA says the same thing from the other side: "the rate will be annualized
+    // and apply based on the number of days in the Calculation Period" (Documenting RFR derivatives
+    // using different approaches to compounding/averaging under the 2006 ISDA Definitions, 27 April
+    // 2021, s1.2) -- annualised by d_c and applied over d_c, which cancel, so the payment is
+    // (prod-1). The two authorities differ on the quoted rate's basis and AGREE on the cash flow.
+    //
+    // So tau_index is the INTEREST period's accrual. tau_index == tau_pay makes k == 1 exactly, and
+    // the coupon also becomes `standard()`, so a shifted coupon now takes the same bit-exact fast
+    // path a plain one does. Unshifted coupons are untouched: this branch only runs on a shift.
+    o.tau_index = year_frac(dc, s, e, accr_cal);
     return o;
   }
   // Lookback / Lockout: a genuine daily compounded product (does NOT telescope).

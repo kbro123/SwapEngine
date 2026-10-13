@@ -54,6 +54,38 @@ TEST(RfrLag, ShiftMovesWholeWindowAndStaysTelescoped) {
   EXPECT_LT(c.obs.sub_start[0], b::curve_time(vd, s));  // window moved EARLIER
   // Payment accrual is unchanged (actual [s,e] span); only the observation window shifted.
   EXPECT_DOUBLE_EQ(c.tau_pay, b::year_frac(conv.float_dc, s, e));
+
+  // THE ACCRUAL BASIS, which this test did not bind until now -- and the convention turns on it.
+  // `tau_index` is the period the compounded rate is annualised over, and float_coupon_pv applies
+  // it over tau_pay, so the payment carries a factor tau_pay/tau_index. Annualising on the SHIFTED
+  // window pays (prod-1)*d_c/d_o: the ARRC's "interest-period weighted shift", which it records as
+  // "widely used in FRNs" and does NOT recommend ("not the principle recommendation"; it "can at
+  // times result in a negative daily accrual even if SOFR rates are positive" -- An Updated User's
+  // Guide to SOFR, 2021, Appendix 4). ISDA agrees from the other side: "the rate will be annualized
+  // and apply based on the number of days in the Calculation Period" (Documenting RFR derivatives
+  // using different approaches to compounding/averaging under the 2006 ISDA Definitions, 27 April
+  // 2021, s1.2) -- annualised by d_c, applied over d_c, which cancel, so the payment is (prod-1).
+  // So tau_index is the INTEREST period and the shift must not move it.
+  EXPECT_DOUBLE_EQ(c.obs.tau_index, b::year_frac(conv.float_dc, s, e));
+  EXPECT_DOUBLE_EQ(c.obs.tau_index, c.tau_pay);
+  // k == 1 exactly, so a shifted coupon takes the same bit-exact fast path a plain one does.
+  EXPECT_TRUE(c.standard());
+
+  // ON THESE DATES THE TWO READINGS COINCIDE: the shifted window is the same calendar length as
+  // [s, e] (0.2555... both), so the assertions above would hold either way and this case alone
+  // cannot bind the convention. Sweep until some case CAN tell them apart, and require that at
+  // least one does -- a gate that is silently vacuous is worse than no gate.
+  int distinguishing = 0;
+  for (int m = 1; m <= 24; ++m) {
+    const b::Date e2 = s.plus_months(m);
+    const b::px::FloatCoupon c2 = b::ois_coupon(vd, conv, s, e2, conv.float_dc, lag);
+    const double tau_interest = b::year_frac(conv.float_dc, s, e2);
+    const b::Date ss2 = b::advance_obs_bd("USD-SOFR", s, -5), ee2 = b::advance_obs_bd("USD-SOFR", e2, -5);
+    EXPECT_DOUBLE_EQ(c2.obs.tau_index, tau_interest) << "+" << m << "M: the shift moved the accrual basis";
+    if (b::year_frac(conv.float_dc, ss2, ee2) != tau_interest) ++distinguishing;
+  }
+  ASSERT_GT(distinguishing, 0) << "no swept tenor has a shifted window of a different length from its interest "
+                                  "period, so nothing here binds which one the rate is annualised over";
 }
 
 // Lookback (without shift): a genuine daily compounded product, one bracket per business day, each observation
