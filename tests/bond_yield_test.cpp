@@ -215,4 +215,46 @@ TEST(BondCurve, CompiledBookBatchedReprice) {
   EXPECT_LT(zpos.maxCoeff(), 0.0011);
 }
 
+// Curve-space KEY-RATE risk on the compiled bond book (2026-10-13): per bond, dPV/dx and d(dirty)/dx over the knot
+// forwards from one W-cache product, against central finite differences of the book's own reprice; the parallel
+// PV01 is the row sum; a knot past every flow carries no risk; a bond's PV risk is negative at every knot its flows
+// reach (more discounting, less value).
+TEST(BondCurve, CompiledBookKeyRateRiskMatchesFiniteDifferences) {
+  std::vector<px::Bond> bonds;
+  for (int i = 0; i < 12; ++i) bonds.push_back(make_bond(2027 + i, 0.02 + 0.002 * i).curve);
+  std::vector<double> meeting, back;
+  for (int i = 1; i <= 48; ++i) back.push_back(0.25 * i);  // knots to 12y: the 2038 bond reaches the last ones
+  Eigen::VectorXd x(static_cast<int>(back.size()));
+  for (int k = 0; k < x.size(); ++k) x[k] = 0.035 + 0.0003 * k;
+  pf::CompiledBondBook book(meeting, back, bonds);
+  const Eigen::MatrixXd J = book.pv_key_rate(x);
+  const Eigen::MatrixXd Jd = book.dirty_key_rate(x);
+  ASSERT_EQ(J.rows(), book.n_bonds());
+  ASSERT_EQ(J.cols(), x.size());
+  const double h = 1e-6;
+  double worst = 0.0, worst_d = 0.0;
+  for (int k = 0; k < x.size(); ++k) {
+    Eigen::VectorXd xp = x, xm = x;
+    xp[k] += h; xm[k] -= h;
+    const Eigen::VectorXd fd = (Eigen::VectorXd(book.pv(xp)) - Eigen::VectorXd(book.pv(xm))) / (2 * h);
+    const Eigen::VectorXd fdd = (Eigen::VectorXd(book.dirty_prices(xp)) - Eigen::VectorXd(book.dirty_prices(xm))) / (2 * h);
+    worst = std::max(worst, (J.col(k) - fd).cwiseAbs().maxCoeff());
+    worst_d = std::max(worst_d, (Jd.col(k) - fdd).cwiseAbs().maxCoeff());
+  }
+  EXPECT_LT(worst, 1e-7) << "dPV/dx vs central differences (bump noise ~1e-9 on O(1) prices)";
+  EXPECT_LT(worst_d, 1e-7) << "d(dirty)/dx vs central differences";
+  // Sign: a parallel rise in the forwards lowers every DF, so every bond's row sum is negative. (A single knot's entry
+  // need not be: a local Hermite basis function dips below zero on its neighbours, so W carries small negative
+  // weights and a knot next to a flow can show a small positive sensitivity -- the FD check above pins that too.)
+  for (int b = 0; b < J.rows(); ++b) EXPECT_LT(J.row(b).sum(), 0.0) << "bond " << b;
+  EXPECT_NE(J(11, x.size() - 1), 0.0) << "the longest bond reaches the last knot";
+  EXPECT_EQ(J(0, x.size() - 1), 0.0) << "the shortest bond (maturing in a year) does not reach the 12y knot";
+  // the parallel PV01 is the row sum: a central 1 bp parallel bump (a one-sided bump differs by the convexity term,
+  // ~1/2 PV (T dx)^2 ~ 7e-7 on the 12y bond)
+  const Eigen::VectorXd pv01 = book.pv01(x);
+  const Eigen::VectorXd bumped = (Eigen::VectorXd(book.pv((x.array() + 0.5e-4).matrix())) -
+                                  Eigen::VectorXd(book.pv((x.array() - 0.5e-4).matrix())));
+  EXPECT_LT((pv01 - bumped).cwiseAbs().maxCoeff(), 1e-9);
+}
+
 }  // namespace

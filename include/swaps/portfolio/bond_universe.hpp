@@ -301,6 +301,40 @@ class CompiledBondBook {
     return dirty_prices(x) - accrued_v_;
   }
 
+  // KEY-RATE RISK in curve space (2026-10-13): per bond, d(PV today)/dx over the knot forwards, B x n_knots. PV is linear
+  // in DF = exp(-W x), so dPV_b/dx = -sum_{j in b} amount_j DF(pay_j) W[pay_j, :] -- the per-flow partials scattered
+  // onto the flow's time, then ONE product with the W-cache (the same shape as the calibration Jacobian, no bumping).
+  // Reuses df_ from the reprice at x (df_into is memoised on nothing here: it recomputes; call once per x).
+  const Eigen::MatrixXd& pv_key_rate(const Eigen::VectorXd& x) const {
+    cs_.df_into(x, df_);
+    const int T = cs_.n_times();
+    G_.setZero(n_bonds_, T);
+    const double* __restrict df = df_.data();
+    const int* __restrict p = pay_v_.data();
+    const double* __restrict a = amount_v_.data();
+    for (int j = 0; j < n_flows_; ++j) G_(bond_of_flow_[j], p[j]) -= a[j] * df[p[j]];
+    J_.noalias() = G_ * cs_.W();  // B x n_knots
+    return J_;
+  }
+  // The same for the DIRTY price P_b = PV_b / DF(settle_b): dP/dx = (dPV/dx)/DF_s + P * W[settle, :] (the settlement
+  // discount's own sensitivity, dDF_s/dx = -DF_s W_s). B x n_knots.
+  const Eigen::MatrixXd& dirty_key_rate(const Eigen::VectorXd& x) const {
+    pv_key_rate(x);  // fills df_ and J_ (PV form)
+    pv(x);           // pv_ (df_ again: cheap, and it keeps the two reads consistent)
+    const double* __restrict df = df_.data();
+    const int* __restrict s = settle_v_.data();
+    const Eigen::MatrixXd& W = cs_.W();
+    Jd_.resize(n_bonds_, W.cols());
+    for (int b = 0; b < n_bonds_; ++b) {
+      const double ds = df[s[b]];
+      Jd_.row(b) = J_.row(b) / ds + (pv_[b] / ds) * W.row(s[b]);
+    }
+    return Jd_;
+  }
+  // Per-bond PV01: the PV change for a +1 bp PARALLEL shift of every knot forward (the row sums of pv_key_rate, in
+  // bp), no bump-and-reprice.
+  Eigen::VectorXd pv01(const Eigen::VectorXd& x) const { return pv_key_rate(x).rowwise().sum() * 1e-4; }
+
   // Per-bond z-spread (continuous, on curve time) to a per-bond target DIRTY price. A scalar Newton per
   // bond off the current DFs — z-spread is inherently a per-bond quantity, so this is a B-loop, not the
   // vectorized hot path. Uses the already-computed df_ from a reprice at `x`.
@@ -341,6 +375,7 @@ class CompiledBondBook {
   Eigen::VectorXi pay_v_, settle_v_;
   Eigen::SparseMatrix<double> R_;
   mutable Eigen::VectorXd df_, flow_, pv_, dirty_;
+  mutable Eigen::MatrixXd G_, J_, Jd_;  // key-rate scratch: per-flow partials by time, and the two Jacobians
 };
 
 }  // namespace swaps::portfolio

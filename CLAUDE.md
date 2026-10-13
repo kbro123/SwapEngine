@@ -1027,7 +1027,11 @@ delete those, they enforce the rule. Two honest residues:
         on curve prices) so a mis-set-up universe cannot quote a speedup. Size sweep (opt-in
         `SWAPS_BOND_SCALE=1`): no small-universe crossover — 680/600/736/738 ns per bond at 100/1k/5k/10k
         vs a flat ~500 µs per bond.
-      **PENDING (next):** curve-space key-rate DV01 beyond PV; TIPS (index ratio + real yield); long-
+      **DONE 2026-10-13:** curve-space KEY-RATE risk on `CompiledBondBook` -- `pv_key_rate(x)` / `dirty_key_rate(x)`
+      (B x n_knots: per-flow partials scattered by time, one product with the W-cache, the settlement discount's own
+      term on the dirty form) and `pv01(x)` (the row sums); pinned against central differences of the book's own
+      reprice (`BondCurve.CompiledBookKeyRateRiskMatchesFiniteDifferences`).
+      **PENDING (next):** TIPS (index ratio + real yield); long-
       first-coupon when-issued; non-treasury bond types (Gilt/Bund/corporate/FRN) as new builders filling
       the SAME structs — the yield-convention slots they need now exist, so most are a one-liner over
       `fixed_rate_bond` plus their own accrual/ex-div rules.
