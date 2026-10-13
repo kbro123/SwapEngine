@@ -63,7 +63,8 @@
     "shape_desk_mixed_jacobian_pwl": "Shape ladder rung 'desk_mixed' (70 rows, 5 curves, SOFR long end on MonotoneCubic) through the PIECEWISE-LINEAR W tier (HybridBundleResidual(p, pwl=true)): every compilable row -- including rows reading the curve's MonotoneCubic region -- rides the compiled W-cache, whose W is exact inside the Hyman filter's branch cell and re-taken by an analytic rank-k update when x crosses into another. The shipped router sends those rows to the AAD block instead; that arm is BM_Route_desk_mixed_Jacobian_routed in the same binary. Opt-in: the tier is off unless a caller asks for it. Measures ONE full Jacobian.",
     "g10_8curve_cold_calibrate": "G10 rates desk: 8 curves over 7 currencies (USD SOFR; EUR ESTR + EURIBOR 3M discounted on ESTR; GBP SONIA; JPY TONA; CHF SARON; CAD CORRA; AUD AONIA), 72 par instruments 1Y-30Y, conventions from the DB on both sides. Cold solve from a flat seed. Reference: QuantLib bootstrapping the same market curve by curve in dependency order (a DIFFERENT algorithm -- sequential exactly-determined bootstraps vs our one joint least-squares solve -- which is the point of the engine, not a handicap; both arms are held to the same answer by the bench's parity gate).",
     "g10_8curve_tick_0p3bp": "The same G10 desk re-curved on a market move: +-0.3 bp on EVERY one of the 72 quotes, alternating so neither arm can cache a no-op. Ours is a streamed frozen-Newton tick on the shared engine; QuantLib must re-bootstrap every curve whose helper quotes changed. This is the desk's real workload -- a cold solve happens once a day.",
-    "g10_book2000_reprice": "2,000 swaps spread across the G10 desk's eight curves (2Y/5Y/10Y/30Y, off-market fixed rates, mixed notionals), repriced off the calibrated curves. Ours is the bound book as rows of the compiled engine (DF = exp(-Wx) + batched coupon algebra, NPV plus the analytic parallel PV01 per reprice); the reference is QuantLib's per-swap NPV() walk. BOTH arms price off OUR calibrated curves (fresh term structures per iteration, so no cached NPV survives), so this times the repricing kernels, not two interpolations."
+    "g10_book2000_reprice": "2,000 swaps spread across the G10 desk's eight curves (2Y/5Y/10Y/30Y, off-market fixed rates, mixed notionals), repriced off the calibrated curves. Ours is the bound book as rows of the compiled engine (DF = exp(-Wx) + batched coupon algebra, NPV plus the analytic parallel PV01 per reprice); the reference is QuantLib's per-swap NPV() walk. BOTH arms price off OUR calibrated curves (fresh term structures per iteration, so no cached NPV survives), so this times the repricing kernels, not two interpolations.",
+    "g10_<noturns|g4turns>_*": "THE G10 DESK WITH AND WITHOUT YEAR-END TURNS (bench/g10_turns_bench.cpp, bench/fixtures/g10_market.hpp, QuantLib-free, 2026-10-13): the same 8-curve / 7-currency desk as g10_8curve_* (9 par swaps per curve from the DB conventions, maturities through the engine's own calendars) built twice -- plain (72 rows, 72 knots, square) and with one year-end turn [2026-12-31, 2027-01-04] on each G4 curve (USD SOFR, EUR ESTR, GBP SONIA, JPY TONA), each a bracketing December-to-January compounded observation + a TurnJump pin (80 rows, 76 knots: over-determined by 4). cold_calibrate is cal::calibrate from the flat seed (the g10_8curve_cold_calibrate definition); stream_tick a 0.1 bp per-row tick on the frozen Jacobian; refresh_25bp a 25 bp tilted move each way; jacobian the hybrid engine's analytic Jacobian. The noturns rung is the CONTROL: a difference between the pair is what the turns cost. First capture (min of 3, quiet machine): cold 2.90 -> 3.94 ms (1.36x: +4 state, +8 rows, more LM iterations), tick 12.1 -> 12.6 us (1.04x), Jacobian 105 -> 114 us (1.09x), refresh 26 us -> 877 us -- NOT a turn cost per se: the plain desk is SQUARE so a 25 bp move converges on frozen steps with no refresh, the turned desk is over-determined so the streamer's drift refresh (10 bp) fires twice per tick."
   },
   "machines": {
     "52e94be82bc4": {
@@ -755,6 +756,54 @@
         },
         "shape_mixed_convex_jacobian": {
           "ours_ns": 107035,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_noturns_cold_calibrate": {
+          "ours_ns": 2903261,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_g4turns_cold_calibrate": {
+          "ours_ns": 3935200,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_noturns_stream_tick": {
+          "ours_ns": 12069,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_g4turns_stream_tick": {
+          "ours_ns": 12556,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_noturns_refresh_25bp": {
+          "ours_ns": 26319,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_g4turns_refresh_25bp": {
+          "ours_ns": 876687,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_noturns_jacobian": {
+          "ours_ns": 104842,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "g10_g4turns_jacobian": {
+          "ours_ns": 114072,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null

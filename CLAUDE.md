@@ -299,6 +299,14 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
 - The **largest** win is the risk ladder: our AAD + implicit-function-theorem gives the full bucketed
   delta from one calibration; QuantLib bumps-and-reprices (one full re-bootstrap per quote). That is
   the `sofr_23k_risk_ladder_23q_book9` metric (reference ~150×, informational). See `bench/curve_build_bench.cpp`.
+- **The G10 desk is measured both ways (2026-10-13).** `bench/g10_desk_ql_bench.cpp` times the 8-curve desk against
+  QuantLib and is therefore par-swaps-only (a year-end turn is not a QuantLib bootstrap concept). `bench/g10_turns_bench.cpp`
+  (`bench/fixtures/g10_market.hpp`, QuantLib-free) builds the SAME desk twice -- plain, and with a year-end turn on each G4
+  curve (bracket observation + `TurnJump` pin) -- and gates cold / tick / refresh / Jacobian for the pair
+  (`g10_noturns_*` is the control for `g10_g4turns_*`). First capture: turns cost 1.36x on the cold solve, 1.04x on the
+  0.1 bp tick, 1.09x on the Jacobian; the 25 bp refresh goes 26 µs → 877 µs because the plain desk is SQUARE (a 25 bp
+  move converges on frozen steps, no refresh) while the turned desk is over-determined by 4 (two bracket rows per one
+  jump), so the streamer's 10 bp drift refresh fires -- the regime change, not the turn arithmetic, is the cost.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
 - Discount factors / par rates vs QuantLib: `rel <= 1e-10`.
