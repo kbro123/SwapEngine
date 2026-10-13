@@ -303,10 +303,13 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   QuantLib and is therefore par-swaps-only (a year-end turn is not a QuantLib bootstrap concept). `bench/g10_turns_bench.cpp`
   (`bench/fixtures/g10_market.hpp`, QuantLib-free) builds the SAME desk twice -- plain, and with a year-end turn on each G4
   curve (bracket observation + `TurnJump` pin) -- and gates cold / tick / refresh / Jacobian for the pair
-  (`g10_noturns_*` is the control for `g10_g4turns_*`). First capture: turns cost 1.36x on the cold solve, 1.04x on the
-  0.1 bp tick, 1.09x on the Jacobian; the 25 bp refresh goes 26 µs → 877 µs because the plain desk is SQUARE (a 25 bp
-  move converges on frozen steps, no refresh) while the turned desk is over-determined by 4 (two bracket rows per one
-  jump), so the streamer's 10 bp drift refresh fires -- the regime change, not the turn arithmetic, is the cost.
+  (`g10_noturns_*` is the control for `g10_g4turns_*`), BOTH UNDER LIGHT SMOOTHING as a desk streams. The square trap,
+  so nobody re-measures it: the plain desk is square (one knot per swap), and on a square problem the streamer never
+  refreshes however far the market moves (its 25 bp refresh read 26 µs against 877 µs turned, two drift refreshes per
+  tick on the over-determined desk). That would charge the turns for leaving the square regime, and no production
+  bundle IS square -- smoothing rows are rows. Under Light on both the turns cost 1.11x cold, 1.04x tick, 1.15x refresh,
+  1.11x Jacobian. The bench's premise check proves the RAW pair calibrates back to its generating state exactly (the four
+  turns identified), and the kernel rungs take the problem WITH its rows so they time the objective the session streams.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
 - Discount factors / par rates vs QuantLib: `rel <= 1e-10`.

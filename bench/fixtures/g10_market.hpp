@@ -11,12 +11,22 @@
 //                 -- 4 turns, +8 rows, +4 state (the jumps), the EURIBOR 3M curve discounting on the turned ESTR
 // so the pair isolates what turns cost on the cold solve, the streamed tick and the Jacobian with nothing else
 // varying. Maturities resolve through the engine's own calendars (build::resolve), as the shape ladder's do.
+//
+// BOTH RUNGS ARE TIMED UNDER LIGHT SMOOTHING (owner's challenge, 2026-10-13). The plain desk is SQUARE (one knot per
+// par swap), and on a square problem the streamer lands exactly on frozen Newton steps however far the market moves,
+// so its 25 bp refresh measured 26 us against 877 us for the turned desk -- not what the turns cost but what leaving
+// the square regime costs, and no desk streams square: smoothing rows are rows, so every production bundle is
+// over-determined (CLAUDE.md section 7a, "nobody streams unsmoothed"). Under Light on both (region data, 0.5) the
+// same pair reads 1.28 -> 1.44 ms on the refresh, 13.8 -> 14.4 us on the tick: the honest turn cost. `light=false`
+// builds the raw pair, which the bench's premise check uses to prove both desks calibrate back to their generating
+// state exactly (a smoothed fit cannot).
 #pragma once
 
 #include <string>
 #include <vector>
 
 #include "shape_ladder.hpp"
+#include "swaps/calibration/regularize.hpp"
 
 namespace swaps::shapes {
 
@@ -45,7 +55,7 @@ inline std::vector<std::string> tenors() { return {"1Y", "2Y", "3Y", "5Y", "7Y",
 
 // The desk; `g4_turns` adds the four year-end turns. Every curve is outright (the EURIBOR curve forecasts 3M and
 // discounts on ESTR by ROLE, not as a spread), as in g10_desk_ql_bench.
-inline Shape g10_desk(bool g4_turns) {
+inline Shape g10_desk(bool g4_turns, bool light = true) {
   cal::BundleProblem p;
   p.curves.resize(g10::NROLES);
   const b::Date turn_s = b::Date::from_iso("2026-12-31"), turn_e = b::Date::from_iso("2027-01-04");
@@ -64,6 +74,7 @@ inline Shape g10_desk(bool g4_turns) {
     }
     p.curves[static_cast<std::size_t>(lg.role)] = std::move(s);
   }
+  if (light) cal::stamp_region_smoothing(p, 0.5);  // every curve's Hermite region: the Light weight, as a desk streams
   return detail::make(g4_turns ? "g10_g4turns" : "g10_noturns",
                       g4_turns ? "G10 desk + a year-end turn on each G4 curve (bracket observation + TurnJump pin)"
                                : "G10 desk: 8 curves over 7 currencies, 9 par swaps each, no turns",

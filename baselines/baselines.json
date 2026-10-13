@@ -64,7 +64,7 @@
     "g10_8curve_cold_calibrate": "G10 rates desk: 8 curves over 7 currencies (USD SOFR; EUR ESTR + EURIBOR 3M discounted on ESTR; GBP SONIA; JPY TONA; CHF SARON; CAD CORRA; AUD AONIA), 72 par instruments 1Y-30Y, conventions from the DB on both sides. Cold solve from a flat seed. Reference: QuantLib bootstrapping the same market curve by curve in dependency order (a DIFFERENT algorithm -- sequential exactly-determined bootstraps vs our one joint least-squares solve -- which is the point of the engine, not a handicap; both arms are held to the same answer by the bench's parity gate).",
     "g10_8curve_tick_0p3bp": "The same G10 desk re-curved on a market move: +-0.3 bp on EVERY one of the 72 quotes, alternating so neither arm can cache a no-op. Ours is a streamed frozen-Newton tick on the shared engine; QuantLib must re-bootstrap every curve whose helper quotes changed. This is the desk's real workload -- a cold solve happens once a day.",
     "g10_book2000_reprice": "2,000 swaps spread across the G10 desk's eight curves (2Y/5Y/10Y/30Y, off-market fixed rates, mixed notionals), repriced off the calibrated curves. Ours is the bound book as rows of the compiled engine (DF = exp(-Wx) + batched coupon algebra, NPV plus the analytic parallel PV01 per reprice); the reference is QuantLib's per-swap NPV() walk. BOTH arms price off OUR calibrated curves (fresh term structures per iteration, so no cached NPV survives), so this times the repricing kernels, not two interpolations.",
-    "g10_<noturns|g4turns>_*": "THE G10 DESK WITH AND WITHOUT YEAR-END TURNS (bench/g10_turns_bench.cpp, bench/fixtures/g10_market.hpp, QuantLib-free, 2026-10-13): the same 8-curve / 7-currency desk as g10_8curve_* (9 par swaps per curve from the DB conventions, maturities through the engine's own calendars) built twice -- plain (72 rows, 72 knots, square) and with one year-end turn [2026-12-31, 2027-01-04] on each G4 curve (USD SOFR, EUR ESTR, GBP SONIA, JPY TONA), each a bracketing December-to-January compounded observation + a TurnJump pin (80 rows, 76 knots: over-determined by 4). cold_calibrate is cal::calibrate from the flat seed (the g10_8curve_cold_calibrate definition); stream_tick a 0.1 bp per-row tick on the frozen Jacobian; refresh_25bp a 25 bp tilted move each way; jacobian the hybrid engine's analytic Jacobian. The noturns rung is the CONTROL: a difference between the pair is what the turns cost. First capture (min of 3, quiet machine): cold 2.90 -> 3.94 ms (1.36x: +4 state, +8 rows, more LM iterations), tick 12.1 -> 12.6 us (1.04x), Jacobian 105 -> 114 us (1.09x), refresh 26 us -> 877 us -- NOT a turn cost per se: the plain desk is SQUARE so a 25 bp move converges on frozen steps with no refresh, the turned desk is over-determined so the streamer's drift refresh (10 bp) fires twice per tick."
+    "g10_<noturns|g4turns>_*": "THE G10 DESK WITH AND WITHOUT YEAR-END TURNS (bench/g10_turns_bench.cpp, bench/fixtures/g10_market.hpp, QuantLib-free, 2026-10-13): the same 8-curve / 7-currency desk as g10_8curve_* (9 par swaps per curve from the DB conventions, maturities through the engine's own calendars) built twice -- plain (72 rows, 72 knots) and with one year-end turn [2026-12-31, 2027-01-04] on each G4 curve (USD SOFR, EUR ESTR, GBP SONIA, JPY TONA), each a bracketing December-to-January compounded observation + a TurnJump pin (80 rows, 76 knots). BOTH RUNGS ARE TIMED UNDER LIGHT SMOOTHING (region data, 0.5, one curvature row per interior knot), as a desk streams: the plain desk is SQUARE and on a square problem the streamer never refreshes (its 25 bp refresh read 26 us against 877 us turned), which would charge the turns for leaving the square regime rather than for the turns -- and no production bundle is square, smoothing rows being rows. cold_calibrate is cal::calibrate from the flat seed on the problem with its rows (the g10_8curve_cold_calibrate definition plus the rows); stream_tick a 0.1 bp per-row tick on the frozen Jacobian; refresh_25bp a 25 bp tilted move each way (premise: it refreshes); jacobian the hybrid engine's analytic Jacobian with the rows. The noturns rung is the CONTROL. First capture (min of 3, quiet machine): cold 3.43 -> 3.81 ms (1.11x), tick 13.6 -> 14.2 us (1.04x), refresh 1.26 -> 1.45 ms (1.15x, 2 refreshes and 8 steps on both), Jacobian 111 -> 123 us (1.11x). The bench's premise check proves the RAW pair calibrates back to its generating state exactly with the four turns identified, and that the kernel rungs carry the same rows the session streams."
   },
   "machines": {
     "52e94be82bc4": {
@@ -761,49 +761,49 @@
           "speedup": null
         },
         "g10_noturns_cold_calibrate": {
-          "ours_ns": 2903261,
+          "ours_ns": 3434747,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "g10_g4turns_cold_calibrate": {
-          "ours_ns": 3935200,
+          "ours_ns": 3806198,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "g10_noturns_stream_tick": {
-          "ours_ns": 12069,
+          "ours_ns": 13617,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "g10_g4turns_stream_tick": {
-          "ours_ns": 12556,
+          "ours_ns": 14199,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "g10_noturns_refresh_25bp": {
-          "ours_ns": 26319,
+          "ours_ns": 1264544,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "g10_g4turns_refresh_25bp": {
-          "ours_ns": 876687,
+          "ours_ns": 1450240,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "g10_noturns_jacobian": {
-          "ours_ns": 104842,
+          "ours_ns": 111133,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
         },
         "g10_g4turns_jacobian": {
-          "ours_ns": 114072,
+          "ours_ns": 122911,
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null

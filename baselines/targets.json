@@ -351,36 +351,36 @@
       "note": "initial = 2026-10-13 baseline x1.3 (mixed_convex: the long rows on the AAD block, MonotoneConvex being not piecewise-linear); ratchets DOWN only"
     },
     "g10_noturns_cold_calibrate": {
-      "target_ns": 3774200,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 4465200,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_g4turns_cold_calibrate": {
-      "target_ns": 5115800,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 4948100,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_noturns_stream_tick": {
-      "target_ns": 15700,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 17700,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_g4turns_stream_tick": {
-      "target_ns": 16300,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 18500,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_noturns_refresh_25bp": {
-      "target_ns": 34200,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 1643900,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_g4turns_refresh_25bp": {
-      "target_ns": 1139700,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 1885300,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_noturns_jacobian": {
-      "target_ns": 136300,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 144500,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_g4turns_jacobian": {
-      "target_ns": 148300,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 159800,
+      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     }
   }
 }

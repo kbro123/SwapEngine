@@ -142,13 +142,14 @@ METRICS = {
     "g10_8curve_tick_0p3bp": ("g10_desk_ql_bench", "BM_G10_Tick_Ours", "BM_G10_Tick_QuantLib"),
     "g10_book2000_reprice": ("g10_desk_ql_bench", "BM_G10_Book_Ours", "BM_G10_Book_QuantLib"),
     # The same desk with and without a YEAR-END TURN on each G4 curve (2026-10-13, bench/g10_turns_bench.cpp,
-    # QuantLib-free: a turn is not a QuantLib bootstrap concept). The noturns rung is the control for the g4turns rung.
+    # QuantLib-free: a turn is not a QuantLib bootstrap concept), BOTH under Light smoothing as a desk streams (a square
+    # control never refreshes and would charge the turns for leaving the square regime). The noturns rung is the control.
     "g10_noturns_cold_calibrate": ("g10_turns_bench", "BM_G10_noturns_Cold", None),
     "g10_g4turns_cold_calibrate": ("g10_turns_bench", "BM_G10_g4turns_Cold", None),
     "g10_noturns_stream_tick": ("g10_turns_bench", "BM_G10_noturns_StreamTick", None, {"refreshes": "==0"}),
     "g10_g4turns_stream_tick": ("g10_turns_bench", "BM_G10_g4turns_StreamTick", None, {"refreshes": "==0"}),
-    "g10_noturns_refresh_25bp": ("g10_turns_bench", "BM_G10_noturns_RefreshTick25bp", None),
-    "g10_g4turns_refresh_25bp": ("g10_turns_bench", "BM_G10_g4turns_RefreshTick25bp", None),
+    "g10_noturns_refresh_25bp": ("g10_turns_bench", "BM_G10_noturns_RefreshTick25bp", None, {"refreshes": ">=1"}),
+    "g10_g4turns_refresh_25bp": ("g10_turns_bench", "BM_G10_g4turns_RefreshTick25bp", None, {"refreshes": ">=1"}),
     "g10_noturns_jacobian": ("g10_turns_bench", "BM_G10_noturns_Jacobian", None),
     "g10_g4turns_jacobian": ("g10_turns_bench", "BM_G10_g4turns_Jacobian", None),
     "multicurve4_cold_calibrate": ("multicurve_ql_bench", "BM_MultiCurve4_Ours", "BM_MultiCurve4_QuantLib"),
