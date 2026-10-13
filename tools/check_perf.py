@@ -79,6 +79,12 @@ METRICS = {
     # 3.3 ms / 214.7 ms, so these numbers are 38x and 43x better than the behaviour they replace.
     "shape_mixed_scheme_stream_tick": ("shape_ladder_bench", "BM_Shape_mixed_scheme_StreamTick", None, {"refreshes": "==0"}),
     "shape_mixed_scheme_refresh_25bp": ("shape_ladder_bench", "BM_Shape_mixed_scheme_RefreshTick25bp", None),
+    # mixed_convex (2026-10-12): mixed_scheme with the long end on MonotoneConvex -- value-dependent and NOT piecewise-
+    # linear, so its long rows stream on the AAD block under the horizon partition (the router's fallback). The one
+    # rung that measures that path; the piecewise-linear tier never sees it (no routing_bench twin).
+    "shape_mixed_convex_stream_tick": ("shape_ladder_bench", "BM_Shape_mixed_convex_StreamTick", None),
+    "shape_mixed_convex_refresh_25bp": ("shape_ladder_bench", "BM_Shape_mixed_convex_RefreshTick25bp", None),
+    "shape_mixed_convex_jacobian": ("shape_ladder_bench", "BM_Shape_mixed_convex_Jacobian", None),
     "shape_desk_mixed_stream_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_StreamTick", None),
     "shape_desk_mixed_refresh_25bp": ("shape_ladder_bench", "BM_Shape_desk_mixed_RefreshTick25bp", None, {"refreshes": ">0", "rescales": ">0"}),
     "shape_desk_mixed_requote_tick": ("shape_ladder_bench", "BM_Shape_desk_mixed_RequoteTick", None),

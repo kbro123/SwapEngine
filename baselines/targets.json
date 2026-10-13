@@ -56,7 +56,7 @@
     },
     "sofr_23k_warm_recal_10bp": {
       "target_ns": 13079,
-      "note": "re-pointed 2026-09-10 (E6.1b): the streamed tick at ±10 bp; 10.1 us x1.3; was 56200 ns; ratchets DOWN only"
+      "note": "re-pointed 2026-09-10 (E6.1b): the streamed tick at \u00b110 bp; 10.1 us x1.3; was 56200 ns; ratchets DOWN only"
     },
     "chain8x26_session_cold_build_calibrate": {
       "target_ns": 27161300,
@@ -337,6 +337,18 @@
     "g10_book2000_reprice": {
       "target_ns": 336000,
       "note": "set 2026-09-21 with the metric (G10 desk, 8 curves / 7 currencies): 258.7 us x1.3; ratchets DOWN only"
+    },
+    "shape_mixed_convex_stream_tick": {
+      "target_ns": 111000,
+      "note": "initial = 2026-10-13 baseline x1.3 (mixed_convex: the long rows on the AAD block, MonotoneConvex being not piecewise-linear); ratchets DOWN only"
+    },
+    "shape_mixed_convex_refresh_25bp": {
+      "target_ns": 244000,
+      "note": "initial = 2026-10-13 baseline x1.3 (mixed_convex: the long rows on the AAD block, MonotoneConvex being not piecewise-linear); ratchets DOWN only"
+    },
+    "shape_mixed_convex_jacobian": {
+      "target_ns": 139000,
+      "note": "initial = 2026-10-13 baseline x1.3 (mixed_convex: the long rows on the AAD block, MonotoneConvex being not piecewise-linear); ratchets DOWN only"
     }
   }
 }

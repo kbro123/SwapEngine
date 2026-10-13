@@ -200,8 +200,11 @@ silent NaN; caught at construction).
   REFUSES the curve (`CompiledCurveSet::enable_pwl` throws, the router never offers it) and the rows reading it
   ride the AAD block under the horizon partition — exactly the fallback `router_partition_test` pins. Both
   `scheme_is_linear` and `scheme_is_piecewise_linear` are INCLUSION lists now: a new scheme is non-linear and
-  not piecewise-linear until named. Not in the shape ladder yet (a rung streams on the AAD tier; add with
-  measured pins).
+  not piecewise-linear until named. **In the shape ladder since 2026-10-12 as the `mixed_convex` rung** (the mixed-scheme bundle
+  with its SOFR long end on MonotoneConvex): gated tick / 25 bp refresh / Jacobian metrics, allocation pins (its
+  long rows on the AAD block allocate ~12 per tick, like mixed_scheme's did before the tier) and soak pins -- 0
+  failed ticks on every walk at ~110..150 us/tick, including the unsmoothed factor walk where MonotoneCubic's
+  Hyman branches fail 49 of 400: no branch kinks to park on.
 - **THE GUARD (detect non-linear → route to AAD, never the W-cache):** `is_linear_map` is now enforced,
   not just documented. (a) Compile-time: `integral_weight_matrix` (`pricing/compiled.hpp`) `static_assert`s
   its curve `is_linear_map`, so a value-dependent scheme can NEVER silently reach the W-cache — it is a
@@ -905,9 +908,10 @@ delete those, they enforce the rule. Two honest residues:
       Obs-shift telescopes (the product still evaluates it exactly); lookback-no-shift/lockout genuinely need
       the product. NB the changelog warns lookback is **incompatible with the telescoping formula** unless the
       observation shift is also applied — we build coupons non-telescopic, sidestepping it.
-      Also not done: a `scheme` selector on the problem structs so a real Bundle/CalibrationProblem *selects*
-      B-spline or the new MonotoneCubic (the W-cache supports the linear ones; only the standalone
-      `BSplineProblem`/`MonotoneCubicProblem` tests exercise a non-default scheme today).
+      The `scheme` selector on the problem structs EXISTS for the bundle (noted 2026-10-12): `BundleCurveSpec`
+      (= `pricing::CurveStructure`) carries its region list, so a `BundleProblem` selects B-spline / MonotoneCubic /
+      MonotoneConvex per region (the compile verb's `policy`, the shape ladder's rungs); only the legacy single-curve
+      `CalibrationProblem` is fixed to `flat_hermite(meeting, back)` by `to_bundle`.
 - [x] **Stage 6 — bonds & bond asset swaps — DONE (pricing + universe sweep + asset swaps + API verbs + perf gate).**
       Merged to `main`. Design `docs/bond-pricing.md`. A bond is DATA (dated
       cashflows + a small yield convention), NOT a subclass — "US Treasury" is field values a builder fills

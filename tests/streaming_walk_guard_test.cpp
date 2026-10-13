@@ -161,7 +161,9 @@ TEST(StreamingWalkGuard, ALargeMoveOnASquareRungNeitherRefreshesNorAllocates) {
     EXPECT_EQ(refreshes, 0) << s.name << ": a 25 bp square tick refreshed";
     EXPECT_EQ(st.factor_count() - f0, 0) << s.name;
     if (swaps::testing::alloc_counting_available()) {
-      const unsigned long pin = s.name == "mixed_scheme" ? 585u : 0u;
+      // mixed_convex (2026-10-12): its long rows stream on the AAD block (MonotoneConvex is not piecewise-linear), which
+      // allocates per tick like mixed_scheme's did before the tier; measured 270 / 10 ticks, pinned with ~10 % slack.
+      const unsigned long pin = s.name == "mixed_scheme" ? 585u : (s.name == "mixed_convex" ? 300u : 0u);
       EXPECT_LE(allocs, pin) << s.name << ": a 25 bp square tick allocates more than its pin";
     }
   }
@@ -244,7 +246,7 @@ TEST(StreamingWalkGuard, ARegularisedTickIsAllocationFree) {
 TEST(StreamingWalkGuard, TheStreamerLadderTickPins) {
   if (!swaps::testing::alloc_counting_available()) GTEST_SKIP() << "allocation counting needs libmalloc's logger (macOS)";
   struct Pin { const char* name; unsigned long ticks; };
-  static const Pin pins[] = {{"mixed_scheme", 520}, {"desk_mixed", 4070}};  // desk_mixed 4530 -> 4070 (S2, 2026-09-15)
+  static const Pin pins[] = {{"mixed_scheme", 520}, {"mixed_convex", 265}, {"desk_mixed", 4070}};  // desk_mixed 4530 -> 4070 (S2, 2026-09-15); mixed_convex measured 240 / 20 ticks (2026-10-12, the AAD block's rows)
   static const std::vector<Shape> L = swaps::shapes::ladder();
   for (const Shape& s : L) {
     const Eigen::VectorXd x = cal::calibrate(s.prob, s.x0).x;

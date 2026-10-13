@@ -740,9 +740,28 @@
           "reference_ns": null,
           "reference_bm": null,
           "speedup": null
+        },
+        "shape_mixed_convex_stream_tick": {
+          "ours_ns": 85582,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_mixed_convex_refresh_25bp": {
+          "ours_ns": 188032,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
+        },
+        "shape_mixed_convex_jacobian": {
+          "ours_ns": 107035,
+          "reference_ns": null,
+          "reference_bm": null,
+          "speedup": null
         }
       },
-      "cpu_busy_pct_at_capture": 12.2
+      "cpu_busy_pct_at_capture": 12.2,
+      "note_mixed_convex": "2026-10-13: the three mixed_convex metrics measured alone (min of 3 runs of shape_ladder_bench, load ~7) and inserted by hand; a whole-file --update that day captured every other metric 1.2..2.1x slow under load and was reverted"
     }
   }
 }

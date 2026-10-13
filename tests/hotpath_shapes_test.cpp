@@ -139,6 +139,7 @@ TEST(ShapeLadder, StreamingTickIsAllocationFreeOnEveryCompiledShape) {
     //   desk_mixed's 18. That is the next thing to attack here, in the same family as C7/C6 — and like every
     //   pin in this list it may only DECREASE.
     static const Pin pins[] = {{"averaged_leg", 360}, {"banded", 0}, {"fx_xccy", 0}, {"desk", 0}, {"mixed_scheme", 560},
+                               {"mixed_convex", 265},   // 2026-10-12: measured 240 / 20 ticks, the AAD block's rows (MonotoneConvex is not piecewise-linear)
                                {"desk_mixed", 3600}};  // 4300 -> 3600 (S2, 2026-09-15: measured 3230, ~10 % slack)
     //   desk_mixed 3700 -> 4300 on 2026-09-15 (step 3a): q_small no longer swings the xccy 30Y knot, and the honest tick flips a
     //   MonotoneCubic clamp -- 3920 over 20 ticks at the session's MEASURED break-even (1.5 refreshes per tick), ~10 % slack as before.

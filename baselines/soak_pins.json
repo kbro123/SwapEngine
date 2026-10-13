@@ -17,7 +17,7 @@
   "keys": {
     "Darwin|AppleClang 21.0.0.21000101|-march=x86-64-v3|AVX2+FMA": {
       "captured": "2026-09-21",
-      "note": "the reference machine (Mac Pro 2019, Xeon W-3223; perf fingerprint 966685f93279), seed 20260921",
+      "note": "the reference machine (Mac Pro 2019, Xeon W-3223; perf fingerprint 966685f93279), seed 20260921. mixed_convex (2026-10-12): the mixed rung with its long end on MonotoneConvex (AAD block, ~110..150 us/tick) read 0 failed ticks on every walk, even the unsmoothed factor walk where MonotoneCubic's Hyman branches fail 49 -- no branch kinks to park on; dq pinned ~1.5x the measurement",
       "rungs": {
         "mixed_scheme": {
           "smoothed_per_row": { "failed": 0, "dq": 2e-5 },
@@ -26,6 +26,10 @@
         "desk_mixed": {
           "smoothed_per_row": { "failed": 1, "dq": 2e-5 },
           "unsmoothed_factor": { "failed": 108, "dq": 2e-5 }
+        },
+        "mixed_convex": {
+          "smoothed_per_row": { "failed": 0, "dq": 2e-6 },
+          "unsmoothed_factor": { "failed": 0, "dq": 1e-11 }
         }
       }
     },

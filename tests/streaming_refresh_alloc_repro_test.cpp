@@ -45,7 +45,7 @@ TEST(StreamingRefreshAllocRepro, ARefreshReusesItsJacobianAndDecompositionStorag
   struct Pin { const char* name; unsigned long refresh; };
   // Measured 2026-09-15 after the change (was, on 8323778: 13 on every compiled rung, desk 18, mixed_scheme 27, desk_mixed 65).
   // desk_mixed 54 -> 31 on 2026-09-15 (S2): a refresh reads its band sides from the Jacobian pass instead of re-pricing every model quote.
-  static const Pin pins[] = {{"desk", 8}, {"mixed_scheme", 16}, {"desk_mixed", 31}};
+  static const Pin pins[] = {{"desk", 8}, {"mixed_scheme", 16}, {"mixed_convex", 10}, {"desk_mixed", 31}};  // mixed_convex measured 9 (2026-10-12: its long rows on the AAD block)
   SC::Options o;
   o.breakeven_steps = 64;
   for (const Shape& s : swaps::shapes::ladder()) {

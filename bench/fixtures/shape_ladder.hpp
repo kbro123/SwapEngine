@@ -84,6 +84,17 @@ inline px::CurveStructure spec_mixed(const std::vector<double>& knots, std::size
                swaps::curve::CurveModule{back, swaps::curve::Scheme::MonotoneCubic}};
   return s;
 }
+// The same split with the long end on MonotoneConvex (Hagan-West): value-dependent AND not piecewise-linear, so its
+// rows ride the AAD block, never the piecewise-linear W tier (the mixed_convex rung, 2026-10-12).
+inline px::CurveStructure spec_mixed_convex(const std::vector<double>& knots, std::size_t split, int base = -1) {
+  px::CurveStructure s;
+  s.base = base;
+  const std::vector<double> front(knots.begin(), knots.begin() + static_cast<std::ptrdiff_t>(split));
+  const std::vector<double> back(knots.begin() + static_cast<std::ptrdiff_t>(split), knots.end());
+  s.regions = {swaps::curve::CurveModule{front, swaps::curve::Scheme::Hermite},
+               swaps::curve::CurveModule{back, swaps::curve::Scheme::MonotoneConvex}};
+  return s;
+}
 // Par swaps of `conv` at the pillar tenors, forecasting fc / discounting disc; returns the knot times (the last
 // fixed pay time of each instrument -- one knot per pillar => a square block).
 inline std::vector<double> add_par_swaps(cal::BundleProblem& p, const b::SwapConv& conv, int fc, int disc,
@@ -341,6 +352,25 @@ inline Shape mixed_scheme() {
                       "(front rows W-cached, long rows on the AAD block)",
                       std::move(p), false);
 }
+// THE MIXED-CONVEX RUNG (2026-10-12): mixed_scheme with the SOFR long end on MonotoneConvex instead of MonotoneCubic.
+// MonotoneConvex is the first scheme that is value-dependent and NOT piecewise-linear (no constant W per branch cell),
+// so the piecewise-linear tier refuses it and the rows reading past the horizon stream on the AAD block under the
+// horizon partition -- the fallback router_partition_test pins. This rung is where that fallback is MEASURED (a tick,
+// a 25 bp refresh, a Jacobian) and walked (the soak, the walk guard) instead of only asserted.
+inline Shape mixed_convex() {
+  cal::BundleProblem p;
+  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  auto k1 = detail::add_averaged_futures(p, "USD-FEDFUNDS", 1, 6);
+  const auto P = detail::pillars();
+  const std::vector<std::string> longer(P.begin() + 1, P.end());  // 2Y..30Y basis
+  const auto k1b = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, longer);
+  k1.insert(k1.end(), k1b.begin(), k1b.end());
+  p.curves = {detail::spec_mixed_convex(k0, 6), detail::spec(k1, 0)};
+  return detail::make("mixed_convex",
+                      "averaged + the SOFR long end on MonotoneConvex: not piecewise-linear, so the long rows take "
+                      "the AAD block under the horizon partition (the router's fallback, measured)",
+                      std::move(p), false);
+}
 inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
   p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
@@ -439,7 +469,7 @@ inline Shape desk() { return desk_impl(false); }
 inline Shape desk_mixed() { return desk_impl(true); }
 
 inline std::vector<Shape> ladder() {
-  return {ois_nolag(), ois_lag(), ibor_multicurve(), basis_spread(), averaged(), averaged_leg(), averaged_leg_moment(), all_schemes(), mixed_scheme(), banded(), turns(), portfolio(), zero_coupon(), fx_xccy(), desk(), desk_mixed()};
+  return {ois_nolag(), ois_lag(), ibor_multicurve(), basis_spread(), averaged(), averaged_leg(), averaged_leg_moment(), all_schemes(), mixed_scheme(), mixed_convex(), banded(), turns(), portfolio(), zero_coupon(), fx_xccy(), desk(), desk_mixed()};
 }
 
 }  // namespace swaps::shapes
