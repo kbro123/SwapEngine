@@ -19,11 +19,12 @@ const rb::MultiCcyBundle& fx() {
   static const rb::MultiCcyBundle b = rb::build_xccy_bundle();
   return b;
 }
-api::RegSpec tension_reg(const rb::MultiCcyBundle& b) {  // (name kept: the bench's regularised variant)
-  api::RegSpec r;                       // the web/SDK default smoothing shape: the curvature penalty
-  r.lambda = 1e-3;
-  for (int c = 0; c < b.n_curves(); ++c) r.curves.push_back(c);
-  return r;
+// The bench's regularised variant: the same problem with the curvature weight stamped onto every region (smoothing
+// is region data, 2026-10-13).
+cal::BundleProblem smoothed(const rb::MultiCcyBundle& b) {
+  cal::BundleProblem p = b.prob;
+  cal::stamp_region_smoothing(p, 1e-3);
+  return p;
 }
 cal::BundleProblem perturbed(const rb::MultiCcyBundle& b) {
   cal::BundleProblem p = b.prob;
@@ -47,10 +48,10 @@ BENCHMARK(BM_XccyBundle_ColdCalibrate);
 // Cold with the web's default tension smoothing (the shipped shape).
 static void BM_XccyBundle_ColdCalibrateTension(benchmark::State& state) {
   const auto& b = fx();
-  const api::RegSpec reg = tension_reg(b);
+  const cal::BundleProblem p = smoothed(b);
   for (auto _ : state) {
-    api::BundleSession sess(b.prob);
-    sess.calibrate(b.x0, reg);
+    api::BundleSession sess(p);
+    sess.calibrate(b.x0);
     benchmark::DoNotOptimize(sess.x().data());
   }
 }

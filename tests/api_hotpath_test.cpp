@@ -114,10 +114,10 @@ TEST(ApiHotPath, OneShotPv01IsTheGradientAlongTheParallelDirectionFromOneNarrowP
   if (swaps::testing::alloc_counting_available()) EXPECT_LE(allocs, 200u) << "the one-shot grew a heap-Dual pass back";
 }
 
-TEST(ApiHotPath, RiskOperatorTakesTheRBlockFromTheSessionCache) {
+TEST(ApiHotPath, RiskOperatorStacksTheRiskSideDampingUnderTheEnginesRows) {
   const Chain f;
-  api::BundleSession s(f.prob);
-  s.calibrate(f.x0, f.reg);
+  api::BundleSession s(f.prob);  // no region smoothing: the engine's rows are the quote rows, so the explicit formula below is [J; R]
+  s.calibrate(f.x0);
   ASSERT_TRUE(s.result().converged) << s.result().status;
   const Eigen::MatrixXd M1 = s.risk_operator(f.reg);  // warm: J cached, R cached
   unsigned long allocs = 0;
@@ -130,7 +130,7 @@ TEST(ApiHotPath, RiskOperatorTakesTheRBlockFromTheSessionCache) {
   std::cout << "  [hotpath] risk_operator (regularised, warm): " << allocs << " allocs\n";
   EXPECT_EQ((M1 - M2).cwiseAbs().maxCoeff(), 0.0) << "same inputs, same operator";
   // Explicit formula off the same J and a freshly built R block: the cached block is the same block.
-  const Eigen::MatrixXd J = s.jacobian(f.reg);
+  const Eigen::MatrixXd J = s.jacobian();
   const Eigen::MatrixXd R = cal::second_difference_operator(f.prob, f.reg.lambda, f.reg.curves);
   Eigen::MatrixXd S(J.rows() + R.rows(), J.cols()); S << J, R;
   Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod; cod.setThreshold(cal::kRankThreshold); cod.compute(S);

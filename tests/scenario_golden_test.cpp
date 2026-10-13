@@ -36,6 +36,7 @@
 #include "swaps/api/scenario.hpp"
 #include "swaps/api/scenario_grid.hpp"
 #include "swaps/api/var.hpp"
+#include "swaps/calibration/regularize.hpp"
 
 namespace api = swaps::api;
 namespace cal = swaps::calibration;
@@ -354,18 +355,19 @@ TEST(ScenarioGolden, VarSuppliedResponseIsBitwise) {
   EXPECT_EQ(q[3].as_object().at("var_pnl").to_number<double>(), 7.75) << "q = 1e-17: the last point";
 }
 
-// REVAL with an explicit seed, a regulariser and no quantiles (the [0.95, 0.99] default): the pieces the lift re-plumbs
-// (seed_or_flat, RegSpec, the default) that var_reval.json does not exercise.
+// REVAL with an explicit seed, a SMOOTHED bundle and no quantiles (the [0.95, 0.99] default): the pieces the lift
+// re-plumbs (seed_or_flat, the default) that var_reval.json does not exercise. Smoothing is REGION DATA (2026-10-13):
+// the bundle's regions carry reg_lambda = 1e-4 (the same rows the retired request-level RegSpec installed, so the golden
+// is unchanged); a `regularize` on the request would be risk-side only and is not sent.
 TEST(ScenarioGolden, VarRevalSeededAndSmoothedResponseIsBitwise) {
   json::object req = base_request();
   req.erase("sample_times");
   json::array x0;
-  const cal::BundleProblem p = bundle();
+  cal::BundleProblem p = bundle();
   for (int i = 0; i < p.n_knots(); ++i) x0.push_back(0.025 + 0.0005 * i);  // not the flat seed
   req["x0"] = std::move(x0);
-  json::array reg_curves;
-  for (int c = 0; c < p.n_curves(); ++c) reg_curves.push_back(c);
-  req["regularize"] = json::object{{"lambda", 1e-4}, {"curves", reg_curves}};  // on(): lambda AND curves
+  cal::stamp_region_smoothing(p, 1e-4);  // every non-Flat region, every curve
+  req["bundle"] = api::bundle_to_json(p);
   req["scenarios"] = json::array{
       json::object{{"parallel_bp", 37.5}},
       json::object{{"parallel_bp", 34.0}, {"shift_curve", json::object{{"1", -31.75}}}},
@@ -379,16 +381,24 @@ TEST(ScenarioGolden, VarRevalSeededAndSmoothedResponseIsBitwise) {
   ASSERT_EQ(q.size(), 2u);
   EXPECT_TRUE(out.at("calibration").as_object().at("converged").as_bool()) << "SC3: the seeded, smoothed base converged";
   EXPECT_EQ(q[0].as_object().at("q").to_number<double>(), 0.95) << "absent quantiles take the default";
-  // The regulariser reaches the calibration: the same request without it (same seed) prices another base.
+  // The regions' smoothing reaches the calibration: the same request on the unsmoothed bundle (same seed) prices another
+  // base; and a request-level `regularize` does NOT (it is the ladder's damping, not the calibration's).
   json::object plain = req;
-  plain.erase("regularize");
+  plain["bundle"] = api::bundle_to_json(bundle());
   const double plain_base =
       json::parse(api::var_json(json::object{{"var", plain}})).as_object().at("var").as_object().at("base_npv").to_number<double>();
-  EXPECT_NE(out.at("base_npv").to_number<double>(), plain_base) << "the regulariser must change the calibrated base";
-  // The golden pins a CONVERGED, regularised base: the same bundle, seed and regulariser through the calibrate dispatch.
-  json::object cal_req{{"bundle", req.at("bundle")}, {"x0", req.at("x0")}, {"regularize", req.at("regularize")}};
+  EXPECT_NE(out.at("base_npv").to_number<double>(), plain_base) << "the regions' smoothing must change the calibrated base";
+  json::object plain_reg = plain;
+  json::array reg_curves;
+  for (int c = 0; c < p.n_curves(); ++c) reg_curves.push_back(c);
+  plain_reg["regularize"] = json::object{{"lambda", 1e-4}, {"curves", reg_curves}};
+  const double plain_reg_base =
+      json::parse(api::var_json(json::object{{"var", plain_reg}})).as_object().at("var").as_object().at("base_npv").to_number<double>();
+  EXPECT_EQ(plain_reg_base, plain_base) << "a request-level regularize is risk-side only: the base is the unsmoothed one";
+  // The golden pins a CONVERGED, smoothed base: the same bundle and seed through the calibrate dispatch install the rows.
+  json::object cal_req{{"bundle", req.at("bundle")}, {"x0", req.at("x0")}};
   const json::object cal_out = json::parse(api::run_json(cal_req)).as_object();
   ASSERT_TRUE(cal_out.contains("calibration")) << json::serialize(cal_out);
   EXPECT_TRUE(cal_out.at("calibration").at("converged").as_bool()) << json::serialize(cal_out.at("calibration"));
-  EXPECT_TRUE(cal_out.at("calibration").at("regularize_applied").as_bool());
+  EXPECT_GT(cal_out.at("calibration").at("smoothing_rows").to_number<int>(), 0);
 }

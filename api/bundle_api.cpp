@@ -125,30 +125,18 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   }
   x_ = Eigen::VectorXd::Zero(prob_.n_knots());
   resolve_fixings();  // resolve any schedule-carrying observations (no-op when none carry a schedule)
+  // SMOOTHING IS REGION DATA (2026-10-13): the regions' own weights (CurveModule::reg_lambda) become the session's
+  // smoothing rows here, once, as the tail of prob_.constraints; no verb installs or changes them.
+  n_smoothing_ = cal::add_smoothing_rows(prob_);
 }
 
-// The smoothing a verb asks for, as the problem's own CONSTRAINT ROWS (2026-10-12, review item 3): one StateLinear
-// row per interior knot (regularize.hpp smoothing_rows), appended at the tail of prob_.constraints and counted in
-// n_smoothing_. The rows depend only on the bundle's STRUCTURE and the reg parameters, never on quotes or x. A change
-// of reg is a change of the row set, i.e. of structure: the engine is dropped and rebuilt against the new rows (the
-// streamer and the bound book with it). The same reg again is a no-op -- the common case: every verb of a session
-// runs under the one smoothing the client chose.
-void BundleSession::install_smoothing(const RegSpec& reg) const {
-  if (!cal::install_smoothing_rows(prob_, n_smoothing_, reg_installed_, reg)) return;  // the one definition (regularize.hpp)
-  engine_.reset();  // the row set changed: the engine, the streamer that borrows it and the bound book's twin rebuild lazily
-  cbook_.reset();
-  resolved_book_.reset();
-  stream_.reset();
-}
-
-const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0, const RegSpec& reg) {
+const cal::CalibrationResult& BundleSession::calibrate(const Eigen::VectorXd& x0) {
   const auto t0 = std::chrono::steady_clock::now();
   // EVERY path drives the ONE cached hybrid engine (compiled W-cache rows + width-reduced AAD rows; for a
   // non-linear scheme the hybrid routes every row to the AAD block, so it subsumes the old pre-E4.A AAD-only
   // escape hatch). The engine is built once per structure and reused across warm re-solves -- construction
-  // (W build, batch registration, MtM guard) is no longer paid per calibrate call. The smoothing is rows of
-  // that engine (install_smoothing), so the regularised solve is the same call over more rows.
-  install_smoothing(reg);
+  // (W build, batch registration, MtM guard) is no longer paid per calibrate call. The regions' smoothing is rows
+  // of that engine (installed at construction), so a smoothed solve is the same call over more rows.
   result_ = cal::calibrate_with(ensure_engine(), prob_.n_knots(), prob_.n_residuals(), x0);
   last_solve_us_ = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
   result_.solve_micros = last_solve_us_;
@@ -181,26 +169,25 @@ void BundleSession::set_band(int row, double lower, double upper, double decay) 
   bands_changed_ = true;  // the streamer's active-set table must be re-read before its next tick
 }
 
-const cal::CalibrationResult& BundleSession::resolve(const RegSpec& reg) { return warm_solve(reg); }
+const cal::CalibrationResult& BundleSession::resolve() { return warm_solve(); }
 
-const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& new_market,
-                                                         const RegSpec& reg) {
+const cal::CalibrationResult& BundleSession::recalibrate(const Eigen::VectorXd& new_market) {
   if (new_market.size() != prob_.n_quotes())
     throw std::runtime_error("recalibrate: market length does not match the instrument count");
   if (!new_market.allFinite())
     throw std::runtime_error("recalibrate: market contains a non-finite quote");
   set_market(new_market);
-  return warm_solve(reg);
+  return warm_solve();
 }
 
-const cal::CalibrationResult& BundleSession::rebind(const cal::StampedBundle& b, const RegSpec& reg) {
+const cal::CalibrationResult& BundleSession::rebind(const cal::StampedBundle& b) {
   // The structural check is the stamp (see the header). Everything else a rebind refuses -- a different
   // instrument count, a non-finite or out-of-band quote -- is still refused by the O(n) body below.
   cal::require_stamp_match(b.stamp(), stamp_, "rebind");
-  return rebind_quotes(b.problem(), reg);
+  return rebind_quotes(b.problem());
 }
 
-const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p, const RegSpec& reg) {
+const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p) {
   if (p.n_quotes() != prob_.n_quotes() || p.n_constraints() != n_client_constraints())
     throw std::runtime_error("rebind: instrument count differs — the structure changed (compile a new session)");
   // Same COUNT is not the same STRUCTURE: a bundle with the same number of instruments but different
@@ -209,12 +196,12 @@ const cal::CalibrationResult& BundleSession::rebind(const cal::BundleProblem& p,
   if (!same_structure(p))
     throw std::runtime_error("rebind: the structure differs (a knot, scheme, role, schedule or instrument changed) — "
                              "compile a new session; rebind carries market targets and bands only");
-  return rebind_quotes(p, reg);
+  return rebind_quotes(p);
 }
 
 // The quote-RHS half of a rebind, shared by both overloads: the structural check is the caller's (an O(n)
 // equality, or the stamp). Everything here is per-row quote data -- no structure is read.
-const cal::CalibrationResult& BundleSession::rebind_quotes(const cal::BundleProblem& p, const RegSpec& reg) {
+const cal::CalibrationResult& BundleSession::rebind_quotes(const cal::BundleProblem& p) {
   const int n_client = p.n_residuals();  // the client's rows: its quotes, then its own constraint rows (never the session's smoothing tail)
   for (int i = 0; i < n_client; ++i) {
     const cal::Instrument& src = p.row(i);
@@ -240,14 +227,9 @@ const cal::CalibrationResult& BundleSession::rebind_quotes(const cal::BundleProb
     bands_changed_ = true;
   }
   if (engine_) engine_->set_quotes(prob_);  // scalar row data: no Instrument copy, no recompile
-  return warm_solve(reg);
+  return warm_solve();
 }
 
-namespace {
-bool same_reg(const RegSpec& a, const RegSpec& b) {
-  return a.lambda == b.lambda && a.curves == b.curves;
-}
-}  // namespace
 
 // The warm re-solve: ONE frozen-Newton tick on the shared engine, seeded from the current x. A session that
 // is not streaming yet starts (one Jacobian at x against the live market); a band edit re-anchors the
@@ -255,12 +237,11 @@ bool same_reg(const RegSpec& a, const RegSpec& b) {
 // converges (committed; result_ reports "streamed") or -- an intrinsically large move -- falls back to an LM
 // warm solve from x, after which the streamer is re-anchored at the LM solution. EVERY bundle takes this
 // path since 2026-09-12: a value-dependent region no longer diverts to a cold solve (see needs_recalibrate).
-const cal::CalibrationResult& BundleSession::warm_solve(const RegSpec& reg) {
-  install_smoothing(reg);  // a reg change re-installs the rows and drops the streamer; the same reg is a no-op
+const cal::CalibrationResult& BundleSession::warm_solve() {
   prob_.market_into(q_scratch_);  // every row's target: the quotes, then the constraint rows (a smoothing row's 0)
   const auto t0 = std::chrono::steady_clock::now();
-  if (!stream_ || !same_reg(stream_reg_, reg)) {
-    start_streaming(reg, stream_ ? stream_step_tol_ : 0.0);  // anchored at (x_, live market)
+  if (!stream_) {
+    start_streaming(stream_ ? stream_step_tol_ : 0.0);  // anchored at (x_, live market)
   } else if (bands_changed_) {
     stream_->resync(prob_, x_, q_scratch_);
     bands_changed_ = false;
@@ -272,7 +253,7 @@ const cal::CalibrationResult& BundleSession::warm_solve(const RegSpec& reg) {
     stamp_streamed(tick, ensure_engine().residuals(x_));  // re-evaluated at x_: the engine's market IS the live market now
     return result_;
   }
-  calibrate(x_, reg);  // the LM fallback, warm from x_
+  calibrate(x_);  // the LM fallback, warm from x_
   stream_->resync(prob_, x_, q_scratch_);
   return result_;
 }
@@ -325,8 +306,7 @@ json::array BundleSession::quote_diagnostics() const {
 }
 std::string BundleSession::quote_diagnostics_json() const { return json::serialize(quote_diagnostics()); }
 
-Eigen::MatrixXd BundleSession::jacobian(const RegSpec& reg) const {
-  (void)reg;  // J = dq/dx is independent of any regulariser (constraint rows sit BELOW the quote block); see header.
+Eigen::MatrixXd BundleSession::jacobian() const {
   // The cached hybrid engine's ANALYTIC Jacobian (W-cache rows analytic, FX/MtM rows width-reduced AAD)
   // -- pin-tested equal to the full AAD sweep, and reuses the session's compiled engine instead of an
   // n_knots-wide AAD pass per call. Its QUOTE block: the constraint rows (installed smoothing, a client bound) are
@@ -340,14 +320,28 @@ Eigen::VectorXd BundleSession::residual_market_scale() const {
 
 Eigen::MatrixXd BundleSession::risk_operator(const RegSpec& reg) const {
   // THE operator (normal_op.hpp): the IFT on min ||r||² + ||Rx||² reads [J; R]ᵀ[J; R] dx = Jᵀ D dq, rank-safe at the ONE
-  // kRankThreshold the streamer and LM use. [J; R] IS the engine's row Jacobian with `reg` installed as its constraint
-  // rows (2026-10-12; until then R was a cached matrix stacked here): the operator is the pseudo-inverse of every row,
-  // and dx/dq reads its quote columns.
-  install_smoothing(reg);
-  const Eigen::MatrixXd S = ensure_engine().jacobian(x_);  // n_res x n_knots: the quotes' rows, then the constraint rows
+  // kRankThreshold the streamer and LM use. The engine's row Jacobian already carries the calibration's own rows (the
+  // regions' smoothing, a client's bounds); `reg` is the separate RISK-side damping (2026-10-13): its rows are stacked
+  // under them here, and dx/dq reads the quote columns of the pseudo-inverse.
+  const Eigen::MatrixXd J = ensure_engine().jacobian(x_);  // n_res x n_knots: the quotes' rows, then the constraint rows
+  if (!reg.on()) {
+    cal::NormalOp op(static_cast<int>(J.rows()), static_cast<int>(J.cols()));
+    op.factor(J);
+    return op.quote_sensitivity(residual_market_scale(), prob_.n_quotes());  // n_knots x n_quotes = dx/dq
+  }
+  // The damping block depends on the structure and the request only: built once per (lambda, curves), reused warm.
+  if (risk_R_.size() == 0 || risk_R_lambda_ != reg.lambda || risk_R_curves_ != reg.curves) {
+    risk_R_ = cal::second_difference_operator(prob_, reg.lambda, reg.curves);
+    risk_R_lambda_ = reg.lambda;
+    risk_R_curves_ = reg.curves;
+  }
+  const Eigen::MatrixXd& R = risk_R_;
+  Eigen::MatrixXd S(J.rows() + R.rows(), J.cols());
+  S.topRows(J.rows()) = J;
+  S.bottomRows(R.rows()) = R;
   cal::NormalOp op(static_cast<int>(S.rows()), static_cast<int>(S.cols()));
   op.factor(S);
-  return op.quote_sensitivity(residual_market_scale(), prob_.n_quotes());  // n_knots x n_quotes = dx/dq
+  return op.quote_sensitivity(residual_market_scale(), prob_.n_quotes());
 }
 
 std::optional<pf::MultiCurveBook> BundleSession::resolve_book(const pf::MultiCurveBook& book) const {
@@ -556,22 +550,20 @@ Eigen::MatrixXd BundleSession::transform_matrix_json(const std::string& source_b
   return transform_matrix(bundle_from_json(json::parse(source_bundle_json)), reg);
 }
 
-void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
+void BundleSession::start_streaming(double step_tol) {
   // The StreamingCalibrator builds its own hybrid engine from prob_; no compiled engine is constructed
   // here (that would throw on an FX/MtM leaf, which the hybrid handles on its AAD block).
   //
   // Anchor at the market MIDS (prob_.market()). For a hard bundle these equal the curve's reprice; for a
   // banded (soft) bundle the curve sits off-market inside the bands, and the streaming feed IS the mids,
   // so anchoring at the mids keeps the drift ~0 at the first real tick.
-  install_smoothing(reg);  // the regulariser is rows of the engine the streamer borrows (nothing stacked on the tick)
-  const Eigen::VectorXd q0 = prob_.market();  // every row's target: the quotes' mids, then the constraint rows'
+  const Eigen::VectorXd q0 = prob_.market();  // the regions' smoothing rows are rows of the engine the streamer borrows  // every row's target: the quotes' mids, then the constraint rows'
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
   if (step_tol > 0.0) opt.step_tol = step_tol;  // looser tol -> fewer corrector steps (speed/accuracy knob)
   // The streamer BORROWS the session's one compiled engine (the object model): a scalar set_quotes on the
   // session is what it prices next tick. It is dropped with the engine (invalidate_engine) and rebuilt
   // here lazily by the next stream_update/resolve.
   stream_ = std::make_unique<cal::StreamingCalibrator<cal::BundleProblem>>(ensure_engine(), prob_, x_, q0, opt);
-  stream_reg_ = reg;
   stream_step_tol_ = step_tol;
   stream_armed_ = true;
   bands_changed_ = false;
@@ -582,7 +574,7 @@ void BundleSession::start_streaming(const RegSpec& reg, double step_tol) {
 const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_market) {
   if (!stream_) {
     if (!stream_armed_) throw std::runtime_error("start_streaming() must be called first");
-    start_streaming(stream_reg_, stream_step_tol_);  // rebuilt after a fixings / evaluation-date recompile
+    start_streaming(stream_step_tol_);  // rebuilt after a fixings / evaluation-date recompile
   }
   // Eigen's size asserts are compiled out under -DNDEBUG, so a wrong-length market would be a silent
   // heap over-read/over-write inside the residual kernel (recalibrate() already checks; this must too).
@@ -622,7 +614,7 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
     // result().converged reports the SOLVE (was the market incorporated). A fallback tick is false and true
     // respectively. A caller watching streaming health still sees every failure; a caller pricing off the
     // curve gets the new market either way.
-    calibrate(x_, stream_reg_);     // warm from the last good x (the quotes were committed before the tick), as warm_solve does
+    calibrate(x_);     // warm from the last good x (the quotes were committed before the tick), as warm_solve does
     stream_->resync(prob_, x_, q_scratch_);
     x_ = result_.x;
   }
@@ -672,17 +664,8 @@ std::string run_json(const json::object& o) {
       req2.erase("compile");
       req2.erase("today");
       req2["bundle"] = bundle_to_json(cr.bundle);
-      // The spec's smoothing is the DEFAULT regulariser of the rewrite (E3-D4): a caller that sends a
-      // composer spec gets the same curve the web shows; an explicit `regularize` still wins.
-      if (!req2.contains("regularize")) {
-        const RegSpec reg = compile_reg_spec(cr);
-        if (reg.on()) {
-          json::object r;
-          r["lambda"] = reg.lambda;
-          r["curves"] = json::array(reg.curves.begin(), reg.curves.end());
-          req2["regularize"] = std::move(r);
-        }
-      }
+      // The spec's smoothing travels INSIDE the bundle (regions[].reg_lambda, region data; a legacy spec's
+      // `smoothness` was migrated onto its regions by compile_spec), so nothing is added here.
       return run_json(req2);  // the compile+sample re-entry: no re-serialise, no re-parse (E6.3)
     }
 
@@ -740,9 +723,11 @@ std::string run_json(const json::object& o) {
       x0 = flat_x0(P);
     }
 
-    const RegSpec reg = reg_from_json(o);  // the ONE RegSpec-from-JSON (E6.3)
-
-    const cal::CalibrationResult& res = sess.calibrate(x0, reg);
+    // `regularize` on a request is the RISK-side damping for its "risk" / "portfolio_risk" / "transform" arms (the
+    // generated dispatch below reads `reg`); the calibration's smoothing is region data (regions[].reg_lambda),
+    // installed by the session at construction.
+    const RegSpec reg = reg_from_json(o);
+    const cal::CalibrationResult& res = sess.calibrate(x0);
 
     json::object out;
     {
@@ -753,8 +738,7 @@ std::string run_json(const json::object& o) {
       c["info"] = res.info;
       c["converged"] = res.converged;  // LM ended at a stationary point with a finite result
       c["status"] = res.status;        // the LM stopping reason, in words
-      c["regularize_applied"] = reg.on();  // which smoothing this calibration ran under (E3-D4)
-      c["regularize_lambda"] = reg.lambda;
+      c["smoothing_rows"] = sess.problem().n_constraints();  // the regions' smoothing rows (+ any client constraint rows) this ran under
       c["rank_deficiency"] = res.rank_deficiency;  // >0: the instrument set under-determines the curve
       out["calibration"] = c;
     }

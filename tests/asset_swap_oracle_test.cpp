@@ -137,11 +137,9 @@ struct Mirror {
   ql::Handle<ql::YieldTermStructure> disc;
 
   explicit Mirror(const std::string& value_date) : bundle(make_bundle_json()) {
-    // EXACTLY api/bond.cpp's recipe: bundle_from_json -> BundleSession -> Light preset -> flat_x0.
+    // EXACTLY api/bond.cpp's recipe: bundle_from_json -> BundleSession -> flat_x0 (smoothing is the bundle's region data).
     sess = std::make_unique<api::BundleSession>(api::bundle_from_json(bundle));
-    const api::RegSpec reg =
-        cal::smoothing_preset(cal::Smoothing::Light, static_cast<int>(sess->problem().curves.size()));
-    sess->calibrate(api::flat_x0(sess->problem()), reg);
+    sess->calibrate(api::flat_x0(sess->problem()));
     curve = SessionCurve{sess.get(), /*curve=*/0};
     disc = ql::Handle<ql::YieldTermStructure>(ql::ext::make_shared<swaps::qlx::CurveTermStructure<SessionCurve>>(
         qd(value_date), ql::Actual365Fixed(), &curve));

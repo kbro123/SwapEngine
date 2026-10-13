@@ -81,7 +81,6 @@ inline ResolvedMove resolve_scenario_move(const ScenarioMove& m, const std::vect
 struct ScenarioRequest {
   calibration::BundleProblem bundle;
   std::optional<Eigen::VectorXd> x0;              // absent => the flat seed
-  calibration::RegSpec reg;
   std::vector<double> sample_times;               // empty => no curve samples
   std::optional<portfolio::MultiCurveBook> book;  // absent => no valuation
   std::vector<ScenarioMove> scenarios;
@@ -126,7 +125,7 @@ ScenarioResult scenarios(ScenarioRequest r) {
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
   ScenarioResult out;
-  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario"), r.reg);
+  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario"));
   out.n_curves = P.n_curves();
   out.n_knots = P.n_knots();
   out.x_base = sess.x();  // the anchor every move forks from; never mutated

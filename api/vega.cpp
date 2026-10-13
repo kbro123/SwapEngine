@@ -96,8 +96,7 @@ std::string vega_json(const json::object& request) {
   // Calibrate the bundle -> the curve we price/vega off (same recipe as swaption_json).
   cal::BundleProblem prob = bundle_from_json(o.at("bundle"));
   BundleSession sess(std::move(prob));
-  const RegSpec reg = cal::smoothing_preset(cal::Smoothing::Light, static_cast<int>(sess.problem().curves.size()));
-  sess.calibrate(flat_x0(sess.problem()), reg);
+  sess.calibrate(flat_x0(sess.problem()));  // smoothing is the bundle's region data (regions[].reg_lambda)
   if (curve < 0 || curve >= static_cast<int>(sess.problem().curves.size()))
     throw std::invalid_argument("vega: curve index out of range");
 

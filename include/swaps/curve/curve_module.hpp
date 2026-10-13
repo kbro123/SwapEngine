@@ -175,6 +175,8 @@ inline void sort_distinct_knots(std::vector<double>& knots) {
   knots.erase(std::unique(knots.begin(), knots.end()), knots.end());
 }
 
+// A region that says nothing about its smoothing (CurveModule::reg_lambda): no rows. The one spelling of "unset".
+inline constexpr double kRegLambdaUnset = -1.0;
 // One building block of a curve: the knot times of a region and the interpolation over them.
 struct CurveModule {
   std::vector<double> knots;  // knot times (year fractions), ascending, within this region
@@ -182,12 +184,12 @@ struct CurveModule {
   // Tension hyperparameter (Scheme::Tension only): pulls the spline taut, σ→0 recovers NaturalCubic,
   // σ→∞ approaches piecewise-linear. Ignored by every other scheme. <=0 means "use the default 1.0".
   double sigma = 0.0;
-  // PER-REGION smoothing weight (Phase 1): the curvature penalty strength for THIS region's knots. <0 (the
-  // default) means "inherit the bundle default λ" — so a curve whose regions never set this is penalised
-  // exactly as before (one global λ). Set it to give the meeting-date front λ=0 while the long end is smoothed,
-  // or two regions different strengths. The regulariser reads it per region. (A per-region regulariser σ,
-  // `reg_sigma`, went with the tension-energy operator on 2026-09-22.)
-  double reg_lambda = -1.0;
+  // This region's OWN smoothing weight -- SMOOTHING IS REGION DATA (owner's rule, 2026-10-13, ASSUMPTIONS K47): set
+  // where the curve is defined. > 0 => the calibration carries one curvature row per interior knot of this region at
+  // this weight (regularize.hpp smoothing_rows); 0 or unset (kRegLambdaUnset) => unsmoothed. There is no bundle-level
+  // default a region inherits. A Flat region needs none (a step level carries no curvature row). (A per-region
+  // regulariser σ, `reg_sigma`, went with the tension-energy operator on 2026-09-22.)
+  double reg_lambda = kRegLambdaUnset;
 };
 
 template <class S>

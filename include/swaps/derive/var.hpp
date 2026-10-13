@@ -122,7 +122,6 @@ inline PnlDistribution pnl_distribution(std::vector<double> pnl, const std::vect
 struct VarRevalRequest {
   calibration::BundleProblem bundle;
   std::optional<Eigen::VectorXd> x0;  // absent => the flat seed
-  calibration::RegSpec reg;
   portfolio::MultiCurveBook book;     // required in reval mode (the codec's `need`)
   std::vector<ScenarioMove> scenarios;
   std::optional<std::string> fx_pivot;  // the currency unbumped currencies hold against (SC2)
@@ -152,7 +151,7 @@ VarRevalResult var_reval(VarRevalRequest r) {
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
   VarRevalResult out;
-  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "var"), r.reg);
+  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "var"));
   const Eigen::VectorXd x_base = sess.x();  // the anchor every move forks from; never mutated
 
   calibration::BookRows book(P.curves, r.book);

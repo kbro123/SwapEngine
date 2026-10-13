@@ -68,7 +68,8 @@ struct Fixture {
   cal::BundleProblem prob;
   Eigen::VectorXd x0;
   cal::BundleProblem pert;  // ~1bp-perturbed quotes (the rebind payload)
-  api::RegSpec reg;         // the SDK/web default: curvature smoothing over every curve
+  api::RegSpec reg;         // the RISK-side damping (risk metrics); its lambda also stamps prob_reg / pert_reg
+  cal::BundleProblem prob_reg, pert_reg;  // the same problems with the weight stamped onto every region
 
   Fixture() {
     std::vector<double> meeting{0.25}, back;
@@ -101,6 +102,10 @@ struct Fixture {
 
     reg.lambda = 1e-3;
     for (int c = 0; c < NC; ++c) reg.curves.push_back(c);
+    // Smoothing is REGION DATA (2026-10-13): the regularised variants run on copies whose regions carry the weight.
+    prob_reg = prob; pert_reg = pert;
+    cal::stamp_region_smoothing(prob_reg, reg.lambda);
+    cal::stamp_region_smoothing(pert_reg, reg.lambda);
   }
 };
 
@@ -148,11 +153,11 @@ BENCHMARK(BM_Session_RebindWarm);
 // composed with the constant R block -- previously a per-iteration AAD sweep over a wrapper problem.
 static void BM_Session_RebindRegWarm(benchmark::State& state) {
   const auto& f = fx();
-  api::BundleSession sess(f.prob);
-  sess.calibrate(f.x0, f.reg);
+  api::BundleSession sess(f.prob_reg);
+  sess.calibrate(f.x0);
   bool flip = false;
   for (auto _ : state) {
-    sess.rebind(flip ? f.prob : f.pert, f.reg);
+    sess.rebind(flip ? f.prob_reg : f.pert_reg);
     flip = !flip;
     benchmark::DoNotOptimize(sess.x().data());
   }

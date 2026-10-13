@@ -17,6 +17,7 @@
 #include <boost/json.hpp>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/calibration/regularize.hpp"
 #include "swaps/api/compile.hpp"
 
 namespace json = boost::json;
@@ -297,43 +298,58 @@ TEST(CompileLayout, InstrumentsOnOneDateShareOneKnot) {
   EXPECT_EQ(r2.bundle.curves[0].regions[1].knots.size(), 2u);
 }
 
-TEST(CompileRegSpec, ReadsTheOneSmoothingTable) {
-  swaps::api::CompileResult r;
-  r.smoothness = "light";
-  r.curve_names = {"A", "B"};
-  swaps::api::RegSpec g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 0.5);
-  EXPECT_EQ(g.curves, (std::vector<int>{0, 1}));
+// Smoothing is REGION DATA (2026-10-13): a composer region row's `reg_lambda` lands on its region module; the compiled
+// bundle then carries it into the session's own rows. A region that says nothing beside one that does stays unsmoothed.
+TEST(CompileLayout, ARegionsSmoothingWeightIsCarriedOntoItsModule) {
+  const char* spec = R"({"value_date": "2026-09-08", "smoothness": "off", "curves": [{
+    "id": "c", "name": "C", "currency": "USD", "index": "USD-SOFR",
+    "regions": [{"id": "r1", "name": "front", "policy": "Flat"}, {"id": "r2", "name": "back", "policy": "Hermite", "reg_lambda": 0.25}],
+    "instruments": [
+      {"id": "m1", "type": "meeting", "end": "2026-09-17", "adds_knot": true, "region": "r1"},
+      {"id": "s2", "type": "swap", "end": "2y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.9},
+      {"id": "s3", "type": "swap", "end": "3y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.85},
+      {"id": "s5", "type": "swap", "end": "5y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.8}]}]})";
+  const swaps::api::CompileResult r = compile_spec(json::parse(spec));
+  ASSERT_EQ(r.bundle.curves[0].regions.size(), 2u);
+  EXPECT_EQ(r.bundle.curves[0].regions[0].reg_lambda, -1.0) << "the Flat region said nothing (and needs no rows)";
+  EXPECT_EQ(r.bundle.curves[0].regions[1].reg_lambda, 0.25);
+  EXPECT_EQ(swaps::calibration::smoothing_rows(r.bundle).size(), 2u) << "the Hermite region's 2y (against the join) and 3y knots";
+  swaps::api::BundleSession sess(r.bundle);
+  EXPECT_EQ(sess.problem().n_constraints(), 2) << "the session installs the region's rows at construction";
+}
 
-  r.smoothness = "strong";
-  g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 5.0);
-
-  r.has_reg_op = true;
-  r.reg_op = "tension";
-  EXPECT_THROW(swaps::api::compile_reg_spec(r), std::invalid_argument);
-  r.reg_op = "second_difference";  // naming the operator is fine
-  r.tension_sigma = 0.3;
-  EXPECT_THROW(swaps::api::compile_reg_spec(r), std::invalid_argument);
-  r.tension_sigma = 0.0;
-  g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 5.0);
-
-  r.smoothness = "off";
-  g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 0.0);
-  EXPECT_FALSE(g.on());
-
-  r.under_determined = true;
-  g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 0.5) << "off is promoted to light (second-difference) when under-determined";
-
-  r.under_determined = false;
-  r.has_bands = true;
-  r.has_reg_op = false;
-  r.curve_names.clear();
-  r.bundle.curves.resize(3);
-  g = swaps::api::compile_reg_spec(r);
-  EXPECT_EQ(g.lambda, 0.5) << "off is promoted to light when banded";
-  EXPECT_EQ(g.curves, (std::vector<int>{0, 1, 2})) << "no named curves => every bundle curve";
+// A LEGACY spec -- explicit regions that say nothing -- has its `smoothness` word migrated onto the non-Flat regions
+// once, at compile, with a warning; "off" stamps 0 (no rows) even on an under-determined spec; the retired operator is
+// refused. The classic layout (no explicit regions) is stamped the same way where the compile defines its Hermite region.
+TEST(CompileLayout, ALegacySpecsSmoothnessWordIsMigratedOntoItsRegionsOnce) {
+  const std::string body = R"(, "curves": [{
+    "id": "c", "name": "C", "currency": "USD", "index": "USD-SOFR",
+    "regions": [{"id": "r1", "name": "front", "policy": "Flat"}, {"id": "r2", "name": "back", "policy": "Hermite"}],
+    "instruments": [
+      {"id": "m1", "type": "meeting", "end": "2026-09-17", "adds_knot": true, "region": "r1"},
+      {"id": "s2", "type": "swap", "end": "2y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.9},
+      {"id": "s3", "type": "swap", "end": "3y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.85},
+      {"id": "s5", "type": "swap", "end": "5y", "adds_knot": true, "region": "r2", "has_quote": true,
+       "quote_kind": "ParRate", "unit": "pct", "target": 3.8}]}]})";
+  const auto spec = [&](const char* smoothness) { return json::parse(std::string(R"({"value_date": "2026-09-08", "smoothness": ")") + smoothness + "\"" + body); };
+  const swaps::api::CompileResult strong = compile_spec(spec("strong"));
+  EXPECT_EQ(strong.bundle.curves[0].regions[0].reg_lambda, -1.0) << "Flat: nothing to stamp";
+  EXPECT_EQ(strong.bundle.curves[0].regions[1].reg_lambda, 5.0);
+  bool warned = false;
+  for (const auto& w : strong.warnings) warned = warned || w.find("Legacy smoothing") != std::string::npos;
+  EXPECT_TRUE(warned) << "the migration says so";
+  const swaps::api::CompileResult off = compile_spec(spec("off"));
+  EXPECT_EQ(off.bundle.curves[0].regions[1].reg_lambda, 0.0);
+  EXPECT_TRUE(swaps::calibration::smoothing_rows(off.bundle).empty()) << "off means off: no floor";
+  const swaps::api::CompileResult light = compile_spec(spec("light"));
+  EXPECT_EQ(light.bundle.curves[0].regions[1].reg_lambda, 0.5);
+  EXPECT_EQ(swaps::calibration::smoothing_rows(light.bundle).size(), 2u);
+  json::value tension = spec("light");
+  tension.as_object()["reg_op"] = "tension";
+  EXPECT_ANY_THROW(compile_spec(tension)) << "the retired operator is refused, never remapped";
 }

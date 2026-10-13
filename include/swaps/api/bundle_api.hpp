@@ -154,13 +154,14 @@ class BundleSession {
   explicit BundleSession(cal::BundleProblem prob);
 
   // Cold-calibrate from x0 on the one hybrid engine (compiled W-cache rows + the AAD block for the rows it cannot
-  // express). `reg` -- here and on every verb below that takes one -- is the SMOOTHING the session runs under: it is
-  // installed as CONSTRAINT ROWS of the session's problem (BundleProblem::constraints, regularize.hpp smoothing_rows,
-  // one StateLinear row per interior knot) and so becomes rows of the engine, the streamer's frozen system and the
-  // risk operator's stack alike (2026-10-12). A verb that passes a DIFFERENT reg from the installed one re-installs
-  // (the engine recompiles: structure changed); the same reg is a no-op. problem() shows the installed rows at the
-  // tail of constraints; the client's own structure (its stamp, its instrument count) is unchanged by them.
-  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0, const RegSpec& reg = {});
+  // express). SMOOTHING IS REGION DATA (owner's rule, 2026-10-13): each region's `reg_lambda` (set where the curve is
+  // defined) is the only source of the calibration's smoothing rows -- installed at construction as CONSTRAINT ROWS
+  // of the session's problem (BundleProblem::constraints, regularize.hpp smoothing_rows, one StateLinear row per
+  // interior knot) and so rows of the engine, the streamer's frozen system and the risk operator's stack alike. No
+  // calibration verb takes a RegSpec any more; the RegSpec on risk_operator / price_portfolio_risk / transform_matrix
+  // is the separate RISK-side damping. problem() shows the installed rows at the tail of constraints; the client's own
+  // structure (its stamp, its instrument count) is unchanged by them.
+  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0);
 
   // ---- the object model (E4.A, 2026-09-10): ONE compiled engine, scalar inputs, structure immutable ----
   // A session compiles its hybrid engine once per STRUCTURE and every consumer borrows it: calibrate, the
@@ -172,26 +173,26 @@ class BundleSession {
   // STRUCTURE: compile a new session (there is no runtime structure hash gating a warm path any more).
   void set_market(const Eigen::VectorXd& market);                          // all targets; no solve
   void set_band(int row, double lower, double upper, double decay);        // one row's band; no solve
-  const cal::CalibrationResult& resolve(const RegSpec& reg = {});          // re-solve to the current inputs
+  const cal::CalibrationResult& resolve();                                 // re-solve to the current inputs
 
   // set_market + resolve: re-solve to a NEW market vector. On a streaming session this IS a tick (the
   // streamer shares the engine); on a fresh session it starts streaming first (one Jacobian) -- so a
-  // requote costs a tick, not an LM. `reg` selects the regulariser the streamer runs under.
-  const cal::CalibrationResult& recalibrate(const Eigen::VectorXd& new_market, const RegSpec& reg = {});
+  // requote costs a tick, not an LM.
+  const cal::CalibrationResult& recalibrate(const Eigen::VectorXd& new_market);
 
   // COMPATIBILITY path: the same requote from a bare BundleProblem, whose structure is proved by an O(n)
   // structure_equal walk of every coupon (~192 us of a ~290 us rebind on the 8x26 chain). Prefer the stamped
   // overload below: a caller that keeps its document alive stamps it ONCE at build and requotes for two
   // integers. This overload does NOT stamp `p` for you on purpose -- hashing a document costs MORE than
   // walking it (204 us vs 192 us measured); the stamp only pays when it is computed once and reused.
-  const cal::CalibrationResult& rebind(const cal::BundleProblem& p, const RegSpec& reg = {});
+  const cal::CalibrationResult& rebind(const cal::BundleProblem& p);
   // THE REQUOTE PATH (adopted 2026-09-20): the caller hands over a bundle that carries the
   // structural stamp it was BUILT with (cal::make_stamped), so the check is two integers instead of an O(n)
   // walk of every coupon (192 us of a 320 us rebind on the 8x26 chain). The stamp is resolution-insensitive,
   // so a client's unresolved document still matches a session carrying resolved fixing schedules. A stale or
   // mismatched stamp throws exactly as a structural difference does; the instrument-count and per-row quote
   // validation are unchanged, so a wrong-sized or non-finite payload is still refused before anything moves.
-  const cal::CalibrationResult& rebind(const cal::StampedBundle& b, const RegSpec& reg = {});
+  const cal::CalibrationResult& rebind(const cal::StampedBundle& b);
   // This session's STRUCTURAL stamp (cal::structural_stamp) -- the value a caller's stamped bundle must
   // carry to rebind. Unlike structure_fingerprint() it does not change when fixings resolve.
   std::uint64_t structural_stamp() const { return stamp_; }
@@ -265,7 +266,7 @@ class BundleSession {
   // never desync). A Python layer transforms a risk ladder from bundle A to bundle B via T = J_A · M_B
   // (n_res_A x n_res_B), delta_B = delta_A · T. `reg` is accepted for signature symmetry with risk_operator() but
   // does not affect J (a regulariser is constraint rows below the quote block, never a change to it).
-  Eigen::MatrixXd jacobian(const RegSpec& reg = {}) const;
+  Eigen::MatrixXd jacobian() const;
 
   // The analytic risk operator M = dx/dq (n_knots x n_quotes) by the implicit-function theorem on the
   // (regularised) least-squares condition: M = pinv([J; R]) restricted to the quote columns, times
@@ -370,7 +371,7 @@ class BundleSession {
   // step_tol > 0 overrides the frozen-Newton convergence tolerance (||dx||_inf); 0 keeps the exact default
   // (machine-precision reprice each tick). A looser tol stops in fewer corrector steps — a speed/accuracy
   // knob for a live viewer — while still refreshing the Jacobian on staleness (so it stays robust).
-  void start_streaming(const RegSpec& reg = {}, double step_tol = 0.0);
+  void start_streaming(double step_tol = 0.0);
   const Eigen::VectorXd& stream_update(const Eigen::VectorXd& new_market);
   // A FOUR-NUMBER requote tick (K5', 2026-09-14): every row's target AND band. Every quote is validated first (a target outside
   // its band, an inverted band or a decay outside [0, 1] is refused and nothing changes); moved bands land on the shared engine
@@ -454,7 +455,7 @@ class BundleSession {
   // is a pure cache of prob_'s structure, so const queries (jacobian) may build it lazily.
   void invalidate_engine() { engine_.reset(); cbook_.reset(); resolved_book_.reset(); stream_.reset(); }
   // The warm re-solve behind resolve/recalibrate/rebind (one streamed tick, LM fallback).
-  const cal::CalibrationResult& warm_solve(const RegSpec& reg);
+  const cal::CalibrationResult& warm_solve();
   void record_tick(const cal::StreamTick& tick, double solve_us);
   // After a CONVERGED tick on either entry point (warm_solve, stream_update): commit the streamer's curve to x_
   // and make result_ report THIS solve, with `r` as its residual. warm_solve passes a re-evaluation at x_ (its
@@ -466,17 +467,12 @@ class BundleSession {
     if (!engine_) engine_ = std::make_unique<cal::HybridBundleResidual>(prob_);
     return *engine_;
   }
-  // Install `reg` as the problem's smoothing rows -- the TAIL n_smoothing_ rows of prob_.constraints (regularize.hpp
-  // smoothing_rows). A no-op when `reg` is the installed one; otherwise the tail is replaced and the engine (and with
-  // it the streamer, the bound book) is dropped: the row set is structure. Const because every verb may ask for it
-  // (risk_operator, price_portfolio_risk, transform_matrix are const), exactly as the engine is built lazily by const
-  // queries: the smoothing rows are state DERIVED from (prob_'s curves, reg), never from quotes or x.
-  void install_smoothing(const RegSpec& reg) const;
+  // The regions' smoothing rows are the TAIL n_smoothing_ rows of prob_.constraints (regularize.hpp smoothing_rows,
+  // installed once at construction from the curves' region data); the client's own constraint rows come before them.
   int n_client_constraints() const { return prob_.n_constraints() - n_smoothing_; }
 
-  mutable cal::BundleProblem prob_;  // the client's problem + the installed smoothing rows at the tail of constraints
-  mutable RegSpec reg_installed_;    // the smoothing those tail rows carry (RegSpec{}: none installed)
-  mutable int n_smoothing_ = 0;      // how many tail rows of prob_.constraints are the session's own
+  cal::BundleProblem prob_;  // the client's problem + the regions' smoothing rows at the tail of constraints
+  int n_smoothing_ = 0;      // how many tail rows of prob_.constraints are the session's own (region data)
   std::uint64_t fingerprint_ = 0;  // structure hash at compile time (the warm-vs-recompile switch)
   Eigen::VectorXd x_;
   Eigen::VectorXd parallel_dir_;  // pricing::parallel_direction(prob_.curves): the PV01 direction, fixed per structure
@@ -485,7 +481,7 @@ class BundleSession {
   bool has_modular_ = false;
   bool has_nonlinear_ = false;
   bool has_band_ = false;
-  mutable std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;  // dropped by install_smoothing (const: a derived cache, like engine_)
+  std::unique_ptr<cal::StreamingCalibrator<cal::BundleProblem>> stream_;
   // The cached warm/streaming reprice twin (bind_portfolio/reprice_bound). bound_book_ is the copied book;
   // cbook_ is its compiled W-cache twin, built once on bind and rebuilt lazily after invalidate_engine()
   // drops it (a structural bundle change moves W). Mutable so the const reprice_bound() can rebuild lazily.
@@ -493,7 +489,6 @@ class BundleSession {
   mutable std::unique_ptr<swaps::portfolio::MultiCurveBook> resolved_book_;  // its fixings-resolved copy (the twin's source)
   mutable std::unique_ptr<swaps::calibration::BookRows> cbook_;
   // Streaming session state (the streamer itself may be dropped by invalidate_engine and rebuilt lazily).
-  RegSpec stream_reg_;
   double stream_step_tol_ = 0.0;
   bool stream_armed_ = false;
   bool bands_changed_ = false;  // a set_band/rebind changed a band since the streamer last anchored
@@ -502,7 +497,7 @@ class BundleSession {
   std::uint64_t stamp_ = 0;  // E8: the structural stamp of the compiled document (resolution-insensitive)
   // The quote-RHS half of a rebind (targets + bands + resolve), shared by both rebind overloads once the
   // caller's structural check -- O(n) equality or the stamp -- has passed.
-  const cal::CalibrationResult& rebind_quotes(const cal::BundleProblem& p, const RegSpec& reg);
+  const cal::CalibrationResult& rebind_quotes(const cal::BundleProblem& p);
   mutable std::unique_ptr<cal::HybridBundleResidual> engine_;
   swaps::pricing::FixingTable fixings_;
   int eval_date_ = 0;
@@ -514,6 +509,10 @@ class BundleSession {
   mutable double last_price_us_ = 0;
   // Risk-time telemetry, stamped by the (const) price_portfolio_risk; mutable so the query stays const.
   mutable double last_risk_us_ = 0;
+  // The risk-side damping block of risk_operator(reg): structure-only, cached per (lambda, curves).
+  mutable Eigen::MatrixXd risk_R_;
+  mutable double risk_R_lambda_ = 0.0;  // 0 = none built (a request with lambda <= 0 is off and never caches)
+  mutable std::vector<int> risk_R_curves_;
   double stream_sum_us_ = 0;   // sum of stream_update solve times since start_streaming()
   long stream_ticks_ = 0;      // count of those ticks
   int last_newton_steps_ = 0;
@@ -579,7 +578,8 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json);
 // One-shot stateless JSON dispatcher for a web call. Request:
 //   { "bundle": {...},                         (required) the BundleProblem object graph
 //     "x0": [...],                             (optional) start; else a flat guess
-//     "regularize": {"lambda":1.0,"curves":[3,4]},  (optional) curvature penalty on those curves
+//     "regularize": {"lambda":1.0,"curves":[3,4]},  (optional) the RISK-side damping for a "risk" / "portfolio_risk" /
+//                                               "transform" arm (calibration smoothing is region data: regions[].reg_lambda)
 //     "sample_times": [...],                   (optional) grid to sample every curve on
 //     "price": [ {instrument}, ... ],          (optional) instruments to price off the solved curves
 //     "risk": true }                           (optional) include the dx/dq operator

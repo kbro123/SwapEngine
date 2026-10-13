@@ -218,7 +218,8 @@ TEST(StreamingWalkGuard, ARegularisedTickIsAllocationFree) {
     cal::RegSpec reg;
     reg.lambda = 0.02;
     reg.curves = curves;
-    cal::add_smoothing_rows(pr, reg);
+    cal::stamp_region_smoothing(pr, reg.lambda, reg.curves);  // smoothing is region data
+  cal::add_smoothing_rows(pr);
     ASSERT_GT(pr.n_constraints(), 0) << "premise: a non-empty regulariser";
     const auto full = [&](const Eigen::VectorXd& q) { Eigen::VectorXd fq = pr.market(); fq.head(q.size()) = q; return fq; };
     const Eigen::VectorXd q0 = full(s.q0), q_small = full(s.q_small);

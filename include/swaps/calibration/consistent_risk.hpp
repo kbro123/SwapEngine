@@ -49,12 +49,8 @@ struct ConsistentRisk {
   std::vector<ConsistentBundleRisk> bundles;
 };
 
-// The calibration that re-levels an under-determined bundle must be well-posed: the caller's regulariser when it is
-// on, else the light preset over every curve. (The RISK operator itself is rank-completed, never smoothed.)
-inline RegSpec relevel_calibration_reg(const RegSpec& reg, const BundleProblem& b) {
-  if (reg.on()) return reg;
-  return smoothing_preset(Smoothing::Light, static_cast<int>(b.curves.size()));
-}
+// (The re-levelling calibrations run under each bundle's OWN region smoothing -- region data, 2026-10-13; the RISK
+// operator itself is rank-completed, never smoothed.)
 
 template <class S, class Book>
 concept RiskSession = CalibrationSession<S> &&
@@ -69,12 +65,12 @@ concept RiskSession = CalibrationSession<S> &&
 
 template <class Session, class Book>
   requires RiskSession<Session, Book>
-ConsistentRisk consistent_risk(const Book& book, const std::vector<BundleProblem>& bundles, const RegSpec& reg) {
+ConsistentRisk consistent_risk(const Book& book, const std::vector<BundleProblem>& bundles) {
   if (bundles.empty()) throw std::invalid_argument("generate_risk: need at least one bundle");
 
   // Anchor: calibrate bundle[0] to ITS market -> the curve C0 everything is priced on.
   Session anchor(bundles[0]);
-  anchor.calibrate(flat_x0(bundles[0]), relevel_calibration_reg(reg, bundles[0]));
+  anchor.calibrate(flat_x0(bundles[0]));
   const auto p0 = anchor.price_portfolio(book);
 
   ConsistentRisk out;
@@ -94,11 +90,11 @@ ConsistentRisk consistent_risk(const Book& book, const std::vector<BundleProblem
       for (auto& ins : bk.instruments) ins.market = anchor.model_quote(ins);
     }
     Session sk(bk);
-    sk.calibrate(flat_x0(bk), relevel_calibration_reg(reg, bk));  // for k>0 the markets are C0-implied -> curve ~ C0
+    sk.calibrate(flat_x0(bk));  // for k>0 the markets are C0-implied -> curve ~ C0
 
     const auto pk = sk.price_portfolio_risk(book);  // curve_grad = dP/dx_k on C0
     const auto pr = sk.price_portfolio(book);
-    const Eigen::MatrixXd J = sk.jacobian(RegSpec{});
+    const Eigen::MatrixXd J = sk.jacobian();
 
     const NullCompletedLadder lad =
         null_completed_ladder(J, pk.curve_grad, residual_market_scale(sk.problem().instruments));
@@ -120,12 +116,11 @@ ConsistentRisk consistent_risk(const Book& book, const std::vector<BundleProblem
 struct ConsistentRiskRequest {
   portfolio::MultiCurveBook book;
   std::vector<BundleProblem> bundles;
-  RegSpec reg;  // only makes the RE-LEVELING calibration well-posed (relevel_calibration_reg)
 };
 
 template <class Session>
 ConsistentRisk consistent_risk(const ConsistentRiskRequest& r) {
-  return consistent_risk<Session, portfolio::MultiCurveBook>(r.book, r.bundles, r.reg);
+  return consistent_risk<Session, portfolio::MultiCurveBook>(r.book, r.bundles);
 }
 
 }  // namespace swaps::calibration

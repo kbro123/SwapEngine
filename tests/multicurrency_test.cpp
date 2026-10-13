@@ -849,7 +849,8 @@ TEST(EurCurves, RegularisedStreamingTracksTheCoupledTrio) {
   cal::RegSpec reg;
   reg.lambda = 1.0;
   reg.curves = {b.EUR3M, b.EUR6M};
-  cal::add_smoothing_rows(pr, reg);
+  cal::stamp_region_smoothing(pr, reg.lambda, reg.curves);  // smoothing is region data
+  cal::add_smoothing_rows(pr);
   const auto full = [&](const Eigen::VectorXd& q) { Eigen::VectorXd f = pr.market(); f.head(q.size()) = q; return f; };
   const Eigen::VectorXd q0 = engine.model_rates(b.x_true);
   SC sc(pr, b.x_true, full(q0), opt);

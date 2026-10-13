@@ -68,17 +68,8 @@ struct CompileResult {
 // spec to carry `value_date`. Throws CompileError on bad structure.
 CompileResult compile_spec(const boost::json::value& spec, const std::string& today_iso = "");
 
-// The smoothing the spec ASKS for, as an engine RegSpec (E3-D4, 2026-09-10; ported from server/compile.py
-// reg_spec so every host -- web, Excel C-ABI, run_json compile+sample -- calibrates the same curve).
-// The operator is the curvature (second-difference) penalty, off / light / strong from calibration/regularize.hpp
-// smoothing_preset (the one table; 0.5 / 5.0). `reg_op` may name it ("second_difference"); any other value, and a
-// non-zero `tension_sigma`, are REFUSED (std::invalid_argument from calibration::refuse_retired_regulariser -- the check
-// lives with the regulariser, P14): the tension-energy operator was retired on 2026-09-22 and
-// a spec still asking for it should not be silently given something else. Both fields stay in CompileResult and
-// compile_to_json so the compile document's shape is unchanged. An under-determined OR banded spec floors "off" to
-// "light" (a penalty is what makes those well-posed). The RegSpec spans every curve. lambda == 0 => RegSpec::on()
-// is false.
-RegSpec compile_reg_spec(const CompileResult& r);
+// (compile_reg_spec is gone, 2026-10-13: smoothing is REGION DATA -- regions[].reg_lambda on the compiled bundle; a
+// legacy spec's `smoothness` is migrated onto its regions inside compile_spec.)
 
 // Serialize a CompileResult to the SAME JSON document server/compile.py's compile_spec returns.
 boost::json::value compile_to_json(const CompileResult& r);

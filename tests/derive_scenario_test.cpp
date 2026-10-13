@@ -21,14 +21,13 @@ namespace px = swaps::pricing;
 
 namespace {
 
-// calibrate() keeps its seed, so x_base is whatever the library seeded with; it counts calls and records the regulariser.
+// calibrate() keeps its seed, so x_base is whatever the library seeded with; it counts calls (smoothing is region data: no argument).
 class SeedSession {
  public:
   explicit SeedSession(cal::BundleProblem p) : p_(std::move(p)) {}
-  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0, const cal::RegSpec& reg) {
+  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0) {
     x_ = x0;
     ++calls;
-    last_lambda = reg.lambda;
     res_.x = x_;
     res_.converged = true;
     res_.iterations = 4;
@@ -37,11 +36,10 @@ class SeedSession {
   }
   const cal::BundleProblem& problem() const { return p_; }
   const Eigen::VectorXd& x() const { return x_; }
-  Eigen::MatrixXd jacobian(const cal::RegSpec&) const { return Eigen::MatrixXd::Zero(p_.n_residuals(), p_.n_knots()); }
+  Eigen::MatrixXd jacobian() const { return Eigen::MatrixXd::Zero(p_.n_residuals(), p_.n_knots()); }
   Eigen::MatrixXd risk_operator(const cal::RegSpec&) const { return Eigen::MatrixXd::Zero(p_.n_knots(), p_.n_residuals()); }
 
   inline static int calls = 0;
-  inline static double last_lambda = 0.0;
 
  private:
   cal::BundleProblem p_;
@@ -141,7 +139,6 @@ TEST(Scenarios, CalibratesOnceAndValuesEveryMoveAtItsForkOfTheBase) {
   dv::ScenarioRequest r;
   r.bundle = p;
   r.x0 = x0;
-  r.reg.lambda = 0.25;
   r.sample_times = {0.0, 2.0};
   r.book = book;
   dv::ScenarioMove par, fx, noop;
@@ -155,7 +152,6 @@ TEST(Scenarios, CalibratesOnceAndValuesEveryMoveAtItsForkOfTheBase) {
   SeedSession::calls = 0;
   const dv::ScenarioResult out = dv::scenarios<SeedSession>(r);
   EXPECT_EQ(SeedSession::calls, 1) << "one calibration for every move";
-  EXPECT_EQ(SeedSession::last_lambda, 0.25);
   EXPECT_EQ(out.calibration.iterations, 4) << "the base's solve is reported as the session returned it (SC3)";
   EXPECT_EQ(std::string(out.calibration.status), "cosine too small");
   EXPECT_EQ(out.n_curves, 2);

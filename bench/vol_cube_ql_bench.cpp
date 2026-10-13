@@ -96,11 +96,10 @@ api::VolCubeSpec make_spec() {
 }
 
 api::BundleSession calibrated_session() {
-  api::BundleSession sess(api::bundle_from_json(boost::json::parse(bundle_json())));
-  api::RegSpec reg;
-  reg.lambda = 0.02;
-  reg.curves = {0};
-  sess.calibrate(api::flat_x0(sess.problem()), reg);
+  swaps::calibration::BundleProblem p = api::bundle_from_json(boost::json::parse(bundle_json()));
+  swaps::calibration::stamp_region_smoothing(p, 0.02);  // smoothing is region data (2026-10-13)
+  api::BundleSession sess(p);
+  sess.calibrate(api::flat_x0(sess.problem()));
   return sess;
 }
 

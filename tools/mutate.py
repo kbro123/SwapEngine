@@ -216,7 +216,7 @@ MUTATIONS = [
      "",
      ["fx_spot_time_compiled_test.cpp"], "*", "the compiled FX outright ignoring the spot time is unpinned"),
     ("compiled_fx_jacobian_drops_spot_entries", "include/swaps/calibration/compiled_bundle.hpp",
-     "              G(t.row, fx.idx_sden) += F * INV[fx.idx_sden];\n              G(t.row, fx.idx_snum) += -F * INV[fx.idx_snum];\n",  # re-anchored 2026-09-22 (row model)
+     "              G(grow_[t.row], fx.idx_sden) += F * INV[fx.idx_sden];\n              G(grow_[t.row], fx.idx_snum) += -F * INV[fx.idx_snum];\n",  # re-anchored 2026-10-13 (G rows compacted to rows with DF support)
      "",
      ["fx_spot_time_compiled_test.cpp"], "*", "the compiled FX row's two spot-time Jacobian entries are unpinned"),
     # ... the MtM notional and the basis divisor ...

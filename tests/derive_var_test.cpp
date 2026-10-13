@@ -32,10 +32,9 @@ constexpr double kCalibrationShift = 1e-3;
 class SeedSession {
  public:
   explicit SeedSession(cal::BundleProblem p) : p_(std::move(p)) {}
-  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0, const cal::RegSpec& reg) {
+  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0) {
     x_ = (x0.array() + kCalibrationShift).matrix();
     ++calls;
-    last_lambda = reg.lambda;
     res_.x = x_;
     res_.iterations = 7;
     res_.info = 5;
@@ -48,11 +47,10 @@ class SeedSession {
   }
   const cal::BundleProblem& problem() const { return p_; }
   const Eigen::VectorXd& x() const { return x_; }
-  Eigen::MatrixXd jacobian(const cal::RegSpec&) const { return Eigen::MatrixXd::Zero(p_.n_residuals(), p_.n_knots()); }
+  Eigen::MatrixXd jacobian() const { return Eigen::MatrixXd::Zero(p_.n_residuals(), p_.n_knots()); }
   Eigen::MatrixXd risk_operator(const cal::RegSpec&) const { return Eigen::MatrixXd::Zero(p_.n_knots(), p_.n_residuals()); }
 
   inline static int calls = 0;
-  inline static double last_lambda = 0.0;
 
  private:
   cal::BundleProblem p_;
@@ -202,7 +200,6 @@ TEST(Var, RevalPricesEveryMoveAtTheCalibratedStateThroughTheCompiledBookUnderThe
   dv::VarRequest r;
   r.quantiles = {0.9};
   r.reval = three_curve_reval();
-  r.reval->reg.lambda = 0.25;
   dv::ScenarioMove keyed = parallel(34.0);
   keyed.shift_curve_bp = {{0, 14.5}};
   dv::ScenarioMove fx;
@@ -217,7 +214,6 @@ TEST(Var, RevalPricesEveryMoveAtTheCalibratedStateThroughTheCompiledBookUnderThe
   SeedSession::calls = 0;
   const dv::VarResult out = dv::var<SeedSession>(r);
   EXPECT_EQ(SeedSession::calls, 1) << "one calibration for every move";
-  EXPECT_EQ(SeedSession::last_lambda, 0.25);
   ASSERT_TRUE(out.reval.has_value());
   const dv::VarRevalResult& rv = *out.reval;
   EXPECT_EQ(rv.n_positions, 2);

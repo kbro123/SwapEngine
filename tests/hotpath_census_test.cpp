@@ -126,7 +126,8 @@ Outcome reg_desk_small() {
   cal::RegSpec reg;
   reg.lambda = 0.02;
   reg.curves = curves;
-  cal::add_smoothing_rows(pr, reg);
+  cal::stamp_region_smoothing(pr, reg.lambda, reg.curves);  // smoothing is region data
+  cal::add_smoothing_rows(pr);
   const auto full = [&](const Eigen::VectorXd& q) { Eigen::VectorXd f = pr.market(); f.head(q.size()) = q; return f; };
   const Eigen::VectorXd q0 = full(s.q0), q_small = full(s.q_small);
   cal::HybridBundleResidual eng(pr);

@@ -18,6 +18,7 @@
               10.0136986301,
               30.0273972603
             ],
+            "reg_lambda": 0.5,
             "scheme": "NaturalCubic"
           }
         ]
@@ -1159,7 +1160,6 @@
     0.0385,
     0.04
   ],
-  "tension_sigma": 0.0,
   "under_determined": false,
   "value_date": "2026-07-08",
   "warnings": []

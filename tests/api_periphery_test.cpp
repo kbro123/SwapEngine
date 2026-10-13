@@ -14,9 +14,12 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/capi.h"
 #include "swaps/api/compile.hpp"
+#include "swaps/api/codec.hpp"
+#include "swaps/calibration/regularize.hpp"
 #include "swaps/calibration/risk.hpp"  // null_completed_ladder (moved from api, E7 3.7)
 
 namespace api = swaps::api;
+namespace cal = swaps::calibration;
 namespace json = boost::json;
 
 namespace {
@@ -138,20 +141,18 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
       {"type":"swap","end":"10Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0396}]}]})";
   const auto cr = api::compile_spec(json::parse(spec), "2026-07-08");
   ASSERT_TRUE(cr.under_determined);
-  const api::RegSpec reg = api::compile_reg_spec(cr);
-  EXPECT_TRUE(reg.on());
-  EXPECT_DOUBLE_EQ(reg.lambda, 0.5);  // the curvature operator's Light (0.02 under the tension table until 2026-09-21)
-  // "off" on an under-determined spec floors to light; "strong" is 5.0; reg_op "tension" is REFUSED (retired 2026-09-22)
-  api::CompileResult r2 = cr; r2.smoothness = "off";
-  EXPECT_DOUBLE_EQ(api::compile_reg_spec(r2).lambda, 0.5);
-  r2.smoothness = "strong";
-  EXPECT_DOUBLE_EQ(api::compile_reg_spec(r2).lambda, 5.0);
-  r2.has_reg_op = true; r2.reg_op = "tension";
-  EXPECT_THROW(api::compile_reg_spec(r2), std::invalid_argument);
-  r2.reg_op = "second_difference";  // naming the operator is fine
-  EXPECT_DOUBLE_EQ(api::compile_reg_spec(r2).lambda, 5.0);
-  r2.under_determined = false; r2.has_bands = false; r2.smoothness = "off";
-  EXPECT_FALSE(api::compile_reg_spec(r2).on());
+  // SMOOTHING IS REGION DATA (2026-10-13): the spec's "light" is stamped onto the layout's non-Flat region when the
+  // compile defines it -- the engine's one table (0.5) -- and nothing else carries it. "off" means off, even for an
+  // under-determined spec (the old floor is gone); "strong" is 5.0; the retired operator is refused at compile.
+  ASSERT_EQ(cr.bundle.curves[0].regions.size(), 2u);
+  EXPECT_EQ(cr.bundle.curves[0].regions[0].reg_lambda, -1.0) << "a Flat region says nothing (no rows)";
+  EXPECT_DOUBLE_EQ(cr.bundle.curves[0].regions[1].reg_lambda, 0.5);
+  json::value s_off = json::parse(spec); s_off.as_object()["smoothness"] = "off";
+  EXPECT_DOUBLE_EQ(api::compile_spec(s_off, "2026-07-08").bundle.curves[0].regions[1].reg_lambda, 0.0);
+  json::value s_strong = json::parse(spec); s_strong.as_object()["smoothness"] = "strong";
+  EXPECT_DOUBLE_EQ(api::compile_spec(s_strong, "2026-07-08").bundle.curves[0].regions[1].reg_lambda, 5.0);
+  json::value s_tension = json::parse(spec); s_tension.as_object()["reg_op"] = "tension";
+  EXPECT_ANY_THROW(api::compile_spec(s_tension, "2026-07-08"));
 
   void* h = swaps_session_create(spec, "2026-07-08");
   ASSERT_NE(h, nullptr);
@@ -160,9 +161,8 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
   const json::object cal = json::parse(cal_s).as_object();
   swaps_string_free(cal_s);
   ASSERT_FALSE(cal.contains("error")) << json::serialize(cal);
-  EXPECT_TRUE(cal.at("regularize_applied").as_bool());
-  EXPECT_DOUBLE_EQ(num(cal, "regularize_lambda"), 0.5);
-  EXPECT_EQ(cal.at("rank_deficiency").as_int64(), 0) << "regularised: the un-quoted 3Y knot is pinned by the penalty";
+  EXPECT_GT(cal.at("smoothing_rows").to_number<int>(), 0) << "the classic layout's Hermite region carries the spec's light";
+  EXPECT_EQ(cal.at("rank_deficiency").as_int64(), 0) << "smoothed: the un-quoted 3Y knot is pinned by the region's rows";
   const char* smp_s = swaps_session_sample(h, "[1.0,2.0,3.0,4.0,5.0,10.0]");
   std::cout << "  [capi] sample: " << std::string(smp_s).substr(0, 200) << "\n";
   const json::value smp = json::parse(smp_s);
@@ -180,12 +180,15 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
   json::object rq; rq["compile"] = json::parse(spec); rq["sample_times"] = json::array{1.0, 2.0, 3.0, 4.0, 5.0, 10.0};
   const json::object rw = json::parse(api::run_json(json::serialize(rq))).as_object();
   ASSERT_FALSE(rw.contains("error")) << json::serialize(rw);
-  EXPECT_TRUE(rw.at("calibration").as_object().at("regularize_applied").as_bool());
+  EXPECT_GT(rw.at("calibration").as_object().at("smoothing_rows").to_number<int>(), 0);
   const std::vector<double> f_rw = fwd(json::value(rw));
-  // ... and equals an explicit light curvature request
-  json::object rg; rg["lambda"] = 0.5; rg["curves"] = json::array{0};
-  rq["regularize"] = rg;
-  const std::vector<double> f_ex = fwd(json::parse(api::run_json(json::serialize(rq))));
+  // ... and equals the compiled bundle with its Hermite region explicitly stamped at the light weight (0.5)
+  json::object ex;
+  cal::BundleProblem pb = cr.bundle;
+  cal::stamp_region_smoothing(pb, 0.5, {0});
+  ex["bundle"] = api::bundle_to_json(pb);
+  ex["sample_times"] = json::array{1.0, 2.0, 3.0, 4.0, 5.0, 10.0};
+  const std::vector<double> f_ex = fwd(json::parse(api::run_json(json::serialize(ex))));
   ASSERT_EQ(f_capi.size(), 6u);
   for (std::size_t i = 0; i < 6; ++i) {
     EXPECT_NEAR(f_capi[i], f_ex[i], 1e-10) << i;

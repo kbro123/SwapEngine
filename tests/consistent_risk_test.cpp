@@ -238,9 +238,10 @@ TEST(ConsistentRisk, FixtureLinearForwardSurvivesTheLightTensionFloor) {
   const cal::BundleProblem p = ois_bundle();
   ASSERT_EQ(p.n_knots(), kNk);
   ASSERT_EQ(p.n_residuals(), kNr);
-  api::BundleSession s(p);
-  const cal::CalibrationResult& res =
-      s.calibrate(api::flat_x0(p), cal::smoothing_preset(cal::Smoothing::Light, p.n_curves()));
+  cal::BundleProblem pl = p;
+  cal::stamp_region_smoothing(pl, cal::smoothing_lambda(cal::Smoothing::Light));  // smoothing is region data
+  api::BundleSession s(pl);
+  const cal::CalibrationResult& res = s.calibrate(api::flat_x0(p));
   EXPECT_TRUE(res.converged) << res.status;
   EXPECT_EQ(res.rank_deficiency, 0);
   // tol::step_tol: the committed-x contract -- two solves of the same zero-residual problem agree on x to it.
@@ -353,12 +354,12 @@ TEST(ConsistentRisk, UnreachedKnotBecomesExactlyOneSyntheticPillar) {
   ASSERT_EQ(head.size(), static_cast<std::size_t>(kNr));
 
   // Native mirror of the anchor calibration: the unseen knot sits at the SEED (calibrate_with's seed-anchored
-  // completion), so the reference must use the same seed. The light floor cannot see it either -- a Flat piece carries no
-  // curvature under either operator (tension: zero energy; second difference: no row on a Flat knot, D18) -- so both x
-  // agree bitwise.
+  // completion), so the reference must use the same seed. Smoothing is REGION DATA (2026-10-13): generate_risk
+  // calibrates each bundle under its own regions' weights -- none here -- and no floor is applied, so the reference is
+  // the same unsmoothed session; its ladder is the IFT on the same rows. (A Flat tail piece carries no curvature row
+  // under the second-difference operator anyway, D18.)
   api::BundleSession ref(p);
-  const cal::CalibrationResult& res =
-      ref.calibrate(api::flat_x0(p), cal::smoothing_preset(cal::Smoothing::Light, p.n_curves()));
+  const cal::CalibrationResult& res = ref.calibrate(api::flat_x0(p));
   ASSERT_EQ(res.rank_deficiency, 1);
   ASSERT_NEAR(ref.x()[7], api::flat_x0(p)[7], tol::step_tol) << "the unseen knot is anchored at the seed";
   ASSERT_LT((ref.x().head(kNk) - line_x(p).head(kNk)).cwiseAbs().maxCoeff(), tol::step_tol);

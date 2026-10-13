@@ -304,12 +304,15 @@ TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
   const cal::BundleProblem p = build_bundle(x_true);
   const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(p.n_knots(), 0.02);
 
-  // (1) Curvature reg: composed compiled engine vs the AAD engine composed with the same R, same seed, same reg.
+  // (1) Curvature smoothing as REGION DATA (2026-10-13): the regions stamped at 1e-3 vs the AAD engine composed with
+  // the same uniform R block (region stamping skips Flat regions exactly as the operator's Flat rule does).
   api::RegSpec reg;
   reg.lambda = 1e-3;
   reg.curves = {0, 1};
-  api::BundleSession sess(p);
-  sess.calibrate(x0, reg);
+  cal::BundleProblem pr = p;
+  cal::stamp_region_smoothing(pr, reg.lambda, reg.curves);
+  api::BundleSession sess(pr);
+  sess.calibrate(x0);
   // The reference path: the GENERIC AAD engine composed with the same constant R block (E6.1c: the
   // LinearRegularizedProblem wrapper this used to compare against was deleted -- one penalty definition).
   const cal::AadResidualEngine<cal::BundleProblem> aad(p);
@@ -320,14 +323,14 @@ TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
       << "the compiled+R composition must land where the AAD wrapper landed";
 
   // (2) Warm rebind (shifted targets + a NEW band) on the cached engine == a fresh cold session.
-  cal::BundleProblem p2 = p;
+  cal::BundleProblem p2 = pr;
   for (auto& ins : p2.instruments) ins.market += 5e-4;
   p2.instruments[2].band_lower = p2.instruments[2].market - 1e-4;
   p2.instruments[2].band_upper = p2.instruments[2].market + 1e-4;
   p2.instruments[2].band_decay = 0.1;
-  sess.rebind(p2, reg);  // warm: same compiled engine, new full quote RHS
+  sess.rebind(p2);  // warm: same compiled engine, new full quote RHS
   api::BundleSession fresh(p2);
-  fresh.calibrate(x0, reg);  // cold: engine compiled directly against p2
+  fresh.calibrate(x0);  // cold: engine compiled directly against p2
   // 1e-6 since 2026-09-10: the warm rebind is a STREAMED tick (the frozen-Newton active set lands exactly on
   // the band kink), the fresh session is an LM that stalls a hair short of it; they agree to ~4e-7 in the
   // knots. Before, both were LM and agreed to 1e-8.
@@ -780,7 +783,7 @@ TEST(BundleApi, RankDeficientBundleStreamsFinite) {
   sess.calibrate(Eigen::VectorXd::Constant(p.n_knots(), 0.03));
   ASSERT_TRUE(sess.x().allFinite());
   const double x_anchor = sess.x()[p.n_knots() - 1];  // the unpinned knot after the anchored calibration
-  sess.start_streaming({}, 1e-6);
+  sess.start_streaming(1e-6);
   Eigen::VectorXd q = p.market();
   for (int i = 1; i <= 3; ++i) {
     const Eigen::VectorXd& x = sess.stream_update(q.array() + 1e-5 * i);

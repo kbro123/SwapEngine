@@ -142,13 +142,15 @@ TEST(StateLinear, CompiledEqualsTemplatedEqualsTheHandSum) {
   EXPECT_THROW(cal::validate_problem(pb, "test"), std::invalid_argument);
 }
 
-// (2) the smoothing rows are the operator, and a session under `reg` lands where the stacked forms landed.
+// (2) the smoothing rows are the operator, and a session over the STAMPED regions lands where the stacked forms landed.
 TEST(StateLinear, SmoothingRowsAreTheOperatorAndTheSessionLandsWhereTheStackedFormsLanded) {
   const cal::BundleProblem p = bundle(smooth_true());
   cal::RegSpec reg;
   reg.lambda = 0.02;
   reg.curves = {0};
-  const std::vector<cal::Instrument> rows = cal::smoothing_rows(p, reg.lambda, reg.curves);
+  cal::BundleProblem ps = p;
+  cal::stamp_region_smoothing(ps, reg.lambda, reg.curves);  // smoothing is region data
+  const std::vector<cal::Instrument> rows = cal::smoothing_rows(ps);
   ASSERT_EQ(rows.size(), 4u) << "6 Hermite knots: interior rows 1..4";
   const Eigen::MatrixXd R = cal::second_difference_operator(p, reg.lambda, reg.curves);
   ASSERT_EQ(R.rows(), 4);
@@ -160,7 +162,8 @@ TEST(StateLinear, SmoothingRowsAreTheOperatorAndTheSessionLandsWhereTheStackedFo
   }
   // a row's value on the engine is R·x to rounding (three products accumulated from 0 vs a dense dot product)
   cal::BundleProblem pr = p;
-  cal::add_smoothing_rows(pr, reg);
+  cal::stamp_region_smoothing(pr, reg.lambda, reg.curves);  // smoothing is region data
+  cal::add_smoothing_rows(pr);
   ASSERT_EQ(pr.n_constraints(), 4);
   ASSERT_EQ(pr.n_quotes(), 10);
   ASSERT_EQ(pr.n_residuals(), 14);
@@ -172,9 +175,9 @@ TEST(StateLinear, SmoothingRowsAreTheOperatorAndTheSessionLandsWhereTheStackedFo
   const Eigen::VectorXd Rx = R * xt;
   for (int r = 0; r < 4; ++r) EXPECT_NEAR(rc[10 + r], Rx[r], 1e-18 + 4e-16 * std::abs(Rx[r])) << r;
 
-  // the session's regularised calibrate == the previous composition RegularizedEngine(engine without rows, R)
-  api::BundleSession sess(p);
-  const Eigen::VectorXd x_rows = sess.calibrate(x0, reg).x;
+  // the session over the stamped regions == the previous composition RegularizedEngine(engine without rows, R)
+  api::BundleSession sess(ps);
+  const Eigen::VectorXd x_rows = sess.calibrate(x0).x;
   const cal::HybridBundleResidual bare(p);
   const cal::RegularizedEngine<cal::HybridBundleResidual> stacked(bare, R);
   const Eigen::VectorXd x_stack = cal::calibrate_with(stacked, p.n_knots(), stacked.n_residuals(), x0).x;
@@ -182,9 +185,10 @@ TEST(StateLinear, SmoothingRowsAreTheOperatorAndTheSessionLandsWhereTheStackedFo
   // and the unregularised solve is NOT the same point (the regulariser does something on this kinked fit)
   EXPECT_GT((cal::calibrate(p, x0).x - x_rows).cwiseAbs().maxCoeff(), 1e-7);
 
-  // the risk operator == the pseudo-inverse of the hand-stacked [J; R], quote columns
-  const Eigen::MatrixXd M_rows = sess.risk_operator(reg);
-  const Eigen::MatrixXd J = sess.jacobian(reg);
+  // the risk operator (no risk-side damping: the rows ARE the engine's) == the pseudo-inverse of the hand-stacked
+  // [J; R], quote columns
+  const Eigen::MatrixXd M_rows = sess.risk_operator();
+  const Eigen::MatrixXd J = sess.jacobian();
   ASSERT_EQ(J.rows(), 10) << "jacobian() is the QUOTE block";
   ASSERT_EQ(M_rows.rows(), 6);
   ASSERT_EQ(M_rows.cols(), 10);
@@ -197,64 +201,94 @@ TEST(StateLinear, SmoothingRowsAreTheOperatorAndTheSessionLandsWhereTheStackedFo
   EXPECT_LT((M_rows - M_stack).cwiseAbs().maxCoeff(), 1e-12 * M_stack.cwiseAbs().maxCoeff());
 }
 
-// (3) the session installs the smoothing as its problem's tail constraint rows; the client's structure is untouched.
+// (3) the session installs the regions' smoothing as its problem's tail constraint rows at construction; the client's
+// structure (its bundle WITH its regions' weights, WITHOUT the rows) is what rebind and the stamp see.
 TEST(StateLinear, ASessionInstallsSmoothingAsItsOwnTailRowsAndTheClientStructureIsUnchanged) {
-  const cal::BundleProblem p = bundle(smooth_true());
+  cal::BundleProblem p = bundle(smooth_true());
+  const cal::BundleProblem p_off = p;
+  p.curves[0].regions[0].reg_lambda = 0.5;  // the Hermite region says: Light
   const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(6, 0.03);
-  cal::RegSpec light;
-  light.lambda = 0.5;
-  light.curves = {0};
   api::BundleSession sess(p);
-  EXPECT_EQ(sess.problem().n_constraints(), 0);
-  sess.calibrate(x0, light);
-  EXPECT_EQ(sess.problem().n_constraints(), 4);
+  EXPECT_EQ(sess.problem().n_constraints(), 4) << "installed at construction, from the region alone";
   EXPECT_EQ(sess.problem().n_quotes(), 10);
   EXPECT_EQ(sess.structural_stamp(), cal::structural_stamp(p)) << "the installed rows are the session's, not the client's structure";
+  sess.calibrate(x0);
   // the client requotes with ITS bundle (no smoothing rows): both rebind paths accept it
   cal::BundleProblem p2 = p;
   for (auto& ins : p2.instruments) ins.market += 3e-4;
-  EXPECT_NO_THROW(sess.rebind(p2, light));
-  EXPECT_NO_THROW(sess.rebind(cal::make_stamped(p2), light));
+  EXPECT_NO_THROW(sess.rebind(p2));
+  EXPECT_NO_THROW(sess.rebind(cal::make_stamped(p2)));
   EXPECT_EQ(sess.problem().n_constraints(), 4);
   // set_market / stream_update take the QUOTE vector
   Eigen::VectorXd q = p2.market();
   q.array() += 1e-4;
   EXPECT_NO_THROW(sess.set_market(q));
-  EXPECT_NO_THROW(sess.resolve(light));
-  sess.start_streaming(light);
+  EXPECT_NO_THROW(sess.resolve());
+  sess.start_streaming();
   q.array() += 1e-4;
   EXPECT_NO_THROW(sess.stream_update(q));
   EXPECT_TRUE(sess.last_converged());
   // the streamed curve is the regularised cold answer for that market (rows ARE the frozen system)
   cal::BundleProblem pc = p;
   for (int i = 0; i < 10; ++i) pc.instruments[static_cast<std::size_t>(i)].market = q[i];
-  cal::add_smoothing_rows(pc, light);
+  cal::add_smoothing_rows(pc);
   const Eigen::VectorXd xc = cal::calibrate(pc, x0).x;
   EXPECT_LT((sess.x() - xc).cwiseAbs().maxCoeff(), 1e-7);
-  // a different strength replaces the tail (same count, scaled coefficients); off removes it
-  cal::RegSpec strong = light;
-  strong.lambda = 5.0;
-  sess.calibrate(x0, strong);
-  ASSERT_EQ(sess.problem().n_constraints(), 4);
-  EXPECT_NEAR(sess.problem().constraints[0].state[0].coeff, 10.0 * cal::smoothing_rows(p, light.lambda, light.curves)[0].state[0].coeff, 1e-15);
-  sess.calibrate(x0, cal::RegSpec{});
-  EXPECT_EQ(sess.problem().n_constraints(), 0);
-  cal::BundleProblem pnow = p;  // the session's quotes moved above: compare against ITS current market
-  for (int i = 0; i < 10; ++i) pnow.instruments[static_cast<std::size_t>(i)].market = sess.problem().instruments[static_cast<std::size_t>(i)].market;
-  EXPECT_LT((sess.x() - cal::calibrate(pnow, x0).x).cwiseAbs().maxCoeff(), 1e-10);
+  // a different strength is a different region weight (same count, scaled coefficients); an unset region is no rows
+  cal::BundleProblem p_strong = p;
+  p_strong.curves[0].regions[0].reg_lambda = 5.0;
+  api::BundleSession ss(p_strong);
+  ASSERT_EQ(ss.problem().n_constraints(), 4);
+  EXPECT_NEAR(ss.problem().constraints[0].state[0].coeff, 10.0 * sess.problem().constraints[0].state[0].coeff, 1e-15);
+  api::BundleSession so(p_off);
+  EXPECT_EQ(so.problem().n_constraints(), 0);
+  so.calibrate(x0);
+  EXPECT_LT((so.x() - cal::calibrate(p_off, x0).x).cwiseAbs().maxCoeff(), 1e-10);
+  EXPECT_NE(sess.structural_stamp(), so.structural_stamp()) << "a region's weight is structure: the stamp sees it";
+  EXPECT_THROW(sess.rebind(p_off), std::runtime_error) << "a bundle with a different region weight is a different structure";
   // a client bundle that carries its OWN constraint row keeps it beside the installed ones
   cal::BundleProblem pb = p;
   pb.constraints.push_back(state_row({{0, 5, 1.0}}, 0.047));
   api::BundleSession sb(pb);
-  sb.calibrate(x0, light);
+  sb.calibrate(x0);
   EXPECT_EQ(sb.problem().n_constraints(), 5);
   EXPECT_EQ(sb.problem().constraints[0].state[0].index, 5) << "the client's row first, the smoothing tail after";
   cal::BundleProblem pb2 = pb;
   pb2.constraints[0].market = 0.0472;  // the client re-targets its own row through rebind
-  EXPECT_NO_THROW(sb.rebind(pb2, light));
+  EXPECT_NO_THROW(sb.rebind(pb2));
   EXPECT_EQ(sb.problem().constraints[0].market, 0.0472);
   cal::BundleProblem pb3 = p;  // without the client's row: a different structure
-  EXPECT_THROW(sb.rebind(pb3, light), std::runtime_error);
+  EXPECT_THROW(sb.rebind(pb3), std::runtime_error);
+}
+
+// (3b) smoothing is REGION DATA (2026-10-13): a region's declared weight IS the calibration smoothing -- the same rows
+// the stamping helper writes for a preset's value; nothing bundle-level is consulted (a RegSpec is risk-side only).
+TEST(StateLinear, ARegionsOwnSmoothingIsInstalledWithoutARegSpec) {
+  cal::BundleProblem p = bundle(smooth_true());
+  p.curves[0].regions[0].reg_lambda = 0.5;  // the Hermite region says: Light
+  const Eigen::VectorXd x0 = Eigen::VectorXd::Constant(6, 0.03);
+  api::BundleSession sess(p);
+  EXPECT_EQ(sess.problem().n_constraints(), 4) << "installed at construction, no RegSpec needed";
+  sess.calibrate(x0);
+  cal::BundleProblem pr = bundle(smooth_true());
+  cal::stamp_region_smoothing(pr, cal::smoothing_lambda(cal::Smoothing::Light), {0});  // the preset's value, as region data
+  cal::add_smoothing_rows(pr);
+  EXPECT_LT((sess.x() - cal::calibrate(pr, x0).x).cwiseAbs().maxCoeff(), 1e-10) << "the region's 0.5 == the preset's 0.5";
+  EXPECT_NEAR(sess.problem().constraints[0].state[0].coeff, pr.constraints[0].state[0].coeff, 1e-15);
+  // a risk-side RegSpec at Strong changes the ladder's damping, never the calibration (the rows are untouched)
+  cal::RegSpec strong;
+  strong.lambda = 5.0;
+  strong.curves = {0};
+  const Eigen::VectorXd x_before = sess.x();
+  const Eigen::MatrixXd M_plain = sess.risk_operator();
+  const Eigen::MatrixXd M_damped = sess.risk_operator(strong);
+  EXPECT_EQ((sess.x() - x_before).cwiseAbs().maxCoeff(), 0.0);
+  ASSERT_EQ(sess.problem().n_constraints(), 4);
+  EXPECT_NEAR(sess.problem().constraints[0].state[0].coeff, pr.constraints[0].state[0].coeff, 1e-15);
+  EXPECT_GT((M_damped - M_plain).cwiseAbs().maxCoeff(), 1e-6 * M_plain.cwiseAbs().maxCoeff()) << "the damping is real";
+  // the client's stamp and rebind are untouched by the installed rows
+  EXPECT_EQ(sess.structural_stamp(), cal::structural_stamp(p));
+  EXPECT_NO_THROW(sess.rebind(p));
 }
 
 // (4) a bound on a knot forward: a StateLinear quote row with a one-sided map, calibrated and streamed.

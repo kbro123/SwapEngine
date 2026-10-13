@@ -127,9 +127,11 @@ double zigzag(const Shape& s, const Eigen::VectorXd& x) {
 
 Outcome soak(const Shape& s, WalkKind kind, const cal::RegSpec& reg, long n, unsigned seed, int check_every) {
   Outcome o;
-  api::BundleSession sess(s.prob);
-  sess.calibrate(s.x0, reg);
-  sess.start_streaming(reg);
+  cal::BundleProblem prob = s.prob;  // smoothing is REGION DATA (2026-10-13): the recipe's weight is stamped onto the regions
+  if (reg.on()) cal::stamp_region_smoothing(prob, reg.lambda, reg.curves);
+  api::BundleSession sess(prob);
+  sess.calibrate(s.x0);
+  sess.start_streaming();
   MarketWalk walk(s, kind, seed);
   std::vector<double> us;
   us.reserve(static_cast<std::size_t>(n));
@@ -154,15 +156,15 @@ Outcome soak(const Shape& s, WalkKind kind, const cal::RegSpec& reg, long n, uns
     }
     o.worst_zig = std::max(o.worst_zig, zigzag(s, x));
     if (k % check_every == check_every - 1) {  // the delivered curve vs a cold solve of the SAME objective refined from it
-      cal::BundleProblem p = s.prob;
-      for (int i = 0; i < p.n_residuals(); ++i) {
+      cal::BundleProblem p = prob;
+      for (int i = 0; i < p.n_quotes(); ++i) {
         auto& in = p.instruments[static_cast<std::size_t>(i)];
         in.market = rq.target[i]; in.band_lower = rq.lower[i]; in.band_upper = rq.upper[i]; in.band_decay = rq.decay[i];
       }
       api::BundleSession ref(p);
-      const Eigen::VectorXd xr = ref.calibrate(x, reg).x;
+      const Eigen::VectorXd xr = ref.calibrate(x).x;
       const Eigen::VectorXd rd = p.residuals<double>(x), rr = p.residuals<double>(xr);  // same market: the difference is in model quotes
-      o.worst_dq = std::max(o.worst_dq, (rd - rr).cwiseAbs().maxCoeff());
+      o.worst_dq = std::max(o.worst_dq, (rd - rr).head(p.n_quotes()).cwiseAbs().maxCoeff());  // the QUOTE rows, as before the rows
     }
   }
   std::sort(us.begin(), us.end());

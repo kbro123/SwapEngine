@@ -64,20 +64,18 @@ std::string& last_error() {
 
 }  // namespace
 
-// The C-ABI session: the compiled bundle's session PLUS the smoothing the spec asked for (E3-D4: until
-// 2026-09-10 the session calibrated with reg = {} and streamed unregularised, so an under-determined spec
-// gave Excel a rank-deficient curve 25 bp from the web's).
+// The C-ABI session: the compiled bundle's session. Smoothing is REGION DATA (2026-10-13): the spec's regions carry it
+// (a legacy spec's `smoothness` is migrated onto them by compile_spec), so Excel and the web calibrate the same curve
+// from the same bundle with nothing passed here.
 struct CapiSession {
   BundleSession sess;
-  swaps::api::RegSpec reg;
 };
 
 extern "C" void* swaps_session_create(const char* spec_json, const char* today) {
   if (!spec_json) return nullptr;
   try {
     auto cr = swaps::api::compile_spec(json::parse(spec_json), today ? today : "");
-    const swaps::api::RegSpec reg = swaps::api::compile_reg_spec(cr);
-    return static_cast<void*>(new CapiSession{BundleSession(std::move(cr.bundle)), reg});
+    return static_cast<void*>(new CapiSession{BundleSession(std::move(cr.bundle))});
   } catch (const std::exception& e) {
     last_error() = e.what();       // FINDING 4: keep the diagnostic; the caller reads swaps_last_error()
     return nullptr;
@@ -96,11 +94,10 @@ extern "C" const char* swaps_session_calibrate(void* session) {
   try {
     auto* cs = static_cast<CapiSession*>(session);
     BundleSession* s = &cs->sess;
-    const auto& r = s->calibrate(swaps::api::flat_x0(s->problem()), cs->reg);
-    s->start_streaming(cs->reg);  // anchor the frozen-Newton warm path -- every bundle is eligible
+    const auto& r = s->calibrate(swaps::api::flat_x0(s->problem()));
+    s->start_streaming();  // anchor the frozen-Newton warm path -- every bundle is eligible
     json::object o;
-    o["regularize_applied"] = cs->reg.on();
-    o["regularize_lambda"] = cs->reg.lambda;
+    o["smoothing_rows"] = s->problem().n_constraints();  // the regions' smoothing rows this ran under
     o["rms_residual"] = r.rms_residual;
     o["converged"] = r.converged;
     o["status"] = r.status;

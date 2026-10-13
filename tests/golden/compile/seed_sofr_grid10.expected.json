@@ -18,6 +18,7 @@
               20.0191780822,
               30.0273972603
             ],
+            "reg_lambda": 0.0,
             "scheme": "Hermite"
           }
         ]
@@ -1895,7 +1896,6 @@
     0.0394083,
     0.040673539999989995
   ],
-  "tension_sigma": 0.0,
   "under_determined": false,
   "value_date": "2026-09-09",
   "warnings": []

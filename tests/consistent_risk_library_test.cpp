@@ -42,7 +42,7 @@ class FakeSession {
     for (int i = 0; i < A_.rows(); ++i)
       for (int k = 0; k < A_.cols(); ++k) A_(i, k) = p_.instruments[static_cast<std::size_t>(i)].obs.weight[static_cast<std::size_t>(k)];
   }
-  const cal::CalibrationResult& calibrate(const Eigen::VectorXd&, const cal::RegSpec&) {
+  const cal::CalibrationResult& calibrate(const Eigen::VectorXd&) {
     x_ = pinv(A_) * p_.market();
     res_.x = x_;
     res_.converged = true;
@@ -50,7 +50,7 @@ class FakeSession {
   }
   const cal::BundleProblem& problem() const { return p_; }
   const Eigen::VectorXd& x() const { return x_; }
-  Eigen::MatrixXd jacobian(const cal::RegSpec&) const { return A_; }
+  Eigen::MatrixXd jacobian() const { return A_; }
   Eigen::MatrixXd risk_operator(const cal::RegSpec&) const { return pinv(A_); }
   FakeReprice price_portfolio(const FakeBook& b) const { return {b.g.dot(x_), 1e-4 * b.g.sum()}; }
   FakeRisk price_portfolio_risk(const FakeBook& b) const { return {b.g}; }
@@ -123,7 +123,7 @@ TEST(ConsistentRiskLibrary, ReLevelsEveryBundleOntoTheAnchor) {
   const std::vector<std::vector<double>> rows = {{1.0, 0.0}, {1.0, 1.0}};
   FakeBook book{{0, 1}, Eigen::Vector2d(2.0, -1.0)};
   const cal::ConsistentRisk r = cal::consistent_risk<FakeSession, FakeBook>(
-      book, {linear_bundle(rows, x_true, 0.0), linear_bundle(rows, x_true, 25e-4)}, cal::RegSpec{});
+      book, {linear_bundle(rows, x_true, 0.0), linear_bundle(rows, x_true, 25e-4)});
   EXPECT_EQ(r.n, 2);
   ASSERT_EQ(r.bundles.size(), 2u);
   EXPECT_NEAR(r.npv, 2.0 * 0.03 - 0.01, 1e-15);
@@ -147,7 +147,7 @@ TEST(ConsistentRiskLibrary, AnUnderDeterminedBundleGetsOneSyntheticPillar) {
   x_true << 0.02, 0.02;
   FakeBook book{{0}, Eigen::Vector2d(1.0, 3.0)};
   const cal::ConsistentRisk r =
-      cal::consistent_risk<FakeSession, FakeBook>(book, {linear_bundle({{1.0, 1.0}}, x_true, 0.0)}, cal::RegSpec{});
+      cal::consistent_risk<FakeSession, FakeBook>(book, {linear_bundle({{1.0, 1.0}}, x_true, 0.0)});
   const cal::ConsistentBundleRisk& b = r.bundles[0];
   EXPECT_EQ(b.n_residuals, 1);
   EXPECT_EQ(b.n_synthetic, 1);
@@ -161,27 +161,15 @@ TEST(ConsistentRiskLibrary, RefusesAnEmptyListOrAMismatchedCurveSet) {
   Eigen::VectorXd x2(2);
   x2 << 0.03, 0.01;
   FakeBook book{{0}, Eigen::Vector2d(1.0, 1.0)};
-  EXPECT_THROW((void)(cal::consistent_risk<FakeSession, FakeBook>(book, {}, cal::RegSpec{})), std::invalid_argument);
+  EXPECT_THROW((void)(cal::consistent_risk<FakeSession, FakeBook>(book, {})), std::invalid_argument);
   const std::vector<std::vector<double>> rows = {{1.0, 0.0}, {0.0, 1.0}};
   EXPECT_THROW((void)(cal::consistent_risk<FakeSession, FakeBook>(
-                   book, {linear_bundle(rows, x2, 0.0), linear_bundle(rows, x2, 0.0, /*n_curves=*/2)}, cal::RegSpec{})),
+                   book, {linear_bundle(rows, x2, 0.0), linear_bundle(rows, x2, 0.0, /*n_curves=*/2)})),
                std::invalid_argument);
 }
 
-TEST(ConsistentRiskLibrary, TheReLevelingCalibrationIsTheCallersRegulariserElseLight) {
-  Eigen::VectorXd x3(3);
-  x3 << 0.03, 0.03, 0.03;
-  const cal::BundleProblem p = linear_bundle({{1.0, 0.0, 0.0}}, x3, 0.0, /*n_curves=*/3);
-  const cal::RegSpec light = cal::relevel_calibration_reg(cal::RegSpec{}, p);
-  const cal::RegSpec want = cal::smoothing_preset(cal::Smoothing::Light, 3);
-  EXPECT_EQ(light.lambda, want.lambda);
-  EXPECT_EQ(light.curves, want.curves);
-  cal::RegSpec mine;
-  mine.lambda = 0.5;
-  mine.curves = {1};
-  EXPECT_EQ(cal::relevel_calibration_reg(mine, p).lambda, 0.5);
-  EXPECT_EQ(cal::relevel_calibration_reg(mine, p).curves, (std::vector<int>{1}));
-}
+// (The re-levelling calibration used to be floored to Light; since 2026-10-13 smoothing is REGION DATA and every bundle
+// calibrates under its own regions' weights -- there is no library-side regulariser to pin.)
 
 // dP/dq = D ⊙ dP/dr: the library applies the residual market scale of each quote to its real ladder row (1 for a hard
 // pin, the decay for a band). The fake's J ignores the band on purpose -- this pins the library's rule, not band physics;
@@ -194,7 +182,7 @@ TEST(ConsistentRiskLibrary, TheLadderIsInQuoteUnitsForABandedRow) {
   p.instruments[1].band_upper = p.instruments[1].market + 1e-3;
   p.instruments[1].band_decay = 0.25;
   FakeBook book{{0}, Eigen::Vector2d(2.0, -1.0)};
-  const cal::ConsistentRisk r = cal::consistent_risk<FakeSession, FakeBook>(book, {p}, cal::RegSpec{});
+  const cal::ConsistentRisk r = cal::consistent_risk<FakeSession, FakeBook>(book, {p});
   const Eigen::Vector2d dPdr = pinv(Eigen::Matrix2d{{1.0, 0.0}, {1.0, 1.0}}).transpose() * book.g;
   EXPECT_NEAR(r.bundles[0].ladder[0], dPdr[0], 1e-14);
   EXPECT_NEAR(r.bundles[0].ladder[1], 0.25 * dPdr[1], 1e-14);

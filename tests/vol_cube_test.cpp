@@ -13,9 +13,11 @@
 #include <string>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/calibration/regularize.hpp"
 #include "swaps/vol/normal.hpp"
 
 namespace api = swaps::api;
+namespace cal = swaps::calibration;
 namespace json = boost::json;
 
 namespace {
@@ -28,11 +30,10 @@ std::string read_fixture() {
 }
 
 api::BundleSession sofr_session() {
-  api::BundleSession sess(api::bundle_from_json(json::parse(read_fixture())));
-  api::RegSpec reg;
-  reg.lambda = 0.02;
-  reg.curves = {0};
-  sess.calibrate(api::flat_x0(sess.problem()), reg);
+  cal::BundleProblem p = api::bundle_from_json(json::parse(read_fixture()));
+  cal::stamp_region_smoothing(p, 0.02, {0});  // smoothing is region data
+  api::BundleSession sess(p);
+  sess.calibrate(api::flat_x0(sess.problem()));
   return sess;
 }
 

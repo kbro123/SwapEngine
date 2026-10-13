@@ -92,7 +92,7 @@ TEST(ApiStatus, AFailedStreamTickIsVisibleAndFallsBackLikeRecalibrate) {
   api::BundleSession ref(p);
   ref.calibrate(Eigen::VectorXd::Constant(6, 0.03));
   ref.start_streaming();
-  ref.recalibrate(q_abs, {});
+  ref.recalibrate(q_abs);
   EXPECT_LT((s.x() - ref.x()).cwiseAbs().maxCoeff(), 1e-10)
       << "stream_update and recalibrate must agree on where a failed tick leaves the curve";
   EXPECT_EQ(s.result().converged, ref.result().converged) << "and on whether the solve succeeded";

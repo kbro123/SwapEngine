@@ -261,7 +261,7 @@ PnlReport pnl_report(PnlRequest r) {
         "pnl: bundle1 must be bundle0 re-quoted -- the same curves, knots and instruments in the same order");
   Session s0(std::move(r.bundle0));
   const BundleProblem& P0 = s0.problem();
-  s0.calibrate(seed_or_flat(P0, r.x0, "pnl"), r.reg);
+  s0.calibrate(seed_or_flat(P0, r.x0, "pnl"));  // smoothing is the bundle's region data; r.reg is the ladder's risk-side damping
   const Eigen::VectorXd ladder = s0.price_portfolio_risk(r.book, r.reg).ladder;  // dP/dq at (x0, q0)
   if (r.x1 && r.x1->size() != P0.n_knots())
     throw std::invalid_argument("pnl: x1 length does not match the bundle's knot count");
@@ -271,7 +271,7 @@ PnlReport pnl_report(PnlRequest r) {
   Eigen::VectorXd x1 = s0.x();
   if (r.bundle1) {
     Session s1(std::move(*r.bundle1));
-    s1.calibrate(seed_or_flat(s1.problem(), r.x1, "pnl"), r.reg);
+    s1.calibrate(seed_or_flat(s1.problem(), r.x1, "pnl"));
     x1 = s1.x();
     out.dq = s1.problem().market() - P0.market();
   }

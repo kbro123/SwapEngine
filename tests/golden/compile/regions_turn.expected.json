@@ -18,6 +18,7 @@
               7.0136986301,
               10.0136986301
             ],
+            "reg_lambda": 0.5,
             "scheme": "Tension",
             "sigma": 0.5
           }
@@ -966,7 +967,6 @@
     0.0385,
     0.00015
   ],
-  "tension_sigma": 0.0,
   "under_determined": true,
   "value_date": "2026-07-08",
   "warnings": [

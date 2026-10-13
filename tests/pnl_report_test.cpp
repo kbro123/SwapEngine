@@ -32,7 +32,7 @@ constexpr double kCalibrationShift = 1e-3;
 class SeedSession {
  public:
   explicit SeedSession(cal::BundleProblem p) : p_(std::move(p)) {}
-  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0, const cal::RegSpec&) {
+  const cal::CalibrationResult& calibrate(const Eigen::VectorXd& x0) {
     x_ = (x0.array() + kCalibrationShift).matrix();
     res_.x = x_;
     res_.converged = true;
@@ -40,7 +40,7 @@ class SeedSession {
   }
   const cal::BundleProblem& problem() const { return p_; }
   const Eigen::VectorXd& x() const { return x_; }
-  Eigen::MatrixXd jacobian(const cal::RegSpec&) const { return Eigen::MatrixXd::Zero(p_.n_residuals(), p_.n_knots()); }
+  Eigen::MatrixXd jacobian() const { return Eigen::MatrixXd::Zero(p_.n_residuals(), p_.n_knots()); }
   Eigen::MatrixXd risk_operator(const cal::RegSpec&) const { return Eigen::MatrixXd::Zero(p_.n_knots(), p_.n_residuals()); }
   FakeRisk price_portfolio_risk(const pf::MultiCurveBook&, const cal::RegSpec&) const {
     return {Eigen::VectorXd::LinSpaced(p_.n_residuals(), 100.0, 200.0)};

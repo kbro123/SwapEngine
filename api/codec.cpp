@@ -934,7 +934,7 @@ cal::ConsistentRiskRequest consistent_risk_request_from_json(const json::object&
   r.book = book_from_json(need(o, "book", "generate_risk: missing 'book'"));
   for (const auto& b : need(o, "bundles", "generate_risk: 'bundles' must be a non-empty array").as_array())
     r.bundles.push_back(bundle_from_json(b));
-  r.reg = reg_from_json(o);
+
   return r;
 }
 
@@ -1457,7 +1457,7 @@ derive::ScenarioRequest scenario_request_from_json(const json::object& payload) 
   derive::ScenarioRequest r;
   r.bundle = bundle_from_json(need(o, "bundle", "scenario: missing 'bundle' object"));
   into(o, "x0", r.x0);
-  r.reg = reg_from_json(o);
+
   into(o, "sample_times", r.sample_times);
   if (present(o, "book")) r.book = book_from_json(o.at("book"));
   into(o, "fx_pivot", r.fx_pivot);
@@ -1549,7 +1549,7 @@ derive::ScenarioGridRequest scenario_grid_request_from_json(const json::object& 
   for (const auto& e : need(o, "axes", "scenario_grid: missing 'axes' array (1 or 2 shock axes)").as_array())
     r.axes.push_back(shock_axis_from_json(e.as_object()));
   into(o, "x0", r.x0);
-  r.reg = reg_from_json(o);
+
   into(o, "sample_times", r.sample_times);
   if (present(o, "book")) r.book = book_from_json(o.at("book"));
   into(o, "fx_pivot", r.fx_pivot);
@@ -1617,7 +1617,7 @@ derive::VarRequest var_request_from_json(const json::object& payload) {
     derive::VarRevalRequest v;
     v.bundle = bundle_from_json(bundle);
     into(o, "x0", v.x0);
-    v.reg = reg_from_json(o);
+
     v.book = book_from_json(book);
     into(o, "fx_pivot", v.fx_pivot);
     for (const auto& e : scenarios.as_array()) v.scenarios.push_back(scenario_move_from_json(e.as_object(), "var"));

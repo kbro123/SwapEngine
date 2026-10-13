@@ -257,6 +257,7 @@ struct KnotItem {
 struct Layout {
   bool classic = true;
   std::vector<double> front, back;            // classic
+  double back_reg_lambda = curve::kRegLambdaUnset;  // classic, from an explicit Hermite region row's own reg_lambda
   std::vector<curve::CurveModule> modules;    // modular
   std::string policies;                        // display
 };
@@ -281,13 +282,14 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
 
   std::vector<std::string> order_ids;
   std::unordered_map<std::string, curve::Scheme> policy;
-  std::unordered_map<std::string, double> sigma;
+  std::unordered_map<std::string, double> sigma, reg_lambda;
   for (const auto& e : *regions) {
     const auto& ro = e.as_object();
     const std::string rid = get_s(ro, "id");
     order_ids.push_back(rid);
     policy[rid] = scheme_from_policy(get_s(ro, "policy", "Hermite"));
     sigma[rid] = std::max(0.0, opt_num(ro, "sigma").value_or(0.0));
+    reg_lambda[rid] = opt_num(ro, "reg_lambda").value_or(curve::kRegLambdaUnset);  // the region's OWN smoothing weight
   }
   std::unordered_map<std::string, std::vector<double>> buckets;
   for (const auto& rid : order_ids) buckets[rid];
@@ -306,6 +308,7 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
     m.scheme = policy[rid];
     m.knots = ks;
     if (m.scheme == curve::Scheme::Tension) m.sigma = sigma[rid];
+    m.reg_lambda = reg_lambda[rid];  // unset stays unset
     modules.push_back(std::move(m));
   }
   if (modules.empty())
@@ -316,6 +319,7 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
     L.classic = true;
     L.front = modules[0].knots;
     L.back = modules[1].knots;
+    L.back_reg_lambda = modules[1].reg_lambda;  // the region's smoothing is DATA: the fast path keeps it
     L.policies = "Flat+Hermite";
     return L;
   }
@@ -565,6 +569,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     cs.currency = ccy_index(get_s(c, "currency"));
     if (layout.classic) {
       cs.regions = curve::flat_hermite(layout.front, layout.back);
+      cs.regions.back().reg_lambda = layout.back_reg_lambda;  // the Hermite region row's own weight, or unset (a front-less classic layout has ONE region)
       pc.n_front = int(layout.front.size());
       pc.n_back = int(layout.back.size());
       pc.n_knots = pc.n_front + pc.n_back;
@@ -720,15 +725,32 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     if (ins.band_upper > ins.band_lower) R.has_bands = true;  // mirrors compile.py's has_bands
   if (R.under_determined)
     R.warnings.push_back("Under-determined: " + std::to_string(R.n_residuals) + " quotes for " +
-                         std::to_string(R.n_knots) + " knots — smoothness regularization keeps it well-posed.");
+                         std::to_string(R.n_knots) + " knots — a region's smoothing (regions[].reg_lambda) selects the smoothest curve; the solver is rank-safe without one.");
 
   R.grid = display_grid(max_t, all_knots);
   for (const json::object* cp : order) R.curve_names.push_back(get_s(*cp, "name", "?"));
   for (const json::object* cp : order) R.order_ids.push_back(get_s(*cp, "id"));
   R.currency_codes = ccy_order;
   R.smoothness = get_s(spec, "smoothness", "light");
+  // SMOOTHING IS REGION DATA (2026-10-13): a region's own `reg_lambda` is the only source of smoothing rows. A LEGACY
+  // spec -- saved before the composer stamped the weight onto each region -- carries only the spec-level `smoothness`
+  // word, so it is migrated ONCE here onto every non-Flat region that says nothing (the engine's one table: light 0.5
+  // / strong 5.0; the Flat rule needs no stamp). A spec whose regions all say something is left alone. The old
+  // "under-determined or banded floors to light" rule is gone with the bundle-level default: a region is smoothed iff
+  // its data says so, and a rank-deficient bundle streams rank-safely regardless.
+  {
+    const cal::Smoothing level = R.smoothness == "off" ? cal::Smoothing::Off
+                                 : R.smoothness == "strong" ? cal::Smoothing::Strong
+                                                            : cal::Smoothing::Light;
+    const double lam = cal::smoothing_lambda(level);
+    const bool migrated = cal::stamp_silent_regions(R.bundle, lam);  // regularize.hpp: the one migration
+    if (migrated && lam > 0.0)
+      R.warnings.push_back("Legacy smoothing: the spec's '" + R.smoothness + "' was stamped onto its regions (regions[].reg_lambda = " +
+                           std::to_string(lam) + "); smoothing is region data -- set it on each region.");
+  }
   if (present(spec, "reg_op")) { R.reg_op = get_s(spec, "reg_op"); R.has_reg_op = true; }
   R.tension_sigma = std::max(0.0, opt_num(spec, "tension_sigma").value_or(0.0));
+  cal::refuse_retired_regulariser(R.has_reg_op, R.reg_op, R.tension_sigma);  // regularize.hpp: refused, never silently remapped
 
   // Resolved windows, for the UI's read-only date columns.
   for (const json::object* cp : order) {
@@ -807,18 +829,6 @@ json::value compile_to_json(const CompileResult& r) {
 std::string compile_json(const std::string& spec_json, const std::string& today_iso) {
   const json::value spec = json::parse(spec_json);
   return json::serialize(compile_to_json(compile_spec(spec, today_iso)));
-}
-
-RegSpec compile_reg_spec(const CompileResult& r) {
-  // The spec names a strength; the ONE table (calibration/regularize.hpp smoothing_preset) owns its value.
-  cal::refuse_retired_regulariser(r.has_reg_op, r.reg_op, r.tension_sigma);  // regularize.hpp: refused, never silently remapped
-  cal::Smoothing level = r.smoothness == "off" ? cal::Smoothing::Off
-                         : r.smoothness == "strong" ? cal::Smoothing::Strong
-                                                    : cal::Smoothing::Light;
-  if (level == cal::Smoothing::Off && (r.under_determined || r.has_bands)) level = cal::Smoothing::Light;
-  const int n_curves = r.curve_names.empty() ? static_cast<int>(r.bundle.curves.size())
-                                             : static_cast<int>(r.curve_names.size());
-  return cal::smoothing_preset(level, n_curves);
 }
 
 }  // namespace swaps::api

@@ -22,8 +22,9 @@
 namespace cal = swaps::calibration;
 namespace curve = swaps::curve;
 
-// A curve's two regions carry different curvature lambda: the operator weights each row by the lambda of
-// its centre knot's region. Front region lambda=0 (unpenalised), back region lambda=5.
+// A curve's two regions carry different curvature lambda: the CALIBRATION rows (smoothing_rows) weight each row by the
+// lambda of its centre knot's region -- front region lambda=0 (unpenalised), back region lambda=5 -- while the RISK-side
+// operator (second_difference_operator) is uniform at the weight it is handed and never consults a region (2026-10-13).
 TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
   cal::BundleProblem p;
   cal::BundleCurveSpec spec;
@@ -32,18 +33,20 @@ TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
   spec.regions.push_back(curve::CurveModule{{3.0, 4.0, 5.0, 6.0}, curve::Scheme::Hermite, 0.0, 5.0}); // reg_lambda 5
   p.curves.push_back(spec);
 
-  const Eigen::MatrixXd R = cal::second_difference_operator(p, /*default lambda*/ 1.0, {0});
   // 6 interp knots -> interior knots i=1..4; knot 1 is a Flat step level and emits NO row (since 2026-10-12 the rows are
   // StateLinear instruments of the problem, smoothing_rows: a skipped knot is no row, not a zero row), so 3 rows.
+  const Eigen::MatrixXd R = cal::state_rows_matrix(p, cal::smoothing_rows(p));
   ASSERT_EQ(R.rows(), 3);
   ASSERT_EQ(R.cols(), 6);
-  ASSERT_EQ(cal::smoothing_rows(p, 1.0, {0}).size(), 3u);
   for (int r = 0; r <= 2; ++r) {  // knots i=2,3,4 in the lambda=5 back region
     const int i = r + 2;
     EXPECT_NEAR(R(r, i - 1), 5.0, 1e-12);
     EXPECT_NEAR(R(r, i), -10.0, 1e-12);
     EXPECT_NEAR(R(r, i + 1), 5.0, 1e-12);
   }
+  const Eigen::MatrixXd Rr = cal::second_difference_operator(p, /*risk-side weight*/ 1.0, {0});
+  ASSERT_EQ(Rr.rows(), 3) << "the same Flat rule";
+  for (int r = 0; r <= 2; ++r) EXPECT_NEAR(Rr(r, r + 2), -2.0, 1e-12) << "uniform at 1.0: the region's 5 is not consulted";
 }
 
 // With no region overriding (reg_lambda<0) every SMOOTH knot's row carries the single global lambda. At unit spacing the
@@ -71,6 +74,45 @@ TEST(RegionSmoothing, UniformLambdaOnSmoothKnotsAndNoRowOnFlatOnes) {
   }
 }
 
+// SMOOTHING IS REGION DATA (2026-10-13): a region's own reg_lambda is the ONLY source of calibration rows -- a region
+// that says nothing is unsmoothed, an explicit 0 is no row; stamp_region_smoothing writes a weight onto the listed
+// curves' non-Flat regions (how a preset's value becomes region data), overriding what they said.
+TEST(RegionSmoothing, ARegionsOwnWeightIsHonouredWithoutTheBundleDefault) {
+  cal::BundleProblem p;
+  cal::BundleCurveSpec a, b;
+  a.base = -1;
+  a.regions.push_back(curve::CurveModule{{1.0, 2.0, 3.0, 4.0, 5.0}, curve::Scheme::Hermite, 0.0, 2.0});  // says 2.0
+  b.base = 0;
+  b.regions.push_back(curve::CurveModule{{1.0, 2.0, 3.0, 4.0, 5.0}, curve::Scheme::Hermite});           // says nothing
+  p.curves = {a, b};
+  // curve 0's region asks for rows, curve 1 (said nothing) gets none
+  const auto rows0 = cal::smoothing_rows(p);
+  ASSERT_EQ(rows0.size(), 3u);
+  for (const auto& r : rows0) EXPECT_EQ(r.state[0].curve, 0);
+  EXPECT_NEAR(rows0[0].state[0].coeff, 2.0, 1e-12);
+  // a stamp over curve 1 only: curve 0 keeps its own 2.0, curve 1 takes 0.5
+  cal::BundleProblem p1 = p;
+  cal::stamp_region_smoothing(p1, 0.5, {1});
+  const auto rows1 = cal::smoothing_rows(p1);
+  ASSERT_EQ(rows1.size(), 6u);
+  EXPECT_NEAR(rows1[0].state[0].coeff, 2.0, 1e-12);
+  EXPECT_NEAR(rows1[3].state[0].coeff, 0.5, 1e-12);
+  // a stamp over curve 0 SETS the region's weight (it is how a preset lands on region data)
+  cal::BundleProblem p2 = p;
+  cal::stamp_region_smoothing(p2, 0.5, {0});
+  const auto rows2 = cal::smoothing_rows(p2);
+  ASSERT_EQ(rows2.size(), 3u);
+  EXPECT_NEAR(rows2[0].state[0].coeff, 0.5, 1e-12);
+  // an explicit 0: no rows
+  p.curves[0].regions[0].reg_lambda = 0.0;
+  EXPECT_TRUE(cal::smoothing_rows(p).empty());
+  // add_smoothing_rows appends the same rows and reports their count
+  cal::BundleProblem q = p;
+  q.curves[0].regions[0].reg_lambda = 2.0;
+  EXPECT_EQ(cal::add_smoothing_rows(q), 3);
+  EXPECT_EQ(q.n_constraints(), 3);
+}
+
 // A trailing single-knot Flat region (the ConsistentRisk unreached-knot fixture): no row reaches it, so an instrument-free
 // tail knot stays genuinely unreached under the default operator -- the same as under tension.
 TEST(RegionSmoothing, ATrailingFlatKnotHasNoRowReachingIt) {
@@ -84,7 +126,8 @@ TEST(RegionSmoothing, ATrailingFlatKnotHasNoRowReachingIt) {
   ASSERT_EQ(R.rows(), 3) << "the last Hermite knot's row would reach into the Flat tail: no row (2026-10-12)";
   EXPECT_NEAR(R.col(5).cwiseAbs().sum(), 0.0, 1e-15) << "nothing couples the Flat tail knot";
   for (int r = 0; r < 3; ++r) EXPECT_GT(R.row(r).cwiseAbs().sum(), 0.0);
-  for (const auto& row : cal::smoothing_rows(p, 0.5, {0}))
+  cal::stamp_region_smoothing(p, 0.5, {0});
+  for (const auto& row : cal::smoothing_rows(p))
     for (const auto& ref : row.state) EXPECT_LT(ref.index, 5) << "no ref reaches the Flat tail knot";
 }
 

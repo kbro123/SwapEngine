@@ -14,7 +14,7 @@ Type kinds (arg + return), mapped by the generator to each target language:
     VEC     list[float]            <-> Eigen::VectorXd (to_vec/to_list)   / JSON number[]
     IVEC    list[int]                                                     / JSON int[]
     MATRIX  list[list[float]]      <-> Eigen::MatrixXd (to_matrix)        / JSON number[][]
-    REG     optional dict          <-> api::RegSpec (reg_from)            / JSON {lambda,curves,tension,sigma}
+    REG     optional dict          <-> api::RegSpec (reg_from)            / JSON {lambda,curves} -- the RISK-side damping only
     VOID    None
     STRUCT:<Name>  a dict/JSON object whose fields are listed in STRUCTS[<Name>]
 
@@ -104,13 +104,13 @@ METHODS = [
     # side-effecting / stateful (custom bodies; pybind-only)
     {"name": "update", "cpp": "stream_update", "args": [("market", "VEC")], "ret": "VEC", "verb": None,
      "doc": "One frozen-Newton streaming tick to a new market -> the new knot vector x."},
-    {"name": "recalibrate", "cpp": None, "args": [("market", "VEC"), ("reg", "REG")], "ret": "VEC",
+    {"name": "recalibrate", "cpp": None, "args": [("market", "VEC")], "ret": "VEC",
      "verb": None,
-     "body": "sess_.recalibrate(to_vec(market), reg_from(reg)); return to_list(sess_.x());",
+     "body": "sess_.recalibrate(to_vec(market)); return to_list(sess_.x());",
      "doc": "set_market + resolve: re-solve to a new market -- one frozen-Newton tick on the shared compiled engine "
             "(LM warm solve only if the tick cannot converge, or for a MonotoneCubic bundle) -> the new x."},
-    {"name": "rebind", "cpp": None, "args": [("bundle_json", "STR"), ("reg", "REG")], "ret": "VEC", "verb": None,
-     "body": "sess_.rebind(api::bundle_from_json(json::parse(bundle_json)), reg_from(reg)); return to_list(sess_.x());",
+    {"name": "rebind", "cpp": None, "args": [("bundle_json", "STR")], "ret": "VEC", "verb": None,
+     "body": "sess_.rebind(api::bundle_from_json(json::parse(bundle_json))); return to_list(sess_.x());",
      "doc": "The full quote RHS (market targets AND soft bands) from a STRUCTURALLY EQUAL bundle, then resolve (a "
             "streamed tick) -> the new x. Throws if the structure differs (count, knot, scheme, role, schedule, "
             "instrument): compile a new session for that."},
@@ -128,11 +128,11 @@ METHODS = [
      "doc": "One streaming tick to a FULL requote -- every row's target, lower, upper and decay -> the new x. Every quote is "
             "validated first (a target outside its band is refused, nothing changes); a band that only moves is a row "
             "re-scale on the tick, not a Jacobian refresh."},
-    {"name": "resolve", "cpp": None, "args": [("reg", "REG")], "ret": "VEC", "verb": None,
-     "body": "sess_.resolve(reg_from(reg)); return to_list(sess_.x());",
+    {"name": "resolve", "cpp": None, "args": [], "ret": "VEC", "verb": None,
+     "body": "sess_.resolve(); return to_list(sess_.x());",
      "doc": "Re-solve to the current quotes/bands: one frozen-Newton tick on the shared compiled engine seeded from x "
             "(LM only if the tick cannot converge) -> the new x."},
-    {"name": "start_streaming", "cpp": "start_streaming", "args": [("reg", "REG"), ("step_tol", "SCALAR", "0.0")],
+    {"name": "start_streaming", "cpp": "start_streaming", "args": [("step_tol", "SCALAR", "0.0")],
      "ret": "VOID", "verb": None,
      "doc": "Anchor the streaming calibrator at the current x (step_tol>0 loosens the corrector tolerance)."},
     {"name": "set_evaluation_date", "cpp": None, "args": [("serial", "INT")], "ret": "INT", "verb": None,
@@ -140,8 +140,8 @@ METHODS = [
      "doc": "Set the evaluation date (Unix-day serial: days since 1970-01-01); re-resolve fixing schedules. Returns n still un-priceable."},
     # CUSTOM irregular shapes (bespoke marshalling; still typed for pyi/excel via ret='CUSTOM')
     {"name": "calibrate", "custom": True,
-     "args": [("x0", "VEC", "None"), ("reg", "REG")], "ret": "CUSTOM:dict", "verb": None,
-     "doc": "Cold calibrate -> {iterations,rms_residual,stationarity,info,solve_micros,rank_deficiency,x}. rank_deficiency>0 = the instrument set under-determines the curve (null states sit at the seed; add an instrument or enable smoothing)."},
+     "args": [("x0", "VEC", "None")], "ret": "CUSTOM:dict", "verb": None,
+     "doc": "Cold calibrate -> {iterations,rms_residual,stationarity,info,solve_micros,rank_deficiency,x}. Smoothing is REGION DATA (regions[].reg_lambda in the bundle), never an argument. rank_deficiency>0 = the instrument set under-determines the curve (null states sit at the seed; add an instrument or smooth the region)."},
     {"name": "sample", "custom": True, "args": [("times", "VEC")], "ret": "CUSTOM:list", "verb": "sample_times",
      "doc": "Sample every curve on a time grid -> [{currency,t,discount,zero,forward}, ...]."},
     {"name": "set_fixings", "custom": True, "args": [("index", "STR"), ("rows", "CUSTOM:pairs")], "ret": "INT",

@@ -127,17 +127,17 @@ inline Eigen::VectorXd seed_or_flat(const BundleProblem& p, const std::optional<
 template <class S>
 concept CalibrationSession =
     std::constructible_from<S, BundleProblem> && requires(S s, const S cs, const Eigen::VectorXd& x, const RegSpec& r) {
-      { s.calibrate(x, r) } -> std::convertible_to<const CalibrationResult&>;
+      { s.calibrate(x) } -> std::convertible_to<const CalibrationResult&>;  // smoothing is region data: no argument
       { cs.problem() } -> std::convertible_to<const BundleProblem&>;
       { cs.x() } -> std::convertible_to<const Eigen::VectorXd&>;
-      { cs.jacobian(r) } -> std::convertible_to<Eigen::MatrixXd>;
-      { cs.risk_operator(r) } -> std::convertible_to<Eigen::MatrixXd>;
+      { cs.jacobian() } -> std::convertible_to<Eigen::MatrixXd>;
+      { cs.risk_operator(r) } -> std::convertible_to<Eigen::MatrixXd>;  // r: the RISK-side damping
     };
 
 struct CalibrationReportRequest {
   BundleProblem bundle;
   std::optional<Eigen::VectorXd> x0;  // absent => flat_x0
-  RegSpec reg;                        // enters M through RᵀR, never J
+  RegSpec reg;                        // the RISK-side damping of the operator (never the calibration: that is region data)
 };
 struct QuoteReport {
   QuoteDiagnostic fit;
@@ -154,8 +154,8 @@ CalibrationReport calibration_report(CalibrationReportRequest req) {
   Session sess(std::move(req.bundle));
   const Eigen::VectorXd x0 = seed_or_flat(sess.problem(), req.x0, "calib_report");
   CalibrationReport out;
-  out.calibration = sess.calibrate(x0, req.reg);
-  const Eigen::MatrixXd J = sess.jacobian(req.reg);       // n_res x n_knots
+  out.calibration = sess.calibrate(x0);
+  const Eigen::MatrixXd J = sess.jacobian();              // n_quotes x n_knots
   const Eigen::MatrixXd M = sess.risk_operator(req.reg);  // n_knots x n_res
   out.conditioning = jacobian_conditioning(J);
   const std::vector<QuoteDiagnostic> fits = quote_diagnostics(sess.problem(), sess.x());

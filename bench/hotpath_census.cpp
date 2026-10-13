@@ -152,7 +152,8 @@ cal::Instrument basis_inst(double T, int fc, int bc, int dc) {
 struct Fixture {
   cal::BundleProblem prob, pert;
   Eigen::VectorXd x0, q0, q1, q_big;
-  api::RegSpec reg;      // the SDK/web default: curvature smoothing over every curve
+  api::RegSpec reg;      // the RISK-side damping; its lambda also stamps prob_reg / pert_reg
+  cal::BundleProblem prob_reg, pert_reg;
   swaps::portfolio::MultiCurveBook book;
   Fixture() {
     std::vector<double> meeting{0.25}, back;
@@ -177,6 +178,9 @@ struct Fixture {
     for (int i = 0; i < m; ++i) { q0[i] = prob.instruments[i].market; q1[i] = q0[i] + 1e-5 * std::sin(0.7 * i + 0.3); q_big[i] = q0[i] + 25e-4 * std::sin(0.3 * i + 0.1); }
     reg.lambda = 1e-3;
     for (int c = 0; c < NC; ++c) reg.curves.push_back(c);
+    prob_reg = prob; pert_reg = pert;  // smoothing is region data (2026-10-13): the regularised rows run on stamped copies
+    cal::stamp_region_smoothing(prob_reg, reg.lambda);
+    cal::stamp_region_smoothing(pert_reg, reg.lambda);
     for (int i = 0; i < 200; ++i) {
       const double T = 1.0 + (i % 30); Legs L = annual(T);
       swaps::portfolio::MultiCurveBook::Position p;
@@ -219,12 +223,12 @@ int main(int argc, char** argv) {
   bool flip = false;
   rows.push_back(census("chain8x26_rebind_warm", [&] { flip = !flip; sess.rebind(flip ? f.pert : f.prob); }));
   {
-    api::BundleSession st(f.prob);
-    st.calibrate(f.x0, f.reg);
+    api::BundleSession st(f.prob_reg);  // the regularised rows: the regions carry the weight
+    st.calibrate(f.x0);
     bool fl = false;
-    rows.push_back(census("chain8x26_rebind_reg_warm", [&] { fl = !fl; st.rebind(fl ? f.pert : f.prob, f.reg); }));
+    rows.push_back(census("chain8x26_rebind_reg_warm", [&] { fl = !fl; st.rebind(fl ? f.pert_reg : f.prob_reg); }));
   }
-  rows.push_back(census("chain8x26_jacobian_reg", [&] { volatile double k = sess.jacobian(f.reg)(0, 0); (void)k; }));
+  rows.push_back(census("chain8x26_jacobian_reg", [&] { volatile double k = sess.jacobian()(0, 0); (void)k; }));
   rows.push_back(census("chain8x26_risk_operator_reg", [&] { volatile double k = sess.risk_operator(f.reg)(0, 0); (void)k; }));
   rows.push_back(census("chain8x26_sample_6_times", [&] { auto s = sess.sample({0.5, 1, 2, 5, 10, 30}); volatile double k = s[0].discount.empty() ? 0.0 : s[0].discount[0]; (void)k; }));
 
@@ -247,14 +251,17 @@ int main(int argc, char** argv) {
   }
 
   {
-    api::BundleSession vs(api::bundle_from_json(boost::json::parse(sofr_bundle_json())));
-    api::RegSpec reg; reg.lambda = 0.02; reg.curves = {0};
-    vs.calibrate(api::flat_x0(vs.problem()), reg);
+    cal::BundleProblem sofr = api::bundle_from_json(boost::json::parse(sofr_bundle_json()));
+    cal::stamp_region_smoothing(sofr, 0.02);  // smoothing is region data (2026-10-13)
+    api::BundleSession vs(sofr);
+    vs.calibrate(api::flat_x0(vs.problem()));
     const api::VolCubeSpec spec = cube_spec();
     rows.push_back(census("sofr_swaption_cube17_price_vol_cube_warm", [&] { volatile double k = vs.price_vol_cube(spec).price[0]; (void)k; }));
     rows.push_back(census("sofr_swaption_cube17_cold_build_calibrate_price", [&] {
-      api::BundleSession c(api::bundle_from_json(boost::json::parse(sofr_bundle_json())));
-      c.calibrate(api::flat_x0(c.problem()), reg);
+      cal::BundleProblem sb = api::bundle_from_json(boost::json::parse(sofr_bundle_json()));
+      cal::stamp_region_smoothing(sb, 0.02);
+      api::BundleSession c(sb);
+      c.calibrate(api::flat_x0(c.problem()));
       volatile double k = c.price_vol_cube(spec).price[0]; (void)k; }, 1, 5, "includes JSON parse"));
   }
 

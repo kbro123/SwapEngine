@@ -66,34 +66,36 @@ inline void bending_row(double h0, double h1, double& a, double& b, double& c, d
 }  // namespace detail
 
 // THE SMOOTHING PENALTY AS ROWS (constraint rows, review item 3, 2026-10-12). One StateLinear instrument per interior
-// knot of each listed curve: coefficients λ_i·√w_i·(a, b, c) on (f_{i-1}, f_i, f_{i+1}) -- detail::bending_row, the
+// knot of a smoothed region: coefficients λᵢ·√wᵢ·(a, b, c) on (f_{i-1}, f_i, f_{i+1}) -- detail::bending_row, the
 // divided second difference with its trapezoid weight, so Σ rows² is the discrete BENDING ENERGY Σ_i w_i (f''_i)², a
 // composite-trapezoid ∫(f'')² dt -- target 0, plain penalty map. Until 2026-09-21 the row was the spacing-blind
 // λ(e_{i-1} − 2e_i + e_{i+1}), which is NOT zero on a straight line over non-uniform pillars (1y..5y, 7y, 10y, ...): it
 // pulled a square bundle's exact linear solution off the line (the ConsistentRisk fixture: a book NPV of 0.0013
 // became 0.0037 under Light), which is why the tension operator had become the default. The divided form is zero on
-// any affine forward, so Light no longer biases an identifiable fit -- and it is what makes the second difference THE
-// default operator (smoothing_preset).
+// any affine forward, so Light no longer biases an identifiable fit.
 //
-// These rows go into BundleProblem::constraints (add_smoothing_rows / BundleSession's RegSpec arguments): the ONE
-// compiled engine then carries them as three Src::State terms each -- residual R·x, Jacobian row R, in the same stack
-// [instruments; constraints] the streamer's frozen system, the LM and the risk operator read. Until 2026-10-12 the
-// same penalty was a dense matrix input (second_difference_operator) that every consumer stacked under its own J;
-// second_difference_operator below is now the dense VIEW of these rows, kept for the tests that pin the coefficients.
+// SMOOTHING IS REGION DATA (owner's rule, 2026-10-13). A region declares its own weight when the curve is defined --
+// `CurveModule::reg_lambda`: > 0 smoothed at that weight, anything else unsmoothed -- and that is the ONLY source of
+// the calibration's smoothing rows: there is no bundle-level default a region inherits (the `RegSpec` that every verb
+// used to take for calibration is gone from those verbs; it survives as the RISK-side damping, a separate penalty on
+// the risk operator -- second_difference_operator below). A session installs these rows at construction
+// (BundleProblem::constraints, the session's tail rows) and the one compiled engine carries them as three Src::State
+// terms each -- residual R·x, Jacobian row R, in the same stack the streamer's frozen system, the LM and the risk
+// operator read.
 //
 // No row is emitted for a knot in a Flat region, nor for a knot whose RIGHT neighbour is Flat (a following Flat region
 // ignores its incoming boundary, so the smooth region ends at knot i and has no curvature there). The LEFT neighbour
 // may be a Flat region's last knot: that is the C0 join value the smooth region starts from, and it couples through
 // this row -- which is what pins a basis-only curve's single Flat front knot (EurCurves.*). Meeting-date policy steps
 // are never smoothed; a trailing Flat knot no instrument reaches stays genuinely unreached
-// (ConsistentRisk.UnreachedKnot). ASSUMPTIONS.md D18. (Until 2026-10-12 a skipped knot kept an all-zero row so the
-// dense operator's row count stayed n − 2 per curve; a zero row is no row.)
-template <class Problem>
-std::vector<Instrument> smoothing_rows(const Problem& p, double lambda, const std::vector<int>& curves) {
+// (ConsistentRisk.UnreachedKnot). ASSUMPTIONS.md D18.
+namespace detail {
+// The rows for ONE weighting: lambda_of(c, i) is knot i of curve c's weight (0 or less = no row).
+template <class Problem, class LambdaOf>
+std::vector<Instrument> curvature_rows(const Problem& p, LambdaOf&& lambda_of) {
   std::vector<Instrument> rows;
-  for (int c : curves) {
+  for (int c = 0; c < static_cast<int>(p.curves.size()); ++c) {
     const int n = p.curves[c].n_interp_knots();  // curvature over interp knots only (no δ)
-    const std::vector<double> lam = region_knot_lambdas(p.curves[c], lambda);  // per-region λ (Phase 1)
     std::vector<double> t;
     std::vector<bool> flat;  // a knot in a Flat region: a step level, not a point on a smooth forward
     t.reserve(static_cast<std::size_t>(n));
@@ -103,11 +105,12 @@ std::vector<Instrument> smoothing_rows(const Problem& p, double lambda, const st
     }
     for (int i = 1; i < n - 1; ++i) {
       if (flat[static_cast<std::size_t>(i)] || flat[static_cast<std::size_t>(i) + 1]) continue;
-      const double li = lam[i];  // the λ of knot i's region
+      const double li = lambda_of(c, i);
+      if (!(li > 0.0)) continue;  // unsmoothed: no row
       const double h0 = t[static_cast<std::size_t>(i)] - t[static_cast<std::size_t>(i) - 1];
       const double h1 = t[static_cast<std::size_t>(i) + 1] - t[static_cast<std::size_t>(i)];
       double a, b, cc, w;
-      detail::bending_row(h0, h1, a, b, cc, w);
+      bending_row(h0, h1, a, b, cc, w);
       const double sc = li * std::sqrt(w);
       Instrument r;
       r.quote = QuoteKind::StateLinear;
@@ -118,31 +121,46 @@ std::vector<Instrument> smoothing_rows(const Problem& p, double lambda, const st
   }
   return rows;
 }
+}  // namespace detail
 
-// Install the smoothing rows for `reg` as the problem's constraint rows (appended). Off => nothing appended.
-template <class Problem, class Reg>
-void add_smoothing_rows(Problem& p, const Reg& reg) {
-  if (!reg.on()) return;
-  std::vector<Instrument> rows = smoothing_rows(p, reg.lambda, reg.curves);
-  p.constraints.insert(p.constraints.end(), std::make_move_iterator(rows.begin()), std::make_move_iterator(rows.end()));
+// The calibration's smoothing rows: each region's OWN weight (CurveModule::reg_lambda), nothing else.
+template <class Problem>
+std::vector<Instrument> smoothing_rows(const Problem& p) {
+  std::vector<std::vector<double>> lam(p.curves.size());
+  for (std::size_t c = 0; c < p.curves.size(); ++c) lam[c] = region_knot_lambdas(p.curves[c], 0.0);
+  return detail::curvature_rows(p, [&](int c, int i) { return lam[static_cast<std::size_t>(c)][static_cast<std::size_t>(i)]; });
 }
-
-// A SESSION's installed smoothing (2026-10-12): the rows for `reg` kept as the TAIL `n_tail` rows of the problem's
-// constraints. Returns false (nothing touched) when `reg` is the installed one; otherwise replaces the tail with the rows
-// for `reg` (none when off), records it in `installed` / `n_tail` and returns true -- the row set changed, so the caller
-// drops anything compiled against it. The client's own constraint rows (before the tail) are never touched.
-template <class Problem, class Reg>
-bool install_smoothing_rows(Problem& p, int& n_tail, Reg& installed, const Reg& reg) {
-  if (reg.lambda == installed.lambda && reg.curves == installed.curves) return false;
-  p.constraints.resize(static_cast<std::size_t>(p.n_constraints() - n_tail));  // drop the old tail
-  n_tail = 0;
-  if (reg.on()) {
-    std::vector<Instrument> rows = smoothing_rows(p, reg.lambda, reg.curves);
-    n_tail = static_cast<int>(rows.size());
-    p.constraints.insert(p.constraints.end(), std::make_move_iterator(rows.begin()), std::make_move_iterator(rows.end()));
+// Stamp a weight onto every non-Flat region of the listed curves (curves empty = all): how a fixture, a test or a
+// default layout SETS smoothing as region data before a session is built. A Flat region needs no stamp (no rows).
+template <class Problem>
+void stamp_region_smoothing(Problem& p, double lambda, const std::vector<int>& curves = {}) {
+  for (int c = 0; c < static_cast<int>(p.curves.size()); ++c) {
+    if (!curves.empty() && std::find(curves.begin(), curves.end(), c) == curves.end()) continue;
+    for (auto& m : p.curves[c].regions)
+      if (m.scheme != curve::Scheme::Flat) m.reg_lambda = lambda;
   }
-  installed = reg;
-  return true;
+}
+// A LEGACY layout's word onto its regions: for every curve whose regions ALL say nothing, stamp `lambda` onto the
+// non-Flat ones (the compile verb's migration of a spec-level `smoothness`; a curve with any region that said is left
+// alone). Returns whether anything was stamped.
+template <class Problem>
+bool stamp_silent_regions(Problem& p, double lambda) {
+  bool stamped = false;
+  for (auto& cs : p.curves) {
+    bool any_said = false;
+    for (const auto& m : cs.regions) any_said = any_said || m.reg_lambda >= 0.0;
+    if (any_said) continue;
+    for (auto& m : cs.regions)
+      if (m.scheme != curve::Scheme::Flat) { m.reg_lambda = lambda; stamped = true; }
+  }
+  return stamped;
+}
+// Append them to the problem's constraint rows (the session does this at construction). Empty when no region says.
+template <class Problem>
+int add_smoothing_rows(Problem& p) {
+  std::vector<Instrument> rows = smoothing_rows(p);
+  p.constraints.insert(p.constraints.end(), std::make_move_iterator(rows.begin()), std::make_move_iterator(rows.end()));
+  return static_cast<int>(rows.size());
 }
 
 // The coefficient matrix of a list of StateLinear rows over the problem's stacked state (n_rows × n_knots): each
@@ -161,19 +179,20 @@ Eigen::MatrixXd state_rows_matrix(const Problem& p, const std::vector<Instrument
   return R;
 }
 
-// The explicit second-difference (curvature) operator R = λ·D as a DENSE matrix: the dense view of smoothing_rows
-// (one row per emitted interior knot, in knot order). RᵀR is the discrete bending energy. Kept for the tests that pin
-// the coefficients and for a caller that wants the operator as a matrix; the engine reads the rows.
+// The RISK-side damping operator R = λ·D as a DENSE matrix: one row per interior knot of each LISTED curve at the
+// uniform weight `lambda` (the Flat rule as above; a region's own calibration weight is NOT consulted -- this is the
+// separate penalty `risk_operator(reg)` stacks under the engine's rows to damp a delta ladder's fan-out, DV01
+// preserved since R annihilates level + linear moves). Also the dense view the coefficient tests read.
 template <class Problem>
 Eigen::MatrixXd second_difference_operator(const Problem& p, double lambda, const std::vector<int>& curves) {
-  return state_rows_matrix(p, smoothing_rows(p, lambda, curves));
+  const auto listed = [&](int c) { return std::find(curves.begin(), curves.end(), c) != curves.end(); };
+  return state_rows_matrix(p, detail::curvature_rows(p, [&](int c, int) { return listed(c) ? lambda : 0.0; }));
 }
 
-// The smoothing request every entry point takes (moved here from api/bundle_api.hpp on 2026-09-13): penalise the
-// curvature of the listed curves' knot forwards with second_difference_operator at weight `lambda`. lambda <= 0 or
-// empty `curves` => off. Needed for basis-only forecast curves whose forward shape is a rank-deficient null
-// (CLAUDE.md §7b, EUR trio) and, since the streaming soak (2026-09-21), for any long end whose quotes are integrals
-// of the forward. (The continuous tension-energy operator that lived beside this one, with its `tension` flag and
+// The RISK-side regularisation request (2026-10-13: no calibration verb takes one any more -- the calibration's
+// smoothing is region data, CurveModule::reg_lambda): damp the risk operator with second_difference_operator over the
+// listed curves at weight `lambda`. lambda <= 0 or empty `curves` => off. The named strengths below are the composer's
+// table for a REGION's weight (smoothing_lambda), shared with the legacy-spec migration in the compile verb. (The continuous tension-energy operator that lived beside this one, with its `tension` flag and
 // membrane σ, was RETIRED on 2026-09-22: at equal weight the two were indistinguishable on the soak -- same failed
 // ticks, same tick cost, zigzag within 1 bp -- and it cost ~200 lines of shape-function quadrature, a preset column
 // of its own, a value-dependent fallback and a UI control. The Tension interpolation SCHEME is unrelated and stays.)

@@ -48,7 +48,8 @@ TEST(JacobianIntoParity, ARegularisedStreamLandsOnTheRegularisedColdSolve) {
     cal::RegSpec reg;
     reg.lambda = 0.02;
     reg.curves = curves;
-    cal::add_smoothing_rows(pr, reg);
+    cal::stamp_region_smoothing(pr, reg.lambda, reg.curves);  // smoothing is region data
+  cal::add_smoothing_rows(pr);
     ASSERT_GT(pr.n_constraints(), 0) << "premise: a non-empty regulariser";
     const auto full = [&](const Eigen::VectorXd& q) {  // the streamer's market is every row's target: the quotes, then the rows' 0
       Eigen::VectorXd f = pr.market();

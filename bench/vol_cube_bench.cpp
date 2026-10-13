@@ -88,16 +88,16 @@ api::VolCubeSpec cube_spec() {
   return s;
 }
 
-api::RegSpec sofr_reg() {
-  api::RegSpec reg;
-  reg.lambda = 0.02;
-  reg.curves = {0};
-  return reg;
+// Smoothing is region data (2026-10-13): the SOFR bundle's regions carry the bench's 0.02 before the session is built.
+swaps::calibration::BundleProblem sofr_problem() {
+  swaps::calibration::BundleProblem p = api::bundle_from_json(boost::json::parse(bundle_json()));
+  swaps::calibration::stamp_region_smoothing(p, 0.02);
+  return p;
 }
 
 api::BundleSession calibrated_session() {
-  api::BundleSession sess(api::bundle_from_json(boost::json::parse(bundle_json())));
-  sess.calibrate(api::flat_x0(sess.problem()), sofr_reg());
+  api::BundleSession sess(sofr_problem());
+  sess.calibrate(api::flat_x0(sess.problem()));
   return sess;
 }
 
@@ -118,10 +118,11 @@ BENCHMARK(BM_VolCube_Warm);
 static void BM_VolCube_Cold(benchmark::State& state) {
   const std::string js = bundle_json();
   const api::VolCubeSpec spec = cube_spec();
-  const api::RegSpec reg = sofr_reg();
   for (auto _ : state) {
-    api::BundleSession sess(api::bundle_from_json(boost::json::parse(js)));
-    sess.calibrate(api::flat_x0(sess.problem()), reg);
+    swaps::calibration::BundleProblem p = api::bundle_from_json(boost::json::parse(js));
+    swaps::calibration::stamp_region_smoothing(p, 0.02);  // smoothing is region data (2026-10-13)
+    api::BundleSession sess(p);
+    sess.calibrate(api::flat_x0(sess.problem()));
     api::VolCube r = sess.price_vol_cube(spec);
     benchmark::DoNotOptimize(r.price.data());
   }

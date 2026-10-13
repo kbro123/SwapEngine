@@ -168,7 +168,8 @@ TEST(StreamingBand, RescaledOperatorEqualsARefactorisation) {
         cal::RegSpec reg;
         reg.lambda = lambda;
         reg.curves = {0};
-        cal::add_smoothing_rows(p, reg);
+        cal::stamp_region_smoothing(p, reg.lambda, reg.curves);  // smoothing is region data
+  cal::add_smoothing_rows(p);
       }
       const Eigen::VectorXd q0 = p.market();  // every row: the quotes, then the constraint rows' 0
       ref.rescale_update = false;

@@ -43,8 +43,7 @@ struct SessionDiscount {
 std::string asset_swap_json(const json::object& request) {
   AssetSwapRequest r = asset_swap_request_from_json(sub(request, "asset_swap"));
   BundleSession sess(std::move(r.bundle));
-  sess.calibrate(flat_x0(sess.problem()),
-                 cal::smoothing_preset(cal::Smoothing::Light, static_cast<int>(sess.problem().curves.size())));
+  sess.calibrate(flat_x0(sess.problem()));  // smoothing is the bundle's region data (regions[].reg_lambda)
   return json::serialize(asset_swap_to_json(
       b::asset_swaps(r.bonds, r.value_date, SessionDiscount{sess, static_cast<std::size_t>(r.curve)})));
 }

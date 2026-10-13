@@ -75,7 +75,6 @@ inline void add_axis_shock(const ShockAxis& ax, double value, const std::vector<
 struct ScenarioGridRequest {
   calibration::BundleProblem bundle;
   std::optional<Eigen::VectorXd> x0;              // absent => the flat seed
-  calibration::RegSpec reg;
   std::vector<double> sample_times;               // base curves only; empty => none
   std::optional<portfolio::MultiCurveBook> book;  // absent => no surface
   std::vector<ShockAxis> axes;                    // 1 or 2
@@ -120,7 +119,7 @@ ScenarioGridResult scenario_grid(ScenarioGridRequest r) {
   Session sess(std::move(r.bundle));
   const calibration::BundleProblem& P = sess.problem();
   ScenarioGridResult out;
-  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario_grid"), r.reg);
+  out.calibration = sess.calibrate(calibration::seed_or_flat(P, r.x0, "scenario_grid"));
   out.n_curves = P.n_curves();
   out.n_knots = P.n_knots();
   out.axes = std::move(r.axes);

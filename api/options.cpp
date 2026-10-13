@@ -71,8 +71,7 @@ std::string swaption_json(const json::object& request) {
   // Calibrate the bundle to its markets -> the curve we price off.
   cal::BundleProblem prob = bundle_from_json(o.at("bundle"));
   BundleSession sess(std::move(prob));
-  const RegSpec reg = cal::smoothing_preset(cal::Smoothing::Light, static_cast<int>(sess.problem().curves.size()));
-  sess.calibrate(flat_x0(sess.problem()), reg);
+  sess.calibrate(flat_x0(sess.problem()));  // smoothing is the bundle's region data (regions[].reg_lambda)
 
   json::array out_trades;
   if (o.contains("trades") && o.at("trades").is_array()) {

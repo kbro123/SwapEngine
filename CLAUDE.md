@@ -541,6 +541,11 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   way. A PIN is the stiff one-piece map `PenaltyMap::stiff(w)` centred on its breakpoint (`apply_pins`), so a pinned
   row's residual and installed slope are a map and its slope like any free row's; when to pin and release is the
   active-set walk's control flow and stays so (ASSUMPTIONS K44).
+  **SMOOTHING IS REGION DATA (owner's rule, 2026-10-13, ASSUMPTIONS K47).** A region's `reg_lambda`, set when the
+  curve is defined, is the only source of the calibration's smoothing rows -- no bundle-level default, no inheritance,
+  no floor; no calibration verb takes a `RegSpec` (the one on the risk verbs is the separate risk-side damping). A
+  legacy composer spec's `smoothness` word is migrated onto its regions once at compile; the composer and the SDK
+  stamp the weight at region creation (`stamp_region_smoothing` for fixtures).
   **The regulariser is ROWS OF THE PROBLEM (2026-10-12, ASSUMPTIONS K45).** `QuoteKind::StateLinear` is a row whose
   model quote is Σ coeff·x[state] (`Instrument::state`, a list of `StateRef{curve, index, coeff}`; JSON `"state"`):
   the curvature penalty is one such row per interior knot (`regularize.hpp smoothing_rows`, target 0), a bound on a
