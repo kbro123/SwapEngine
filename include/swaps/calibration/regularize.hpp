@@ -123,15 +123,47 @@ std::vector<Instrument> curvature_rows(const Problem& p, LambdaOf&& lambda_of) {
 }
 }  // namespace detail
 
-// The calibration's smoothing rows: each region's OWN weight (CurveModule::reg_lambda), nothing else.
+// SMOOTHING IS A TIE-BREAKER, NEVER A TRADE AGAINST THE QUOTES (owner's rule, 2026-10-13, ASSUMPTIONS K48). The
+// smoothing rows choose the minimum-curvature curve AMONG the curves the quotes allow -- the unique point when the
+// quotes are square and full-rank (nothing to choose), the smooth completion of the directions an under-determined
+// quote set leaves free, the minimum-curvature point inside the bid/offer bands where a banded quote is a BOUND (a
+// dead zone inside, PenaltyMap) -- and never move a hard quote off its market or a banded quote outside its band.
+// Written as rows of the least squares, that is the lexicographic limit of a weight w -> 0: the leak of a curvature
+// row into the quotes is O(w^2) (at the optimum J_q^T r_q = -w^2 R^T R x), while the directions the quotes do not
+// pin are set by the rows alone whatever w is. kSmoothingTieBreak is that weight, fixed by numerics only:
+// MEASURED (scratch sweep over every ladder rung and the G10 desk, 2026-10-13) the worst hard-quote misfit is
+// 7e-6 bp at 1e-4 (2.7e-9 bp on annual OIS, 7.3e-6 on monthly averaged futures -- denser knots leak more), 7e-4 bp
+// at 1e-3 and 0.1..0.7 bp at the retired 0.5, and the rows' singular values at 1e-4 sit ~1e-5 of the quotes': far
+// above kRankThreshold (1e-10). A region's reg_lambda is therefore a SWITCH: > 0 smooths that region's knots at this
+// weight, 0 / unset leaves them to the quotes alone; its magnitude is not read (a "strength" would be a trade
+// against the quotes, which is exactly what this rule forbids). tests/smoothing_tie_breaker_test.cpp pins the
+// round trip (< 1e-4 bp on every hard quote, every banded quote inside its band) on every shape.
+inline constexpr double kSmoothingTieBreak = 1e-4;
+// THE PULL INSIDE A BAND WHEN ITS REGION IS SMOOTHED (the hierarchy's third level, 2026-10-13): a banded quote is a
+// BOUND -- outside the band the row pulls at slope 1 -- and inside it needs SOME pull toward mid, or the curvature rows
+// (which annihilate a straight line) leave the curve's level and slope undetermined within the bands and the
+// minimum-curvature point parks the quotes on the band EDGES (measured on annual OIS: six of twelve quotes at +-0.25
+// bp, 279..546 LM iterations, the streamer's band walk tripping on a 10^4 slope ratio at the edge). The pull must lose
+// to the curvature at the jitter scale and win above it: MEASURED on alternating +-0.03 bp jitter in +-0.25 bp bands,
+// the exact fit zigzags the knots by 32.5 bp; inside-band decay 1e-3 (10x the tie-breaker) takes that to 2.6 bp with
+// every quote within 0.06 bp of mid in 6 iterations, 1e-2 leaves 21 bp, 3e-2 and above leave it all. This is the
+// recommended `band_decay` for a quote on a smoothed region (the composer / SDK default); the engine reads the row's
+// own decay as data and applies nothing itself.
+inline constexpr double kSmoothedBandDecay = 10.0 * kSmoothingTieBreak;
+
+// The calibration's smoothing rows: one per interior knot of every region whose reg_lambda is set (> 0), at the
+// tie-breaker weight. Nothing else (no bundle-level default, no strength).
 template <class Problem>
 std::vector<Instrument> smoothing_rows(const Problem& p) {
-  std::vector<std::vector<double>> lam(p.curves.size());
-  for (std::size_t c = 0; c < p.curves.size(); ++c) lam[c] = region_knot_lambdas(p.curves[c], 0.0);
-  return detail::curvature_rows(p, [&](int c, int i) { return lam[static_cast<std::size_t>(c)][static_cast<std::size_t>(i)]; });
+  std::vector<std::vector<double>> on(p.curves.size());
+  for (std::size_t c = 0; c < p.curves.size(); ++c) on[c] = region_knot_lambdas(p.curves[c], 0.0);
+  return detail::curvature_rows(p, [&](int c, int i) {
+    return on[static_cast<std::size_t>(c)][static_cast<std::size_t>(i)] > 0.0 ? kSmoothingTieBreak : 0.0;
+  });
 }
-// Stamp a weight onto every non-Flat region of the listed curves (curves empty = all): how a fixture, a test or a
-// default layout SETS smoothing as region data before a session is built. A Flat region needs no stamp (no rows).
+// Stamp the switch onto every non-Flat region of the listed curves (curves empty = all): how a fixture, a test or a
+// default layout SETS smoothing as region data before a session is built (`lambda` > 0 = on, 0 = off; the value is
+// data for the switch only). A Flat region needs no stamp (no rows).
 template <class Problem>
 void stamp_region_smoothing(Problem& p, double lambda, const std::vector<int>& curves = {}) {
   for (int c = 0; c < static_cast<int>(p.curves.size()); ++c) {
@@ -214,16 +246,17 @@ inline void refuse_retired_regulariser(bool has_reg_op, std::string_view reg_op,
     throw std::invalid_argument("tension_sigma: the tension-energy regulariser was retired on 2026-09-22; omit it (or pass 0)");
 }
 
-// The composer's named smoothing strengths -- ONE table for every entry point (E7 stage 3). compile_reg_spec maps
-// a spec's "off"/"light"/"strong" onto it; a verb that needs a well-posed default calibration asks for Light
-// instead of writing lambda out. tests/smoothing_preset_test.cpp pins the values.
-enum class Smoothing { Off, Light, Strong };
+// The composer's smoothing words -- ONE table for every entry point (E7 stage 3). Since 2026-10-13 (K48) smoothing
+// is a switch: "on" (and the legacy words "light" / "strong", which named strengths when smoothing traded against
+// the quotes) stamp 1 onto a region's reg_lambda, "off" stamps 0. The enum keeps Light / Strong as spellings of On
+// so a saved spec still reads; they are the same switch. tests/smoothing_preset_test.cpp pins the values.
+enum class Smoothing { Off, Light, Strong, On = Light };
 
 inline double smoothing_lambda(Smoothing s) {
   switch (s) {
     case Smoothing::Off: return 0.0;
-    case Smoothing::Light: return 0.5;
-    case Smoothing::Strong: return 5.0;
+    case Smoothing::Light: return 1.0;
+    case Smoothing::Strong: return 1.0;
   }
   return 0.0;
 }

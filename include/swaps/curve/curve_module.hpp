@@ -184,11 +184,13 @@ struct CurveModule {
   // Tension hyperparameter (Scheme::Tension only): pulls the spline taut, σ→0 recovers NaturalCubic,
   // σ→∞ approaches piecewise-linear. Ignored by every other scheme. <=0 means "use the default 1.0".
   double sigma = 0.0;
-  // This region's OWN smoothing weight -- SMOOTHING IS REGION DATA (owner's rule, 2026-10-13, ASSUMPTIONS K47): set
-  // where the curve is defined. > 0 => the calibration carries one curvature row per interior knot of this region at
-  // this weight (regularize.hpp smoothing_rows); 0 or unset (kRegLambdaUnset) => unsmoothed. There is no bundle-level
-  // default a region inherits. A Flat region needs none (a step level carries no curvature row). (A per-region
-  // regulariser σ, `reg_sigma`, went with the tension-energy operator on 2026-09-22.)
+  // This region's smoothing SWITCH -- SMOOTHING IS REGION DATA (owner's rule, 2026-10-13, ASSUMPTIONS K47) and a
+  // TIE-BREAKER, never a trade against the quotes (K48): > 0 => the calibration chooses the minimum-curvature curve
+  // among those the quotes allow over this region's knots (one curvature row per interior knot at the fixed
+  // tie-breaker weight regularize.hpp kSmoothingTieBreak; the magnitude here is NOT read -- a strength would buy
+  // smoothness with quote error); 0 or unset (kRegLambdaUnset) => the quotes alone. There is no bundle-level default a
+  // region inherits. A Flat region needs none (a step level carries no curvature row). (A per-region regulariser σ,
+  // `reg_sigma`, went with the tension-energy operator on 2026-09-22.)
   double reg_lambda = kRegLambdaUnset;
 };
 

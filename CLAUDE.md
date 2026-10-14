@@ -307,8 +307,10 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   so nobody re-measures it: the plain desk is square (one knot per swap), and on a square problem the streamer never
   refreshes however far the market moves (its 25 bp refresh read 26 µs against 877 µs turned, two drift refreshes per
   tick on the over-determined desk). That would charge the turns for leaving the square regime, and no production
-  bundle IS square -- smoothing rows are rows. Under Light on both the turns cost 1.11x cold, 1.04x tick, 1.15x refresh,
-  1.11x Jacobian. The bench's premise check proves the RAW pair calibrates back to its generating state exactly (the four
+  bundle IS square -- smoothing rows are rows. Under smoothing on both the turns cost 1.11x cold, 1.04x tick, 1.11x
+  Jacobian; and since K48 made the rows tie-breakers the SQUARE plain desk is exempt from the drift refresh again
+  (29.7 µs, 0 refreshes, premise `refreshes == 0`) while the over-determined turned desk refreshes (1.45 ms), so the
+  refresh pair now gates the exemption rather than a turn cost. The bench's premise check proves the RAW pair calibrates back to its generating state exactly (the four
   turns identified), and the kernel rungs take the problem WITH its rows so they time the objective the session streams.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
@@ -556,7 +558,34 @@ tick** (`x ← x − M·(model_rates(x) − q)` until `‖dx‖∞ < 1e-9`), not
   curve is defined, is the only source of the calibration's smoothing rows -- no bundle-level default, no inheritance,
   no floor; no calibration verb takes a `RegSpec` (the one on the risk verbs is the separate risk-side damping). A
   legacy composer spec's `smoothness` word is migrated onto its regions once at compile; the composer and the SDK
-  stamp the weight at region creation (`stamp_region_smoothing` for fixtures).
+  stamp the switch at region creation (`stamp_region_smoothing` for fixtures).
+  **SMOOTHING IS A TIE-BREAKER, NEVER A TRADE AGAINST THE QUOTES (owner's rule, 2026-10-13, ASSUMPTIONS K48).** The
+  rows choose the minimum-curvature curve AMONG the curves the quotes allow: hard quotes reprice to their market, a
+  banded quote (a BOUND: dead zone inside, decay 0) stays in its band, and the rows decide only what the quotes leave
+  free -- an unreached knot, the interior of a band. As rows that is the w → 0 limit (leak O(w²), free directions set
+  by the rows whatever w); `kSmoothingTieBreak = 1e-4` is fixed by numerics (measured worst leak 7e-6 bp over every
+  shape; the retired 0.5 preset leaked 0.1..0.7 bp, which is what "light smoothing calibrates poorly" was). A region's
+  `reg_lambda` is a SWITCH (> 0 on; "light"/"strong" are legacy spellings of "on"; magnitude not read). A square
+  quote set plus its tie-breaker rows streams exactly on the frozen operator and is exempt from the drift refresh
+  (`Options::tie_breaker_rows`). The long end's zigzag on exact quotes is what the quotes imply (0.03 bp of alternating
+  jitter on annual pillars: natural cubic 39 bp, Hermite 32 bp, tension 24 bp at any σ -- the linear floor, the
+  coupling never vanishes -- B-spline control points 381 bp; Flat and MonotoneConvex, whose state is per-interval,
+  1.6 bp = the pure 30y/5y leverage). The freedom that removes it is the bid/offer band, quoted as a BOUND with a weak
+  mid row beside it: the quote row's band at decay 0 (outside slope 1, dead zone inside) plus the same instrument at the
+  constant slope `kSmoothedBandDecay` = 10× the tie-breaker (`PenaltyMap::stiff`). The mid pull is the hierarchy's
+  third level -- without it the curvature rows, which annihilate a line, leave level and slope undetermined within the
+  bands and the solution parks quotes on the band edges; and it cannot live INSIDE the band's own slope: the frozen
+  band walk is robust to a 0 ↔ 1 kink (the dead-zone path) and to mild ones, not to the 1000:1 kink a tie-breaker-
+  scale inside slope makes (measured: nearly every tick failed). Measured on the soak (±1 bp bounds, every rate row):
+  the realistic factor walk streams at the unsmoothed speeds (annual OIS 4.7 µs, the desk 71 µs), zero failed ticks on
+  every linear rung, streamed == cold to 1e-12, zigzag 6 bp where hard quotes gave 32; the per-row stress walk is
+  exact (1e-10) but costs 80 µs..11 ms a tick because a dead-zone exit is a full refactorisation. FOUND AND FIXED on
+  the way: a decay-0 band was never TRACKED by the streamer (its frozen row is zero, so the corrector converged with a
+  quote 1.9 bp OUTSIDE its band and no stall fired); `BandRow::trackable` now tracks it through the dead-zone path.
+  Two-rows-per-quote lives in the soak recipe today (`tests/streaming_soak_test.cpp soak()`); the session does not
+  yet mint the mid row for a client's bounded quote, and the dead-zone exit is not yet a rank-one update -- the two
+  open items. The MonotoneCubic rungs (mixed_scheme, desk_mixed) fail ticks on quotes held to ±1 bp as they always
+  did unsmoothed: the Light preset had hidden it by bending the quotes; MonotoneConvex does not.
   **The regulariser is ROWS OF THE PROBLEM (2026-10-12, ASSUMPTIONS K45).** `QuoteKind::StateLinear` is a row whose
   model quote is Σ coeff·x[state] (`Instrument::state`, a list of `StateRef{curve, index, coeff}`; JSON `"state"`):
   the curvature penalty is one such row per interior knot (`regularize.hpp smoothing_rows`, target 0), a bound on a

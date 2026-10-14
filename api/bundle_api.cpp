@@ -560,6 +560,7 @@ void BundleSession::start_streaming(double step_tol) {
   const Eigen::VectorXd q0 = prob_.market();  // the regions' smoothing rows are rows of the engine the streamer borrows  // every row's target: the quotes' mids, then the constraint rows'
   cal::StreamingCalibrator<cal::BundleProblem>::Options opt;
   if (step_tol > 0.0) opt.step_tol = step_tol;  // looser tol -> fewer corrector steps (speed/accuracy knob)
+  opt.tie_breaker_rows = n_smoothing_;  // the regions' smoothing rows at the tail of prob_.constraints (K48)
   // The streamer BORROWS the session's one compiled engine (the object model): a scalar set_quotes on the
   // session is what it prices next tick. It is dropped with the engine (invalidate_engine) and rebuilt
   // here lazily by the next stream_update/resolve.

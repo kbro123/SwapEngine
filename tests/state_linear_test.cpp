@@ -152,7 +152,8 @@ TEST(StateLinear, SmoothingRowsAreTheOperatorAndTheSessionLandsWhereTheStackedFo
   cal::stamp_region_smoothing(ps, reg.lambda, reg.curves);  // smoothing is region data
   const std::vector<cal::Instrument> rows = cal::smoothing_rows(ps);
   ASSERT_EQ(rows.size(), 4u) << "6 Hermite knots: interior rows 1..4";
-  const Eigen::MatrixXd R = cal::second_difference_operator(p, reg.lambda, reg.curves);
+  // the rows carry the TIE-BREAKER weight whatever the stamp says (K48): the dense view at kSmoothingTieBreak
+  const Eigen::MatrixXd R = cal::second_difference_operator(p, cal::kSmoothingTieBreak, reg.curves);
   ASSERT_EQ(R.rows(), 4);
   for (std::size_t r = 0; r < rows.size(); ++r) {
     ASSERT_EQ(rows[r].state.size(), 3u);
@@ -182,8 +183,9 @@ TEST(StateLinear, SmoothingRowsAreTheOperatorAndTheSessionLandsWhereTheStackedFo
   const cal::RegularizedEngine<cal::HybridBundleResidual> stacked(bare, R);
   const Eigen::VectorXd x_stack = cal::calibrate_with(stacked, p.n_knots(), stacked.n_residuals(), x0).x;
   EXPECT_LT((x_rows - x_stack).cwiseAbs().maxCoeff(), 1e-10) << "the rows and the stacked block are the same least squares";
-  // and the unregularised solve is NOT the same point (the regulariser does something on this kinked fit)
-  EXPECT_GT((cal::calibrate(p, x0).x - x_rows).cwiseAbs().maxCoeff(), 1e-7);
+  // and on this SQUARE fit the rows change nothing the quotes decide: the tie-breaker's leak is below 1e-7 in the knots
+  // (K48 -- until 2026-10-13 the 0.02 weight moved this kinked fit by > 1e-7, which was the trade the rule forbids)
+  EXPECT_LT((cal::calibrate(p, x0).x - x_rows).cwiseAbs().maxCoeff(), 1e-7);
 
   // the risk operator (no risk-side damping: the rows ARE the engine's) == the pseudo-inverse of the hand-stacked
   // [J; R], quote columns
@@ -234,12 +236,13 @@ TEST(StateLinear, ASessionInstallsSmoothingAsItsOwnTailRowsAndTheClientStructure
   cal::add_smoothing_rows(pc);
   const Eigen::VectorXd xc = cal::calibrate(pc, x0).x;
   EXPECT_LT((sess.x() - xc).cwiseAbs().maxCoeff(), 1e-7);
-  // a different strength is a different region weight (same count, scaled coefficients); an unset region is no rows
+  // a different stamp value is the SAME switch (K48: the magnitude is not read, the rows carry the tie-breaker weight);
+  // an unset region is no rows
   cal::BundleProblem p_strong = p;
   p_strong.curves[0].regions[0].reg_lambda = 5.0;
   api::BundleSession ss(p_strong);
   ASSERT_EQ(ss.problem().n_constraints(), 4);
-  EXPECT_NEAR(ss.problem().constraints[0].state[0].coeff, 10.0 * sess.problem().constraints[0].state[0].coeff, 1e-15);
+  EXPECT_EQ(ss.problem().constraints[0].state[0].coeff, sess.problem().constraints[0].state[0].coeff);
   api::BundleSession so(p_off);
   EXPECT_EQ(so.problem().n_constraints(), 0);
   so.calibrate(x0);

@@ -148,6 +148,13 @@ class StreamingCalibrator {
     int max_frozen = 8;      // EXACT mode: hard cap on frozen steps without convergence -> refresh M
     int max_refresh = 6;     // safety cap on refreshes within one tick
     int max_steps = 64;      // hard cap on corrector steps per tick (then: converged = false, not committed)
+    // TIE-BREAKER ROWS (K48, 2026-10-13): how many TRAILING rows of the problem are smoothing rows at the tie-breaker
+    // weight (regularize.hpp kSmoothingTieBreak; BundleSession passes its own count). With the remaining rows SQUARE in
+    // the state, the frozen fixed point J_ref^T [r_q; w R x] = 0 gives r_q = -w^2 J_q,ref^-T R^T R x = O(w^2) for ANY
+    // frozen J (J_q,ref is invertible), i.e. the quotes are hit to the tie-breaker's leak whatever the drift -- the
+    // square-problem exactness argument, so such a problem is exempt from the drift refresh like a square one.
+    // Rows at weight 1 (a client's constraint, a pin) are NOT tie-breakers and keep the refresh.
+    int tie_breaker_rows = 0;
     // PREDICTIVE CONVERGENCE (2026-09-10, E4.D): after two consecutive full steps under the SAME frozen
     // operator (no refresh, re-scale or breakpoint between them) the next step is bounded by the observed
     // contraction, |dx_{k+1}| <= (|dx_k| / |dx_{k-1}|) * |dx_k| (exact for the linear rate a frozen M
@@ -228,7 +235,7 @@ class StreamingCalibrator {
       if constexpr (requires(Engine& e, const Problem& p) { e.set_quotes(p); }) owned_engine_->set_quotes(prob);
     }
     collect_bands(prob);
-    drift_refresh_ = (n_res_ != static_cast<int>(x.size())) || !bands_.empty();
+    drift_refresh_ = (n_res_ - opt_.tie_breaker_rows != static_cast<int>(x.size())) || !bands_.empty();
     if (!set_anchor(x, q)) throw std::invalid_argument("StreamingCalibrator::resync: the Jacobian at the anchor is non-finite");
     x_cur_ = x;
     q_cur_ = q;
@@ -252,14 +259,16 @@ class StreamingCalibrator {
     op_.reset(n_res_, static_cast<int>(x0.size()));  // THE operator (normal_op.hpp): the pseudo-inverse of the rows, sized once
     collect_bands(prob);
     // The drift-triggered accuracy refresh applies only where the fixed point is not r = 0: a non-square row set (an
-    // over-determined market, constraint rows) or a tracked band. A square set of rows converges to r = 0 exactly.
-    drift_refresh_ = (n_res_ != static_cast<int>(x0.size())) || !bands_.empty();
+    // over-determined market, a client's constraint rows) or a tracked band. A square set of rows converges to r = 0
+    // exactly -- and so, to the tie-breaker's O(w^2) leak, does a square quote set plus its smoothing rows
+    // (Options::tie_breaker_rows), which is therefore exempt too (K48).
+    drift_refresh_ = (n_res_ - opt_.tie_breaker_rows != static_cast<int>(x0.size())) || !bands_.empty();
     // The background worker hands over M ONLY (no B, no band re-scaling, and its private engine copy never
     // sees a later set_quotes), which is exact for a SQUARE, unbanded, unregularised problem and wrong for
     // the rest (E3 register S3 / G5): a regularised or banded stream would mix an un-regularised M with a
     // stale B and converge to the wrong fixed point. So the prefetch is armed only where it is exact;
     // elsewhere the option is ignored (prefetch_hits() stays 0).
-    if (opt_.prefetch && !drift_refresh_) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
+    if (opt_.prefetch && !drift_refresh_ && n_res_ == static_cast<int>(x0.size())) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (!set_anchor(x0, q0))
       throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
     breakeven_steps_ = opt_.breakeven_steps > 0.0 ? opt_.breakeven_steps : kBreakevenCap;
@@ -296,9 +305,9 @@ class StreamingCalibrator {
     last_step_.resize(x0.size());  // sized once: the corrector's 2-cycle check allocates nothing
   }
 
-  // The banded rows (FX forwards are never banded): what the per-tick side tracking watches. decay > 0
-  // only: the inside branch must be invertible (q from r) and the frozen row non-zero. A decay-0 (dead-
-  // zone) band is not tracked; it still works through the stall-triggered refresh.
+  // The banded rows (FX forwards are never banded): what the per-tick side tracking watches -- including a decay-0
+  // (dead-zone) band since 2026-10-13: the walk reads the model value, so an inside branch need not be invertible, and
+  // a row anchored in its dead zone is tracked through the engine's unscaled quote row (dead_rows).
   void collect_bands(const Problem& prob) {
     bands_.clear();
     quote_lo_.assign(n_res_, 0.0);
@@ -352,7 +361,7 @@ class StreamingCalibrator {
       const bool was_tracked = k < bands_.size() && bands_[k].row == i;
       if (was_tracked && bands_[k].general) { ++k; continue; }  // its map is data, not the four numbers
       const bool banded = upper[i] > lower[i];
-      const bool tracked = banded && band_eligible_[i] && decay[i] > 0.0;
+      const bool tracked = banded && band_eligible_[i];  // a decay-0 band is tracked too (BandRow::trackable, 2026-10-13)
       if (tracked != was_tracked || banded != (quote_up_[i] > quote_lo_[i])) return false;
       if (was_tracked) ++k;
     }
@@ -438,12 +447,21 @@ class StreamingCalibrator {
     double b(int j) const { return map.b[j]; }
     double s(int piece_) const { return map.s[piece_]; }
     double span() const { return map.b[map.n - 1] - map.b[0]; }
-    // Tracked: a monotone map (every slope >= 0) whose target piece has a positive slope -- a band with decay > 0, a
-    // bound with the target on its live side. A decay-0 band is not tracked (as before: the stall refresh handles it).
-    static bool trackable(const PenaltyMap& m, double target) {
+    // Tracked: a monotone map (every slope >= 0) with a positive slope somewhere -- a band with decay > 0, a bound with
+    // the target on its live side, and (2026-10-13) a BOUND band, decay 0 with the target on its dead-zone piece. Until
+    // then a decay-0 band was left to "the stall refresh": but its frozen row is ZERO, so the corrector converges with
+    // the quote OUTSIDE the band and no stall ever fires -- measured on the per-row walk with +-0.25 bp bounds, a row
+    // 1.9 bp outside its band on a tick that reported converged, 0 re-scales. Anchored on the zero-slope piece it is
+    // tracked through the engine's unscaled quote row exactly as a data map's dead zone is (the 2026-10-12 path), and a
+    // crossing out re-scales it from 0.
+    static bool trackable(const PenaltyMap& m, double) {
       if (m.n < 1) return false;
-      for (int i = 0; i <= m.n; ++i) if (!(m.s[i] >= 0.0)) return false;
-      return m.s[m.target_piece(target)] > 0.0;
+      bool live = false;
+      for (int i = 0; i <= m.n; ++i) {
+        if (!(m.s[i] >= 0.0)) return false;
+        live = live || m.s[i] > 0.0;
+      }
+      return live;
     }
   };
 

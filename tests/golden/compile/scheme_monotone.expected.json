@@ -18,7 +18,7 @@
               10.0136986301,
               30.0273972603
             ],
-            "reg_lambda": 0.5,
+            "reg_lambda": 1.0,
             "scheme": "MonotoneCubic"
           }
         ]
@@ -1076,5 +1076,7 @@
   ],
   "under_determined": false,
   "value_date": "2026-07-08",
-  "warnings": []
+  "warnings": [
+    "Legacy smoothing: the spec's 'light' was stamped onto its regions (regions[].reg_lambda = 1.000000); smoothing is region data -- set it on each region."
+  ]
 }

@@ -12,21 +12,24 @@
 namespace cal = swaps::calibration;
 
 TEST(SmoothingPreset, TheComposerTableIsPinned) {
-  // ONE operator (the curvature / second-difference penalty) and one column: the tension-energy operator and its
-  // 0.02 / 0.2 column were retired on 2026-09-22.
+  // ONE operator (the curvature / second-difference penalty) and, since 2026-10-13 (K48), ONE switch: smoothing is a
+  // tie-breaker among the curves the quotes allow, so "light" and "strong" -- strengths from when it traded against
+  // the quotes (0.5 / 5.0) -- are both "on" (1) and the weight is regularize.hpp kSmoothingTieBreak, not this value.
   EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Off), 0.0);
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Light), 0.5);
-  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Strong), 5.0);
+  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Light), 1.0);
+  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::Strong), 1.0);
+  EXPECT_EQ(cal::smoothing_lambda(cal::Smoothing::On), 1.0);
+  EXPECT_EQ(cal::kSmoothingTieBreak, 1e-4);
 }
 
 TEST(SmoothingPreset, APresetCoversEveryCurveAndOffIsNoPenalty) {
   const cal::RegSpec light = cal::smoothing_preset(cal::Smoothing::Light, 3);
   EXPECT_TRUE(light.on());
-  EXPECT_EQ(light.lambda, 0.5);
+  EXPECT_EQ(light.lambda, 1.0);
   EXPECT_EQ(light.curves, (std::vector<int>{0, 1, 2}));
 
   const cal::RegSpec strong = cal::smoothing_preset(cal::Smoothing::Strong, 2);
-  EXPECT_EQ(strong.lambda, 5.0);
+  EXPECT_EQ(strong.lambda, 1.0);
   EXPECT_EQ(strong.curves, (std::vector<int>{0, 1}));
 
   const cal::RegSpec off = cal::smoothing_preset(cal::Smoothing::Off, 4);

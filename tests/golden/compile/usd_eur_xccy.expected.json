@@ -10,7 +10,7 @@
               2.0082191781,
               10.0136986301
             ],
-            "reg_lambda": 0.5,
+            "reg_lambda": 1.0,
             "scheme": "Hermite"
           }
         ]
@@ -24,7 +24,7 @@
               2.0082191781,
               10.0136986301
             ],
-            "reg_lambda": 0.5,
+            "reg_lambda": 1.0,
             "scheme": "Hermite"
           }
         ]
@@ -39,7 +39,7 @@
               5.0082191781,
               10.0136986301
             ],
-            "reg_lambda": 0.5,
+            "reg_lambda": 1.0,
             "scheme": "Hermite"
           }
         ]
@@ -3294,6 +3294,7 @@
       "n_knots": 3,
       "n_quotes": 3,
       "name": "EUR/USD xccy",
+      "pair": "EURUSD",
       "policies": "Hermite",
       "type": "xccy"
     }

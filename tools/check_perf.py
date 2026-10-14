@@ -148,7 +148,10 @@ METRICS = {
     "g10_g4turns_cold_calibrate": ("g10_turns_bench", "BM_G10_g4turns_Cold", None),
     "g10_noturns_stream_tick": ("g10_turns_bench", "BM_G10_noturns_StreamTick", None, {"refreshes": "==0"}),
     "g10_g4turns_stream_tick": ("g10_turns_bench", "BM_G10_g4turns_StreamTick", None, {"refreshes": "==0"}),
-    "g10_noturns_refresh_25bp": ("g10_turns_bench", "BM_G10_noturns_RefreshTick25bp", None, {"refreshes": ">=1"}),
+    # K48 (2026-10-13): the plain desk is SQUARE in its quotes and its smoothing rows are tie-breakers, so it is exempt from the
+    # drift refresh (Options::tie_breaker_rows) -- the 25 bp move converges on frozen steps; the turned desk's two bracket rows
+    # per jump make its quotes over-determined, so it still refreshes. The pair is now the exemption's own gate.
+    "g10_noturns_refresh_25bp": ("g10_turns_bench", "BM_G10_noturns_RefreshTick25bp", None, {"refreshes": "==0"}),
     "g10_g4turns_refresh_25bp": ("g10_turns_bench", "BM_G10_g4turns_RefreshTick25bp", None, {"refreshes": ">=1"}),
     "g10_noturns_jacobian": ("g10_turns_bench", "BM_G10_noturns_Jacobian", None),
     "g10_g4turns_jacobian": ("g10_turns_bench", "BM_G10_g4turns_Jacobian", None),

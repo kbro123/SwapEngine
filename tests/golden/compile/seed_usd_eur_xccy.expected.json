@@ -31590,6 +31590,7 @@
       "n_knots": 11,
       "n_quotes": 11,
       "name": "EUR/USD xccy",
+      "pair": "EURUSD",
       "policies": "Flat \u2192 Hermite",
       "type": "xccy"
     },

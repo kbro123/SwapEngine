@@ -18,7 +18,7 @@
               7.0136986301,
               10.0136986301
             ],
-            "reg_lambda": 0.5,
+            "reg_lambda": 1.0,
             "scheme": "Tension",
             "sigma": 0.5
           }
@@ -970,6 +970,7 @@
   "under_determined": true,
   "value_date": "2026-07-08",
   "warnings": [
+    "Legacy smoothing: the spec's 'light' was stamped onto its regions (regions[].reg_lambda = 1.000000); smoothing is region data -- set it on each region.",
     "Under-determined: 5 quotes for 6 knots \u2014 smoothness regularization keeps it well-posed."
   ]
 }

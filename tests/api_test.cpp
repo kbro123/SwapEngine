@@ -316,7 +316,7 @@ TEST(BundleApi, WarmEngineReuseMatchesFreshSessionsAndTheOldRegularizedPath) {
   // The reference path: the GENERIC AAD engine composed with the same constant R block (E6.1c: the
   // LinearRegularizedProblem wrapper this used to compare against was deleted -- one penalty definition).
   const cal::AadResidualEngine<cal::BundleProblem> aad(p);
-  const Eigen::MatrixXd R_ref = cal::second_difference_operator(p, reg.lambda, reg.curves);
+  const Eigen::MatrixXd R_ref = cal::second_difference_operator(p, cal::kSmoothingTieBreak, reg.curves);  // the rows' weight (K48)
   const cal::RegularizedEngine<cal::AadResidualEngine<cal::BundleProblem>> composed_ref(aad, R_ref);
   const auto old_path = cal::calibrate_with(composed_ref, p.n_knots(), composed_ref.n_residuals(), x0);
   EXPECT_LT((sess.x() - old_path.x).cwiseAbs().maxCoeff(), 1e-9)

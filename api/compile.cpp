@@ -740,8 +740,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   // its data says so, and a rank-deficient bundle streams rank-safely regardless.
   {
     const cal::Smoothing level = R.smoothness == "off" ? cal::Smoothing::Off
-                                 : R.smoothness == "strong" ? cal::Smoothing::Strong
-                                                            : cal::Smoothing::Light;
+                                 : R.smoothness == "strong" ? cal::Smoothing::Strong  // legacy word: the same switch
+                                                            : cal::Smoothing::On;      // "on", "light" (legacy)
     const double lam = cal::smoothing_lambda(level);
     const bool migrated = cal::stamp_silent_regions(R.bundle, lam);  // regularize.hpp: the one migration
     if (migrated && lam > 0.0)

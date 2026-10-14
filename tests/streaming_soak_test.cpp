@@ -90,7 +90,7 @@ long soak_ticks() {
 enum class Recipe { Smoothed, Unsmoothed };
 const char* to_string(Recipe r) {
   switch (r) {
-    case Recipe::Smoothed: return "SMOOTHED (the API's Light preset: second-difference over every curve)";
+    case Recipe::Smoothed: return "SMOOTHED (K48: min-curvature WITHIN +-1 bp BOUNDS -- the tie-breaker rows on every curve, every rate row a bound plus a mid row at kSmoothedBandDecay)";
     case Recipe::Unsmoothed: return "UNSMOOTHED (the stress case)";
   }
   return "";
@@ -125,10 +125,70 @@ double zigzag(const Shape& s, const Eigen::VectorXd& x) {
   return z;
 }
 
+// The smoothed recipe's band half-width: +-1 bp, the bid/offer a desk shows on a swap, wide enough that a tick's level move
+// (the walk moves each band with its target, and the model lags the target by the move) leaves most rows INSIDE their new
+// band. MEASURED 2026-10-13: at +-0.25 bp most rows start every tick outside their moved band, and each dead-zone exit is a
+// full refactorisation -- 75 us a tick on annual OIS and 13 ms on the desk; at +-1 bp the factor walk streams at the
+// unsmoothed speeds (4.7 us / 71 us) with the same zero failed ticks and the same 1e-12 agreement with the cold solve.
+constexpr double kSoakBand = 1e-4;
+
 Outcome soak(const Shape& s, WalkKind kind, const cal::RegSpec& reg, long n, unsigned seed, int check_every) {
   Outcome o;
-  cal::BundleProblem prob = s.prob;  // smoothing is REGION DATA (2026-10-13): the recipe's weight is stamped onto the regions
-  if (reg.on()) cal::stamp_region_smoothing(prob, reg.lambda, reg.curves);
+  cal::BundleProblem prob = s.prob;  // smoothing is REGION DATA (2026-10-13): the recipe's switch is stamped onto the regions
+  bool has_bands = s.has_bands;
+  std::vector<int> mirror_of;  // appended mid rows -> their quote row
+  if (reg.on()) {
+    cal::stamp_region_smoothing(prob, reg.lambda, reg.curves);
+    // MIN-CURVATURE WITHIN BANDS (owner's rule, 2026-10-13, K48): smoothing chooses among the curves the quotes allow and
+    // never trades a quote away, so on hard quotes it changes nothing a square rung streams -- the freedom it uses is the
+    // bid/offer band. Every rate row without a band of its own is quoted as a bound +-kSoakBand around its market; the
+    // rows that carry their own band (the banded rung's, the desk's) keep it. THE PULL INSIDE THE BAND IS THE THIRD LEVEL
+    // of the hierarchy, at the tie-breaker scale: the curvature rows annihilate a straight line, so with NO pull inside
+    // (decay 0) a curve's level and slope are undetermined within its bands -- the streamed and cold solves landed up to
+    // the band width apart in quote space and the per-row walk tripped the refresh cap on the near-singular interior
+    // (measured 2026-10-13). A pull toward mid at kSmoothedBandDecay (10x the tie-breaker; regularize.hpp says why:
+    // AT the tie-breaker the band walk tripped on a 10^4 slope ratio, at 1e-2 the zigzag survives) fixes level and slope
+    // and loses to the curvature at the jitter scale. Until 2026-10-13 this recipe was the Light
+    // preset at 0.5 on hard quotes, which bought its zero failed ticks with 0.1..0.7 bp of quote error -- the thing the
+    // rule forbids; the MonotoneCubic rungs' failed ticks on hard quotes are the UNSMOOTHED rows'.
+    // TWO ROWS PER QUOTE (the walk is robust to a 0 <-> 1 kink -- the dead-zone path -- and to mild ones, not to a
+    // 1000:1 kink): row A is the quote as a pure BOUND (+-kSoakBand, no pull inside), row B the same instrument at the
+    // constant weak slope kSmoothedBandDecay toward mid (PenaltyMap::stiff -- a one-piece map), appended after every
+    // quote so the original quote indices are unchanged; the walk feeds row B the same target as row A.
+    const int n0 = prob.n_quotes();
+    for (int i = 0; i < n0; ++i) {
+      auto& ins = prob.instruments[static_cast<std::size_t>(i)];
+      if (ins.quote == cal::QuoteKind::FxForward || ins.band_upper > ins.band_lower) continue;
+      cal::Instrument mid = ins;
+      mid.penalty_map = cal::PenaltyMap::stiff(cal::kSmoothedBandDecay);
+      mid.band_lower = mid.band_upper = 0.0;
+      mid.band_decay = 0.0;
+      ins.band_lower = ins.market - kSoakBand;
+      ins.band_upper = ins.market + kSoakBand;
+      ins.band_decay = 0.0;
+      mirror_of.push_back(i);
+      prob.instruments.push_back(std::move(mid));
+    }
+    has_bands = true;
+  }
+  // The four-number requote off THIS problem's rows (Shape::requote reads the shape's own, which the recipe may have widened):
+  // the walk's q covers the original quotes; a mirror row takes its quote row's target.
+  const int n_orig = s.prob.n_quotes();
+  const auto requote = [&](const Eigen::VectorXd& q0) {
+    const int m = prob.n_quotes();
+    Eigen::VectorXd q(m);
+    q.head(n_orig) = q0;
+    for (std::size_t k = 0; k < mirror_of.size(); ++k) q[n_orig + static_cast<int>(k)] = q0[mirror_of[k]];
+    Shape::Requote r{q, Eigen::VectorXd(m), Eigen::VectorXd(m), Eigen::VectorXd(m)};
+    for (int i = 0; i < m; ++i) {
+      const auto& ins = prob.instruments[static_cast<std::size_t>(i)];
+      const double d = ins.band_upper > ins.band_lower ? q[i] - s.q0[i < n_orig ? i : mirror_of[static_cast<std::size_t>(i - n_orig)]] : 0.0;
+      r.lower[i] = ins.band_lower + d;
+      r.upper[i] = ins.band_upper + d;
+      r.decay[i] = ins.band_decay;
+    }
+    return r;
+  };
   api::BundleSession sess(prob);
   sess.calibrate(s.x0);
   sess.start_streaming();
@@ -139,9 +199,9 @@ Outcome soak(const Shape& s, WalkKind kind, const cal::RegSpec& reg, long n, uns
   double sum = 0;
   for (long k = 0; k < n; ++k) {
     const Eigen::VectorXd& q = walk.next();
-    const Shape::Requote rq = s.requote(q);
+    const Shape::Requote rq = requote(q);
     const auto t0 = std::chrono::steady_clock::now();
-    const Eigen::VectorXd& x = s.has_bands ? sess.stream_update(rq.target, rq.lower, rq.upper, rq.decay) : sess.stream_update(rq.target);
+    const Eigen::VectorXd& x = has_bands ? sess.stream_update(rq.target, rq.lower, rq.upper, rq.decay) : sess.stream_update(rq.target);
     const double dt = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
     sum += dt;
     us.push_back(dt);
@@ -246,7 +306,11 @@ void run_walk(WalkKind kind, Recipe recipe) {
     for (const auto& [r, c] : o.reasons) why += (why.empty() ? "" : "; ") + std::to_string(c) + "x " + r;
     std::printf("  %-20s %6ld %6ld %6ld %10.1f %10.1f %11.2e %8.1f  %s\n", s.name.c_str(), o.ticks, o.failed, o.maxrun, o.mean_us,
                 o.p99_us, o.worst_dq, 1e4 * o.worst_zig, why.c_str());
-    const bool universal = s.expect_compiled || (recipe == Recipe::Smoothed && kind == WalkKind::Factor);
+    // UNIVERSAL = every linear rung on every walk and recipe. (Until 2026-10-13 every rung on the smoothed FACTOR walk was
+    // universal too: the Light preset at 0.5 bent the quotes enough to keep a MonotoneCubic long end off its Hyman branch
+    // boundaries. Smoothing no longer trades a quote away -- K48 -- so the value-dependent rungs are pinned per fingerprint
+    // on every recipe; their failed ticks on quotes held to +-1 bp are what those rungs do.)
+    const bool universal = s.expect_compiled;
     if (universal) {
       EXPECT_EQ(o.failed, 0) << s.name << " (" << swaps::shapes::to_string(kind) << " walk, " << to_string(recipe)
                              << "): a failed tick on a platform-independent row";

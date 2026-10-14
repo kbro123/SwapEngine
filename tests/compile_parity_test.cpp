@@ -339,7 +339,7 @@ TEST(CompileLayout, ALegacySpecsSmoothnessWordIsMigratedOntoItsRegionsOnce) {
   const auto spec = [&](const char* smoothness) { return json::parse(std::string(R"({"value_date": "2026-09-08", "smoothness": ")") + smoothness + "\"" + body); };
   const swaps::api::CompileResult strong = compile_spec(spec("strong"));
   EXPECT_EQ(strong.bundle.curves[0].regions[0].reg_lambda, -1.0) << "Flat: nothing to stamp";
-  EXPECT_EQ(strong.bundle.curves[0].regions[1].reg_lambda, 5.0);
+  EXPECT_EQ(strong.bundle.curves[0].regions[1].reg_lambda, 1.0) << "a legacy strength word is the switch (K48)";
   bool warned = false;
   for (const auto& w : strong.warnings) warned = warned || w.find("Legacy smoothing") != std::string::npos;
   EXPECT_TRUE(warned) << "the migration says so";
@@ -347,7 +347,7 @@ TEST(CompileLayout, ALegacySpecsSmoothnessWordIsMigratedOntoItsRegionsOnce) {
   EXPECT_EQ(off.bundle.curves[0].regions[1].reg_lambda, 0.0);
   EXPECT_TRUE(swaps::calibration::smoothing_rows(off.bundle).empty()) << "off means off: no floor";
   const swaps::api::CompileResult light = compile_spec(spec("light"));
-  EXPECT_EQ(light.bundle.curves[0].regions[1].reg_lambda, 0.5);
+  EXPECT_EQ(light.bundle.curves[0].regions[1].reg_lambda, 1.0);
   EXPECT_EQ(swaps::calibration::smoothing_rows(light.bundle).size(), 2u);
   json::value tension = spec("light");
   tension.as_object()["reg_op"] = "tension";

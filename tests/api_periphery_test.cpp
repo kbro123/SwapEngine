@@ -146,11 +146,13 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
   // under-determined spec (the old floor is gone); "strong" is 5.0; the retired operator is refused at compile.
   ASSERT_EQ(cr.bundle.curves[0].regions.size(), 2u);
   EXPECT_EQ(cr.bundle.curves[0].regions[0].reg_lambda, -1.0) << "a Flat region says nothing (no rows)";
-  EXPECT_DOUBLE_EQ(cr.bundle.curves[0].regions[1].reg_lambda, 0.5);
+  EXPECT_DOUBLE_EQ(cr.bundle.curves[0].regions[1].reg_lambda, 1.0) << "light = on (K48: a switch, not a strength)";
   json::value s_off = json::parse(spec); s_off.as_object()["smoothness"] = "off";
   EXPECT_DOUBLE_EQ(api::compile_spec(s_off, "2026-07-08").bundle.curves[0].regions[1].reg_lambda, 0.0);
   json::value s_strong = json::parse(spec); s_strong.as_object()["smoothness"] = "strong";
-  EXPECT_DOUBLE_EQ(api::compile_spec(s_strong, "2026-07-08").bundle.curves[0].regions[1].reg_lambda, 5.0);
+  EXPECT_DOUBLE_EQ(api::compile_spec(s_strong, "2026-07-08").bundle.curves[0].regions[1].reg_lambda, 1.0) << "strong = the same switch";
+  json::value s_on = json::parse(spec); s_on.as_object()["smoothness"] = "on";
+  EXPECT_DOUBLE_EQ(api::compile_spec(s_on, "2026-07-08").bundle.curves[0].regions[1].reg_lambda, 1.0);
   json::value s_tension = json::parse(spec); s_tension.as_object()["reg_op"] = "tension";
   EXPECT_ANY_THROW(api::compile_spec(s_tension, "2026-07-08"));
 

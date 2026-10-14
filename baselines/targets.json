@@ -367,8 +367,8 @@
       "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
     },
     "g10_noturns_refresh_25bp": {
-      "target_ns": 1643900,
-      "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
+      "target_ns": 38500,
+      "note": "initial = 2026-10-13 baseline x1.3 (square quotes + tie-breaker rows: exempt from the drift refresh, K48); ratchets DOWN only"
     },
     "g10_g4turns_refresh_25bp": {
       "target_ns": 1885300,

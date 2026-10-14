@@ -12,7 +12,8 @@
     "Rows: smoothed_per_row = the API Light preset on the PER-ROW stress walk; unsmoothed_factor = no regulariser on the",
     "factor walk. failed = the pin per 400 ticks (scaled to SWAPS_SOAK_TICKS); dq = the quote-space tolerance (rate) of",
     "the delivered curve vs a cold solve of the same objective (a value-dependent rung compares two LM optima on a",
-    "kinked landscape, so it is a class tolerance ~1.5x the measurement, not a rounding bound)."
+    "kinked landscape, so it is a class tolerance ~1.5x the measurement, not a rounding bound).",
+    "2026-10-13 (K48, smoothing is a tie-breaker, never a trade against the quotes): the SMOOTHED recipe is now min-curvature within +-1 bp BOUNDS (bound row + a weak mid row per quote; tests/streaming_soak_test.cpp soak()), and the value-dependent rungs are pinned per fingerprint on the smoothed FACTOR walk too -- the old recipe (the Light preset at 0.5 on hard quotes) kept a MonotoneCubic long end off its Hyman branch boundaries by bending the quotes 0.1..0.7 bp, which is what the rule forbids. These rows RESTART from the measured values under the new recipe (desk_mixed smoothed_factor 87 / smoothed_per_row 9, mixed_scheme 0 / 63, mixed_convex 0 / 0, with ~1.5x dq slack) and ratchet down from here."
   ],
   "keys": {
     "Darwin|AppleClang 21.0.0.21000101|-march=x86-64-v3|AVX2+FMA": {
@@ -20,16 +21,19 @@
       "note": "the reference machine (Mac Pro 2019, Xeon W-3223; perf fingerprint 966685f93279), seed 20260921. mixed_convex (2026-10-12): the mixed rung with its long end on MonotoneConvex (AAD block, ~110..150 us/tick) read 0 failed ticks on every walk, even the unsmoothed factor walk where MonotoneCubic's Hyman branches fail 49 -- no branch kinks to park on; dq pinned ~1.5x the measurement",
       "rungs": {
         "mixed_scheme": {
-          "smoothed_per_row": { "failed": 0, "dq": 2e-5 },
-          "unsmoothed_factor": { "failed": 62, "dq": 2e-5 }
+          "smoothed_per_row": { "failed": 63, "dq": 2e-07 },
+          "unsmoothed_factor": { "failed": 62, "dq": 2e-05 },
+          "smoothed_factor": { "failed": 0, "dq": 2e-12 }
         },
         "desk_mixed": {
-          "smoothed_per_row": { "failed": 1, "dq": 2e-5 },
-          "unsmoothed_factor": { "failed": 108, "dq": 2e-5 }
+          "smoothed_per_row": { "failed": 9, "dq": 2e-09 },
+          "unsmoothed_factor": { "failed": 108, "dq": 2e-05 },
+          "smoothed_factor": { "failed": 87, "dq": 8e-08 }
         },
         "mixed_convex": {
-          "smoothed_per_row": { "failed": 0, "dq": 2e-6 },
-          "unsmoothed_factor": { "failed": 0, "dq": 1e-11 }
+          "smoothed_per_row": { "failed": 0, "dq": 4e-10 },
+          "unsmoothed_factor": { "failed": 0, "dq": 1e-11 },
+          "smoothed_factor": { "failed": 0, "dq": 3e-12 }
         }
       }
     },
@@ -38,12 +42,12 @@
       "note": "GitHub ubuntu-24.04 runner (ci.yml quantlib-free-gate). smoothed_per_row read off run 35719680823: mixed_scheme 2 failed (refresh cap), max|dq| 1.27e-4; desk_mixed 0, 2.7e-7. unsmoothed_factor read off run 35734841453's soak report step: mixed_scheme 33, desk_mixed 88 (pinned with ~25 % slack like the Mac's, 2026-09-22).",
       "rungs": {
         "mixed_scheme": {
-          "smoothed_per_row": { "failed": 2, "dq": 2e-4 },
-          "unsmoothed_factor": { "failed": 42, "dq": 2e-5 }
+          "smoothed_per_row": { "failed": 2, "dq": 0.0002 },
+          "unsmoothed_factor": { "failed": 42, "dq": 2e-05 }
         },
         "desk_mixed": {
-          "smoothed_per_row": { "failed": 0, "dq": 2e-5 },
-          "unsmoothed_factor": { "failed": 110, "dq": 2e-5 }
+          "smoothed_per_row": { "failed": 0, "dq": 2e-05 },
+          "unsmoothed_factor": { "failed": 110, "dq": 2e-05 }
         }
       }
     }

@@ -22,9 +22,9 @@
 namespace cal = swaps::calibration;
 namespace curve = swaps::curve;
 
-// A curve's two regions carry different curvature lambda: the CALIBRATION rows (smoothing_rows) weight each row by the
-// lambda of its centre knot's region -- front region lambda=0 (unpenalised), back region lambda=5 -- while the RISK-side
-// operator (second_difference_operator) is uniform at the weight it is handed and never consults a region (2026-10-13).
+// A curve's two regions: the front region's switch is off (0, no rows), the back region's on (any positive value -- its
+// magnitude is NOT read, K48: the rows carry the tie-breaker weight kSmoothingTieBreak), while the RISK-side operator
+// (second_difference_operator) is uniform at the weight it is handed and never consults a region (2026-10-13).
 TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
   cal::BundleProblem p;
   cal::BundleCurveSpec spec;
@@ -38,15 +38,16 @@ TEST(RegionSmoothing, SecondDifferenceIsPerRegion) {
   const Eigen::MatrixXd R = cal::state_rows_matrix(p, cal::smoothing_rows(p));
   ASSERT_EQ(R.rows(), 3);
   ASSERT_EQ(R.cols(), 6);
-  for (int r = 0; r <= 2; ++r) {  // knots i=2,3,4 in the lambda=5 back region
+  const double w = cal::kSmoothingTieBreak;
+  for (int r = 0; r <= 2; ++r) {  // knots i=2,3,4 in the switched-on back region, at the tie-breaker weight
     const int i = r + 2;
-    EXPECT_NEAR(R(r, i - 1), 5.0, 1e-12);
-    EXPECT_NEAR(R(r, i), -10.0, 1e-12);
-    EXPECT_NEAR(R(r, i + 1), 5.0, 1e-12);
+    EXPECT_NEAR(R(r, i - 1), w, 1e-18);
+    EXPECT_NEAR(R(r, i), -2.0 * w, 1e-18);
+    EXPECT_NEAR(R(r, i + 1), w, 1e-18);
   }
   const Eigen::MatrixXd Rr = cal::second_difference_operator(p, /*risk-side weight*/ 1.0, {0});
   ASSERT_EQ(Rr.rows(), 3) << "the same Flat rule";
-  for (int r = 0; r <= 2; ++r) EXPECT_NEAR(Rr(r, r + 2), -2.0, 1e-12) << "uniform at 1.0: the region's 5 is not consulted";
+  for (int r = 0; r <= 2; ++r) EXPECT_NEAR(Rr(r, r + 2), -2.0, 1e-12) << "uniform at 1.0: the region's switch value is not consulted";
 }
 
 // With no region overriding (reg_lambda<0) every SMOOTH knot's row carries the single global lambda. At unit spacing the
@@ -75,8 +76,9 @@ TEST(RegionSmoothing, UniformLambdaOnSmoothKnotsAndNoRowOnFlatOnes) {
 }
 
 // SMOOTHING IS REGION DATA (2026-10-13): a region's own reg_lambda is the ONLY source of calibration rows -- a region
-// that says nothing is unsmoothed, an explicit 0 is no row; stamp_region_smoothing writes a weight onto the listed
-// curves' non-Flat regions (how a preset's value becomes region data), overriding what they said.
+// that says nothing is unsmoothed, an explicit 0 is no row; stamp_region_smoothing writes the switch onto the listed
+// curves' non-Flat regions (how a preset's word becomes region data), overriding what they said. The rows always carry
+// kSmoothingTieBreak (K48): the switch's magnitude (2.0, 0.5 below) is not read.
 TEST(RegionSmoothing, ARegionsOwnWeightIsHonouredWithoutTheBundleDefault) {
   cal::BundleProblem p;
   cal::BundleCurveSpec a, b;
@@ -89,20 +91,20 @@ TEST(RegionSmoothing, ARegionsOwnWeightIsHonouredWithoutTheBundleDefault) {
   const auto rows0 = cal::smoothing_rows(p);
   ASSERT_EQ(rows0.size(), 3u);
   for (const auto& r : rows0) EXPECT_EQ(r.state[0].curve, 0);
-  EXPECT_NEAR(rows0[0].state[0].coeff, 2.0, 1e-12);
+  EXPECT_NEAR(rows0[0].state[0].coeff, cal::kSmoothingTieBreak, 1e-18);
   // a stamp over curve 1 only: curve 0 keeps its own 2.0, curve 1 takes 0.5
   cal::BundleProblem p1 = p;
   cal::stamp_region_smoothing(p1, 0.5, {1});
   const auto rows1 = cal::smoothing_rows(p1);
   ASSERT_EQ(rows1.size(), 6u);
-  EXPECT_NEAR(rows1[0].state[0].coeff, 2.0, 1e-12);
-  EXPECT_NEAR(rows1[3].state[0].coeff, 0.5, 1e-12);
+  EXPECT_NEAR(rows1[0].state[0].coeff, cal::kSmoothingTieBreak, 1e-18);
+  EXPECT_NEAR(rows1[3].state[0].coeff, cal::kSmoothingTieBreak, 1e-18);
   // a stamp over curve 0 SETS the region's weight (it is how a preset lands on region data)
   cal::BundleProblem p2 = p;
   cal::stamp_region_smoothing(p2, 0.5, {0});
   const auto rows2 = cal::smoothing_rows(p2);
   ASSERT_EQ(rows2.size(), 3u);
-  EXPECT_NEAR(rows2[0].state[0].coeff, 0.5, 1e-12);
+  EXPECT_NEAR(rows2[0].state[0].coeff, cal::kSmoothingTieBreak, 1e-18);
   // an explicit 0: no rows
   p.curves[0].regions[0].reg_lambda = 0.0;
   EXPECT_TRUE(cal::smoothing_rows(p).empty());

@@ -21,7 +21,7 @@
               10.0136986301,
               30.0273972603
             ],
-            "reg_lambda": 0.5,
+            "reg_lambda": 1.0,
             "scheme": "Hermite"
           }
         ]

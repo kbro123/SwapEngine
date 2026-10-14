@@ -49,6 +49,7 @@ if(SWAPS_BUILD_TESTS AND GTest_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/conventions_registry_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/codec_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/state_linear_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/smoothing_tie_breaker_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/bond_future_reference_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/consistent_risk_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/risk_scale_repro_test.cpp
