@@ -113,6 +113,7 @@ add_executable(swaps_tests
   xva_exposure_test.cpp
   gamma_test.cpp
   kernel_pins_test.cpp
+  g4_desk_test.cpp
   cds_closed_form_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)

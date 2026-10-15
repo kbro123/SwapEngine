@@ -312,6 +312,18 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   (29.7 µs, 0 refreshes, premise `refreshes == 0`) while the over-determined turned desk refreshes (1.45 ms), so the
   refresh pair now gates the exemption rather than a turn cost. The bench's premise check proves the RAW pair calibrates back to its generating state exactly (the four
   turns identified), and the kernel rungs take the problem WITH its rows so they time the objective the session streams.
+- **The G4 desk is the hardest bundle, and it is PROFILED, not yet gated (2026-10-15, `bench/fixtures/g4_market.hpp`,
+  `bench/g4_profile_bench.cpp`, `tests/g4_desk_test.cpp`).** Four currencies, 14 curves, 200 knots, 204 quotes: the RFR
+  curves carry a meeting-date Flat front (DB `cb_schedules`, one compounded meeting-to-meeting observation per knot) and a
+  long end whose scheme is the fixture's parameter (Hermite / MonotoneCubic / MonotoneConvex), a year-end turn each; FF and
+  EUR 3M/6M tenor basis; a CCP discount curve per currency (a spread over the RFR pinned by the same par OIS discounted on
+  it -- a role choice, not a DB product); EUR/GBP/JPY-in-USD collateral curves (FX forwards + MtM xccy on the DB pairs
+  EURUSD / GBPUSD / USDJPY). The bench splits a cold / warm LM into its pieces per iteration (engine build, residuals,
+  Jacobian by tier, the LM's column-pivoted QR, NormalOp) beside the ticks. Measured (smoothed, 352 rows x 200 knots):
+  Hermite cold 60 ms / 8 iterations with the Jacobian 1.1 ms, the QR 1.9 ms and the engine build 11.8 ms; MonotoneConvex
+  cold 213 ms with the AAD block at 16 ms per Jacobian because its touched width is the whole state (200 > kPooledMaxW
+  64: the heap dual). THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
+  columns vanish and the joint LM wanders from the ladder's flat seed; the fixture's cold seed carries a 2 bp/knot slope.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
 - Discount factors / par rates vs QuantLib: `rel <= 1e-10`.

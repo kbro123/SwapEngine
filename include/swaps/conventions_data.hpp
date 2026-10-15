@@ -95,7 +95,7 @@ struct CalendarConv {
   bool sandwich = false;  // Japan: a weekday between two holidays is a holiday
 };
 
-inline constexpr std::array<ProductConv, 34> kProducts = {{
+inline constexpr std::array<ProductConv, 38> kProducts = {{
   {"ARS-BADLAR-IRS", "irs", "ARS", "ARS", "ModifiedFollowing", "", "", "", "", "", 2, 0, -1, -1, -1, -1, false, {"", "ACT/360", "1M", "", false, false, false}, {"ARS-BADLAR", "ACT/360", "1M", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"AUD-AONIA-OIS", "ois", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", "", 1, 2, -1, -1, -1, -1, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"AUD-AONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
   {"AUD-BBSW-3M-IRS", "irs", "AUD", "AUD", "ModifiedFollowing", "", "", "", "", "", 1, 0, -1, -1, -1, -1, false, {"", "ACT/365F", "3M", "", false, false, false}, {"AUD-BBSW-3M", "ACT/365F", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
@@ -110,6 +110,8 @@ inline constexpr std::array<ProductConv, 34> kProducts = {{
   {"EUR-EURIBOR-3M-IRS", "irs", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", "", 2, 0, -1, -1, -1, -1, false, {"", "30E/360", "1Y", "", false, false, false}, {"EUR-EURIBOR-3M", "ACT/360", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"EUR-EURIBOR-6M-IRS", "irs", "EUR", "EUR", "ModifiedFollowing", "", "", "", "", "", 2, 0, -1, -1, -1, -1, false, {"", "30E/360", "1Y", "", false, false, false}, {"EUR-EURIBOR-6M", "ACT/360", "6M", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"FX-FWD-EURUSD", "fx_forward", "", "EURUSD", "", "", "", "EURUSD", "", "", 2, -1, -1, -1, -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"FX-FWD-GBPUSD", "fx_forward", "", "GBPUSD", "", "", "", "GBPUSD", "", "", 2, -1, -1, -1, -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
+  {"FX-FWD-USDJPY", "fx_forward", "", "USDJPY", "", "", "", "USDJPY", "", "", 2, -1, -1, -1, -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"GBP-SONIA-OIS", "ois", "GBP", "GBP", "ModifiedFollowing", "", "", "", "", "", 0, 0, -1, -1, -1, -1, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"GBP-SONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
   {"IDR-INDONIA-OIS", "ois", "IDR", "IDR", "ModifiedFollowing", "", "", "", "", "", 2, 0, -1, -1, -1, -1, false, {"", "ACT/360", "1Y", "", false, false, false}, {"IDR-INDONIA", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
   {"INR-MIBOR-OIS", "ois", "INR", "INR", "ModifiedFollowing", "", "", "", "", "", 1, 0, -1, -1, -1, -1, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"INR-MIBOR-ON", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
@@ -128,6 +130,8 @@ inline constexpr std::array<ProductConv, 34> kProducts = {{
   {"USD-SOFR-3M-FUTURE", "future", "USD", "USD-SOFR", "", "", "", "", "", "", -1, -1, -1, -1, -1, -1, false, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"USD-SOFR-OIS", "ois", "USD", "USD+USD-FED", "ModifiedFollowing", "", "", "", "", "", 2, 2, -1, -1, -1, -1, false, {"", "ACT/360", "1Y", "", false, false, false}, {"USD-SOFR", "ACT/360", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
   {"XCCY-MTM-EURUSD", "xccy_mtm", "", "EURUSD", "ModifiedFollowing", "3M", "", "EURUSD", "EUR", "EURUSD", 2, 2, 0, 0, 0, 2, false, {"", "", "", "", false, false, false}, {"USD-SOFR", "ACT/360", "3M", "compounded", false, true, true}, {"EUR-ESTR", "ACT/360", "3M", "compounded", true, false, false}},
+  {"XCCY-MTM-GBPUSD", "xccy_mtm", "", "GBPUSD", "ModifiedFollowing", "3M", "", "GBPUSD", "GBP", "GBPUSD", 2, 2, 0, 0, 0, 2, false, {"", "", "", "", false, false, false}, {"USD-SOFR", "ACT/360", "3M", "compounded", false, true, true}, {"GBP-SONIA", "ACT/365F", "3M", "compounded", true, false, false}},
+  {"XCCY-MTM-USDJPY", "xccy_mtm", "", "USDJPY", "ModifiedFollowing", "3M", "", "USDJPY", "USD", "USDJPY", 2, 2, 0, 0, 0, 2, false, {"", "", "", "", false, false, false}, {"USD-SOFR", "ACT/360", "3M", "compounded", false, true, true}, {"JPY-TONA", "ACT/365F", "3M", "compounded", true, false, false}},
   {"ZAR-JIBAR-3M-IRS", "irs", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", "", 0, 0, -1, -1, -1, -1, false, {"", "ACT/365F", "3M", "", false, false, false}, {"ZAR-JIBAR-3M", "ACT/365F", "3M", "", false, false, false}, {"", "", "", "", false, false, false}},
   {"ZAR-ZARONIA-OIS", "ois", "ZAR", "ZAR", "ModifiedFollowing", "", "", "", "", "", 0, 0, -1, -1, -1, -1, false, {"", "ACT/365F", "1Y", "", false, false, false}, {"ZAR-ZARONIA", "ACT/365F", "1Y", "compounded", false, false, false}, {"", "", "", "", false, false, false}},
 }};
@@ -194,8 +198,10 @@ inline constexpr std::array<BondFutureConv, 4> kBondFutures = {{
   {"CME-US", "USD", "USD", "US-TREASURY", "ACT/360", "any_business_day_in_month", 0.06, 15.0, 25.0, 3, 4},
 }};
 
-inline constexpr std::array<FxPairConv, 1> kFxPairs = {{
+inline constexpr std::array<FxPairConv, 3> kFxPairs = {{
   {"EURUSD", "EUR", "USD", "EURUSD", "USD", "spot", "delta_neutral", "XCCY-MTM-EURUSD", "FX-FWD-EURUSD", 2, 0.1, 0.25},
+  {"GBPUSD", "GBP", "USD", "GBPUSD", "USD", "spot", "delta_neutral", "XCCY-MTM-GBPUSD", "FX-FWD-GBPUSD", 2, 0.1, 0.25},
+  {"USDJPY", "USD", "JPY", "USDJPY", "USD", "spot", "delta_neutral", "XCCY-MTM-USDJPY", "FX-FWD-USDJPY", 2, 0.1, 0.25},
 }};
 
 inline constexpr std::array<FixingSourceConv, 5> kFixingSources = {{
@@ -1053,14 +1059,18 @@ inline constexpr std::array<HolidayRule, 751> kHolidayRules = {{
   {"fixed", 5, 29, -1, 0, 0, 2024, 2024, "", false},
 }};
 
-inline constexpr std::array<std::string_view, 4> kCalendarJoins = {{
+inline constexpr std::array<std::string_view, 8> kCalendarJoins = {{
   "USD",
   "EUR",
   "USD",
+  "GBP",
+  "USD",
   "USD-FED",
+  "USD",
+  "JPY",
 }};
 
-inline constexpr std::array<CalendarConv, 23> kCalendars = {{
+inline constexpr std::array<CalendarConv, 25> kCalendars = {{
   {"ARS", "Buenos Aires / Argentina settlement", "none", 96, 0, 16, 0, 0, false},
   {"AUD", "Sydney / Australia (ASX, NSW) settlement", "weekend_to_next_weekday", 96, 16, 10, 0, 0, false},
   {"BRL", "Brazil (B3 / ANBIMA) settlement", "none", 96, 26, 13, 0, 0, false},
@@ -1070,20 +1080,22 @@ inline constexpr std::array<CalendarConv, 23> kCalendars = {{
   {"EUR", "TARGET (EUR settlement)", "none", 96, 159, 6, 0, 0, false},
   {"EURUSD", "Joint US-SIFMA + TARGET (FX/xccy USD side = SIFMA government-bond)", "", 96, 165, 0, 0, 2, false},
   {"GBP", "London / United Kingdom settlement", "weekend_to_next_weekday", 96, 165, 8, 2, 0, false},
-  {"IDR", "Jakarta / Indonesia settlement", "none", 96, 173, 46, 2, 0, false},
-  {"INR", "Mumbai / India settlement", "none", 96, 219, 42, 2, 0, false},
-  {"JPY", "Tokyo / Japan settlement", "sun_to_next_weekday", 96, 261, 19, 2, 0, true},
-  {"KRW", "Seoul / South Korea settlement", "none", 96, 280, 184, 2, 0, false},
-  {"MXN", "Mexico City / Mexico settlement", "none", 96, 464, 14, 2, 0, false},
-  {"NONE", "No holidays — weekends only (synthetic / test problems; must be named explicitly)", "none", 96, 478, 0, 2, 0, false},
-  {"RUB", "Moscow / Russia (MOEX) settlement", "none", 96, 478, 14, 2, 0, false},
-  {"SAR", "Riyadh / Saudi Arabia settlement (Fri/Sat weekend)", "none", 48, 492, 83, 2, 0, false},
-  {"TRY", "Istanbul / Turkey settlement", "none", 96, 575, 128, 2, 0, false},
-  {"USD", "US SIFMA / US government securities (bond market)", "sat_to_fri_sun_to_mon", 96, 703, 12, 2, 0, false},
-  {"USD+USD-FED", "SOFR swap spot / roll / payment days: U.S. Government Securities Business Day (SIFMA) AND New York business day (Fedwire) -- ISDA SOFR market practice note 2022; ISDA Good Friday 2026 guidance section 4, fn 8", "", 96, 715, 0, 2, 2, false},
-  {"USD-FED", "US Federal Reserve (Fedwire)", "sun_to_mon", 96, 715, 11, 4, 0, false},
-  {"USD-SOFR", "SOFR fixing calendar (SIFMA, incl. Good Friday close)", "sat_to_fri_sun_to_mon", 96, 726, 12, 4, 0, false},
-  {"ZAR", "Johannesburg / South Africa settlement", "sun_to_mon", 96, 738, 13, 4, 0, false},
+  {"GBPUSD", "Joint US-SIFMA + London (FX/xccy USD side = SIFMA government-bond)", "", 96, 173, 0, 2, 2, false},
+  {"IDR", "Jakarta / Indonesia settlement", "none", 96, 173, 46, 4, 0, false},
+  {"INR", "Mumbai / India settlement", "none", 96, 219, 42, 4, 0, false},
+  {"JPY", "Tokyo / Japan settlement", "sun_to_next_weekday", 96, 261, 19, 4, 0, true},
+  {"KRW", "Seoul / South Korea settlement", "none", 96, 280, 184, 4, 0, false},
+  {"MXN", "Mexico City / Mexico settlement", "none", 96, 464, 14, 4, 0, false},
+  {"NONE", "No holidays — weekends only (synthetic / test problems; must be named explicitly)", "none", 96, 478, 0, 4, 0, false},
+  {"RUB", "Moscow / Russia (MOEX) settlement", "none", 96, 478, 14, 4, 0, false},
+  {"SAR", "Riyadh / Saudi Arabia settlement (Fri/Sat weekend)", "none", 48, 492, 83, 4, 0, false},
+  {"TRY", "Istanbul / Turkey settlement", "none", 96, 575, 128, 4, 0, false},
+  {"USD", "US SIFMA / US government securities (bond market)", "sat_to_fri_sun_to_mon", 96, 703, 12, 4, 0, false},
+  {"USD+USD-FED", "SOFR swap spot / roll / payment days: U.S. Government Securities Business Day (SIFMA) AND New York business day (Fedwire) -- ISDA SOFR market practice note 2022; ISDA Good Friday 2026 guidance section 4, fn 8", "", 96, 715, 0, 4, 2, false},
+  {"USD-FED", "US Federal Reserve (Fedwire)", "sun_to_mon", 96, 715, 11, 6, 0, false},
+  {"USD-SOFR", "SOFR fixing calendar (SIFMA, incl. Good Friday close)", "sat_to_fri_sun_to_mon", 96, 726, 12, 6, 0, false},
+  {"USDJPY", "Joint US-SIFMA + Tokyo (FX/xccy USD side = SIFMA government-bond)", "", 96, 738, 0, 6, 2, false},
+  {"ZAR", "Johannesburg / South Africa settlement", "sun_to_mon", 96, 738, 13, 8, 0, false},
 }};
 
 // conventions.schema.json's enum vocabularies: Registry's row rules (conventions_db.hpp) check against these.

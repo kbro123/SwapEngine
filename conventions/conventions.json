@@ -529,6 +529,16 @@
         "EUR"
       ]
     },
+    "GBPUSD": {
+      "name": "Joint US-SIFMA + London (FX/xccy USD side = SIFMA government-bond)",
+      "weekend": [5, 6],
+      "join": ["USD", "GBP"]
+    },
+    "USDJPY": {
+      "name": "Joint US-SIFMA + Tokyo (FX/xccy USD side = SIFMA government-bond)",
+      "weekend": [5, 6],
+      "join": ["USD", "JPY"]
+    },
     "JPY": {
       "name": "Tokyo / Japan settlement",
       "quantlib": "Japan",
@@ -8023,6 +8033,26 @@
       "outright": "spot * DF_foreign / DF_domestic",
       "type": "fx_forward"
     },
+    "FX-FWD-GBPUSD": {
+      "description": "GBP/USD FX forward outright = spot * DF_GBP(T) / DF_USD(T). Spot T+2 on the joint calendar.",
+      "pair": "GBPUSD",
+      "base": "GBP",
+      "quote": "USD",
+      "spot_lag": 2,
+      "calendar": "GBPUSD",
+      "outright": "spot * DF_foreign / DF_domestic",
+      "type": "fx_forward"
+    },
+    "FX-FWD-USDJPY": {
+      "description": "USD/JPY FX forward outright = spot * DF_USD(T) / DF_JPY(T). Spot T+2 on the joint calendar.",
+      "pair": "USDJPY",
+      "base": "USD",
+      "quote": "JPY",
+      "spot_lag": 2,
+      "calendar": "USDJPY",
+      "outright": "spot * DF_foreign / DF_domestic",
+      "type": "fx_forward"
+    },
     "XCCY-MTM-EURUSD": {
       "description": "EUR/USD mark-to-market cross-currency basis (RFR vs RFR). USD SOFR leg is FLAT and RESETTABLE (notional resets to FX spot); EUR ESTR leg carries the basis spread and has constant notional (EUR is the base). Quarterly. Coupons pay payment_lag business days after each period end; the notional exchanges (initial, intermediate MtM, final) settle ON the adjusted start / roll / maturity dates, never lagged; the USD notional resets to the FX rate fixed fx_reset_fixing_lag business days before each period on fx_reset_calendar (ARRC 2020 xccy conventions; Bank of Canada / CARR CORRA-SOFR terms 2021 worked example; AFMA; Clarus 2021).",
       "pair": "EURUSD",
@@ -8048,6 +8078,70 @@
         "index": "EUR-ESTR",
         "compounding": "compounded",
         "day_count": "ACT/360",
+        "carries_spread": true,
+        "notional_resets": false,
+        "frequency": "3M"
+      },
+      "type": "xccy_mtm",
+      "bdc": "ModifiedFollowing"
+    },
+    "XCCY-MTM-GBPUSD": {
+      "description": "GBP/USD mark-to-market cross-currency basis (RFR vs RFR), the post-LIBOR USD-vs-RFR structure of XCCY-MTM-EURUSD: the USD SOFR leg is FLAT and RESETTABLE (notional resets to FX spot), the non-USD leg (schema key eur_leg) carries the basis spread and has constant notional. Quarterly; coupons pay payment_lag business days after each period end; notional exchanges settle ON the adjusted dates; the USD notional resets to the FX rate fixed fx_reset_fixing_lag business days before each period on fx_reset_calendar (ARRC 2020 xccy conventions; CARR 2021 RFR xccy terms).",
+      "pair": "GBPUSD",
+      "base_currency": "GBP",
+      "spot_lag": 2,
+      "payment_lag": 2,
+      "exchange_lag_initial": 0,
+      "exchange_lag_intermediate": 0,
+      "exchange_lag_final": 0,
+      "fx_reset_fixing_lag": 2,
+      "fx_reset_calendar": "GBPUSD",
+      "calendar": "GBPUSD",
+      "frequency": "3M",
+      "usd_leg": {
+        "index": "USD-SOFR",
+        "compounding": "compounded",
+        "day_count": "ACT/360",
+        "flat": true,
+        "notional_resets": true,
+        "frequency": "3M"
+      },
+      "eur_leg": {
+        "index": "GBP-SONIA",
+        "compounding": "compounded",
+        "day_count": "ACT/365F",
+        "carries_spread": true,
+        "notional_resets": false,
+        "frequency": "3M"
+      },
+      "type": "xccy_mtm",
+      "bdc": "ModifiedFollowing"
+    },
+    "XCCY-MTM-USDJPY": {
+      "description": "USD/JPY mark-to-market cross-currency basis (RFR vs RFR), the post-LIBOR USD-vs-RFR structure of XCCY-MTM-EURUSD: the USD SOFR leg is FLAT and RESETTABLE (notional resets to FX spot), the non-USD leg (schema key eur_leg) carries the basis spread and has constant notional. Quarterly; coupons pay payment_lag business days after each period end; notional exchanges settle ON the adjusted dates; the USD notional resets to the FX rate fixed fx_reset_fixing_lag business days before each period on fx_reset_calendar (ARRC 2020 xccy conventions; CARR 2021 RFR xccy terms).",
+      "pair": "USDJPY",
+      "base_currency": "USD",
+      "spot_lag": 2,
+      "payment_lag": 2,
+      "exchange_lag_initial": 0,
+      "exchange_lag_intermediate": 0,
+      "exchange_lag_final": 0,
+      "fx_reset_fixing_lag": 2,
+      "fx_reset_calendar": "USDJPY",
+      "calendar": "USDJPY",
+      "frequency": "3M",
+      "usd_leg": {
+        "index": "USD-SOFR",
+        "compounding": "compounded",
+        "day_count": "ACT/360",
+        "flat": true,
+        "notional_resets": true,
+        "frequency": "3M"
+      },
+      "eur_leg": {
+        "index": "JPY-TONA",
+        "compounding": "compounded",
+        "day_count": "ACT/365F",
         "carries_spread": true,
         "notional_resets": false,
         "frequency": "3M"
@@ -8182,6 +8276,32 @@
       ],
       "xccy_product": "XCCY-MTM-EURUSD",
       "forward_product": "FX-FWD-EURUSD"
+    },
+    "GBPUSD": {
+      "description": "GBP/USD: GBP base, USD quote; spot T+2 on the joint calendar; premium in USD; spot-delta, delta-neutral ATM (interbank major).",
+      "base": "GBP",
+      "quote": "USD",
+      "spot_lag": 2,
+      "calendar": "GBPUSD",
+      "premium_currency": "USD",
+      "delta_convention": "spot",
+      "atm_convention": "delta_neutral",
+      "smile_pillars": [0.1, 0.25],
+      "xccy_product": "XCCY-MTM-GBPUSD",
+      "forward_product": "FX-FWD-GBPUSD"
+    },
+    "USDJPY": {
+      "description": "USD/JPY: USD base, JPY quote; spot T+2 on the joint calendar; premium in USD; spot-delta, delta-neutral ATM (interbank major).",
+      "base": "USD",
+      "quote": "JPY",
+      "spot_lag": 2,
+      "calendar": "USDJPY",
+      "premium_currency": "USD",
+      "delta_convention": "spot",
+      "atm_convention": "delta_neutral",
+      "smile_pillars": [0.1, 0.25],
+      "xccy_product": "XCCY-MTM-USDJPY",
+      "forward_product": "FX-FWD-USDJPY"
     }
   },
   "cb_schedules": {

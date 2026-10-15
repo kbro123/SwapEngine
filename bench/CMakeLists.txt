@@ -144,6 +144,11 @@ target_include_directories(shape_ladder_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 add_executable(g10_turns_bench g10_turns_bench.cpp)
 target_link_libraries(g10_turns_bench PRIVATE swaps swaps_api benchmark::benchmark)
 target_include_directories(g10_turns_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+# The G4 desk (14 curves: meeting-flat RFR fronts + a value-dependent long end, tenor/CCP/xccy basis), QuantLib-free:
+# where a cold / off-hot-path re-calibration spends its time (bench/fixtures/g4_market.hpp). A probe, not gated yet.
+add_executable(g4_profile_bench g4_profile_bench.cpp)
+target_link_libraries(g4_profile_bench PRIVATE swaps swaps_api benchmark::benchmark)
+target_include_directories(g4_profile_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
 
 # The router's per-row partition vs the whole-bundle veto it replaced, on every rung of the same ladder.
 add_executable(routing_bench routing_bench.cpp)
