@@ -30,7 +30,7 @@
 // draft bumped by 1 bp with kRel = 2e-5 and two rows (|ladder| ≈ 37) missed by 1.4x: 2.8e-5 relative. At h = 0.25 bp
 // the same rows fell 16.1x -- exactly h² -- so it was truncation, not an engine/QuantLib difference, and the bump was
 // shrunk rather than the tolerance widened. At h = 0.25 bp: worst ladder row 0.087x of 2e-5 (1.7e-6 relative), worst
-// operator entry 0.049x; solver noise ≤ ‖ladder‖₁·kSolveFloor/(2h) ≈ 1e2·1e-14/5e-5 = 2e-8. kRel = 5e-6 on
+// operator entry 0.049x; solver noise ≤ ‖ladder‖₁·kSolveFloor/(2h) ≈ 1e2·2e-14/5e-5 = 4e-8. kRel = 5e-6 on
 // max(|ref|, 1) keeps ~3x over the measured truncation and is still ~3 orders below a 365/360 day-count slip
 // (1.4e-2), a dropped D (factor 4 on a banded row) or a first-order (forward-difference) bump (negative control 1).
 //
@@ -85,7 +85,9 @@ namespace {
 constexpr double kH = 2.5e-5;         // the bump: 0.25 bp in quote (rate) units (truncation measured, see header)
 constexpr double kRel = 5e-6;         // relative ladder tolerance on max(|ref|, kFloor): ~3x the measured truncation
 constexpr double kFloor = 1.0;        // per unit quote, per unit notional: below it the bound is absolute (5e-6)
-constexpr double kSolveFloor = 1e-14; // every QuantLib re-solve must reprice its market to this (rate units)
+constexpr double kSolveFloor = 2e-14; // every QuantLib re-solve must reprice its market to this (rate units): the chord polish
+                                      // stalls on QuantLib's own rounding floor, 0.9e-14 from the lmder base point and 1.07e-14 from
+                                      // the normal-equations driver's (K50, 2026-10-19) -- the bound above stays 2 orders under kRel
 constexpr double kXGap = 1e-11;       // verb knots vs QuantLib-residual knots: 10x calibration_oracle's measured 9.2e-13
 constexpr double kNpvAbs = 5e-9;      // verb NPV vs QuantLib NPV: kXGap × ‖dP/dx‖₁ (≈ Σ|N|·A ≈ 50, ≲ 2e2) + leg PVs
                                       // (≲ 1) at curve_rel 1e-10 + JSON ULPs

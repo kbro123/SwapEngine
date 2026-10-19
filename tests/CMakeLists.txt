@@ -115,6 +115,7 @@ add_executable(swaps_tests
   kernel_pins_test.cpp
   g4_desk_test.cpp
   aad_block_groups_test.cpp
+  lm_driver_test.cpp
   cds_closed_form_test.cpp
 )
 target_link_libraries(swaps_tests PRIVATE swaps GTest::gtest_main)

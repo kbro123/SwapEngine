@@ -269,8 +269,9 @@ rates and par swap rates must match QuantLib. Two oracles:
 **(b) Calibration — solver-dependent. Do NOT demand 1e-10.**
   - Assert **first-order optimality**: `‖Jᵀr‖∞` below a stationarity tolerance.
   - Assert the achieved `‖r‖²` is no worse than a committed golden objective value.
-  - Optionally cross-check the minimizer against an independent optimizer (Eigen LM + numerical
-    Jacobian) — *not* against QuantLib's `GlobalBootstrap`, which throws on over-determined fits.
+  - Optionally cross-check the minimizer against an independent optimizer (Eigen's MINPACK LM + numerical
+    Jacobian, `calibrate(..., use_aad = false)`; the shipped driver is `lm_normal_equations`, K50) — *not*
+    against QuantLib's `GlobalBootstrap`, which throws on over-determined fits.
 
 **(c) AAD Jacobian** matches bump-and-reprice within `rel <= 1e-6` (bump noise dominates).
 **(d) Batched portfolio analytics** match per-swap QuantLib pricing within `rel <= 1e-10`.
@@ -326,7 +327,12 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   Hermite cold 60 ms / 8 iterations with the Jacobian 1.1 ms, the QR 1.9 ms and the engine build 11.8 ms; MonotoneConvex
   cold 213 ms with ONE AAD block at 16 ms per Jacobian because its touched width was the whole state (200 > kPooledMaxW
   64: the heap dual) -- grouping the block by closure (2026-10-19, K49) took that to 3.4 ms, the cold solve to 100 ms,
-  the warm LM after 25 bp to 78 ms and the 25 bp tick to 45 ms, every block pooled. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
+  the warm LM after 25 bp to 78 ms and the 25 bp tick to 45 ms, every block pooled. THE LM DRIVER (2026-10-19, K50):
+  Eigen's MINPACK LM spent 4.0 ms of a 5.9 ms Hermite iteration in its own column-pivoted QR and lmpar2 trials; the
+  shipped driver is now lmder's own trust-region control flow over the scaled normal equations (`lm_normal_equations`:
+  JᵀJ 0.44 ms + 0.18 ms per Cholesky trial, the same step to 5e-14 under MINPACK's column scaling, cond(D⁻¹J) 7e2 where
+  cond(J) is 2e5), the Hermite cold solve 60 → 34 ms and the warm solve 55 → 32 ms; a damping SCHEDULE in place of the
+  trust region was measured parking at MonotoneCubic's Hyman kinks, which is why the flow is lmder's. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
   columns vanish and the joint LM wanders from the ladder's flat seed; the fixture's cold seed carries a 2 bp/knot slope.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)

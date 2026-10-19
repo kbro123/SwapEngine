@@ -155,7 +155,11 @@ TEST(ScenarioFxPairsRepro, EachXccyPositionMovesWithItsOwnPair) {
   const Scen a = scenario(json::array{eurusd()}, json::array{bump("EUR", "USD", 0.02)});
   const Scen b = scenario(json::array{gbpusd()}, json::array{bump("GBP", "USD", -0.01)});
 
-  EXPECT_EQ(both.npv, a.npv + b.npv)
+  EXPECT_EQ(both.base_npv, a.base_npv + b.base_npv) << "the base book is the exact sum of its positions";
+  // An FX bump re-calibrates the collateral curves, and the two-pair solve's damping path is not the one-pair solves'
+  // (the gain ratio reads the whole residual), so each pair's block ends an ulp from where it ends alone: the identity
+  // holds to rounding, not bitwise (it was bitwise under the lmder driver by the luck of its path; K50, 2026-10-19).
+  EXPECT_NEAR(both.npv, a.npv + b.npv, 1e-14 * std::abs(both.npv))
       << "identity: the two-pair book is the sum of each position under its OWN pair (TODAY both take 1.02 * 0.99)";
   const double want = closed_form(kNotionalA, kSpotA, 1.02, both.df_eur) + closed_form(kNotionalB, kSpotB, 0.99, both.df_gbp);
   EXPECT_NEAR(both.npv, want, swaps::tol::analytics_rel * kGross) << "closed form (TODAY off by about +823)";
@@ -171,6 +175,9 @@ TEST(ScenarioFxPairsRepro, ABumpOnOnePairLeavesAnotherPairsPositionAlone) {
   const Scen both = scenario(json::array{eurusd(), gbpusd()}, json::array{bump("EUR", "USD", 0.02)}, "USD");
   const Scen a = scenario(json::array{eurusd()}, json::array{bump("EUR", "USD", 0.02)});
   const Scen b = scenario(json::array{gbpusd()}, json::array{});
+  EXPECT_EQ(both.df_eur, a.df_eur) << "TEMP: base calibration identical across calls?";
+  EXPECT_EQ(both.df_gbp, b.df_gbp) << "TEMP: base calibration identical across calls?";
+  EXPECT_EQ(both.base_npv, a.base_npv + b.base_npv) << "TEMP: base npv identity";
   EXPECT_EQ(both.npv, a.npv + b.npv) << "GBPUSD is not bumped (before SC2 it took 1.02 too: +2498 too much)";
   EXPECT_THROW((void)scenario(json::array{eurusd(), gbpusd()}, json::array{bump("EUR", "USD", 0.02)}),
                std::invalid_argument)

@@ -8,6 +8,9 @@
 // The lift must keep every number bitwise. An owner-gated behaviour change (SC1 override-vs-add, SC2 multi-pair FX)
 // re-records deliberately and says so in its commit:
 //   SWAPS_WRITE_GOLDEN=1 ./build/api/swaps_api_tests --gtest_filter='ScenarioGolden.*'
+// Re-recorded 2026-10-19 for the LM driver swap (ASSUMPTIONS K50, lm_normal_equations): every number within 4e-11 relative
+// (3e-8 absolute on a P&L in currency units) of the lmder-era record -- the solve ends at a different point on the 1e-16
+// residual floor; the seeded reval's iteration count 5 -> 4, the others unchanged; var_supplied (no solve) byte-identical.
 // grid_us (wall-clock) is the one field cut before comparing, by string surgery: a parse/serialize round trip is not
 // bit-exact (ASSUMPTIONS E1). Every shock size is one where bp/1e4 != bp*1e-4 in double: `scenario` samples the
 // shocked curves, so its golden sees that one-ULP change (shown by hand, 2026-09-14); the grid emits only NPVs, where
