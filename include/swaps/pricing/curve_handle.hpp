@@ -126,15 +126,16 @@ struct TurnedCurve : CurveHandle<S> {
   }
 };
 
-// Build every bundle curve as a handle. `value(c, i)` supplies curve c's local knot i (free from the
-// parameter vector, or a frozen constant). Requires base < c so each spread's base is already built.
+// Build ONE bundle curve as a handle into C[c] (its base, if any, already in C[base]). `value(c, i)` supplies curve
+// c's local knot i (free from the parameter vector, or a frozen constant). Requires base < c.
 template <class Scalar, class ValueFn>
-std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves(
-    const std::vector<CurveStructure>& specs, ValueFn value) {
-  std::vector<std::unique_ptr<CurveHandle<Scalar>>> C(specs.size());
-  for (int c = 0; c < static_cast<int>(specs.size()); ++c) {
-    const auto& spec = specs[c];
+void build_bundle_curve(const std::vector<CurveStructure>& specs, int c, ValueFn& value,
+                        std::vector<std::unique_ptr<CurveHandle<Scalar>>>& C) {
+  {
+    const auto& spec = specs[static_cast<std::size_t>(c)];
     if (spec.base >= c) throw std::invalid_argument("bundle curve: base index must be < curve index");
+    if (spec.base >= 0 && !C[static_cast<std::size_t>(spec.base)])
+      throw std::invalid_argument("bundle curve: a spread's base must be built before it");
     const int ni = spec.n_interp_knots();  // the first ni state entries feed the interpolation
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> xi(ni);
     for (int i = 0; i < ni; ++i) xi[i] = value(c, i);
@@ -155,6 +156,23 @@ std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves(
     }
     C[c] = std::move(h);
   }
+}
+
+// Build every bundle curve as a handle. Requires base < c so each spread's base is already built.
+template <class Scalar, class ValueFn>
+std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves(
+    const std::vector<CurveStructure>& specs, ValueFn value) {
+  std::vector<std::unique_ptr<CurveHandle<Scalar>>> C(specs.size());
+  for (int c = 0; c < static_cast<int>(specs.size()); ++c) build_bundle_curve<Scalar>(specs, c, value, C);
+  return C;
+}
+// Build only the listed curves (sorted ascending, closed under spread ancestry: a base precedes its spreads); the
+// others stay null. An AAD block over one closure builds only what its rows read.
+template <class Scalar, class ValueFn>
+std::vector<std::unique_ptr<CurveHandle<Scalar>>> build_bundle_curves_only(
+    const std::vector<CurveStructure>& specs, const std::vector<int>& ids, ValueFn value) {
+  std::vector<std::unique_ptr<CurveHandle<Scalar>>> C(specs.size());
+  for (int c : ids) build_bundle_curve<Scalar>(specs, c, value, C);
   return C;
 }
 
@@ -179,6 +197,22 @@ class BundleCurveSet {
       auto& xi = scratch_[c];
       for (int i = 0; i < static_cast<int>(xi.size()); ++i) xi[i] = value(c, i);
       handles_[c]->set_forwards(xi);
+    }
+  }
+  // Build only the listed curves (sorted, closed under ancestry); the others stay null and must never be read.
+  void build_only(const std::vector<CurveStructure>& specs, const std::vector<int>& ids) {
+    handles_ = build_bundle_curves_only<Scalar>(specs, ids, [](int, int) { return Scalar(0.0); });
+    scratch_.resize(specs.size());
+    for (int c : ids) scratch_[static_cast<std::size_t>(c)].resize(specs[static_cast<std::size_t>(c)].n_knots());
+  }
+  // Overwrite only the listed curves' forwards (an AAD block updates its closure, not the whole bundle: a block's rows
+  // never read a curve outside it, and a spread's base is in the closure by construction).
+  template <class ValueFn>
+  void update_only(const std::vector<int>& ids, ValueFn value) {
+    for (int c : ids) {
+      auto& xi = scratch_[static_cast<std::size_t>(c)];
+      for (int i = 0; i < static_cast<int>(xi.size()); ++i) xi[i] = value(c, i);
+      handles_[static_cast<std::size_t>(c)]->set_forwards(xi);
     }
   }
   const CurveHandle<Scalar>& operator[](int i) const { return *handles_[i]; }

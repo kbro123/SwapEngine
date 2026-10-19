@@ -239,7 +239,10 @@ combine into prices.** Exploit this — it is the whole optimization thesis:
   producing `W` once (`integral_weight_matrix`, generic for any linear region policy), and the pooled
   `AadBlock` tier for the rows the W-cache cannot express (a compounded observation, an incomplete or seasoned
   MtM funding leg) — `HybridBundleResidual` is a list of `RowEngine`s (`row_engine.hpp`: the compiled subset
-  and the AAD block are two implementations of one interface) and the tier of every row is fingerprinted.
+  and the AAD blocks are two implementations of one interface) and the tier of every row is fingerprinted.
+  The AAD rows are ONE BLOCK PER CLOSURE GROUP (2026-10-19, ASSUMPTIONS K49): grouped by the curves they read
+  under the pooled width, each block building and updating only its closure's curves -- a multi-currency desk's
+  block is otherwise as wide as the state and falls to the heap dual (the G4 desk: 16 ms → 3.4 ms a Jacobian).
 - **Extending/re-wrapping QuantLib is allowed where it unlocks this.** QuantLib instruments recompute
   per-coupon on every pricing call; our wrapper computes `W` once (reusing QuantLib only to build the
   schedule) and reprices by matrix algebra. Reimplement/extend the hot parts; reuse the rest.
@@ -321,8 +324,9 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   EURUSD / GBPUSD / USDJPY). The bench splits a cold / warm LM into its pieces per iteration (engine build, residuals,
   Jacobian by tier, the LM's column-pivoted QR, NormalOp) beside the ticks. Measured (smoothed, 352 rows x 200 knots):
   Hermite cold 60 ms / 8 iterations with the Jacobian 1.1 ms, the QR 1.9 ms and the engine build 11.8 ms; MonotoneConvex
-  cold 213 ms with the AAD block at 16 ms per Jacobian because its touched width is the whole state (200 > kPooledMaxW
-  64: the heap dual). THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
+  cold 213 ms with ONE AAD block at 16 ms per Jacobian because its touched width was the whole state (200 > kPooledMaxW
+  64: the heap dual) -- grouping the block by closure (2026-10-19, K49) took that to 3.4 ms, the cold solve to 100 ms,
+  the warm LM after 25 bp to 78 ms and the 25 bp tick to 45 ms, every block pooled. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
   columns vanish and the joint LM wanders from the ladder's flat seed; the fixture's cold seed carries a 2 bp/knot slope.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)

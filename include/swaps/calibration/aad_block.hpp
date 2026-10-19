@@ -135,6 +135,8 @@ class AadBlock final : public RowEngine {
   bool pooled() const { return pooled_; }
   // The width-reduced knot count this block differentiates w.r.t. -- the number that decides `pooled_`.
   int touched_width() const { return static_cast<int>(touched_.size()); }
+  // The curves this block's rows read, closed under spread ancestry (sorted): the only curves it ever updates.
+  const std::vector<int>& closure() const { return closed_; }
 
   // Build from the bundle's curves, the non-cacheable instruments, their GLOBAL residual rows, and the
   // global knot count. Determines the touched knots and pre-sizes the reusable width-reduced seed.
@@ -159,6 +161,7 @@ class AadBlock final : public RowEngine {
     for (int c : curves_used) {
       for (int a = c; a >= 0; a = sub_.curves[a].base) closed.insert(a);
     }
+    closed_.assign(closed.begin(), closed.end());  // sorted: a base precedes its spreads (base < c)
     std::set<int> knots;
     for (int c : closed) {
       const int off = sub_.offset(c), nk = sub_.curves[c].n_knots();
@@ -175,7 +178,7 @@ class AadBlock final : public RowEngine {
 
     // Build the reusable double curves ONCE (the structure is fixed tick to tick). Every residual pass
     // overwrites their forwards IN PLACE instead of reconstructing the handles/curves each call.
-    dcurves_.build(sub_.curves);
+    dcurves_.build_only(sub_.curves, closed_);
 
     build_df_cache();
   }
@@ -185,7 +188,7 @@ class AadBlock final : public RowEngine {
   // are never the driver of a frozen-Newton reprice.)
   void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override {
     if (rows_.empty()) return;
-    dcurves_.update([&](int c, int i) { return x[off_[c] + i]; });
+    dcurves_.update_only(closed_, [&](int c, int i) { return x[off_[c] + i]; });
     const auto curve_of = [this](int i) -> const CurveHandle<double>& { return dcurves_[i]; };
     for (int j = 0; j < size(); ++j)
       out[rows_[j]] = instrument_model_quote<double>(sub_.instruments[j], curve_of);
@@ -205,13 +208,13 @@ class AadBlock final : public RowEngine {
   // first use (a block that is never asked for a directional pays nothing).
   void directional_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, Eigen::VectorXd& out) const override {
     if (rows_.empty()) return;
-    if (!dir_built_) { dir_.xd.resize(n_knots_); dir_.curves.build(sub_.curves); dir_built_ = true; }
+    if (!dir_built_) { dir_.xd.resize(n_knots_); dir_.curves.build_only(sub_.curves, closed_); dir_built_ = true; }
     for (int k = 0; k < n_knots_; ++k) {
       ad::DualDir::DerType der(1);
       der[0] = dir[k];
       dir_.xd[k] = ad::DualDir(x[k], der);
     }
-    dir_.curves.update([&](int c, int i) { return dir_.xd[off_[c] + i]; });
+    dir_.curves.update_only(closed_, [&](int c, int i) { return dir_.xd[off_[c] + i]; });
     const auto curve_of = [this](int i) -> const CurveHandle<ad::DualDir>& { return dir_.curves[i]; };
     for (int j = 0; j < size(); ++j) {
       const ad::DualDir rj = instrument_residual<ad::DualDir>(sub_.instruments[j], curve_of);
@@ -290,7 +293,7 @@ class AadBlock final : public RowEngine {
     s.xd.resize(n_knots_);
     for (int k = 0; k < n_knots_; ++k) s.xd[k].derivatives().setZero(w);
     for (int j = 0; j < w; ++j) s.xd[touched_[j]].derivatives()[j] = 1.0;
-    s.curves.build(sub_.curves);
+    s.curves.build_only(sub_.curves, closed_);
   }
 
   // The one differentiated sweep, templated on the dual scalar. `q == nullptr` differentiates the stored-
@@ -300,7 +303,7 @@ class AadBlock final : public RowEngine {
   void jacobian_impl(AadState<D>& s, const Eigen::VectorXd& x, Eigen::MatrixXd& J,
                      const Eigen::VectorXd* q, Eigen::VectorXd* r = nullptr) const {
     for (int k = 0; k < n_knots_; ++k) s.xd[k].value() = x[k];  // reuse the seed: values only
-    s.curves.update([&](int c, int i) { return s.xd[off_[c] + i]; });
+    s.curves.update_only(closed_, [&](int c, int i) { return s.xd[off_[c] + i]; });  // the closure only
     const auto curve_of = [&s](int i) -> const CurveHandle<D>& { return s.curves[i]; };
     const int w = static_cast<int>(touched_.size());
     for (int j = 0; j < size(); ++j) {
@@ -338,42 +341,47 @@ class AadBlock final : public RowEngine {
 
     // 1) Discovery replay: record every discount(t) per curve IN ORDER. The query TIMES are x-independent
     //    (the schedule is fixed), so any x works -- price the block once at x = 0 with recording curves.
-    dcurves_.update([](int, int) { return 0.0; });
+    dcurves_.update_only(closed_, [](int, int) { return 0.0; });
     std::vector<std::vector<double>> seq(NC);   // ordered discount-query times, as the kernel asks them
     std::vector<RecordingCurve> rec(NC);
-    for (int c = 0; c < NC; ++c) { rec[c].real = &dcurves_[c]; rec[c].log = &seq[c]; }
+    for (int c : closed_) { rec[c].real = &dcurves_[c]; rec[c].log = &seq[c]; }
     const auto rec_of = [&](int i) -> const CurveHandle<double>& { return rec[i]; };
     for (const auto& ins : sub_.instruments) (void)instrument_residual<double>(ins, rec_of);
 
     // 2) Per queried curve: the DISTINCT sorted times (df layout + fallback search) and the AFFINE map to
     //    integral(t) via AAD (integral is affine in x for any streamable/constant-W scheme, so derivatives
     //    = M exactly at any seed and value at x=0 = b). Then the ordered play-list of slots (seq_slot).
+    // Seeded over the TOUCHED knots only (the closure's state): the affine map's columns are the touched columns and
+    // the per-eval GEMV runs over them, not the whole bundle's state.
+    const int w = static_cast<int>(touched_.size());
     std::vector<ad::Dual> xd(n_knots_);
-    for (int k = 0; k < n_knots_; ++k) { xd[k].value() = 0.0; xd[k].derivatives() = Eigen::VectorXd::Unit(n_knots_, k); }
-    const auto Cu = build_bundle_curves<ad::Dual>(sub_.curves, [&](int c, int i) { return xd[sub_.offset(c) + i]; });
+    for (int k = 0; k < n_knots_; ++k) { xd[k].value() = 0.0; xd[k].derivatives() = Eigen::VectorXd::Zero(w); }
+    for (int j = 0; j < w; ++j) xd[touched_[j]].derivatives()[j] = 1.0;
+    const auto Cu = build_bundle_curves_only<ad::Dual>(sub_.curves, closed_, [&](int c, int i) { return xd[sub_.offset(c) + i]; });
+    xt_.resize(w);
     // The affine cache is valid ONLY for a linear-map curve (integral(t) = M·x + b exactly). A value-
     // dependent scheme (MonotoneCubic) has an x-dependent "M", so sampling AAD derivatives at x = 0 would
     // bake in the WRONG constant map -- such a curve (or one whose spread ANCESTRY is non-linear) keeps
     // the real-curve fallback (resolve_ already points at dcurves_) and simply prices without the cache.
     std::vector<char> linear(NC, 1);
-    for (int c = 0; c < NC; ++c) {
+    for (int c : closed_) {  // ascending, bases first (base < c), so linear[a] is final when c reads it
       if (!curve::make_modular_curve<ad::Dual>(sub_.curves[c].modules()).is_linear_map()) linear[c] = 0;
       for (int a = sub_.curves[c].base; a >= 0; a = sub_.curves[a].base)
-        if (!linear[a]) linear[c] = 0;  // bases are built first (base < c), so linear[a] is final here
+        if (!linear[a]) linear[c] = 0;
     }
-    for (int c = 0; c < NC; ++c) {
+    for (int c : closed_) {
       if (seq[c].empty() || !linear[c]) continue;
       std::vector<double> uniq = seq[c];
       std::sort(uniq.begin(), uniq.end());
       uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
       const int nt = static_cast<int>(uniq.size());
       disc_times_[c] = uniq;
-      disc_M_[c].resize(nt, n_knots_);
+      disc_M_[c].resize(nt, w);
       disc_b_[c].resize(nt);
       for (int i = 0; i < nt; ++i) {
         const ad::Dual I = Cu[c]->integral(uniq[i]);
         disc_b_[c][i] = I.value();
-        if (I.derivatives().size() == n_knots_) disc_M_[c].row(i) = I.derivatives().transpose();
+        if (I.derivatives().size() == w) disc_M_[c].row(i) = I.derivatives().transpose();
         else disc_M_[c].row(i).setZero();
       }
       disc_df_[c].resize(nt);
@@ -392,10 +400,12 @@ class AadBlock final : public RowEngine {
   // Per residual eval: update the reusable curves (fallback + integral/forward), recompute each cached
   // curve's DFs as one GEMV + one vectorised exp, and rewind its cursor to replay the fixed query order.
   void refresh_curves(const Eigen::VectorXd& x) const {
-    dcurves_.update([&](int c, int i) { return x[off_[c] + i]; });
+    dcurves_.update_only(closed_, [&](int c, int i) { return x[off_[c] + i]; });
+    if (!cached_ids_.empty())
+      for (std::size_t j = 0; j < touched_.size(); ++j) xt_[static_cast<Eigen::Index>(j)] = x[touched_[j]];  // the closure's state
     for (int c : cached_ids_) {
       // GEMV straight into the df buffer (noalias -> no heap temp for M*x), then the affine + exp in place.
-      disc_df_[c].noalias() = disc_M_[c] * x;
+      disc_df_[c].noalias() = disc_M_[c] * xt_;
       disc_df_[c] = (-(disc_df_[c] + disc_b_[c])).array().exp();
       cached_[c].cursor = 0;
     }
@@ -406,6 +416,8 @@ class AadBlock final : public RowEngine {
   std::vector<int> rows_;      // block index -> global residual row
   std::vector<int> off_;       // per-curve global state offset (== sub_.offset(c)), hoisted at init
   std::vector<int> touched_;   // global knot indices these instruments differentiate w.r.t. (sorted)
+  std::vector<int> closed_;    // the curves those knots belong to (sorted): the only curves any pass updates
+  mutable Eigen::VectorXd xt_;  // x gathered on touched_ (the DF cache's GEMV input), sized at init
   int n_knots_ = 0;
   bool pooled_ = false;  // AAD scalar selected at init: pooled (width <= kPooledMaxW) vs heap fallback
   mutable AadState<ad::DualPooled<ad::kPooledMaxW>> pool_;  // the allocation-free sweep (built iff pooled_)

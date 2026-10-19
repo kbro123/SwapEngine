@@ -80,11 +80,11 @@ void partition_counters(benchmark::State& st, const Fixture& f, const cal::Hybri
   st.counters["rows"] = static_cast<double>(f.rows.n_residuals());
   st.counters["compiled_rows"] = static_cast<double>(h.n_compiled_rows());
   st.counters["aad_rows"] = static_cast<double>(f.rows.n_residuals() - h.n_compiled_rows());
-  for (const auto& e : h.engines())
-    if (const auto* blk = dynamic_cast<const cal::AadBlock*>(e.get())) {
-      st.counters["aad_touched"] = blk->touched_width();
-      st.counters["aad_pooled"] = blk->pooled() ? 1.0 : 0.0;
-    }
+  if (h.n_aad_blocks() > 0) {
+    st.counters["aad_blocks"] = h.n_aad_blocks();
+    st.counters["aad_touched"] = h.aad_width();  // the widest block
+    st.counters["aad_pooled"] = h.aad_pooled() ? 1.0 : 0.0;
+  }
 }
 
 void cold(benchmark::State& st, std::size_t i) {
@@ -144,18 +144,19 @@ void jacobian(benchmark::State& st, std::size_t i) {
 void jacobian_tier(benchmark::State& st, std::size_t i, bool aad) {
   const Fixture& f = fixture(i);
   const cal::HybridBundleResidual h(f.rows);
-  const cal::RowEngine* eng = nullptr;
-  for (const auto& e : h.engines()) {
-    const bool is_aad = dynamic_cast<const cal::AadBlock*>(e.get()) != nullptr;
-    if (is_aad == aad) eng = e.get();
-  }
-  if (!eng) { st.SkipWithError("no such tier on this variant"); return; }
+  std::vector<const cal::RowEngine*> tier;  // the compiled engine, or every AAD block
+  for (const auto& e : h.engines())
+    if ((dynamic_cast<const cal::AadBlock*>(e.get()) != nullptr) == aad) tier.push_back(e.get());
+  if (tier.empty()) { st.SkipWithError("no such tier on this variant"); return; }
   Eigen::MatrixXd J = Eigen::MatrixXd::Zero(f.rows.n_residuals(), f.rows.n_knots());
+  double n_rows = 0;
+  for (const auto* e : tier) n_rows += static_cast<double>(e->rows().size());
   for (auto _ : st) {
-    eng->jacobian_into(f.x_cal, J);
+    for (const auto* e : tier) e->jacobian_into(f.x_cal, J);
     benchmark::DoNotOptimize(J.data());
   }
-  st.counters["tier_rows"] = static_cast<double>(eng->rows().size());
+  st.counters["tier_rows"] = n_rows;
+  st.counters["tier_blocks"] = static_cast<double>(tier.size());
 }
 // The per-iteration factorisation Eigen's LM pays: a column-pivoted Householder QR of the dense Jacobian.
 void lm_qr(benchmark::State& st, std::size_t i) {

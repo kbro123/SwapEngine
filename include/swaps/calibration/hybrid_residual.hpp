@@ -12,6 +12,10 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
+#include <iterator>
+#include <set>
+
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -208,8 +212,18 @@ class HybridBundleResidual {
   // Is the AAD half on the heap-free pooled dual? False means its touched width exceeded ad::kPooledMaxW and
   // every dual operation now allocates -- a ~100x per-tick cost cliff that nothing else reports. Exposed so
   // the hot-path tests can fail on it rather than merely measure it (2026-09-12).
-  bool aad_pooled() const { return !aad_ || aad_->pooled(); }
-  int aad_width() const { return aad_ ? aad_->touched_width() : 0; }
+  // The AAD blocks' observability: every block on the pooled dual; the widest block's touched width; the block count.
+  bool aad_pooled() const {
+    for (const AadBlock* b : aad_blocks_) if (!b->pooled()) return false;
+    return true;
+  }
+  int aad_width() const {
+    int w = 0;
+    for (const AadBlock* b : aad_blocks_) w = std::max(w, b->touched_width());
+    return w;
+  }
+  int n_aad_blocks() const { return static_cast<int>(aad_blocks_.size()); }
+  const std::vector<AadBlock*>& aad_blocks() const { return aad_blocks_; }
   // The engines, for a consumer that wants to walk the list (which rows each owns).
   const std::vector<std::unique_ptr<RowEngine>>& engines() const { return engines_; }
 
@@ -350,7 +364,7 @@ class HybridBundleResidual {
     if (pwl && c.instruments.empty()) return false;
     engines_.clear();
     compiled_ = nullptr;
-    aad_ = nullptr;
+    aad_blocks_.clear();
     // The compiled engine is built for every fully-linear bundle (even an all-AAD instrument mix, which keeps
     // n_times() honest) and for a mixed bundle whenever some row stayed on the W-cache.
     if (!use_horizons || !c.instruments.empty()) {
@@ -364,11 +378,43 @@ class HybridBundleResidual {
       compiled_ = cr.get();
       engines_.push_back(std::move(cr));
     }
+    // ONE AAD BLOCK PER CLOSURE GROUP (2026-10-19). A block differentiates every row against the union of its rows'
+    // curve closures, so one block over the whole non-cacheable set on a multi-currency desk is as wide as the state
+    // (the G4 desk: 200 knots against kPooledMaxW 64 -- the heap dual, 16 ms a Jacobian). Rows are grouped by the
+    // closure they read: a row joins the first group whose union with it still fits the pooled width, else opens
+    // one (first fit in row order; a closure wider than the limit on its own is a group of its own and runs on the
+    // heap dual as before). Each block updates only its closure's curves, so the groups cost no more curve work
+    // than the one block did, and the stacked Jacobian is the same doubles in the same order.
     if (!nc.empty()) {
-      auto blk = std::make_unique<AadBlock>();
-      blk->init(p.curves, std::move(nc), std::move(nc_rows), p.n_knots());
-      aad_ = blk.get();
-      engines_.push_back(std::move(blk));
+      struct Group { std::vector<int> curves; int width = 0; std::vector<std::size_t> members; };
+      std::vector<Group> groups;
+      for (std::size_t j = 0; j < nc.size(); ++j) {
+        const std::vector<int> cl = aad_closure(nc[j], p.curves);
+        const auto width_of = [&](const std::vector<int>& cs) {
+          int w = 0;
+          for (int c : cs) w += p.curves[static_cast<std::size_t>(c)].n_knots();
+          return w;
+        };
+        bool placed = false;
+        for (Group& g : groups) {
+          std::vector<int> u;
+          std::set_union(g.curves.begin(), g.curves.end(), cl.begin(), cl.end(), std::back_inserter(u));
+          const int w = width_of(u);
+          if (w <= ad::kPooledMaxW || u.size() == g.curves.size()) {  // fits, or adds no curve (already too wide: same closure)
+            g.curves = std::move(u); g.width = w; g.members.push_back(j); placed = true; break;
+          }
+        }
+        if (!placed) groups.push_back(Group{cl, width_of(cl), {j}});
+      }
+      for (Group& g : groups) {
+        std::vector<Instrument> gi;
+        std::vector<int> gr;
+        for (std::size_t j : g.members) { gi.push_back(nc[j]); gr.push_back(nc_rows[j]); }
+        auto blk = std::make_unique<AadBlock>();
+        blk->init(p.curves, std::move(gi), std::move(gr), p.n_knots());
+        aad_blocks_.push_back(blk.get());
+        engines_.push_back(std::move(blk));
+      }
     }
     owner_.assign(static_cast<std::size_t>(n_res_), -1);
     for (std::size_t k = 0; k < engines_.size(); ++k)
@@ -378,11 +424,20 @@ class HybridBundleResidual {
   }
 
   int n_res_;
-  std::vector<std::unique_ptr<RowEngine>> engines_;  // in tier order: the compiled W-cache, then the AAD block
+  std::vector<std::unique_ptr<RowEngine>> engines_;  // in tier order: the compiled W-cache, then the AAD blocks
   std::vector<int> owner_;                            // global row -> index into engines_
   mutable std::vector<int> dead_all_;  // dead_rows() scratch over every engine (empty on most refreshes)
   CompiledRows* compiled_ = nullptr;                  // the compiled engine, if any (typed access for the observability)
-  AadBlock* aad_ = nullptr;                           // the AAD block, if any
+  std::vector<AadBlock*> aad_blocks_;                 // the AAD blocks (one per closure group), if any
+
+  // The curves an instrument reads, closed under spread ancestry, sorted (AadBlock::init's touched set, per row).
+  static std::vector<int> aad_closure(const Instrument& ins, const std::vector<BundleCurveSpec>& curves) {
+    std::set<int> closed;
+    ins.for_each_curve_ref([&](int c, const char*) {
+      for (int a = c; a >= 0; a = curves[static_cast<std::size_t>(a)].base) closed.insert(a);
+    });
+    return std::vector<int>(closed.begin(), closed.end());
+  }
   bool whole_ = false;                                // ONE compiled engine owns every row: direct delegate, no stitch
   mutable Eigen::VectorXd out_, res_;
 };

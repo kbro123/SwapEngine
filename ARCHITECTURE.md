@@ -149,7 +149,12 @@ graph LR
   (`row_engine.hpp`, 2026-09-22 — `RowEngine` is the one interface: the rows an engine owns, quote updates by
   global row, and the `*_into` residual / Jacobian forms on those rows). Two implementations: `CompiledRows`
   (the W-cache over every row the batch can express) and `AadBlock` (width-reduced AAD over the rest: an
-  incomplete/seasoned MtM funding leg or a compounded observation, standalone or nested). The hybrid stitches
+  incomplete/seasoned MtM funding leg or a compounded observation, standalone or nested) -- ONE BLOCK PER
+  CLOSURE GROUP since 2026-10-19: the non-cacheable rows are grouped by the curves they read (closed under
+  spread ancestry) under the pooled width `kPooledMaxW`, first fit in row order, and each block builds and
+  updates only its closure's curves (`BundleCurveSet::build_only` / `update_only`, `build_bundle_curves_only`),
+  its DF cache's affine map over the touched columns. One block over the G4 desk's rows was 200 wide (the heap
+  dual, 16 ms a Jacobian); seven closure blocks of <= 64 are all pooled, 3.4 ms. The hybrid stitches
   whatever engines claimed rows; when one compiled engine owns every row it is a direct delegate with no
   stitch. A third engine registers by implementing `RowEngine`; no hybrid member changes.
   The compiled engine's ROW MODEL (2026-09-22): every row is `rho_row(Σ_terms w·xf(value), q)` — ONE

@@ -4,6 +4,9 @@
 // basis -- pinned here so the profile bench (bench/g4_profile_bench.cpp) measures a fixture that is what it says.
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <vector>
+
 #include <Eigen/Core>
 
 #include "g4_market.hpp"
@@ -100,8 +103,9 @@ TEST(G4Desk, TheCcpBlockIsIdentifiedOnlyThroughTheSlope) {
 }
 
 // The router's partition on the desk: Hermite and MonotoneCubic (the piecewise-linear tier) compile every row; the
-// MonotoneConvex long ends send the rows reading past the RFR horizons to the AAD block, whose touched width is the
-// whole state -- above the pooled dual's limit, so the block runs on the heap dual (the profile bench's finding).
+// MonotoneConvex long ends send the rows reading past the RFR horizons to the AAD blocks -- one per closure group
+// (2026-10-19), every one of them within the pooled dual's width although the union of their closures is the whole
+// state (which is what one block over all of them measured: the heap dual at 16 ms a Jacobian).
 TEST(G4Desk, ThePartitionIsWhatTheSchemeSays) {
   for (cv::Scheme sch : {cv::Scheme::Hermite, cv::Scheme::MonotoneCubic}) {
     const Shape s = swaps::shapes::g4_desk(raw(sch));
@@ -111,10 +115,15 @@ TEST(G4Desk, ThePartitionIsWhatTheSchemeSays) {
   const Shape s = swaps::shapes::g4_desk(raw(cv::Scheme::MonotoneConvex));
   const cal::HybridBundleResidual h(s.prob);
   EXPECT_LT(h.n_compiled_rows(), s.prob.n_residuals());
-  const cal::AadBlock* blk = nullptr;
-  for (const auto& e : h.engines()) if (auto* b = dynamic_cast<const cal::AadBlock*>(e.get())) blk = b;
-  ASSERT_NE(blk, nullptr);
-  EXPECT_EQ(blk->touched_width(), s.prob.n_knots());
-  EXPECT_GT(blk->touched_width(), swaps::ad::kPooledMaxW);
-  EXPECT_FALSE(blk->pooled());
+  EXPECT_GT(h.n_aad_blocks(), 1);
+  EXPECT_TRUE(h.aad_pooled());
+  EXPECT_LE(h.aad_width(), swaps::ad::kPooledMaxW);
+  std::vector<int> all;  // the union of the blocks' closures is every curve of the desk
+  for (const cal::AadBlock* b : h.aad_blocks()) {
+    EXPECT_TRUE(b->pooled());
+    all.insert(all.end(), b->closure().begin(), b->closure().end());
+  }
+  std::sort(all.begin(), all.end());
+  all.erase(std::unique(all.begin(), all.end()), all.end());
+  EXPECT_EQ(static_cast<int>(all.size()), s.prob.n_curves());
 }
