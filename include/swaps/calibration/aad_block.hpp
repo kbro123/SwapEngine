@@ -333,6 +333,7 @@ class AadBlock final : public RowEngine {
   void build_df_cache() {
     const int NC = static_cast<int>(sub_.curves.size());
     disc_times_.assign(NC, {}); disc_M_.assign(NC, {}); disc_b_.assign(NC, {}); disc_df_.assign(NC, {});
+    disc_linear_.assign(NC, 0);
     seq_t_.assign(NC, {}); seq_slot_.assign(NC, {});
     cached_.assign(NC, CachedDisc{}); resolve_.assign(NC, nullptr);
     cached_ids_.clear();
@@ -369,20 +370,29 @@ class AadBlock final : public RowEngine {
       for (int a = sub_.curves[c].base; a >= 0; a = sub_.curves[a].base)
         if (!linear[a]) linear[c] = 0;
     }
+    // EVERY queried curve is cached (2026-10-25): a linear curve's DFs come from the affine map (one GEMV + one exp),
+    // a value-dependent curve's (or one with a value-dependent ancestor) from the real curve evaluated ONCE per
+    // DISTINCT time per eval -- the rows of a block share most of their dates (a 30y swap's coupons contain a 20y's),
+    // so the rows then read the table through the same cursor replay instead of each re-evaluating the region
+    // search and exp per coupon. Measured on the G4 desk's MonotoneConvex rows (ASSUMPTIONS K51): the residual pass
+    // 0.81 -> 0.25 ms, the streamed tick 3.4 -> 1.1 ms.
     for (int c : closed_) {
-      if (seq[c].empty() || !linear[c]) continue;
+      if (seq[c].empty()) continue;
       std::vector<double> uniq = seq[c];
       std::sort(uniq.begin(), uniq.end());
       uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
       const int nt = static_cast<int>(uniq.size());
       disc_times_[c] = uniq;
-      disc_M_[c].resize(nt, w);
-      disc_b_[c].resize(nt);
-      for (int i = 0; i < nt; ++i) {
-        const ad::Dual I = Cu[c]->integral(uniq[i]);
-        disc_b_[c][i] = I.value();
-        if (I.derivatives().size() == w) disc_M_[c].row(i) = I.derivatives().transpose();
-        else disc_M_[c].row(i).setZero();
+      disc_linear_[c] = linear[c];
+      if (linear[c]) {
+        disc_M_[c].resize(nt, w);
+        disc_b_[c].resize(nt);
+        for (int i = 0; i < nt; ++i) {
+          const ad::Dual I = Cu[c]->integral(uniq[i]);
+          disc_b_[c][i] = I.value();
+          if (I.derivatives().size() == w) disc_M_[c].row(i) = I.derivatives().transpose();
+          else disc_M_[c].row(i).setZero();
+        }
       }
       disc_df_[c].resize(nt);
       // ordered play-list: slot of each recorded query, so eval is df[seq_slot[cursor++]] -- no search.
@@ -404,9 +414,18 @@ class AadBlock final : public RowEngine {
     if (!cached_ids_.empty())
       for (std::size_t j = 0; j < touched_.size(); ++j) xt_[static_cast<Eigen::Index>(j)] = x[touched_[j]];  // the closure's state
     for (int c : cached_ids_) {
-      // GEMV straight into the df buffer (noalias -> no heap temp for M*x), then the affine + exp in place.
-      disc_df_[c].noalias() = disc_M_[c] * xt_;
-      disc_df_[c] = (-(disc_df_[c] + disc_b_[c])).array().exp();
+      if (disc_linear_[c]) {
+        // GEMV straight into the df buffer (noalias -> no heap temp for M*x), then the affine + exp in place.
+        disc_df_[c].noalias() = disc_M_[c] * xt_;
+        disc_df_[c] = (-(disc_df_[c] + disc_b_[c])).array().exp();
+      } else {
+        // a value-dependent curve: the real (updated) curve once per distinct time -- the same doubles a row would
+        // compute per coupon, computed once
+        const CurveHandle<double>& real = dcurves_[c];
+        const std::vector<double>& ts = disc_times_[c];
+        Eigen::VectorXd& df = disc_df_[c];
+        for (std::size_t i = 0; i < ts.size(); ++i) df[static_cast<Eigen::Index>(i)] = real.discount(ts[i]);
+      }
       cached_[c].cursor = 0;
     }
   }
@@ -428,7 +447,8 @@ class AadBlock final : public RowEngine {
 
   // ---- vectorised discount cache (per curve; only for curves the block prices off) ----
   std::vector<std::vector<double>> disc_times_;  // [curve] sorted distinct query times
-  std::vector<Eigen::MatrixXd> disc_M_;          // [curve] (n_times x n_knots): integral(t) = M.row.x + b
+  std::vector<char> disc_linear_;                // [curve] 1: DFs from the affine map; 0: from the real curve per distinct time
+  std::vector<Eigen::MatrixXd> disc_M_;          // [curve] (n_times x touched): integral(t) = M.row.xt + b (linear curves)
   std::vector<Eigen::VectorXd> disc_b_;          // [curve] constant term of the affine integral map
   mutable std::vector<Eigen::VectorXd> disc_df_; // [curve] exp(-(M x + b)), refreshed per eval
   std::vector<std::vector<double>> seq_t_;        // [curve] ordered query times (cursor replay guard)

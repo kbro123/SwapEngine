@@ -153,7 +153,7 @@ graph LR
   CLOSURE GROUP since 2026-10-19: the non-cacheable rows are grouped by the curves they read (closed under
   spread ancestry) under the pooled width `kPooledMaxW`, first fit in row order, and each block builds and
   updates only its closure's curves (`BundleCurveSet::build_only` / `update_only`, `build_bundle_curves_only`),
-  its DF cache's affine map over the touched columns. One block over the G4 desk's rows was 200 wide (the heap
+  its DF cache's affine map over the touched columns; the cache covers value-dependent curves too, evaluated once per distinct time per eval (K51, 2026-10-25). One block over the G4 desk's rows was 200 wide (the heap
   dual, 16 ms a Jacobian); seven closure blocks of <= 64 are all pooled, 3.4 ms. The hybrid stitches
   whatever engines claimed rows; when one compiled engine owns every row it is a direct delegate with no
   stitch. A third engine registers by implementing `RowEngine`; no hybrid member changes.

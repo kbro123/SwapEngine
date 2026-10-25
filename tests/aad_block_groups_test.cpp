@@ -18,6 +18,7 @@
 #include "swaps/calibration/aad_block.hpp"
 #include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
+#include "swaps/curve/curve_module.hpp"
 
 namespace cal = swaps::calibration;
 namespace cv = swaps::curve;
@@ -89,5 +90,47 @@ TEST(AadBlockGroups, ARungWhoseClosureFitsStaysOneBlock) {
     if (h.n_aad_blocks() == 0) continue;  // fx_xccy compiles whole
     EXPECT_EQ(h.n_aad_blocks(), 1) << s.name;
     EXPECT_TRUE(h.aad_pooled()) << s.name;
+  }
+}
+
+// THE DF TABLE FOR A VALUE-DEPENDENT CURVE (2026-10-25, K51): a block caches a MonotoneConvex curve's discount factors per
+// distinct query time per eval, evaluated once on the real curve, and its rows read the table through the cursor replay.
+// The residuals are the SAME doubles the generic kernel computes coupon by coupon on freshly built curves -- bit for bit
+// wherever every curve a row reads is value-dependent (every row when every curve is). A row that also reads a LINEAR
+// curve takes that curve's DFs from the affine-map cache (one GEMV, since 2026-09), which rounds an ulp away from the
+// per-coupon integral: a zero FX-forward residual reads 1e-17 there, as it did before this table.
+TEST(AadBlockGroups, ValueDependentDfTableIsTheGenericKernelsDoubles) {
+  for (bool everywhere : {false, true}) {
+    swaps::shapes::g4::Opts o;
+    o.back = cv::Scheme::MonotoneConvex;
+    o.vd_everywhere = everywhere;
+    o.smoothing = false;
+    const Shape s = swaps::shapes::g4_desk(o);
+    const auto& p = s.prob;
+    const cal::HybridBundleResidual h(p);
+    ASSERT_GT(h.n_aad_blocks(), 1) << s.name;
+    std::vector<bool> linear_curve(static_cast<std::size_t>(p.n_curves()));
+    for (int c = 0; c < p.n_curves(); ++c) linear_curve[static_cast<std::size_t>(c)] = cv::make_modular_curve<double>(p.curves[static_cast<std::size_t>(c)].modules()).is_linear_map();
+    const auto reads_a_linear_curve = [&](const cal::Instrument& ins) {
+      bool any = false;
+      ins.for_each_curve_ref([&](int c, const char*) {
+        for (int a = c; a >= 0; a = p.curves[static_cast<std::size_t>(a)].base) any = any || linear_curve[static_cast<std::size_t>(a)];
+      });
+      return any;
+    };
+    int bitwise_rows = 0;
+    for (const Eigen::VectorXd& x : {Eigen::VectorXd(s.x_true), Eigen::VectorXd(s.x_true.array() + 0.0007), Eigen::VectorXd(s.x0)}) {
+      const Eigen::VectorXd r = h.residuals(x);
+      const auto C = cal::build_bundle_curves<double>(p.curves, [&](int c, int i) { return x[p.offset(c) + i]; });
+      const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
+      for (const cal::AadBlock* b : h.aad_blocks())
+        for (int row : b->rows()) {
+          const double want = cal::instrument_residual<double>(p.row(row), curve_of);
+          if (reads_a_linear_curve(p.row(row))) EXPECT_NEAR(r[row], want, 1e-15 + 1e-12 * std::abs(want)) << s.name << " row " << row;
+          else { EXPECT_EQ(r[row], want) << s.name << " row " << row; ++bitwise_rows; }
+        }
+    }
+    EXPECT_GT(bitwise_rows, 0) << s.name;
+    if (everywhere) EXPECT_EQ(bitwise_rows, 3 * (p.n_residuals() - h.n_compiled_rows())) << s.name << ": every AAD row reads value-dependent curves only";
   }
 }

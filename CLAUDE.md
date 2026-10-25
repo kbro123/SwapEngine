@@ -332,7 +332,10 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   shipped driver is now lmder's own trust-region control flow over the scaled normal equations (`lm_normal_equations`:
   JᵀJ 0.44 ms + 0.18 ms per Cholesky trial, the same step to 5e-14 under MINPACK's column scaling, cond(D⁻¹J) 7e2 where
   cond(J) is 2e5), the Hermite cold solve 60 → 34 ms and the warm solve 55 → 32 ms; a damping SCHEDULE in place of the
-  trust region was measured parking at MonotoneCubic's Hyman kinks, which is why the flow is lmder's. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
+  trust region was measured parking at MonotoneCubic's Hyman kinks, which is why the flow is lmder's. THE DF TABLE
+  (2026-10-25, K51): an AAD block now caches a value-dependent curve's discount factors per distinct query time per eval
+  (the linear curves had the affine map; the MonotoneConvex curves were re-evaluated per coupon), the residual pass on
+  the 156 AAD rows 813 → 249 µs and the streamed tick 3.4 → 1.1 ms. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
   columns vanish and the joint LM wanders from the ladder's flat seed; the fixture's cold seed carries a 2 bp/knot slope.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
