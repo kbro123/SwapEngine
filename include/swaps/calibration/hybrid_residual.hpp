@@ -186,9 +186,10 @@ class HybridBundleResidual {
     bool mixed = false;
     for (double h : horizons)
       if (h < std::numeric_limits<double>::infinity()) mixed = true;
-    // The tier tracks PIECEWISE-linear value dependence only (one constant W per branch cell). A region that is
-    // not piecewise-linear (MonotoneConvex) is never offered to it: its rows take the horizon partition below.
-    if (pwl && mixed && pricing::curves_piecewise_linear(p.curves) && build(p, horizons, /*use_horizons=*/false, /*pwl=*/true)) return;
+    // The tier tracks a PIECEWISE-linear curve (one constant W per branch cell, MonotoneCubic) and, since 2026-10-31,
+    // a TANGENT curve (W re-taken analytically at every state, MonotoneConvex). A curve that is neither is never
+    // offered to it: its rows take the horizon partition below.
+    if (pwl && mixed && pricing::curves_tier_trackable(p.curves) && build(p, horizons, /*use_horizons=*/false, /*pwl=*/true)) return;
     // The horizon partition (the tier off, or refused: nothing would stay compiled, or the compiled engine
     // rejects the bundle, e.g. moment-path coupons on a value-dependent curve).
     build(p, horizons, /*use_horizons=*/mixed, /*pwl=*/false);

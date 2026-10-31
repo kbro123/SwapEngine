@@ -26,8 +26,12 @@ set; a runtime registry lets any API add or override entries without rebuilding.
 **P3. The linear-map thesis.** `∫f = w(t)·x` is linear in the knot forwards with structure-only weights, so
 `DF = exp(−W·x)` with `W` built once. Everything rides this: cache `W` per instrument, reprice as `L = W·x`,
 analytic Jacobian `−(∂r/∂DF·diag DF)·W`, implicit-function-theorem risk. There are exactly **two tiers**: the
-compiled W-cache tier for linear-map rows, and the pooled-AAD block for value-dependent schemes and
-non-cacheable rows (MtM funding legs, FX-in-portfolio). A row's tier is explicit and fingerprinted.
+compiled W-cache tier, and the pooled-AAD block for non-cacheable rows (MtM funding legs, FX-in-portfolio) and
+as the generic fallback. A value-dependent scheme rides the compiled tier too, with `W` RE-TAKEN AT THE STATE --
+cell-constant for a piecewise-linear scheme (MonotoneCubic), the scheme's closed-form TANGENT otherwise
+(MonotoneConvex, 2026-10-31) -- and the log-discount kept exact; a scheme reaches the compiled tier only by
+supplying one of the two, pinned against AAD, which stays the oracle for every analytic derivative. A row's tier
+is explicit and fingerprinted.
 
 **P4. One templated implementation, no duplication.** Scalar-templated kernels give value and Jacobian
 from one code path. ONE rate formula, ONE float primitive (`BundleFloatBatch`), roles on legs, ONE residual

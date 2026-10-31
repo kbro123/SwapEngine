@@ -217,7 +217,9 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     p.curves[static_cast<std::size_t>(x.role)] = std::move(s);
   }
   if (o.smoothing) cal::stamp_region_smoothing(p, 1.0);  // the switch; Flat regions take no rows
-  const bool linear = o.back == cv::Scheme::Hermite;
+  // Every row compiles unless the long end is MonotoneCubic (the piecewise-linear tier's rung keeps the ladder's
+  // convention: its re-syncs are not held to zero allocations); MonotoneConvex rides the tangent tier (2026-10-31).
+  const bool linear = o.back != cv::Scheme::MonotoneCubic;
   return detail::make(g4::name_of(o),
                       std::string("G4 desk: 14 curves -- 4 RFR (meeting-flat front + ") + g4::scheme_word(o.back) +
                           " back" + (o.turns ? ", year-end turn" : "") + "), FF + EUR 3M/6M tenor basis, 4 CCP discount "

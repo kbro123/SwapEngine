@@ -184,6 +184,8 @@ class CompiledBundleResidual {
   // distinct cells visited (opt-in: enable_pwl_stats, a std::set insert per change).
   bool pwl_active() const { return cs_.pwl(); }
   int pwl_rebuilds() const { return cs_.pwl_rebuilds(); }
+  int tangent_syncs() const { return cs_.tangent_syncs(); }
+  int n_tangent_curves() const { return cs_.n_tangent_curves(); }
   int pwl_analytic() const { return cs_.pwl_analytic(); }
   int pwl_distinct() const { return cs_.pwl_distinct(); }
   void enable_pwl_stats() { cs_.enable_pwl_stats(); }
@@ -346,6 +348,7 @@ class CompiledBundleResidual {
     directional_vs_into(x, dir, market_, out);
   }
   void directional_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& dir, const Eigen::VectorXd& q, Eigen::VectorXd& out) const {
+    sync_W(x);  // a tangent curve's W at x
     const Eigen::VectorXd& DF = df_at(x);  // syncs the piecewise-linear tier first (W may move)
     const Eigen::VectorXd& INV = inv_;
     if (wdir_stale_ || dir.size() != dir_memo_.size() || (dir.array() != dir_memo_.array()).any()) {
@@ -474,6 +477,7 @@ class CompiledBundleResidual {
   // The Jacobian pass. `values`: also accumulate every row's model value into mrj_ (the 4-arg form's residual);
   // the mapped rows' values are accumulated regardless, since their slope rho'(q_model) needs them.
   void jacobian_core(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, bool values) const {
+    sync_W(x);  // a tangent curve's W at x (the DF memo below is invalidated by the mirror when it moves)
     const Eigen::VectorXd& DF = df_at(x);
     const Eigen::VectorXd& INV = inv_;
     if (has_moment_) { gen_float_.set_state(x); gen_rate_.set_state(x); }
@@ -710,6 +714,14 @@ class CompiledBundleResidual {
   // data -- the rank-k delta or the cell reset into W and its ancestry blocks, mirrored into W^T and the per-time
   // spans; or the full AAD re-take. const: W is a pure function of x, so this is the DF memo's own key changing
   // (the same argument as df_x_), not observable state.
+  // The tangent curves' W, re-taken at x before a Jacobian or directional reads it (lazy: a tick's Newton steps
+  // only ever need the exact log-discount, which sync() keeps through the correction). const for the same reason
+  // sync() is: W is a pure function of x.
+  void sync_W(const Eigen::VectorXd& x) const {
+    if (!cs_.pwl() || cs_.n_tangent_curves() == 0) return;
+    auto& self = const_cast<CompiledBundleResidual&>(*this);
+    self.cs_.tangent_sync_W(x, [&](int pc) { self.mirror_delta(pc); });
+  }
   void sync(const Eigen::VectorXd& x) const {
     if (!cs_.pwl()) return;
     auto& self = const_cast<CompiledBundleResidual&>(*this);

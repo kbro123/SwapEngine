@@ -61,6 +61,7 @@ class Flat {
  public:
   explicit Flat(std::vector<double> ends) : m_(std::move(ends)) { require_increasing_knots(m_, "Flat"); }
   int n_values() const { return static_cast<int>(m_.size()); }
+  const std::vector<double>& knots() const { return m_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return m_.back(); }
   static constexpr bool is_linear_map = true;
 
@@ -114,6 +115,7 @@ class Linear {
  public:
   explicit Linear(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "Linear"); }
   int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;
 
@@ -186,6 +188,7 @@ class NaturalCubic {
  public:
   explicit NaturalCubic(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "NaturalCubic"); }
   int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;
 
@@ -304,6 +307,7 @@ class Hermite {
  public:
   explicit Hermite(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "Hermite"); }
   int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;
 
@@ -324,14 +328,19 @@ class Hermite {
       for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
     }
     const int nseg = N - 1;
-    std::vector<double> h(nseg);
-    std::vector<Scalar> sec(nseg);
+    // Scratch MEMBERS, sized once (2026-10-31): these were three locals allocated per build -- the E3 finding B3 that
+    // made every hybrid tick pay three allocations; the tangent tier rebuilds a curve per state, so it had to go.
+    auto& h = h_;
+    auto& sec = sec_;
+    auto& m = m_;
+    h.resize(nseg);
+    sec.resize(nseg);
     for (int i = 0; i < nseg; ++i) {
       h[i] = xs_[i + 1] - xs_[i];
       sec[i] = (ys_[i + 1] - ys_[i]) / h[i];
     }
     // Bessel/parabolic tangents (linear in ys).
-    std::vector<Scalar> m(N);
+    m.resize(N);
     for (int j = 1; j < N - 1; ++j)
       m[j] = (h[j] * sec[j - 1] + h[j - 1] * sec[j]) / (h[j - 1] + h[j]);
     if (nseg >= 2) {
@@ -397,8 +406,8 @@ class Hermite {
     auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
     return static_cast<int>(it - xs_.begin()) - 1;
   }
-  std::vector<double> s_, xs_;
-  std::vector<Scalar> ys_, a_, b_, c_, d_, Is_;
+  std::vector<double> s_, xs_, h_;
+  std::vector<Scalar> ys_, a_, b_, c_, d_, Is_, sec_, m_;  // h_/sec_/m_: build scratch, sized once (2026-10-31)
   Scalar end_slope_{0.0};
 };
 
@@ -424,6 +433,7 @@ class MonotoneCubic {
     require_increasing_knots(s_, "MonotoneCubic");
   }
   int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = false;  // Hyman filter is value-dependent -> AAD tier, not W-cache
 
@@ -709,8 +719,9 @@ class MonotoneCubic {
 // Yield Curve, 2008). On each interval the forward is fd_i + g(x), x = (t - tau_{i-1})/(tau_i - tau_{i-1}), with g
 // one of four quadratic SHAPES chosen by the signs of g0 = f(tau_{i-1}) - fd_i and g1 = f(tau_i) - fd_i, and
 // breakpoints eta that are RATIOS of the values -- so this is genuinely value-dependent and NOT piecewise-linear
-// in the knots (MonotoneCubic is: its Hyman filter only picks among linear formulas). Its tier is AAD, never the
-// W-cache; curve_module.hpp scheme_is_piecewise_linear is false and the piecewise-linear tier refuses it.
+// in the knots (MonotoneCubic is: its Hyman filter only picks among linear formulas). Its W is therefore not
+// constant per cell (scheme_is_piecewise_linear is false); since 2026-10-31 it carries its TANGENT in closed form
+// (integral_tangent below), so the compiled engine re-takes W at every state analytically and no AAD is needed.
 //
 // FREE VALUES are the DISCRETE forwards fd_i over the intervals, exactly the method's inputs. A FOLLOWING region's n
 // knots bound n intervals (tau_0 = the join time; f_0 = the incoming forward: the engine's C0 join replaces the
@@ -733,6 +744,7 @@ class MonotoneConvex {
     require_increasing_knots(s_, "MonotoneConvex");
   }
   int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = false;  // value-dependent AND not piecewise-linear -> AAD tier only
 
@@ -761,12 +773,22 @@ class MonotoneConvex {
       f_[i] = (hl * fd_[i + 1] + hr * fd_[i]) / (hl + hr);
     }
     if (m_ >= 1) f_[m_] = fd_[m_] - 0.5 * (f_[m_ - 1] - fd_[m_]);
-    // Amelioration, sign-symmetric (see the header).
+    // Amelioration, sign-symmetric (see the header). The branch each f_i takes is RECORDED for the tangent below:
+    // 0 unclamped, 1 clamped to the zero bound, 2 clamped to 2 fd_i, 3 clamped to 2 fd_{i+1} (the same comparisons
+    // clamp() / smin() / smax() make, so the recorded branch is the one the value took).
+    clampk_.assign(static_cast<std::size_t>(m_ + 1), 0);
     for (int i = 1; i <= m_; ++i) {
       const Scalar& a = fd_[i];
       const Scalar& b = (i < m_) ? fd_[i + 1] : fd_[i];
-      if (a >= 0.0 && b >= 0.0) f_[i] = clamp(f_[i], a * 0.0, 2.0 * smin(a, b));
-      else if (a <= 0.0 && b <= 0.0) f_[i] = clamp(f_[i], 2.0 * smax(a, b), a * 0.0);
+      if (a >= 0.0 && b >= 0.0) {
+        const Scalar lo = a * 0.0, hi = 2.0 * smin(a, b);
+        if (f_[i] < lo) { f_[i] = lo; clampk_[static_cast<std::size_t>(i)] = 1; }
+        else if (hi < f_[i]) { f_[i] = hi; clampk_[static_cast<std::size_t>(i)] = (b < a) ? 3 : 2; }
+      } else if (a <= 0.0 && b <= 0.0) {
+        const Scalar lo = 2.0 * smax(a, b), hi = a * 0.0;
+        if (f_[i] < lo) { f_[i] = lo; clampk_[static_cast<std::size_t>(i)] = (a < b) ? 3 : 2; }
+        else if (hi < f_[i]) { f_[i] = hi; clampk_[static_cast<std::size_t>(i)] = 1; }
+      }
     }
     // Per-interval shape, and the integral at the interval ends (exact: G(1) = 0 in every region).
     h_.resize(m_ + 1);
@@ -790,6 +812,63 @@ class MonotoneConvex {
       else if (r == 4) { eta_[i] = g1 / (g0 + g1); A_[i] = -g0 * g1 / (g0 + g1); }
       Iend_[i] = Iend_[i - 1] + fd_[i] * h_[i];
     }
+    lead_ = lead;
+    tangent_prepare();
+  }
+
+  // ---- THE TANGENT (2026-10-31): the gradient of the integral at t, and of the outgoing forward, with respect to
+  // this region's OWN values and the INCOMING join forward, at the state of the last build -- closed form, no AAD.
+  // The incoming integral enters with coefficient 1 (every region adds it), so the chain (ModularCurve::
+  // integral_tangent) carries it itself. Own values: leading [f_0, fd_1..fd_m], following [fd_1..fd_m]. Every
+  // branch the value took (shape, breakpoint side, clamp) is the branch differentiated, so at a switch the
+  // tangent is the one-sided derivative AAD gives on the same code. Per interval i with x = (t - tau_{i-1})/h_i:
+  //   dI/dv = dIend_{i-1}/dv + h_i [x e_{fd_i} + dG/dg0 (df_{i-1} - e_{fd_i}) + dG/dg1 (df_i - e_{fd_i})]
+  // where df_k is the gradient of the node forward f_k (the spacing-weighted average, the far-end rule, a clamp to
+  // 0 or to twice a neighbour) and dG/dg0, dG/dg1 the shape's closed-form partials, eta and A differentiated
+  // through (shape_tangent). Pinned against AAD and a central difference in tests/curve_tangent_test.cpp.
+  static constexpr bool has_tangent = true;
+  void integral_tangent(double t, double* own, double& d_inv) const {
+    const int n = n_values();
+    const int V = n + 1;  // own slots + the incoming forward
+    std::fill(own, own + n, 0.0);
+    d_inv = 0.0;
+    if (m_ == 0) {  // a single leading value: I(t) = f_0 t
+      own[0] = t;
+      return;
+    }
+    tg_row_.assign(static_cast<std::size_t>(V), 0.0);
+    double* row = tg_row_.data();
+    if (t <= tau_[0]) {  // I = I0 - f_0 (tau_0 - t): the flat short end (leading) / before the join (following)
+      if (lead_) row[0] = t;  // I0 = f_0 tau_0
+      else row[V - 1] = -(tau_[0] - t);
+    } else {
+      const int i = t >= tau_[m_] ? m_ : seg(t);
+      // dIend_{i-1}: I0 (leading: f_0 tau_0) + sum_{j<i} fd_j h_j
+      if (lead_) row[0] += tau_[0];
+      for (int j = 1; j < i; ++j) row[own_of_fd(j)] += h_[j];
+      if (t >= tau_[m_]) {  // Iend_m + f_m (t - tau_m)
+        row[own_of_fd(m_)] += h_[m_];
+        axpy(row, t - tau_[m_], df_row(m_), V);
+      } else {
+        const double x = (t - tau_[i - 1]) / h_[i];
+        double dG0 = 0.0, dG1 = 0.0;
+        shape_tangent(i, x, dG0, dG1);
+        row[own_of_fd(i)] += h_[i] * x;
+        // dg0_i = df_{i-1} - e_{fd_i};  dg1_i = df_i - e_{fd_i}
+        axpy(row, h_[i] * dG0, df_row(i - 1), V);
+        axpy(row, h_[i] * dG1, df_row(i), V);
+        row[own_of_fd(i)] -= h_[i] * (dG0 + dG1);
+      }
+    }
+    for (int k = 0; k < n; ++k) own[k] = row[k];
+    d_inv = row[V - 1];
+  }
+  void out_value_tangent(double* own, double& d_inv) const {  // f_m's gradient (the C0 handoff to the next region)
+    const int n = n_values();
+    const int V = n + 1;
+    const double* r = df_row(m_);
+    for (int k = 0; k < n; ++k) own[k] = r[k];
+    d_inv = r[V - 1];
   }
 
   Scalar forward(double t) const {
@@ -963,12 +1042,118 @@ class MonotoneConvex {
     }
   }
 
+  // ---- tangent helpers (doubles; the recorded branches of the last build) ----
+  int own_of_fd(int i) const { return lead_ ? i : i - 1; }  // the own slot of fd_i (i >= 1)
+  const double* df_row(int k) const { return tg_df_.data() + static_cast<std::size_t>(k) * static_cast<std::size_t>(n_values() + 1); }
+  static void axpy(double* y, double a, const double* x, int n) { for (int k = 0; k < n; ++k) y[k] += a * x[k]; }
+  // df_k for k = 0..m: the gradient of each node forward over [own | in.value], following build()'s formulas and
+  // the clamp branch it recorded (the far-end rule reads the UNCLAMPED f_{m-1}, as build does).
+  void tangent_prepare() {
+    const int n = n_values();
+    const int V = n + 1;
+    tg_df_.assign(static_cast<std::size_t>(m_ + 1) * static_cast<std::size_t>(V), 0.0);
+    auto row = [&](int k) { return tg_df_.data() + static_cast<std::size_t>(k) * static_cast<std::size_t>(V); };
+    if (lead_) row(0)[0] = 1.0;
+    else row(0)[V - 1] = 1.0;
+    for (int i = 1; i < m_; ++i) {
+      const double hl = tau_[i] - tau_[i - 1], hr = tau_[i + 1] - tau_[i];
+      row(i)[own_of_fd(i + 1)] = hl / (hl + hr);
+      row(i)[own_of_fd(i)] = hr / (hl + hr);
+    }
+    if (m_ >= 1) {  // f_m = fd_m - 0.5 (f_{m-1} - fd_m) = 1.5 fd_m - 0.5 f_{m-1}
+      axpy(row(m_), -0.5, row(m_ - 1), V);
+      row(m_)[own_of_fd(m_)] += 1.5;
+    }
+    for (int i = 1; i <= m_; ++i) {
+      const int cl = clampk_[static_cast<std::size_t>(i)];
+      if (cl == 0) continue;
+      double* r = row(i);
+      std::fill(r, r + V, 0.0);
+      if (cl == 2) r[own_of_fd(i)] = 2.0;
+      else if (cl == 3) r[own_of_fd(i + 1)] = 2.0;
+    }
+  }
+  // dG/dg0, dG/dg1 of interval i's shape at x, with eta and A differentiated through (the paper's shapes, G as in
+  // G() above; shape 0 -- g0 == g1 == 0 exactly -- is the flat configuration whose AAD gradient is zero).
+  void shape_tangent(int i, double x, double& dG0, double& dG1) const {
+    const double g0 = dbl(g0_[i]), g1 = dbl(g1_[i]);
+    dG0 = dG1 = 0.0;
+    switch (reg_[static_cast<std::size_t>(i)]) {
+      case 1:
+        dG0 = x - 2.0 * x * x + x * x * x;
+        dG1 = -x * x + x * x * x;
+        return;
+      case 2: {
+        const double eta = dbl(eta_[i]);
+        if (x <= eta) { dG0 = x; return; }
+        const double q = (g1 - g0) * (g1 - g0);
+        const double deta0 = 3.0 * g1 / q, deta1 = -3.0 * g0 / q;
+        const double d = x - eta, w = 1.0 - eta;
+        const double F = d * d * d / (3.0 * w * w);
+        const double dF = -d * d / (w * w) + 2.0 * d * d * d / (3.0 * w * w * w);  // dF/deta
+        dG0 = x - F + (g1 - g0) * dF * deta0;
+        dG1 = F + (g1 - g0) * dF * deta1;
+        return;
+      }
+      case 3: {
+        const double eta = dbl(eta_[i]);
+        const double q = (g1 - g0) * (g1 - g0);
+        const double deta0 = 3.0 * g1 / q, deta1 = -3.0 * g0 / q;
+        if (x < eta) {
+          const double d = eta - x;
+          const double H = (eta * eta * eta - d * d * d) / (3.0 * eta * eta);
+          const double dH = 1.0 / 3.0 - d * d / (eta * eta) + 2.0 * d * d * d / (3.0 * eta * eta * eta);  // dH/deta
+          dG0 = H + (g0 - g1) * dH * deta0;
+          dG1 = x - H + (g0 - g1) * dH * deta1;
+        } else {
+          dG0 = eta / 3.0 + (g0 - g1) * deta0 / 3.0;
+          dG1 = x - eta / 3.0 + (g0 - g1) * deta1 / 3.0;
+        }
+        return;
+      }
+      case 4: {
+        const double eta = dbl(eta_[i]), A = dbl(A_[i]);
+        const double sq = (g0 + g1) * (g0 + g1);
+        const double deta0 = -g1 / sq, deta1 = g0 / sq;
+        const double dA0 = -g1 * g1 / sq, dA1 = -g0 * g0 / sq;
+        if (x < eta) {
+          const double d = eta - x;
+          const double H = (eta * eta * eta - d * d * d) / (3.0 * eta * eta);
+          const double dH = 1.0 / 3.0 - d * d / (eta * eta) + 2.0 * d * d * d / (3.0 * eta * eta * eta);
+          dG0 = dA0 * x + (1.0 - dA0) * H + (g0 - A) * dH * deta0;
+          dG1 = dA1 * x - dA1 * H + (g0 - A) * dH * deta1;
+        } else {
+          double dfirst0 = 0.0, dfirst1 = 0.0;
+          if (eta > 0.0) {
+            dfirst0 = (1.0 - dA0) * eta / 3.0 + (g0 - A) * deta0 / 3.0;
+            dfirst1 = -dA1 * eta / 3.0 + (g0 - A) * deta1 / 3.0;
+          }
+          dG0 = dA0 * x + dfirst0;
+          dG1 = dA1 * x + dfirst1;
+          if (eta < 1.0) {
+            const double d = x - eta, w = 1.0 - eta;
+            const double F = d * d * d / (3.0 * w * w);
+            const double dF = -d * d / (w * w) + 2.0 * d * d * d / (3.0 * w * w * w);
+            dG0 += -dA0 * F + (g1 - A) * dF * deta0;
+            dG1 += (1.0 - dA1) * F + (g1 - A) * dF * deta1;
+          }
+        }
+        return;
+      }
+      default: return;
+    }
+  }
+
   std::vector<double> s_;
   int m_ = 0;
+  bool lead_ = false;
   std::vector<double> tau_, h_;
   Scalar I0_{0.0};
   std::vector<Scalar> fd_, f_, g0_, g1_, eta_, A_, Iend_;
   std::vector<int> reg_;
+  std::vector<int> clampk_;              // the amelioration branch of each f_i (see build)
+  std::vector<double> tg_df_;            // (m+1) x (n_values+1): the node forwards' gradients over [own | in.value]
+  mutable std::vector<double> tg_row_;   // integral_tangent scratch (V), reused
 };
 
 // Clamped cubic B-SPLINE, CONTROL-POINT parameterization (docs/bezier-and-moments.md, Part A).
@@ -996,6 +1181,7 @@ class BSpline {
     require_increasing_knots(s_, "BSpline");
   }
   int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;
 
@@ -1349,6 +1535,7 @@ class Tension {
       throw std::invalid_argument("Tension: sigma must be finite and > 0 (use NaturalCubic for σ=0)");
   }
   int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
   double t_end() const { return s_.back(); }
   static constexpr bool is_linear_map = true;
 

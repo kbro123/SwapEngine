@@ -353,10 +353,12 @@ inline Shape mixed_scheme() {
                       std::move(p), false);
 }
 // THE MIXED-CONVEX RUNG (2026-10-12): mixed_scheme with the SOFR long end on MonotoneConvex instead of MonotoneCubic.
-// MonotoneConvex is the first scheme that is value-dependent and NOT piecewise-linear (no constant W per branch cell),
-// so the piecewise-linear tier refuses it and the rows reading past the horizon stream on the AAD block under the
-// horizon partition -- the fallback router_partition_test pins. This rung is where that fallback is MEASURED (a tick,
-// a 25 bp refresh, a Jacobian) and walked (the soak, the walk guard) instead of only asserted.
+// MonotoneConvex is the first scheme that is value-dependent and NOT piecewise-linear (no constant W per branch cell).
+// Until 2026-10-31 the piecewise-linear tier refused it and the rows reading past the horizon streamed on the AAD block;
+// since then the scheme carries its TANGENT and the compiled engine re-takes W analytically at every state, so every
+// row compiles (the opt-out `HybridBundleResidual(p, false)` still takes the horizon partition, which
+// router_partition_test pins). This rung is where the tangent tier is MEASURED (a tick, a 25 bp refresh, a Jacobian)
+// and walked (the soak, the walk guard).
 inline Shape mixed_convex() {
   cal::BundleProblem p;
   const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
@@ -367,9 +369,9 @@ inline Shape mixed_convex() {
   k1.insert(k1.end(), k1b.begin(), k1b.end());
   p.curves = {detail::spec_mixed_convex(k0, 6), detail::spec(k1, 0)};
   return detail::make("mixed_convex",
-                      "averaged + the SOFR long end on MonotoneConvex: not piecewise-linear, so the long rows take "
-                      "the AAD block under the horizon partition (the router's fallback, measured)",
-                      std::move(p), false);
+                      "averaged + the SOFR long end on MonotoneConvex: not piecewise-linear, so since 2026-10-31 the "
+                      "TANGENT tier re-takes its W analytically at every state (every row compiled, the tick allocation-free)",
+                      std::move(p), true);
 }
 inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");

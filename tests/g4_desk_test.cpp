@@ -59,8 +59,9 @@ TEST(G4Desk, StructureIsTheDesk) {
   const Shape sm = swaps::shapes::g4_desk(g4::Opts{});
   for (const auto& c : sm.prob.curves)
     for (const auto& m : c.regions) EXPECT_EQ(m.reg_lambda > 0, m.scheme != cv::Scheme::Flat);
-  EXPECT_FALSE(sm.expect_compiled);
+  EXPECT_TRUE(sm.expect_compiled) << "MonotoneConvex rides the tangent tier: every row compiled (2026-10-31)";
   EXPECT_TRUE(swaps::shapes::g4_desk(raw(cv::Scheme::Hermite)).expect_compiled);
+  EXPECT_FALSE(swaps::shapes::g4_desk(raw(cv::Scheme::MonotoneCubic)).expect_compiled) << "the piecewise-linear tier's rung keeps the ladder's convention";
 }
 
 // Every variant's raw build calibrates from the fixture's cold seed back to its generating state, full rank: fourteen
@@ -102,18 +103,19 @@ TEST(G4Desk, TheCcpBlockIsIdentifiedOnlyThroughTheSlope) {
   EXPECT_TRUE(cal::calibrate(p, s.x0).converged);  // the sloped seed
 }
 
-// The router's partition on the desk: Hermite and MonotoneCubic (the piecewise-linear tier) compile every row; the
-// MonotoneConvex long ends send the rows reading past the RFR horizons to the AAD blocks -- one per closure group
-// (2026-10-19), every one of them within the pooled dual's width although the union of their closures is the whole
-// state (which is what one block over all of them measured: the heap dual at 16 ms a Jacobian).
+// The router's partition on the desk (2026-10-31): Hermite (linear), MonotoneCubic (the piecewise-linear tier) and
+// MonotoneConvex (the tangent tier) ALL compile every row -- no AAD block on the desk at all. The AAD blocks exist only
+// under the opt-out (the horizon partition), where they are one per closure group, every one within the pooled width
+// although the union of their closures is the whole state.
 TEST(G4Desk, ThePartitionIsWhatTheSchemeSays) {
-  for (cv::Scheme sch : {cv::Scheme::Hermite, cv::Scheme::MonotoneCubic}) {
+  for (cv::Scheme sch : {cv::Scheme::Hermite, cv::Scheme::MonotoneCubic, cv::Scheme::MonotoneConvex}) {
     const Shape s = swaps::shapes::g4_desk(raw(sch));
     const cal::HybridBundleResidual h(s.prob);
     EXPECT_EQ(h.n_compiled_rows(), s.prob.n_residuals()) << s.name;
+    EXPECT_EQ(h.n_aad_blocks(), 0) << s.name;
   }
   const Shape s = swaps::shapes::g4_desk(raw(cv::Scheme::MonotoneConvex));
-  const cal::HybridBundleResidual h(s.prob);
+  const cal::HybridBundleResidual h(s.prob, /*pwl=*/false);  // the opt-out: the horizon partition
   EXPECT_LT(h.n_compiled_rows(), s.prob.n_residuals());
   EXPECT_GT(h.n_aad_blocks(), 1);
   EXPECT_TRUE(h.aad_pooled());

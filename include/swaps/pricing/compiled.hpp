@@ -66,6 +66,27 @@ inline Eigen::MatrixXd integral_weight_matrix(const std::vector<curve::CurveModu
   return W;
 }
 
+// THE TANGENT W (2026-10-31): W of ANY tangent-capable curve at state x (curve::scheme_has_tangent on every region),
+// analytically -- the curve's own integral_tangent rows, no AAD. For a linear curve it equals integral_weight_matrix
+// to rounding; for a MonotoneConvex curve it is the W of the state, which the compiled engine re-takes per state.
+inline Eigen::MatrixXd integral_tangent_matrix(const std::vector<curve::CurveModule>& regions,
+                                               const std::vector<double>& times, const Eigen::VectorXd& x) {
+  for (const auto& r : regions)
+    if (!curve::scheme_has_tangent(r.scheme))
+      throw std::invalid_argument("integral_tangent_matrix: a region without a tangent (MonotoneCubic rides the piecewise-linear tier)");
+  auto c = curve::make_modular_curve<double>(regions);
+  const int m = c.n_knots();
+  if (x.size() != m) throw std::invalid_argument("integral_tangent_matrix: state size != curve knot count");
+  c.set_forwards(x);
+  Eigen::MatrixXd W(static_cast<int>(times.size()), m);
+  std::vector<double> row(static_cast<std::size_t>(m));
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    c.integral_tangent(times[i], row.data());
+    for (int k = 0; k < m; ++k) W(static_cast<int>(i), k) = row[static_cast<std::size_t>(k)];
+  }
+  return W;
+}
+
 // EXPERIMENT (exp/piecewise-linear-w): the W of a PIECEWISE-linear curve at state x. Every shipped scheme is
 // piecewise-linear in its knot values (the linear ones trivially; MonotoneCubic because its Hyman filter is
 // built from abs/min/max/sign -- see MonotoneCubic::hyman_filter), so integral(t) = W_P·x exactly throughout

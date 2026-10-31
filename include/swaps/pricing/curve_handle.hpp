@@ -265,6 +265,23 @@ inline bool curves_piecewise_linear(const std::vector<CurveStructure>& curves) {
       if (!curve::scheme_is_piecewise_linear(r.scheme)) return false;
   return true;
 }
+// Can the compiled engine's state-tracking tier take EVERY curve (2026-10-31)? A curve rides it either as a
+// piecewise-linear curve (every region scheme_is_piecewise_linear: MonotoneCubic's cell-constant W, re-taken on a
+// cell change) or as a TANGENT curve (every region scheme_has_tangent: W re-taken analytically at every state --
+// MonotoneConvex). A curve mixing the two kinds of value dependence is neither, and the horizon partition takes it.
+inline bool curve_tier_trackable(const CurveStructure& c) {
+  bool pwl = true, tangent = true;
+  for (const auto& r : c.regions) {
+    pwl = pwl && curve::scheme_is_piecewise_linear(r.scheme);
+    tangent = tangent && curve::scheme_has_tangent(r.scheme);
+  }
+  return pwl || tangent;
+}
+inline bool curves_tier_trackable(const std::vector<CurveStructure>& curves) {
+  for (const auto& c : curves)
+    if (!curve_tier_trackable(c)) return false;
+  return true;
+}
 
 // True iff NO time on this curve set is W-cacheable (every curve's horizon is −inf). Retained for the
 // callers that only need the all-or-nothing answer.

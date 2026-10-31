@@ -34,8 +34,10 @@ Guidance for Claude Code when working in this repository. Read this first, every
 - **Performance is a first-class constraint, protected by gates.** The hot path — the W-cache
   (`DF = exp(-Wx)`, `W` structure-only, built once), frozen-Newton streaming, analytic Jacobian — stays
   LEAN: nothing allocated or branched per tick. Region schemes are LINEAR MAPS so the W-cache / analytic-
-  Jacobian fast path is preserved; a value-dependent scheme (`MonotoneCubic`) is `is_linear_map=false` and
-  routes to the AAD tier EXPLICITLY. Any generic abstraction must not bloat the differentiated hot loop.
+  Jacobian fast path is preserved; a value-dependent scheme is `is_linear_map=false` and the compiled engine
+  re-takes its W at the state EXPLICITLY (the cell-constant W of `MonotoneCubic`, the closed-form TANGENT of
+  `MonotoneConvex`, 2026-10-31); the AAD block is the generic fallback for rows no batch expresses. Any generic
+  abstraction must not bloat the differentiated hot loop.
   `tools/verify.sh` + per-fingerprint baselines enforce the perf gates (§3).
 
 ## 1. What this project is
@@ -196,23 +198,30 @@ silent NaN; caught at construction).
   `[0, 2·min(fdᵢ, fdᵢ₊₁)]`) is applied MIRRORED when both neighbours are non-positive, so negative rates keep
   the paper's guarantee. Pinned (`tests/monotone_convex_test.cpp`, no QuantLib oracle exists for it): every
   interval integrates to its discrete forward exactly, continuity, sign preservation, hand computation of
-  each shape, AAD vs FD, and the ROUTING: `scheme_is_piecewise_linear` is false, so the piecewise-linear tier
-  REFUSES the curve (`CompiledCurveSet::enable_pwl` throws, the router never offers it) and the rows reading it
-  ride the AAD block under the horizon partition — exactly the fallback `router_partition_test` pins. Both
-  `scheme_is_linear` and `scheme_is_piecewise_linear` are INCLUSION lists now: a new scheme is non-linear and
-  not piecewise-linear until named. **In the shape ladder since 2026-10-12 as the `mixed_convex` rung** (the mixed-scheme bundle
-  with its SOFR long end on MonotoneConvex): gated tick / 25 bp refresh / Jacobian metrics, allocation pins (its
-  long rows on the AAD block allocate ~12 per tick, like mixed_scheme's did before the tier) and soak pins -- 0
-  failed ticks on every walk at ~110..150 us/tick, including the unsmoothed factor walk where MonotoneCubic's
-  Hyman branches fail 49 of 400: no branch kinks to park on.
+  each shape, AAD vs FD, and the ROUTING. `scheme_is_piecewise_linear` is false (no cell-constant W), but
+  **since 2026-10-31 the scheme carries its TANGENT in closed form** (`MonotoneConvex::integral_tangent`: the
+  four shapes with η and A differentiated through, the amelioration clamps, the join; ASSUMPTIONS K52), so the
+  compiled engine's state-tracking tier takes the curve as a TANGENT curve: W re-taken analytically at every
+  state (`CompiledCurveSet::tangent_take`), the log-discount corrected to the exact integral, every row on the
+  W-cache, the tick allocation-free, NO AAD. The AAD block remains the opt-out (`HybridBundleResidual(p, false)`,
+  the horizon partition `router_partition_test` pins) and the fallback for a curve that is neither piecewise-linear
+  nor tangent-capable (MonotoneCubic and MonotoneConvex regions together). `scheme_is_linear`,
+  `scheme_is_piecewise_linear` and `scheme_has_tangent` are INCLUSION lists: a new scheme is non-linear, not
+  piecewise-linear and without a tangent until named. **In the shape ladder since 2026-10-12 as the `mixed_convex` rung** (the mixed-scheme bundle
+  with its SOFR long end on MonotoneConvex): gated tick / 25 bp refresh / Jacobian metrics, allocation pins (0 per
+  tick on the tangent tier since 2026-10-31; before that its long rows on the AAD block allocated ~12 per tick)
+  and soak pins -- 0 failed ticks on every walk, including the unsmoothed factor walk where MonotoneCubic's Hyman
+  branches fail 49 of 400: no branch kinks to park on.
 - **THE GUARD (detect non-linear → route to AAD, never the W-cache):** `is_linear_map` is now enforced,
   not just documented. (a) Compile-time: `integral_weight_matrix` (`pricing/compiled.hpp`) `static_assert`s
   its curve `is_linear_map`, so a value-dependent scheme can NEVER silently reach the W-cache — it is a
   compile error. (b) Type-routing: `residual_engine_t<Problem>` maps only `CalibrationProblem`/`BundleProblem`
   (both hard-wired linear) to the compiled engine; every other problem (incl. a non-linear-curve problem)
   falls to `AadResidualEngine` by default — locked by a `static_assert` in `monotone_cubic_test.cpp`.
-  (c) Runtime: `ModularCurve::is_linear_map()` returns false when it contains the `Scheme::MonotoneCubic`
-  region. Any FUTURE non-linear scheme (monotone-convex / Hyman-on-Hermite) inherits this guard for free.
+  (c) Runtime: `ModularCurve::is_linear_map()` returns false when it contains a value-dependent region. Any FUTURE
+  non-linear scheme inherits this guard for free -- and reaches the compiled engine only by naming itself in
+  `scheme_is_piecewise_linear` (a cell-constant W) or `scheme_has_tangent` (its own `integral_tangent`), each pinned
+  against AAD; until then its rows take the AAD block.
 - Locality is a real design axis even among linear schemes: natural cubic is C² but *global* (dense
   `W`, non-local deltas); a local C¹ `Hermite`/`B-spline` back end gives local deltas **without**
   leaving the fast path. Prefer it when hedging stability matters.
@@ -335,7 +344,12 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   trust region was measured parking at MonotoneCubic's Hyman kinks, which is why the flow is lmder's. THE DF TABLE
   (2026-10-25, K51): an AAD block now caches a value-dependent curve's discount factors per distinct query time per eval
   (the linear curves had the affine map; the MonotoneConvex curves were re-evaluated per coupon), the residual pass on
-  the 156 AAD rows 813 → 249 µs and the streamed tick 3.4 → 1.1 ms. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
+  the 156 AAD rows 813 → 249 µs and the streamed tick 3.4 → 1.1 ms. THE TANGENT TIER (2026-10-31, K52): MonotoneConvex
+  carries its tangent in closed form, so the compiled engine re-takes W analytically per state and NO row of the desk
+  is on AAD -- the Jacobian 3.7 → 1.12 ms (the linear desk's own 1.13), the residual pass 249 → 16 µs, the streamed
+  tick 1.1 ms → 419 µs (the W re-take is lazy: a tick's Newton steps pay only the exact integrals), the cold solve
+  78 → 44 ms and the warm re-solve after 25 bp 65 → 40 ms -- under the 50 ms target on the value-dependent desk; the
+  ladder's mixed_convex rung streams at 16 µs a tick where the AAD block gave ~110. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
   columns vanish and the joint LM wanders from the ladder's flat seed; the fixture's cold seed carries a 2 bp/knot slope.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)

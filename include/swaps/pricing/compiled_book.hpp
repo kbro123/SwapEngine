@@ -84,13 +84,21 @@ class CompiledCurveSet {
   // finalize() when the pattern changes. Call before finalize(). Fully linear curves are unaffected.
   // The piecewise-linear tier: REFUSED (throws) when a value-dependent region is not piecewise-linear in its knots
   // (curve::scheme_is_piecewise_linear): W taken at a state would be silently wrong between syncs there.
+  // Since 2026-10-31 the tier also takes a TANGENT curve: every region carries its integral's tangent
+  // (curve::scheme_has_tangent -- the linear schemes and MonotoneConvex), so W is re-taken analytically at every
+  // state (tangent_sync) and the log-discount is corrected to the exact integral (df_into). A curve that is neither
+  // piecewise-linear nor tangent-capable (MonotoneCubic and MonotoneConvex regions together) is refused as before.
   void enable_pwl() {
-    bool ok = true;
-    for (const auto& c : specs_)
-      for (const auto& r : c.regions) ok = ok && curve::scheme_is_piecewise_linear(r.scheme);
-    if (!ok)
-      throw std::invalid_argument("CompiledCurveSet: the piecewise-linear W tier cannot track a region that is not "
-                                  "piecewise-linear in its knots (e.g. MonotoneConvex); its rows belong on the AAD tier");
+    for (const auto& c : specs_) {
+      bool pwl = true, tangent = true;
+      for (const auto& r : c.regions) {
+        pwl = pwl && curve::scheme_is_piecewise_linear(r.scheme);
+        tangent = tangent && curve::scheme_has_tangent(r.scheme);
+      }
+      if (!(pwl || tangent))  // the same rule as pricing::curve_tier_trackable (curve_handle.hpp)
+        throw std::invalid_argument("CompiledCurveSet: the state-tracking W tier takes a piecewise-linear curve (MonotoneCubic) "
+                                    "or a tangent curve (MonotoneConvex), not a curve mixing the two; its rows belong on the AAD tier");
+    }
     pwl_ = true;
   }
   bool pwl() const { return pwl_; }
@@ -99,6 +107,15 @@ class CompiledCurveSet {
       if (!curve::scheme_is_linear(r.scheme)) return true;
     return false;
   }
+  // A TANGENT curve: value-dependent, every region tangent-capable (its W is the tangent at the state).
+  bool tangent_curve(int c) const {
+    if (!value_dependent(c)) return false;
+    for (const auto& r : specs_[c].regions)
+      if (!curve::scheme_has_tangent(r.scheme)) return false;
+    return true;
+  }
+  int n_tangent_curves() const { return static_cast<int>(tg_.size()); }
+  int tangent_syncs() const { return tangent_syncs_; }
   // The state a value-dependent curve's W is taken at (its interp-knot segment of the stacked x).
   void set_eval_state(const Eigen::VectorXd& x) {
     for (int c = 0; c < static_cast<int>(specs_.size()); ++c)
@@ -122,6 +139,27 @@ class CompiledCurveSet {
     Eigen::MatrixXd L;  // rows x ni: d integral / d x_c holding the filtered tangents fixed
     Eigen::MatrixXd D;  // rows x ni: the last applied delta (scratch, sized once; the owner mirrors it into W^T)
   };
+  // The block location of global row g for curve c's interp columns (the row's curve d has c in its ancestry).
+  // False when the layout is not understood (the caller then stays on the AAD re-take).
+  bool locate_row(int g, int c, int ni, PwlRow& r) const {
+    const int d = pts_[g].first;
+    r = PwlRow{g, d, -1, -1, -1};
+    const int off = knot_offset_[c];
+    for (int k = 0; k < static_cast<int>(blk_rows_[d].size()); ++k)
+      if (blk_rows_[d][k] == g) { r.blk_row = k; break; }
+    for (int b2 = 0; b2 < static_cast<int>(blk_[d].size()); ++b2)
+      if (blk_[d][b2].off <= off && off + ni <= blk_[d][b2].off + blk_[d][b2].nk) {
+        r.blk = b2;
+        r.blk_col = off - blk_[d][b2].off;
+        break;
+      }
+    return r.blk >= 0 && r.blk_row >= 0;
+  }
+  bool in_ancestry(int d, int c) const {
+    for (int a = d; a >= 0; a = specs_[a].base)
+      if (a == c) return true;
+    return false;
+  }
   // Structure-only; call after finalize(). Returns the pwl index, or -1 if c is not analytic-capable.
   int pwl_prepare(int c) {
     if (!pwl_ || !value_dependent(c)) return -1;
@@ -144,24 +182,13 @@ class CompiledCurveSet {
     cd.set_forwards(xd);
     std::vector<Eigen::RowVectorXd> Brows, Lrows;
     for (int g = 0; g < static_cast<int>(pts_.size()); ++g) {
-      const int d = pts_[g].first;
-      bool anc = false;
-      for (int a = d; a >= 0 && !anc; a = specs_[a].base) anc = (a == c);
-      if (!anc) continue;
+      if (!in_ancestry(pts_[g].first, c)) continue;
       const D I = cd.integral(pts_[g].second);
       if (I.derivatives().size() != w) continue;
       const Eigen::RowVectorXd b = I.derivatives().tail(N).transpose();
       if (b.cwiseAbs().maxCoeff() == 0.0) continue;  // before the region: pattern-independent row
-      PwlRow r{g, d, -1, -1, -1};
-      for (int k = 0; k < static_cast<int>(blk_rows_[d].size()); ++k)
-        if (blk_rows_[d][k] == g) { r.blk_row = k; break; }
-      for (int b2 = 0; b2 < static_cast<int>(blk_[d].size()); ++b2)
-        if (blk_[d][b2].off <= P.off && P.off + ni <= blk_[d][b2].off + blk_[d][b2].nk) {
-          r.blk = b2;
-          r.blk_col = P.off - blk_[d][b2].off;
-          break;
-        }
-      if (r.blk < 0 || r.blk_row < 0) return -1;  // layout not understood: stay on the AAD re-take
+      PwlRow r;
+      if (!locate_row(g, c, ni, r)) return -1;  // layout not understood: stay on the AAD re-take
       P.rows.push_back(r);
       Brows.push_back(b);
       Lrows.push_back(I.derivatives().head(ni).transpose());
@@ -199,6 +226,95 @@ class CompiledCurveSet {
   }
   const PwlCurve& pwl_curve(int pc) const { return pwlc_[pc]; }
 
+  // ---- THE TANGENT CURVES (2026-10-31) ----------------------------------------------------------------------
+  // One per tangent curve c (tangent_curve): the rows of every curve whose ancestry includes c (a PwlCurve, for its
+  // row bookkeeping and the delta machinery above), a reusable double curve, the state its rows' W was last taken
+  // at, and per row the CORRECTION corr = I_c(t; x) - W_c(t; x) . x_c that turns the installed linearisation into
+  // the exact log-discount (df_into adds it). Every x change re-takes the rows' W (the curve's closed-form
+  // integral_tangent per registered time) as a delta into W_ and the ancestry blocks, and the correction with it.
+  struct TangentCurve {
+    int pc = -1;                       // its PwlCurve (rows, D, off, ni)
+    curve::ModularCurve<double> crv;   // c's own regions, rebuilt in place per state
+    Eigen::VectorXd xc;                // the state the rows' W is taken at (empty: never)
+    Eigen::VectorXd xs;                // the state the correction is taken at (the last ensure_corr / take)
+    Eigen::VectorXd corr;              // per row: exact integral at xs minus the installed W's linearisation at xs
+    std::vector<double> row;           // integral_tangent scratch (ni)
+  };
+  void tangent_init() {
+    tg_.clear();
+    if (!pwl_) return;
+    for (int c = 0; c < static_cast<int>(specs_.size()); ++c) {
+      if (!tangent_curve(c)) continue;
+      const int ni = specs_[c].n_interp_knots();
+      PwlCurve P;
+      P.c = c; P.off = knot_offset_[c]; P.ni = ni; P.N = 0;
+      for (int g = 0; g < static_cast<int>(pts_.size()); ++g) {
+        if (!in_ancestry(pts_[g].first, c)) continue;
+        PwlRow r;
+        if (!locate_row(g, c, ni, r)) throw std::logic_error("CompiledCurveSet: a tangent curve's row layout was not understood");
+        P.rows.push_back(r);
+      }
+      P.D.setZero(static_cast<int>(P.rows.size()), ni);
+      pwlc_.push_back(std::move(P));
+      TangentCurve t;
+      t.pc = static_cast<int>(pwlc_.size()) - 1;
+      t.crv = curve::make_modular_curve<double>(specs_[c].modules());
+      t.crv.set_forwards(Eigen::VectorXd::Constant(ni, 0.03));  // sizes the scratch; the first sync re-takes
+      t.corr.setZero(static_cast<int>(pwlc_.back().rows.size()));
+      t.row.assign(static_cast<std::size_t>(ni), 0.0);
+      tg_.push_back(std::move(t));
+    }
+    corr_x_.resize(0);
+  }
+  // Re-take tangent curve t's rows at x: with `delta`, the new tangent rows replace the installed ones (W_ and the
+  // ancestry blocks, through the PwlCurve's D); the correction is taken against whatever W is installed after.
+  // `delta`: re-take the rows' W as the tangent at x (W_ and the ancestry blocks through the PwlCurve's D; the owner
+  // mirrors it) and record x as the W state; always: the correction against whatever W is installed after.
+  void tangent_take(TangentCurve& t, const Eigen::VectorXd& x, bool delta) {
+    PwlCurve& P = pwlc_[t.pc];
+    t.xs = x.segment(P.off, P.ni);
+    t.crv.set_forwards(t.xs);
+    if (delta) {
+      for (int r = 0; r < static_cast<int>(P.rows.size()); ++r) {
+        const int g = P.rows[r].g;
+        t.crv.integral_tangent(pts_[g].second, t.row.data());
+        for (int k = 0; k < P.ni; ++k) P.D(r, k) = t.row[static_cast<std::size_t>(k)] - W_(g, P.off + k);
+      }
+      apply_delta(P);
+      t.xc = t.xs;
+    }
+    for (int r = 0; r < static_cast<int>(P.rows.size()); ++r) {
+      const int g = P.rows[r].g;
+      const double time = pts_[g].second;
+      const double lin = W_.row(g).segment(P.off, P.ni).dot(t.xs);
+      t.corr[r] = (time <= 0.0 ? 0.0 : t.crv.integral(time)) - lin;
+    }
+  }
+  // W as the tangent at x on every tangent curve whose installed W is at another state (a Jacobian or directional
+  // request); the owner mirrors each curve's delta. Returns true iff W changed.
+  template <class TangentSet>
+  bool tangent_sync_W(const Eigen::VectorXd& x, TangentSet&& tangent_set) {
+    bool changed = false;
+    for (TangentCurve& t : tg_) {
+      const PwlCurve& P = pwlc_[t.pc];
+      if (t.xc.size() == P.ni && (t.xc.array() == x.segment(P.off, P.ni).array()).all()) continue;
+      tangent_take(t, x, /*delta=*/true);
+      tangent_set(t.pc);
+      changed = true;
+    }
+    if (changed) { corr_x_ = x; ++tangent_syncs_; }
+    return changed;
+  }
+  // The corrections at x against the installed W, for a DF request that did not come through a sync (a book
+  // reprice): exact for any installed W, since corr is taken against it.
+  void ensure_corr(const Eigen::VectorXd& x) const {
+    if (tg_.empty()) return;
+    if (corr_x_.size() == x.size() && (corr_x_.array() == x.array()).all()) return;
+    auto& self = const_cast<CompiledCurveSet&>(*this);
+    for (TangentCurve& t : self.tg_) self.tangent_take(t, x, /*delta=*/false);
+    self.corr_x_ = x;
+  }
+
   // ---- THE PIECEWISE-LINEAR TRACKER (moved here from the calibration router, 2026-09-22) -------------------
   // One per value-dependent curve. Phase 2 of the tier: the region's filter inputs z are LINEAR in x, so G =
   // d(prefilter)/dx is taken ONCE (one AAD pass) and every sync reads the branch pattern off z = G·x with the
@@ -218,11 +334,12 @@ class CompiledCurveSet {
     std::vector<int> nodes;
     bool dirty = false;
   };
-  // Build the trackers (after finalize, on a pwl-enabled set).
+  // Build the trackers (after finalize, on a pwl-enabled set): the piecewise-linear trackers, then the tangent curves.
   void pwl_init() {
     trk_.clear();
+    tangent_init();
     for (int k = 0; k < static_cast<int>(specs_.size()); ++k) {
-      if (!value_dependent(k)) continue;
+      if (!value_dependent(k) || tangent_curve(k)) continue;
       const int ni = specs_[k].n_interp_knots();
       PwlTracker t;
       t.c = k; t.off = knot_offset_[k]; t.ni = ni;
@@ -259,6 +376,10 @@ class CompiledCurveSet {
   // Returns true iff W changed. The first sync is always a full re-take.
   template <class RankUpdate, class Set, class FullRetake>
   bool pwl_sync(const Eigen::VectorXd& x, RankUpdate&& rank_update, Set&& set, FullRetake&& full_retake) {
+    // The tangent curves: a state change needs only the exact log-discount here (ensure_corr); the rows' W is
+    // re-taken LAZILY, when a Jacobian or a directional asks for it (tangent_sync_W) -- a streamed tick's Newton
+    // steps never do, so they pay the exact integrals and nothing else.
+    ensure_corr(x);
     bool changed = false, analytic = pwl_synced_;
     for (auto& t : trk_) {
       t.z.noalias() = t.G * x.segment(t.off, t.ni);  // the one-pass linear map to the filter inputs
@@ -292,7 +413,11 @@ class CompiledCurveSet {
       // curve is then SET to its recorded pattern's W (L + B·M), which stays exact at degenerate states.
       bool need_aad = false;
       for (const auto& t : trk_) need_aad = need_aad || t.pc < 0;
-      if (need_aad) full_retake();
+      if (need_aad) {
+        full_retake();  // W rebuilt from scratch: a tangent curve's rows are now its tangent at x (logdf_weight)
+        for (TangentCurve& t : tg_) { tangent_take(t, x, /*delta=*/false); t.xc = t.xs; }
+        corr_x_ = x;
+      }
       for (auto& t : trk_) {
         t.cached = t.cur;
         if (t.pc < 0) continue;
@@ -407,6 +532,13 @@ class CompiledCurveSet {
         for (int k = 0; k < m; ++k) o[r[k]] = a[k];
       }
     }
+    if (!tg_.empty()) {  // the exact log-discount on a tangent curve: the linearisation plus its correction
+      ensure_corr(x);
+      for (const TangentCurve& t : tg_) {
+        const PwlCurve& P = pwlc_[t.pc];
+        for (int r = 0; r < static_cast<int>(P.rows.size()); ++r) out[P.rows[r].g] += t.corr[r];
+      }
+    }
     out = (-out.array()).exp();
   }
   // BATCHED DF (hot-path design R12): a MATRIX of curve-states X (n_knots x n_states) -> DF grid
@@ -415,6 +547,7 @@ class CompiledCurveSet {
   // equals df_into(X.col(j), .) to rounding (dense GEMM vs the block-sparse vector path). Alloc-free after
   // the first sizing of `out`.
   void df_into(const Eigen::MatrixXd& X, Eigen::MatrixXd& out) const {
+    refuse_grid_on_tangent();
     out.noalias() = W_ * X;
     out = (-out.array()).exp();
   }
@@ -427,8 +560,14 @@ class CompiledCurveSet {
   // (X.middleCols(j0, bw)) can be discounted without copying — the batched exposure loop tiles the states
   // so the DF/coupon working set stays cache-resident.
   void df_into(const Eigen::Ref<const Eigen::MatrixXd>& X, RowMatrixXd& out) const {
+    refuse_grid_on_tangent();
     out.noalias() = W_ * X;
     out = (-out.array()).exp();
+  }
+  void refuse_grid_on_tangent() const {
+    if (!tg_.empty())
+      throw std::logic_error("CompiledCurveSet: a batched DF grid is not available on a tangent-tracked curve set (a MonotoneConvex "
+                             "curve): W is the tangent at one state and the log-discount needs the exact integral per state");
   }
   const Eigen::MatrixXd& W() const { return W_; }
   // FORWARD weight rows of curve c at `times` (forward_c(t) = row·x): own regions + base ancestry + a 0/1
@@ -478,9 +617,10 @@ class CompiledCurveSet {
   Eigen::MatrixXd logdf_weight(int c, const std::vector<double>& times) const {
     const int ni = specs_[c].n_interp_knots();
     Eigen::MatrixXd W = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
-    if (pwl_ && value_dependent(c)) {  // EXPERIMENT: W of the state's branch-pattern cell
+    if (pwl_ && value_dependent(c)) {  // the state's W: the branch-pattern cell's (piecewise-linear) or the tangent's
       const Eigen::VectorXd xs = eval_x_[c].size() == ni ? eval_x_[c] : Eigen::VectorXd::Constant(ni, 0.03);
-      W.middleCols(knot_offset_[c], ni) = integral_weight_matrix_at(specs_[c].modules(), times, xs);
+      W.middleCols(knot_offset_[c], ni) = tangent_curve(c) ? integral_tangent_matrix(specs_[c].modules(), times, xs)
+                                                           : integral_weight_matrix_at(specs_[c].modules(), times, xs);
     } else {
       W.middleCols(knot_offset_[c], ni) =
           integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
@@ -501,6 +641,9 @@ class CompiledCurveSet {
   std::vector<Eigen::VectorXd> eval_x_;  // EXPERIMENT: per-curve W evaluation state (empty = default seed)
   std::vector<PwlCurve> pwlc_;           // EXPERIMENT: analytic re-take structure per value-dependent curve
   std::vector<PwlTracker> trk_;          // the tier's trackers (pwl_init)
+  std::vector<TangentCurve> tg_;         // the tangent curves (tangent_init)
+  mutable Eigen::VectorXd corr_x_;       // the state the corrections are taken at
+  int tangent_syncs_ = 0;
   bool pwl_synced_ = false, pwl_stats_ = false;
   int pwl_rebuilds_ = 0, pwl_analytic_ = 0;  // syncs that changed W; of which analytic rank-k updates
   std::set<std::vector<unsigned char>> pwl_seen_;  // opt-in diagnostics: distinct cells visited

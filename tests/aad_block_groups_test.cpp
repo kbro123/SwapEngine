@@ -2,7 +2,8 @@
 // ONE AAD BLOCK PER CLOSURE GROUP (2026-10-19). HybridBundleResidual used to put every non-cacheable row in ONE AadBlock,
 // whose touched width is the union of its rows' curve closures: on the G4 desk that is the whole state (200 knots against
 // kPooledMaxW 64), so the block ran on the heap dual at 16 ms a Jacobian. Rows are now grouped by closure under the pooled
-// width (first fit in row order), each block building and updating only its closure's curves. Pinned here: the grouped
+// width (first fit in row order), each block building and updating only its closure's curves. Since the tangent tier
+// (2026-10-31) compiles MonotoneConvex rows by default, the blocks are reached through the opt-out routing here. Pinned: the grouped
 // Jacobian is the SAME doubles as one block over the same rows (bit for bit; residuals to an ulp through the DF cache), they match the full AAD
 // Jacobian, every block on the desk is pooled, and a rung whose closure fits stays one block.
 #include <gtest/gtest.h>
@@ -50,7 +51,7 @@ TEST(AadBlockGroups, GroupedBlocksAreOneBlocksDoublesBitForBit) {
     o.smoothing = false;
     const Shape s = swaps::shapes::g4_desk(o);
     const auto& p = s.prob;
-    const cal::HybridBundleResidual h(p);
+    const cal::HybridBundleResidual h(p, /*pwl=*/false);  // the horizon partition: the tangent tier (2026-10-31) compiles these rows by default
     ASSERT_GT(h.n_aad_blocks(), 1) << s.name;
     EXPECT_TRUE(h.aad_pooled()) << s.name << ": a block fell off the pooled dual at width " << h.aad_width();
     EXPECT_LE(h.aad_width(), swaps::ad::kPooledMaxW) << s.name;
@@ -86,7 +87,7 @@ TEST(AadBlockGroups, GroupedBlocksAreOneBlocksDoublesBitForBit) {
 // A rung whose non-cacheable rows share one closure that fits the pooled width stays ONE block, as before.
 TEST(AadBlockGroups, ARungWhoseClosureFitsStaysOneBlock) {
   for (const Shape& s : {swaps::shapes::mixed_convex(), swaps::shapes::desk_mixed(), swaps::shapes::fx_xccy()}) {
-    const cal::HybridBundleResidual h(s.prob);
+    const cal::HybridBundleResidual h(s.prob, /*pwl=*/false);  // the horizon partition
     if (h.n_aad_blocks() == 0) continue;  // fx_xccy compiles whole
     EXPECT_EQ(h.n_aad_blocks(), 1) << s.name;
     EXPECT_TRUE(h.aad_pooled()) << s.name;
@@ -107,7 +108,7 @@ TEST(AadBlockGroups, ValueDependentDfTableIsTheGenericKernelsDoubles) {
     o.smoothing = false;
     const Shape s = swaps::shapes::g4_desk(o);
     const auto& p = s.prob;
-    const cal::HybridBundleResidual h(p);
+    const cal::HybridBundleResidual h(p, /*pwl=*/false);  // the horizon partition (see above)
     ASSERT_GT(h.n_aad_blocks(), 1) << s.name;
     std::vector<bool> linear_curve(static_cast<std::size_t>(p.n_curves()));
     for (int c = 0; c < p.n_curves(); ++c) linear_curve[static_cast<std::size_t>(c)] = cv::make_modular_curve<double>(p.curves[static_cast<std::size_t>(c)].modules()).is_linear_map();

@@ -254,7 +254,7 @@ TEST(MonotoneConvex, AadDerivativeMatchesCentralDifferenceInEveryShape) {
   for (int shape : {1, 2, 3, 4}) EXPECT_TRUE(seen.count(shape)) << "shape " << shape << " not exercised";
 }
 
-// ---- (7) routing: value-dependent, NOT piecewise-linear, tier refused, AAD rows ------------------------------------
+// ---- (7) routing: value-dependent, NOT piecewise-linear, the TANGENT tier (2026-10-31; the AAD block is the opt-out) ----
 namespace {
 cal::Instrument par_swap(double T, int curve) {
   cal::Instrument ins;
@@ -288,27 +288,48 @@ TEST(MonotoneConvex, SchemeIsValueDependentAndNotPiecewiseLinear) {
   EXPECT_FALSE(cv::make_modular_curve<double>(p.curves[0].modules()).is_linear_map());
   EXPECT_FALSE(px::curves_piecewise_linear(p.curves));
   EXPECT_DOUBLE_EQ(px::curve_linear_horizon(p.curves, 0), 0.5) << "the flat front is the linear prefix";
-  // The tier itself refuses the curve set (never a silently frozen W).
+  // Not piecewise-linear, so the cell-constant W is refused (never a silently frozen W) -- but the scheme carries its
+  // TANGENT (2026-10-31), so the tier takes the curve as a tangent curve, W re-taken analytically at every state.
+  EXPECT_THROW(px::integral_weight_matrix_at(p.curves[0].modules(), {3.0}, Eigen::VectorXd::Constant(8, 0.03)), std::invalid_argument);
+  EXPECT_TRUE(cv::scheme_has_tangent(cv::Scheme::MonotoneConvex));
+  EXPECT_FALSE(cv::scheme_has_tangent(cv::Scheme::MonotoneCubic)) << "the piecewise-linear tier's scheme";
+  EXPECT_TRUE(px::curves_tier_trackable(p.curves));
   px::CompiledCurveSet cs;
   cs.init(p.curves);
-  EXPECT_THROW(cs.enable_pwl(), std::invalid_argument);
-  EXPECT_THROW(px::integral_weight_matrix_at(p.curves[0].modules(), {3.0}, Eigen::VectorXd::Constant(8, 0.03)), std::invalid_argument);
+  EXPECT_NO_THROW(cs.enable_pwl());
+  EXPECT_TRUE(cs.tangent_curve(0));
+  // A curve mixing the two kinds of value dependence is neither piecewise-linear nor tangent-capable: refused.
+  cal::BundleProblem mixed = convex_bundle();
+  mixed.curves[0].regions.push_back(cv::CurveModule{{12.0, 15.0}, cv::Scheme::MonotoneCubic});
+  EXPECT_FALSE(px::curves_tier_trackable(mixed.curves));
+  px::CompiledCurveSet cs2;
+  cs2.init(mixed.curves);
+  EXPECT_THROW(cs2.enable_pwl(), std::invalid_argument);
 }
 
-TEST(MonotoneConvex, RouterSendsRowsReadingTheRegionToAadAndMatchesTheKernel) {
+TEST(MonotoneConvex, RouterKeepsRowsReadingTheRegionOnTheTangentTierAndMatchesTheKernel) {
   cal::BundleProblem p = convex_bundle();
   Eigen::VectorXd x(8);
   x << 0.030, 0.031, 0.033, 0.036, 0.038, 0.040, 0.041, 0.042;  // front levels, then the back's DISCRETE forwards
   const auto C = cal::build_bundle_curves<double>(p.curves, [&](int, int i) { return x[i]; });
   const auto curve_of = [&C](int i) -> const cal::CurveHandle<double>& { return *C[i]; };
   for (auto& ins : p.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of) + 2e-4;
-  const cal::HybridBundleResidual eng(p);  // default routing
-  EXPECT_FALSE(eng.pwl_active()) << "the piecewise-linear tier must be refused, not engaged";
-  for (int r = 0; r < p.n_residuals(); ++r) EXPECT_EQ(eng.compiled_row(r), -1) << "row " << r << " reads past the 0.5y horizon";
-  EXPECT_TRUE(eng.aad_pooled());
-  EXPECT_LT((eng.residuals(x) - p.residuals<double>(x)).cwiseAbs().maxCoeff(), 1e-14);
-  const Eigen::MatrixXd Jh = eng.jacobian(x), Ja = cal::aad_jacobian(p, x);
-  EXPECT_LT((Jh - Ja).cwiseAbs().maxCoeff(), 1e-12 * Ja.cwiseAbs().maxCoeff());
+  const cal::HybridBundleResidual eng(p);  // default routing: the tangent tier (2026-10-31), every row compiled
+  EXPECT_TRUE(eng.pwl_active()) << "the state-tracking tier takes a tangent curve";
+  for (int r = 0; r < p.n_residuals(); ++r) EXPECT_GE(eng.compiled_row(r), 0) << "row " << r << " rides the W-cache with the tangent W";
+  EXPECT_EQ(eng.n_aad_blocks(), 0);
+  // exact in value (the log-discount is the exact integral, not the linearisation) and analytic in derivative, at
+  // this state and after a move (the tangent re-taken)
+  for (const Eigen::VectorXd& xs : {Eigen::VectorXd(x), Eigen::VectorXd(x.array() + 0.004), Eigen::VectorXd(x.array() * 0.7)}) {
+    EXPECT_LT((eng.residuals(xs) - p.residuals<double>(xs)).cwiseAbs().maxCoeff(), 1e-14);
+    const Eigen::MatrixXd Jh = eng.jacobian(xs), Ja = cal::aad_jacobian(p, xs);
+    EXPECT_LT((Jh - Ja).cwiseAbs().maxCoeff(), 1e-12 * Ja.cwiseAbs().maxCoeff());
+  }
+  // The horizon partition is still the opt-out (an AAD block over the rows past the 0.5y horizon), and agrees.
+  const cal::HybridBundleResidual aad(p, /*pwl=*/false);
+  EXPECT_FALSE(aad.pwl_active());
+  EXPECT_EQ(aad.n_aad_blocks(), 1);
+  EXPECT_LT((aad.jacobian(x) - eng.jacobian(x)).cwiseAbs().maxCoeff(), 1e-12 * eng.jacobian(x).cwiseAbs().maxCoeff());
   // The streaming forms exist on this engine too (the AAD block's _vs forms).
   Eigen::VectorXd q = p.market();
   for (int i = 0; i < q.size(); ++i) q[i] += 1e-4;

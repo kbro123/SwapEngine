@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -24,6 +25,7 @@
 
 #include <Eigen/Core>
 
+#include "swaps/ad/dual.hpp"
 #include "swaps/curve/regions.hpp"
 
 namespace swaps::curve {
@@ -56,17 +58,118 @@ struct RegionIface {
   // The piecewise-linear capability (2026-09-22): the region's own cell description. 0 / no-op when linear.
   virtual int node_pattern_bytes() const { return 0; }
   virtual void node_formula(int, const unsigned char*, double*) const {}
+  // THE TANGENT (2026-10-31): the gradient of this region's integral at t, and of its outgoing forward, with respect
+  // to its OWN values and the INCOMING join forward, at the state of the last build (the incoming integral enters
+  // with coefficient 1 everywhere and no region reads the incoming slope, so the chain needs nothing else). A linear
+  // region's is constant (taken once by one dual pass over the region alone: LinearTangentTwin); a value-dependent
+  // region supplies its own closed form (MonotoneConvex). `has_tangent` false (MonotoneCubic) keeps the curve off
+  // the tangent tier. `own` has n_values() entries.
+  virtual bool has_tangent() const { return false; }
+  virtual void integral_tangent(double, double*, double&) const { throw std::logic_error("region: no tangent"); }
+  virtual void out_value_tangent(double*, double&) const { throw std::logic_error("region: no tangent"); }
+};
+
+// The constant tangent of a LINEAR region policy: one dual pass over the region alone, seeded on its own values and
+// the incoming forward, taken once (the gradient of a linear map does not depend on the state) at the first request
+// after the region knows whether it leads or follows. Setup only, and the same single AAD pass integral_weight_matrix
+// makes for the whole curve -- here per region, so the chain can compose it with a value-dependent neighbour.
+template <class PolicyDual>
+struct LinearTangentTwin {
+  std::unique_ptr<PolicyDual> twin;
+  int n = 0;
+  // The rows are CONSTANT, so each time's row is taken once and served from here afterwards: a dual evaluation
+  // materialises a heap gradient, and the compiled engine's tangent sync asks the same registered times every
+  // state -- the cache keeps the per-state path allocation-free after warm-up (the T4 invariant).
+  struct Row { std::vector<double> own; double d_inv = 0.0; };
+  mutable std::map<double, Row> rows;
+  mutable std::unique_ptr<Row> out_row;
+  template <class Make>
+  void ensure(Make make, int n_values, double in_time, bool has_pred) {
+    if (twin) return;
+    n = n_values;
+    twin = make();
+    std::vector<ad::Dual> xd(static_cast<std::size_t>(n));
+    for (int k = 0; k < n; ++k) xd[static_cast<std::size_t>(k)] = ad::Dual(0.03 + 0.002 * k, n + 1, k);
+    // WIDTH-SIZED zeros for the boundary scalars the seed does not differentiate (the engine's idiom): an EMPTY
+    // derivative vector is coherent with a sized one only when Eigen sees a plain vector on the other side; a
+    // region's first-segment integral sums two such empties before adding a sized term, and set_forwards() only
+    // avoids that because out() happens to size the incoming integral first. Seeded sized, the twin cannot hit it.
+    Boundary<ad::Dual> in;
+    in.time = in_time;
+    in.value = ad::Dual(0.03, n + 1, n);
+    in.slope = ad::Dual(0.0);
+    in.slope.derivatives().setZero(n + 1);
+    in.integral = ad::Dual(0.0);
+    in.integral.derivatives().setZero(n + 1);
+    in.has_predecessor = has_pred;
+    twin->build(xd.data(), 0, n, in);
+    (void)twin->out();  // as set_forwards() does after every build
+  }
+  void take(const ad::Dual& d, double* own, double& d_inv) const {
+    if (d.derivatives().size() == n + 1) {
+      for (int k = 0; k < n; ++k) own[k] = d.derivatives()[k];
+      d_inv = d.derivatives()[n];
+    } else {
+      std::fill(own, own + n, 0.0);
+      d_inv = 0.0;
+    }
+  }
+  void integral(double t, double* own, double& d_inv) const {
+    auto it = rows.find(t);
+    if (it == rows.end()) {
+      Row r;
+      r.own.resize(static_cast<std::size_t>(n));
+      take(twin->integral(t), r.own.data(), r.d_inv);
+      it = rows.emplace(t, std::move(r)).first;
+    }
+    std::copy(it->second.own.begin(), it->second.own.end(), own);
+    d_inv = it->second.d_inv;
+  }
+  void out_value(double* own, double& d_inv) const {
+    if (!out_row) {
+      out_row = std::make_unique<Row>();
+      out_row->own.resize(static_cast<std::size_t>(n));
+      take(twin->out().value, out_row->own.data(), out_row->d_inv);
+    }
+    std::copy(out_row->own.begin(), out_row->own.end(), own);
+    d_inv = out_row->d_inv;
+  }
 };
 
 template <class S, template <class> class Policy>
 struct RegionHolder final : RegionIface<S> {
   Policy<S> p;
+  mutable LinearTangentTwin<Policy<ad::Dual>> twin_;  // built from p.knots() on the first tangent request
+  double in_time_ = 0.0;
+  bool has_pred_ = false;
   explicit RegionHolder(std::vector<double> knots) : p(std::move(knots)) {}
   int n_values() const override { return p.n_values(); }
   double t_end() const override { return p.t_end(); }
   bool linear() const override { return Policy<S>::is_linear_map; }
   // Policy::build indexes x[off+k]; a raw pointer satisfies that (pointer indexing), no copy of policy.
-  void build(const S* x, int off, const Boundary<S>& in) override { p.build(x, off, p.n_values(), in); }
+  void build(const S* x, int off, const Boundary<S>& in) override {
+    in_time_ = in.time;
+    has_pred_ = in.has_predecessor;
+    p.build(x, off, p.n_values(), in);
+  }
+  bool has_tangent() const override {
+    if constexpr (requires { Policy<S>::has_tangent; }) return Policy<S>::has_tangent;
+    else return Policy<S>::is_linear_map;
+  }
+  void integral_tangent(double t, double* own, double& d_inv) const override {
+    if constexpr (requires { p.integral_tangent(t, own, d_inv); }) p.integral_tangent(t, own, d_inv);
+    else if constexpr (Policy<S>::is_linear_map) {
+      twin_.ensure([this] { return std::make_unique<Policy<ad::Dual>>(p.knots()); }, p.n_values(), in_time_, has_pred_);
+      twin_.integral(t, own, d_inv);
+    } else throw std::logic_error("region: no tangent");
+  }
+  void out_value_tangent(double* own, double& d_inv) const override {
+    if constexpr (requires { p.out_value_tangent(own, d_inv); }) p.out_value_tangent(own, d_inv);
+    else if constexpr (Policy<S>::is_linear_map) {
+      twin_.ensure([this] { return std::make_unique<Policy<ad::Dual>>(p.knots()); }, p.n_values(), in_time_, has_pred_);
+      twin_.out_value(own, d_inv);
+    } else throw std::logic_error("region: no tangent");
+  }
   S forward(double t) const override { return p.forward(t); }
   S integral(double t) const override { return p.integral(t); }
   S forward_d1(double t) const override { return p.forward_d1(t); }
@@ -115,11 +218,28 @@ struct RegionHolder final : RegionIface<S> {
 template <class S>
 struct TensionHolder final : RegionIface<S> {
   Tension<S> p;
-  TensionHolder(std::vector<double> knots, double sigma) : p(std::move(knots), sigma) {}
+  double sigma_;
+  mutable LinearTangentTwin<Tension<ad::Dual>> twin_;
+  double in_time_ = 0.0;
+  bool has_pred_ = false;
+  TensionHolder(std::vector<double> knots, double sigma) : p(std::move(knots), sigma), sigma_(sigma) {}
   int n_values() const override { return p.n_values(); }
   double t_end() const override { return p.t_end(); }
   bool linear() const override { return Tension<S>::is_linear_map; }
-  void build(const S* x, int off, const Boundary<S>& in) override { p.build(x, off, p.n_values(), in); }
+  void build(const S* x, int off, const Boundary<S>& in) override {
+    in_time_ = in.time;
+    has_pred_ = in.has_predecessor;
+    p.build(x, off, p.n_values(), in);
+  }
+  bool has_tangent() const override { return true; }
+  void integral_tangent(double t, double* own, double& d_inv) const override {
+    twin_.ensure([this] { return std::make_unique<Tension<ad::Dual>>(p.knots(), sigma_); }, p.n_values(), in_time_, has_pred_);
+    twin_.integral(t, own, d_inv);
+  }
+  void out_value_tangent(double* own, double& d_inv) const override {
+    twin_.ensure([this] { return std::make_unique<Tension<ad::Dual>>(p.knots(), sigma_); }, p.n_values(), in_time_, has_pred_);
+    twin_.out_value(own, d_inv);
+  }
   S forward(double t) const override { return p.forward(t); }
   S integral(double t) const override { return p.integral(t); }
   S forward_d1(double t) const override { return p.forward_d1(t); }
@@ -157,6 +277,10 @@ inline constexpr bool scheme_is_linear(Scheme s) {
 // schemes trivially (one cell). MonotoneConvex is not: its W varies continuously inside a shape cell, so a
 // tier that froze W at a state would be silently wrong between syncs. Inclusion list, like scheme_is_linear.
 inline constexpr bool scheme_is_piecewise_linear(Scheme s) { return scheme_is_linear(s) || s == Scheme::MonotoneCubic; }
+// Does the scheme carry its integral's TANGENT (RegionIface::integral_tangent) -- a linear scheme's constant row, or a
+// closed form for a value-dependent one (MonotoneConvex, 2026-10-31) -- so the compiled engine can re-take W at any
+// state analytically? MonotoneCubic is tracked by the piecewise-linear tier instead. Inclusion list, like the others.
+inline constexpr bool scheme_has_tangent(Scheme s) { return scheme_is_linear(s) || s == Scheme::MonotoneConvex; }
 
 // The tripwire for adding a scheme (REVIEW FINDING 3, 2026-09-21): appending one moves the last enumerator and
 // breaks this assert, which names what must learn about it: scheme_is_linear AND scheme_is_piecewise_linear
@@ -164,8 +288,8 @@ inline constexpr bool scheme_is_piecewise_linear(Scheme s) { return scheme_is_li
 // codec's to/from string (api/codec.cpp), tests/region_combinatorial_test.cpp ALL_SCHEMES and kSchemeCount.
 inline constexpr int kSchemeCount = 8;
 static_assert(static_cast<int>(Scheme::MonotoneConvex) + 1 == kSchemeCount,
-              "a Scheme was added or reordered: update scheme_is_linear / scheme_is_piecewise_linear (inclusion "
-              "lists), ModularCurve::add, the codec's to/from string (api/codec.cpp), ALL_SCHEMES and kSchemeCount");
+              "a Scheme was added or reordered: update scheme_is_linear / scheme_is_piecewise_linear / scheme_has_tangent "
+              "(inclusion lists), ModularCurve::add, the codec's to/from string (api/codec.cpp), ALL_SCHEMES and kSchemeCount");
 
 // Sort a region's knot times and drop duplicates: two instruments maturing on ONE date share ONE knot (a knot is a
 // time, an instrument a row). A region constructor refuses a duplicate (a zero-length segment is a silent NaN), so
@@ -294,6 +418,48 @@ class ModularCurve {
     using std::exp;
     return exp(-integral(t));
   }
+  // THE CURVE'S TANGENT (2026-10-31): d integral(t) / d x over all n_knots() values at the last set_forwards, chained
+  // front to back: a region's row over its own values, plus its sensitivity to the incoming forward times the
+  // predecessor's outgoing-forward gradient, plus the incoming integral's gradient (coefficient 1). For a fully
+  // linear curve this is the W row; with a MonotoneConvex region it is W at this state -- the analytic replacement
+  // for the AAD sweep. integral(t <= 0) == 0 by convention, so its row is zero. Allocation-free after the first call.
+  bool has_tangent() const {
+    for (const auto& r : regions_)
+      if (!r->has_tangent()) return false;
+    return true;
+  }
+  void integral_tangent(double t, double* row) const {
+    if (static_cast<int>(buf_.size()) != n_) throw std::logic_error("ModularCurve::integral_tangent: call set_forwards() first");
+    std::fill(row, row + n_, 0.0);
+    if (t <= 0.0) return;
+    tg_dinv_.assign(static_cast<std::size_t>(n_), 0.0);  // d(incoming forward)/dx for the region at hand
+    tg_dI_.assign(static_cast<std::size_t>(n_), 0.0);    // d(incoming integral)/dx
+    tg_own_.resize(static_cast<std::size_t>(n_));
+    tg_tmp_.resize(static_cast<std::size_t>(n_));
+    int off = 0;
+    const std::size_t nreg = regions_.size();
+    for (std::size_t k = 0; k < nreg; ++k) {
+      const RegionIface<S>& r = *regions_[k];
+      const int nk = r.n_values();
+      double d_inv = 0.0;
+      if (t <= r.t_end() || k + 1 == nreg) {  // locate()'s rule: the first region reaching t, else the last
+        r.integral_tangent(t, tg_own_.data(), d_inv);
+        for (int i = 0; i < n_; ++i) row[i] = tg_dI_[static_cast<std::size_t>(i)] + d_inv * tg_dinv_[static_cast<std::size_t>(i)];
+        for (int j = 0; j < nk; ++j) row[off + j] += tg_own_[static_cast<std::size_t>(j)];
+        return;
+      }
+      // pass through: the outgoing integral is the integral at t_end, the outgoing forward is out().value
+      r.integral_tangent(r.t_end(), tg_own_.data(), d_inv);
+      for (int i = 0; i < n_; ++i) tg_dI_[static_cast<std::size_t>(i)] += d_inv * tg_dinv_[static_cast<std::size_t>(i)];
+      for (int j = 0; j < nk; ++j) tg_dI_[static_cast<std::size_t>(off + j)] += tg_own_[static_cast<std::size_t>(j)];
+      double dv_inv = 0.0;
+      r.out_value_tangent(tg_own_.data(), dv_inv);
+      for (int i = 0; i < n_; ++i) tg_tmp_[static_cast<std::size_t>(i)] = dv_inv * tg_dinv_[static_cast<std::size_t>(i)];
+      for (int j = 0; j < nk; ++j) tg_tmp_[static_cast<std::size_t>(off + j)] += tg_own_[static_cast<std::size_t>(j)];
+      tg_dinv_.swap(tg_tmp_);
+      off += nk;
+    }
+  }
   // EXPERIMENT: the curve's branch pattern at the last set_forwards (concatenated region traces; empty for a
   // fully linear curve). A piecewise-linear curve is ONE linear map of x throughout each pattern's cell.
   void pattern_into(std::vector<unsigned char>& out) const {
@@ -359,6 +525,7 @@ class ModularCurve {
   std::vector<std::unique_ptr<RegionIface<S>>> regions_;
   int n_ = 0;
   std::vector<S> buf_;  // reused set_forwards scratch (see set_forwards) — sized once, no per-call alloc
+  mutable std::vector<double> tg_dinv_, tg_dI_, tg_own_, tg_tmp_;  // integral_tangent scratch, sized once
 };
 
 // Cross-region join check, for ANY layout: each region must start strictly after the previous one ends.
