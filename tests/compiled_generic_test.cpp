@@ -241,14 +241,15 @@ TEST(CompiledGeneric, IdentityFastPathIsExactlyTheGeneralPath) {
   Book id = build(x, b, b);
   ASSERT_TRUE(id.fl.sub_is_identity) << "plain one-sub-period legs must take the identity fast path";
 
-  // num() honours the same shortcut; compare it against an explicit R_sub reduction of the same data,
-  // written in the batch's own reciprocal form (DF[s]·INV[e] − 1, compiled_book.hpp inverse_of).
-  // (a plain loop, not an Eigen expression: clang contracts a*b-1 into an FMA in a scalar loop but not
-  // inside Eigen's packet evaluation, and this test is about the R_sub shortcut, not about contraction).
+  // num() honours the same shortcut; compare it against an explicit per-coupon reduction of the same data
+  // (sub_cpn names each sub-period's coupon, sub_w its weight), written in the batch's own reciprocal form
+  // (DF[s]·INV[e] − 1, compiled_book.hpp inverse_of). (a plain loop, not an Eigen expression: clang contracts
+  // a*b-1 into an FMA in a scalar loop but not inside Eigen's packet evaluation, and this test is about the
+  // identity shortcut, not about contraction).
   const Eigen::VectorXd n_fast = id.fl.num(id.DF);
   const Eigen::VectorXd inv = id.DF.cwiseInverse();
-  Eigen::VectorXd sub(id.fl.subS.size());
-  for (int i = 0; i < sub.size(); ++i) sub[i] = id.DF[id.fl.subS[i]] * inv[id.fl.subE[i]] - 1.0;
-  const Eigen::VectorXd n_gen = id.fl.R_sub * sub;
-  EXPECT_EQ(n_fast, n_gen) << "identity shortcut must be bit-identical to the sparse reduction";
+  Eigen::VectorXd n_gen = Eigen::VectorXd::Zero(id.fl.n_coupons());
+  for (int i = 0; i < id.fl.subS.size(); ++i)
+    n_gen[id.fl.sub_cpn[i]] += id.fl.sub_w[i] * (id.DF[id.fl.subS[i]] * inv[id.fl.subE[i]] - 1.0);
+  EXPECT_EQ(n_fast, n_gen) << "identity shortcut must be bit-identical to the explicit reduction";
 }

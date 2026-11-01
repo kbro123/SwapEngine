@@ -42,19 +42,16 @@
 
 namespace swaps::pricing {
 
-// REDUCE LAYOUT (E4.D, measured 2026-09-09 on every rung of the shape ladder, tools/check_perf.py shape_*):
-//   1  SEGMENT (default): coupons of an instrument (and sub-periods of a coupon) are CONTIGUOUS in registration
-//      order, so each coupon's gather-product accumulates straight into its instrument's slot — no coupon
-//      vector, no sparse matrix. Stream tick 0.50-0.66x of the sparse form on every compiled shape, 0.42x on the
-//      desk-scale chain (177 -> 74 us); refresh 0.78-0.90x; Jacobian 0.84-0.96x; never slower.
-//   0  SPARSE (reference): materialise the coupon vector, then R_cpn * coupon (Eigen SpMV). Kept selectable
-//      (-DSWAPS_REDUCE_LAYOUT=0) as the A/B baseline; not used by any build.
-//   A PADDED coupon-major layout (slots x instruments with a DF==1 sentinel, instruments as SIMD lanes) was
-//   measured too and was neutral to 1.2x SLOWER on the ticks (padding waste, worse locality); deleted.
-#ifndef SWAPS_REDUCE_LAYOUT
-#define SWAPS_REDUCE_LAYOUT 1
-#endif
-static_assert(SWAPS_REDUCE_LAYOUT == 0 || SWAPS_REDUCE_LAYOUT == 1, "SWAPS_REDUCE_LAYOUT: 0 (sparse reference) or 1 (segment)");
+// REDUCE LAYOUT (E4.D, measured 2026-09-09 on every rung of the shape ladder, tools/check_perf.py shape_*): SEGMENT.
+// Coupons of an instrument (and sub-periods of a coupon) are CONTIGUOUS in registration order, so each coupon's
+// gather-product accumulates straight into its instrument's slot — no coupon vector, no sparse matrix. Measured
+// against the SPARSE reference (materialise the coupon vector, then an Eigen SpMV over a 0/1 reduction matrix):
+// stream tick 0.50-0.66x on every compiled shape, 0.42x on the desk-scale chain (177 -> 74 us); refresh
+// 0.78-0.90x; Jacobian 0.84-0.96x; never slower. The reference stayed selectable (-DSWAPS_REDUCE_LAYOUT=0) until
+// 2026-11-01 (review item 1.7): no build set it, and its two reduction matrices were still assembled by
+// setFromTriplets on EVERY engine build to be read by nothing. A PADDED coupon-major layout (slots x instruments
+// with a DF==1 sentinel, instruments as SIMD lanes) was measured too and was neutral to 1.2x SLOWER on the ticks
+// (padding waste, worse locality); deleted.
 
 // Row-major dense matrix: storing the batched DF grid row-major makes DFg.row(t) — one registered time
 // across ALL curve-states — a CONTIGUOUS span, which is what lets the batched leg reduce gather a coupon's
@@ -683,12 +680,11 @@ class CompiledCurveSet {
 
 // THE float batch (design §4) -- the compiled form of the generic FloatCoupon/RateObservation model.
 // N instruments, each a list of coupons, each coupon an observation with ANY number of weighted
-// sub-periods. Two sparse reductions:
+// sub-periods. Two segment reductions (contiguous sub-periods of a coupon, contiguous coupons of a leg):
 //
 //   sub   = DF[s_k]/DF[e_k] - 1                      (per sub-period, forecast curve)
-//   num   = R_sub * sub                              (sub-periods -> per-coupon numerator; w_k are
-//                                                     R_sub's VALUES, so no separate w-multiply)
-//   pv    = R_cpn * ( DF[pay] * (num + konst) * k )  (coupons -> per-instrument leg PV)
+//   num   = Σ_{k in coupon} w_k · sub_k               (sub-periods -> per-coupon numerator)
+//   pv    = Σ_{coupons of leg} DF[pay] * (num + konst) * k   (coupons -> per-instrument leg PV)
 //
 // in the k-form of pricing/cashflows.hpp float_coupon_pv (konst = realized + spread*tau_index,
 // k = tau_pay/tau_index), which is what makes the one-sub-period/no-spread/tau_pay==tau_index shape
@@ -723,8 +719,7 @@ struct LegTable {
 struct BundleFloatBatch {
   // Per sub-period (every coupon of every instrument, flattened).
   Eigen::VectorXi subS, subE, sub_cpn;  // sub_cpn = owning coupon
-  Eigen::VectorXd sub_w;                // w_k (also carried as R_sub's values)
-  Eigen::SparseMatrix<double> R_sub;    // n_coupons x n_subs, values = w_k
+  Eigen::VectorXd sub_w;                // w_k
   // Per coupon.
   Eigen::VectorXi pay, inst;                       // inst = owning instrument; pay < 0 for futures
   // MtM (FX-reset-notional) coupons (2026-09-09): value = R·(A + DF[dE] − DF[dS]) with R = DF[rN]·INV[rD] the
@@ -734,10 +729,9 @@ struct BundleFloatBatch {
   // product of registered DFs, hence W-cacheable with hand-written partials (no "negligible term" shortcut).
   Eigen::VectorXi rN, rD, dS, dE;
   Eigen::VectorXd konst, k, realized, inv_tau, convexity;
-  Eigen::SparseMatrix<double> R_cpn;               // n_inst x n_coupons, 0/1
   int n_inst = 0;
   // True iff EVERY observation is standard() (one implicit-unit-weight sub-period per coupon, in
-  // order): R_sub is then EXACTLY the identity, R_sub*v == v, and the reduction is skipped entirely.
+  // order): sub-period i IS coupon i, and the reduction is skipped entirely.
   bool sub_is_identity = false;
   // True iff EVERY coupon is standard() (no spread, nothing realized, tau_pay == tau_index, no scale):
   // the "+ konst" and "* k" passes are then pure overhead over the whole coupon vector (~1.28x on a 1000-swap
@@ -801,7 +795,6 @@ struct BundleFloatBatch {
   int size() const { return n_inst; }
   bool has_mtm() const { return has_mtm_; }
   bool mtm_leg(int leg) const { return mtm_leg_[static_cast<std::size_t>(leg)] != 0; }
-  static constexpr int reduce_layout() { return SWAPS_REDUCE_LAYOUT; }
 
   // --- generic registration -------------------------------------------------------------------
   // One instrument = one float leg: coupons forecast `fc`, discount `dc`.
@@ -873,8 +866,6 @@ struct BundleFloatBatch {
     inv_tau = detail::to_vec(it_);
     convexity = detail::to_vec(cv_);
     rN = detail::to_vec(rn_); rD = detail::to_vec(rd_); dS = detail::to_vec(ds_); dE = detail::to_vec(de_);
-    R_sub = build(sc_, sw_, n_cpn_);
-    R_cpn = build(row_, std::vector<double>(row_.size(), 1.0), n_inst);
     // Segment offsets: coupons of one instrument and sub-periods of one coupon are contiguous by construction
     // (add() pushes a whole leg; push_obs pushes a whole observation) -- asserted, since the fused reduces rely on it.
     cpn_begin_.assign(n_inst + 1, 0);
@@ -909,8 +900,6 @@ struct BundleFloatBatch {
       if (!obs_std_[static_cast<std::size_t>(c)]) leg_general_[i] = 1;
       if (!cpn_std_[static_cast<std::size_t>(c)]) leg_plain_[i] = 0;
     }
-    any_general_leg_ = false;
-    for (unsigned char g : leg_general_) any_general_leg_ = any_general_leg_ || g;
     // ONE kind byte per leg for the value pass's dispatch: 0 = standard (fused), 1 = standard observations with
     // spread / k / scale, 2 = needs the materialised numerator, 3 = MtM.
     leg_kind_.assign(static_cast<std::size_t>(n_inst), 0);
@@ -935,17 +924,6 @@ struct BundleFloatBatch {
   // ("cannot identify array bounds": data-dependent gather indices) — verified with -Rpass-analysis on
   // 2026-09-09; the earlier "auto-vectorized gather" comments were wrong. With the reciprocal they are
   // load/multiply bound, which is close to the scalar floor; explicit SIMD is an E4.D decision.
-  // coupon vector -> per-instrument PV under the configured reduce layout (segment-sum or the sparse reference).
-  const Eigen::VectorXd& reduce_coupons(const Eigen::VectorXd& coupon) const {
-    if (SWAPS_REDUCE_LAYOUT >= 1) {
-      pv_res_.resize(n_inst);
-      const int* __restrict cb = cpn_begin_.data(); const double* __restrict cc = coupon.data(); double* __restrict out = pv_res_.data();
-      for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += cc[c]; out[i] = acc; }
-      return pv_res_;
-    }
-    pv_res_.noalias() = R_cpn * coupon;
-    return pv_res_;
-  }
   const Eigen::VectorXd& inverse_of(const Eigen::VectorXd& DF) const {
     inv_scratch_ = DF.cwiseInverse();  // alloc-free after first sizing
     return inv_scratch_;
@@ -967,9 +945,8 @@ struct BundleFloatBatch {
       if (!state_set_) throw std::logic_error("BundleFloatBatch: set_state(x) must precede num/pv/rate on a batch with moment coupons");
       for (const auto& mc : moments_) out[mc.sub] = std::log(df[ss[mc.sub]] * iv[se[mc.sub]]) + mc.mom;
     }
-    if (sub_is_identity) return sub_;  // R_sub == I: the reduction is a bitwise no-op
-    if (SWAPS_REDUCE_LAYOUT == 0) { num_res_.noalias() = R_sub * sub_; return num_res_; }
-    num_res_.resize(n_cpn_);  // segment-sum of the weighted sub-periods of each coupon (sub_w = R_sub's values)
+    if (sub_is_identity) return sub_;  // one unit-weight sub-period per coupon: the reduction is a bitwise no-op
+    num_res_.resize(n_cpn_);  // segment-sum of the weighted sub-periods of each coupon
     const double* __restrict sw = sub_w.data();
     const int* __restrict sb = sub_begin_.data();
     double* __restrict nr = num_res_.data();
@@ -982,85 +959,16 @@ struct BundleFloatBatch {
   const Eigen::VectorXd& pv(const Eigen::VectorXd& DF) const { return pv(DF, inverse_of(DF)); }
   // Every leg's PV ACCUMULATED with a sign into a caller slot: out[row[leg]] += sign[leg]·pv(leg), legs in order
   // (the caller zeroes `out`). This is how a quotient's numerator Σ sign·pv(leg) is formed in the batch's own
-  // per-leg loop, with no second pass over the legs; (0 + pv_a) + (−pv_b) == pv_a − pv_b bit for bit. SEGMENT
-  // layout only (the reference layout has no per-leg loop); pv() is this with row = identity, sign = +1.
+  // per-leg loop, with no second pass over the legs; (0 + pv_a) + (−pv_b) == pv_a − pv_b bit for bit. pv() is this
+  // with row = identity, sign = +1.
   void pv_into(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV, Eigen::VectorXd& out, const int* row, const double* sign) const {
     pv_impl(DF, INV, out.data(), row, sign);
   }
   const Eigen::VectorXd& pv(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
-    if (SWAPS_REDUCE_LAYOUT >= 1) {
-      pv_res_.resize(n_inst);
-      pv_impl(DF, INV, pv_res_.data(), nullptr, nullptr);
-      return pv_res_;
-    }
-    return pv_reference(DF, INV);
-  }
-  const Eigen::VectorXd& pv_reference(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV) const {
-    // PERF RULE: what reaches R_cpn must be a materialized VectorXd -- handing Eigen's sparse*dense an
-    // unevaluated gather/divide re-does that work per access (~1.28x slower, measured). On the identity
-    // path we fuse the sub-period gather straight into the coupon vector, so the standard shape costs
-    // exactly one materialized pass, as it did before this generalization.
-    assert((pay.size() == 0 || pay.minCoeff() >= 0) && "pv() needs pay dates: this is a futures batch");
-    Eigen::VectorXd& coupon = coupon_;  // reuse the per-batch scratch (no per-tick allocation)
-    if (has_mtm_) {  // (reference layout) MtM coupons: R·(A + DF[dE] − DF[dS]); constant-notional coupons in the same batch: A
-      const Eigen::VectorXd& nm = num(DF, INV);
-      coupon.resize(n_cpn_);
-      const double* __restrict df = DF.data();
-      const double* __restrict iv = INV.data();
-      const int* __restrict p = pay.data();
-      const double* __restrict nn = nm.data();
-      const double* __restrict kk = konst.data();
-      const double* __restrict kv = k.data();
-      const int* __restrict rn = rN.data(); const int* __restrict rdn = rD.data();
-      const int* __restrict dsn = dS.data(); const int* __restrict den = dE.data();
-      double* __restrict out = coupon.data();
-      for (int i = 0; i < n_cpn_; ++i) {
-        double v = df[p[i]] * (nn[i] + kk[i]) * kv[i];
-        if (rn[i] >= 0) v = (v + df[den[i]] - df[dsn[i]]) * (df[rn[i]] * iv[rdn[i]]);
-        out[i] = v;
-      }
-      return reduce_coupons(coupon);
-    }
-    if (!moments_.empty() || !sub_is_identity) {  // moment coupons or a weighted/multi-sub-period batch: go through num()
-      const Eigen::VectorXd& nm = num(DF, INV);  // materialised per-coupon numerator (sub_ or num_res_)
-      coupon.resize(n_cpn_);
-      const double* __restrict df = DF.data();
-      const int* __restrict p = pay.data();
-      const double* __restrict nn = nm.data();
-      const double* __restrict kk = konst.data();
-      const double* __restrict kv = k.data();
-      double* __restrict out = coupon.data();
-      for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (nn[i] + kk[i]) * kv[i];  // hand gather: no IndexedView temporaries
-    }
-    else if (sub_is_identity && cpn_is_plain) {  // standard shape: identical work to pre-generalization
-      // Hand-written FUSED gather instead of Eigen's IndexedView (which materializes DF(pay)/DF(subS)/
-      // DF(subE) into temporaries — allocations on the tick). Not auto-vectorised (see inverse_of).
-      coupon.resize(n_cpn_);
-      const double* __restrict df = DF.data();
-      const double* __restrict iv = INV.data();
-      const int* __restrict p = pay.data();
-      const int* __restrict ss = subS.data();
-      const int* __restrict se = subE.data();
-      double* __restrict out = coupon.data();
-      for (int i = 0; i < n_cpn_; ++i) out[i] = df[p[i]] * (df[ss[i]] * iv[se[i]] - 1.0);
-    }
-    else if (sub_is_identity) {
-      coupon.resize(n_cpn_);
-      const double* __restrict df = DF.data();
-      const double* __restrict iv = INV.data();
-      const int* __restrict p = pay.data();
-      const int* __restrict ss = subS.data();
-      const int* __restrict se = subE.data();
-      const double* __restrict kk = konst.data();
-      const double* __restrict kv = k.data();
-      double* __restrict out = coupon.data();
-      for (int i = 0; i < n_cpn_; ++i)
-        out[i] = df[p[i]] * (df[ss[i]] * iv[se[i]] - 1.0 + kk[i]) * kv[i];
-    }
-    pv_res_.noalias() = R_cpn * coupon;
+    pv_res_.resize(n_inst);
+    pv_impl(DF, INV, pv_res_.data(), nullptr, nullptr);
     return pv_res_;
   }
-
   // SEGMENT: each coupon's gather-product accumulates into its leg's slot (row = nullptr: slot i, written; else
   // out[row[i]] += sign[i]·pv, accumulated).
   void pv_impl(const Eigen::VectorXd& DF, const Eigen::VectorXd& INV, double* __restrict out, const int* __restrict row, const double* __restrict sign) const {
@@ -1176,17 +1084,13 @@ struct BundleFloatBatch {
       }
     }
     // (IndexedView form retired 2026-09-09: it materialised index temporaries on every Jacobian — E3-A2/A3.)
-    if (SWAPS_REDUCE_LAYOUT >= 1) {
-      const int* __restrict cb = cpn_begin_.data(); const double* __restrict cc = coupon.data();
-      for (int i = 0; i < n_inst; ++i) {
-        double acc = 0.0;
-        for (int c = cb[i]; c < cb[i + 1]; ++c) acc += cc[c];
-        if (row) res[row[i]] += sign[i] * acc;
-        else res[i] = acc;
-      }
-      return;
+    const int* __restrict cb = cpn_begin_.data(); const double* __restrict cc = coupon.data();
+    for (int i = 0; i < n_inst; ++i) {
+      double acc = 0.0;
+      for (int c = cb[i]; c < cb[i + 1]; ++c) acc += cc[c];
+      if (row) res[row[i]] += sign[i] * acc;
+      else res[i] = acc;
     }
-    Eigen::Map<Eigen::VectorXd>(res, n_inst).noalias() = R_cpn * coupon;  // reference layout: identity map only
   }
 
   // --- BATCHED pricing over a curve-state GRID (MC-exposure hot path, design R12 coupon-batch) --------
@@ -1201,7 +1105,7 @@ struct BundleFloatBatch {
   // are state-invariant — only the DF VALUES change across states — so per coupon we gather its three rows
   // ONCE and let Eigen fuse divide/subtract/multiply across ALL states in a vectorized row op, then
   // ACCUMULATE it straight into its owning instrument's PV row (coupons of one instrument are a contiguous
-  // block, so R_cpn is just a segment-sum):
+  // block, so the reduction is just a segment-sum):
   //     pv_grid.row(inst[i]) += DFg.row(pay[i]) ⊙ (DFg.row(subS[i]) ⊘ DFg.row(subE[i]) − 1)
   // Fusing the reduction into the gather avoids materializing the big n_cpn × n_states coupon grid and the
   // SpMM over it — pv_grid_ is only n_inst × n_states (stays cache-hot). Column j is == pv(DFg.col(j)) to
@@ -1439,7 +1343,7 @@ struct BundleFloatBatch {
       mc.cpn = n_cpn_;
       mc.sub = static_cast<int>(ss_.size());
       mc.step = o.fixing_step; mc.step3 = o.fixing_step3;
-      push_sub(cs, fc, o.sub_start[0], o.sub_end[0], weighted ? o.weight[0] : 1.0);  // the day-count ratio rides R_sub
+      push_sub(cs, fc, o.sub_start[0], o.sub_end[0], weighted ? o.weight[0] : 1.0);  // the day-count ratio rides sub_w
       // KNOT-ALIGNED 4-pt Gauss per piece panel -- the SAME node set as pricing::curve_forward_sq_integral
       // (moment_gauss_nodes), exact for the square of a cubic piece (E3-R4 / G2, 2026-09-10; the old
       // unaligned 32×2 rule lost 1.7e-7 of the rate on the Flat-front Fed-funds shape).
@@ -1482,15 +1386,6 @@ struct BundleFloatBatch {
     rn_.push_back(-1); rd_.push_back(-1); ds_.push_back(-1); de_.push_back(-1);
     ++n_cpn_;
   }
-  static Eigen::SparseMatrix<double> build(const std::vector<int>& row, const std::vector<double>& val,
-                                           int n_rows) {
-    std::vector<Eigen::Triplet<double>> trip;
-    trip.reserve(row.size());
-    for (int j = 0; j < static_cast<int>(row.size()); ++j) trip.emplace_back(row[j], j, val[j]);
-    Eigen::SparseMatrix<double> M(n_rows, static_cast<int>(row.size()));
-    M.setFromTriplets(trip.begin(), trip.end());
-    return M;
-  }
 
   int n_cpn_ = 0;
   std::vector<int> ss_, se_, sc_, p_, row_;
@@ -1503,13 +1398,12 @@ struct BundleFloatBatch {
   std::vector<int> sub0_;                                  // per coupon: its first sub-period (== its only one on an identity leg)
   Eigen::VectorXi cs0_, ce0_;                              // per coupon: that sub-period's start/end DF indices (the fused gather)
   std::vector<int> mom_of_;                                // per coupon: its moment-coupon index, or -1
-  bool any_general_leg_ = false;
   std::vector<int> cpn_begin_, sub_begin_;                // segment offsets (coupons of an instrument; subs of a coupon)
   std::vector<double> sw_, konst_, k_, rz_, it_, cv_;
   // Per-batch reusable scratch (sized on first use) so pv/num/rate never allocate in the hot loop.
   // Each returns a const ref into these; because gen_pos_/gen_neg_ are distinct batch objects, two
   // results (one per batch) are simultaneously live in model_rates without aliasing.
-  mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_, inv_scratch_, rmul_;
+  mutable Eigen::VectorXd coupon_, sub_, num_res_, pv_res_, rate_res_, inv_scratch_;
   mutable std::vector<MomentCoupon> moments_;  // per-coupon precomputed quadratic forms (set_state fills mom/dmom)
   mutable bool state_set_ = false;
   mutable Eigen::VectorXd state_x_;  // set_state memo key
@@ -1522,7 +1416,6 @@ struct BundleFloatBatch {
 struct BundleFixedLegs {
   Eigen::VectorXi pay, inst;
   Eigen::VectorXd tau;
-  Eigen::SparseMatrix<double> R;
   int n_inst = 0;
 
   // One instrument = one fixed leg of generic coupons, discounting `dc`. FX `scale` (default 1) folds
@@ -1540,29 +1433,17 @@ struct BundleFixedLegs {
     pay = detail::to_vec(p_);
     tau = detail::to_vec(t_);
     inst = detail::to_vec(row_);
-    std::vector<Eigen::Triplet<double>> trip;
-    for (int k = 0; k < static_cast<int>(row_.size()); ++k) trip.emplace_back(row_[k], k, 1.0);
-    R.resize(n_inst, static_cast<int>(row_.size()));
-    R.setFromTriplets(trip.begin(), trip.end());
     cpn_begin_.assign(n_inst + 1, 0);
     for (std::size_t c = 0; c < row_.size(); ++c) { assert(c == 0 || row_[c] >= row_[c - 1]); ++cpn_begin_[row_[c] + 1]; }
     for (int i = 0; i < n_inst; ++i) cpn_begin_[i + 1] += cpn_begin_[i];
   }
   const Eigen::VectorXd& annuity(const Eigen::VectorXd& DF) const {
-    const int n = static_cast<int>(pay.size());
-    disc_.resize(n);  // per-batch reusable scratch (no per-tick allocation); auto-vectorized gather
     const double* __restrict df = DF.data();
     const int* __restrict p = pay.data();
     const double* __restrict t = tau.data();
-    double* __restrict d = disc_.data();
-    if (SWAPS_REDUCE_LAYOUT >= 1) {
-      ann_res_.setZero(n_inst);
-      const int* __restrict cb = cpn_begin_.data(); double* __restrict out = ann_res_.data();
-      for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += t[c] * df[p[c]]; out[i] = acc; }
-      return ann_res_;
-    }
-    for (int i = 0; i < n; ++i) d[i] = t[i] * df[p[i]];
-    ann_res_.noalias() = R * disc_;
+    ann_res_.setZero(n_inst);  // per-batch reusable scratch (no per-tick allocation)
+    const int* __restrict cb = cpn_begin_.data(); double* __restrict out = ann_res_.data();
+    for (int i = 0; i < n_inst; ++i) { double acc = 0.0; for (int c = cb[i]; c < cb[i + 1]; ++c) acc += t[c] * df[p[c]]; out[i] = acc; }
     return ann_res_;
   }
   // BATCHED annuity over a curve-state GRID (MC-exposure hot path, design R12 coupon-batch). DFg is the
@@ -1593,7 +1474,7 @@ struct BundleFixedLegs {
   std::vector<int> p_, row_;
   std::vector<double> t_;
   std::vector<int> cpn_begin_;              // segment offsets (coupons of an instrument)
-  mutable Eigen::VectorXd disc_, ann_res_;  // per-batch reusable scratch for annuity()
+  mutable Eigen::VectorXd ann_res_;  // per-batch reusable scratch for annuity()
   mutable RowMatrixXd ann_grid_;  // reusable scratch for annuity_grid()
 };
 
