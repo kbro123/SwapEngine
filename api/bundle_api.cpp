@@ -39,7 +39,7 @@
 #include <type_traits>
 #include "swaps/calibration/jacobian.hpp"         // aad_jacobian (risk operator)
 #include "swaps/calibration/regularize.hpp"       // second_difference_operator()
-#include "swaps/calibration/structure_fingerprint.hpp"  // structure_fingerprint (warm-vs-recompile switch)
+#include "swaps/calibration/structure_fingerprint.hpp"  // structural_stamp
 
 namespace swaps::api {
 
@@ -107,7 +107,6 @@ int BundleSession::resolve_fixings() {
 
 BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   cal::validate_problem(prob_, "BundleSession");  // E1/E2/B12: a malformed bundle is an error, not a crash/NaN
-  fingerprint_ = cal::structure_fingerprint(prob_);  // an identity stamp of the compiled document (not a gate)
   stamp_ = cal::structural_stamp(prob_);  // E8: computed ONCE here; a stamped rebind compares against it
   parallel_dir_ = swaps::pricing::parallel_direction(prob_.curves);
   for (int i = 0; i < prob_.n_residuals(); ++i) {

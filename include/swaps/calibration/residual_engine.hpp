@@ -15,7 +15,7 @@
 //   * CalibrationProblem -> CompiledResidual: NOT a second kernel -- a thin delegate that wraps the
 //     single curve as a 1-curve bundle (single_curve_bundle) and runs the exact same CompiledBundleResidual.
 //     Kept only so single-curve callers/tests get the simpler CalibrationProblem interface.
-//   * anything ELSE (e.g. BundleBlockProblem for the staged solve, or a test-only problem such as the
+//   * anything ELSE (e.g. the test fixtures' BundleBlockProblem for the staged solve, or a test-only problem such as the
 //     fixed-base spread problem in tests/spread_reference.hpp) -> the generic AadResidualEngine:
 //     templated residuals<double>(x) + the AAD Jacobian. Correct and generic, but a refresh here costs
 //     one AAD sweep -- the only problem types that still AAD on refresh. Refreshes are rare, so fine.
@@ -45,7 +45,7 @@ inline constexpr double kRankThreshold = 1e-10;
 // falls straight out of one differentiated sweep of the stacked residual.
 //
 // market() is fetched LAZILY (only in model_rates), NOT at construction: cold calibrate() drives this
-// engine too but never needs model_rates, so a Problem WITHOUT a market() (e.g. BundleBlockProblem, or a
+// engine too but never needs model_rates, so a Problem WITHOUT a market() (e.g. the staged fixture's BundleBlockProblem, or a
 // test-only problem) still calibrates through the analytic engine -- model_rates is simply never
 // instantiated for it. Only the streaming path calls model_rates, and only for problems that have market().
 template <class Problem>

@@ -63,7 +63,6 @@ add_executable(swaps_tests
   calendar_data_test.cpp
   build_instruments_test.cpp
   instrument_params_test.cpp
-  structure_fingerprint_test.cpp
   trade_test.cpp
   trade_book_test.cpp
   book_rows_test.cpp

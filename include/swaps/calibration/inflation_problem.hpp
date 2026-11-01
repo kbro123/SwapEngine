@@ -5,7 +5,7 @@
 //
 // It exposes the STANDARD calibration interface — residuals<Scalar>(x), n_knots(), n_residuals() — so it
 // rides the EXISTING LM+AAD path with no new machinery: residual_engine_t<InflationProblem> resolves to
-// the generic AadResidualEngine (like the staged BundleBlockProblem and the test-only spread problem),
+// the generic AadResidualEngine (like the test-only staged and spread problems),
 // and calibrate()/calibrate_with() in lm.hpp drive it unchanged. Nothing here touches the frozen W-cache
 // hot path (compiled_bundle/compiled_book): the ZCIS power transform and the YoY index-ratio coupon are
 // smooth AAD residuals, so the analytic-Jacobian AAD tier is exactly the right (and only needed) home.

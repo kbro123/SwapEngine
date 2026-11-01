@@ -1,13 +1,12 @@
 #pragma once
-// STRUCTURE FINGERPRINT of a BundleProblem — a 64-bit hash of everything the compiled W-cache depends on
-// (curve regions, curve roles, cashflow times, observation windows, per-coupon baked constants) but NOT the
-// quoted TARGETS (Instrument.market / band_lower / band_upper / band_decay).
+// STRUCTURAL IDENTITY of a BundleProblem: structure_equal (the O(n) walk a rebind and the P&L explain check) and
+// its hash twin structural_stamp (E8), plus the StampedBundle a client rebinds with. "Structure" is everything the
+// compiled W-cache depends on -- curve regions, roles, cashflow times, observation schedules, baked constants --
+// and never the quoted TARGETS (Instrument.market / band_*), which a warm tick moves over the existing W.
 //
-// This is the switch behind the object-oriented / hot-path split. Two problems with the SAME fingerprint
-// differ only in their market levels, so a calibrated Model can WARM-tick to the new market over its
-// existing W-cache (microseconds). A CHANGED fingerprint means the topology actually moved — a knot, a
-// scheme, a role, an added instrument, a shifted observation window — so W must be recompiled. The OO layer
-// stays put; the optimised hot path is regenerated only when the structure genuinely changes.
+// (Until 2026-11-01 this file also carried `structure_fingerprint`, an older RESOLUTION-SENSITIVE hash kept "for a
+// client's own caching"; BundleSession::structure_fingerprint() had no reader in the engine, the tests, the
+// benches or the web repo. Deleted, review item 1.4. The file keeps its name for the stamp's history.)
 
 #include <cstdint>
 #include <stdexcept>
@@ -42,80 +41,6 @@ struct FnvHasher {
   }
 };
 
-// An observation window is fully determined by its ENDPOINTS + count + the (fixed, per-index) calendar, so
-// a bounded summary — size, first/last of each edge vector, and the scalars — is collision-safe against any
-// real structural change (a shifted maturity, a shortened window after a fixing) while staying O(1) per
-// observation rather than O(daily sub-periods). Cheap enough to be provably off any perf budget.
-inline void edges(FnvHasher& H, const std::vector<double>& v) {
-  H.i(static_cast<long long>(v.size()));
-  if (!v.empty()) {
-    H.d(v.front());
-    H.d(v.back());
-  }
-}
-
-inline void hash_obs(FnvHasher& H, const pricing::RateObservation& o) {
-  edges(H, o.sub_start);
-  edges(H, o.sub_end);
-  edges(H, o.weight);
-  H.d(o.realized);  // baked into the per-coupon constant, so a fixing change forces a (correct) recompile
-  H.d(o.tau_index);
-  H.d(o.fixing_step);
-  H.d(o.fixing_step3);
-  H.i(o.compounded);
-  H.d(o.realized_factor);
-  H.s(o.fixing_index);
-  H.i(static_cast<long long>(o.fixing_schedule.size()));
-  if (!o.fixing_schedule.empty()) {  // endpoints of the fixing schedule (interiors are calendar-derived)
-    const auto& a = o.fixing_schedule.front();
-    const auto& z = o.fixing_schedule.back();
-    H.i(a.fixing_date);
-    H.d(a.t_start);
-    H.i(z.fixing_date);
-    H.d(z.t_end);
-  }
-}
-
-inline void hash_float(FnvHasher& H, const FloatLeg& lg) {
-  H.i(lg.forecast);
-  H.i(lg.discount);
-  H.i(lg.reset_num);
-  H.i(lg.reset_den);
-  H.d(lg.fx_spot);
-  if (lg.fx_spot_time != 0.0) H.d(lg.fx_spot_time);  // O-X3: hashed only when set (existing fingerprints unchanged)
-  H.i(static_cast<long long>(lg.coupons.size()));
-  for (const auto& c : lg.coupons) {
-    hash_obs(H, c.obs);
-    H.d(c.pay);
-    H.d(c.tau_pay);
-    H.d(c.spread);
-    H.d(c.scale);  // FX-spot constant baked into the W-cache's per-coupon k, so it belongs to the structure
-    H.d(c.reset_time);
-    H.d(c.accrual_set ? c.accrual_start : (c.obs.sub_start.empty() ? -1.0 : c.obs.sub_start.front()));  // effective exchange dates
-    H.d(c.accrual_set ? c.accrual_end : (c.obs.sub_end.empty() ? -1.0 : c.obs.sub_end.back()));
-    H.d(c.reset_fx);
-    if (c.fx_fixing_set) H.d(c.fx_fixing_time);  // O-X3 piece 2 (hashed only when set)
-  }
-}
-
-inline void hash_fixed(FnvHasher& H, const FixedLeg& lg) {
-  H.i(lg.discount);
-  H.i(static_cast<long long>(lg.coupons.size()));
-  for (const auto& c : lg.coupons) {
-    H.d(c.pay);
-    H.d(c.tau);
-    H.d(c.scale);
-  }
-}
-
-// STRUCTURAL EQUALITY (the object model, 2026-09-10): an O(n) walk over the same inputs the hash covers,
-// with no hashing and no allocation -- the check behind BundleSession::same_structure / rebind. Two
-// problems are structurally equal iff a compiled model of one prices the other's rows: same curves
-// (roles, regions, knots), same instrument kinds, legs, cashflow times and observation windows. Quote
-// fields (market, bands) are excluded. A schedule-carrying observation is compared on its FIXING SCHEDULE
-// (endpoints + size), not on its resolved sub-periods / realized part -- those are the RESOLUTION of the
-// schedule against a fixing table, which the session performs on its own copy (a client resends the
-// unresolved document, so comparing resolution outputs made same_structure(problem()) false, E3-D16).
 inline bool obs_equal(const pricing::RateObservation& a, const pricing::RateObservation& b) {
   if (a.fixing_schedule.size() != b.fixing_schedule.size()) return false;
   if (a.fixing_index != b.fixing_index) return false;
@@ -187,64 +112,7 @@ inline bool curve_equal(const BundleCurveSpec& a, const BundleCurveSpec& b) {
     if (a.turns[i].start != b.turns[i].start || a.turns[i].end != b.turns[i].end) return false;
   return true;
 }
-inline void hash_instrument(FnvHasher& H, const Instrument& ins) {
-  H.i(static_cast<long long>(ins.quote));
-  H.i(ins.forecast);
-  H.i(ins.pv_currency);
-  H.i(ins.fx_num);
-  H.i(ins.fx_den);
-  H.d(ins.fx_spot);
-  H.d(ins.fx_time);
-  if (ins.fx_spot_time != 0.0) H.d(ins.fx_spot_time);
-  H.i(ins.turn_curve);
-  H.i(ins.turn_index);
-  H.d(ins.convexity);
-  if (!ins.state.empty()) {  // a StateLinear row's refs; absent on every other kind so older hashes are unchanged
-    H.i(static_cast<long long>(ins.state.size()));
-    for (const auto& r : ins.state) { H.i(r.curve); H.i(r.index); H.d(r.coeff); }
-  }
-  hash_obs(H, ins.obs);
-  hash_float(H, ins.fwd);
-  hash_float(H, ins.bench);
-  hash_fixed(H, ins.fixed);
-  // EXCLUDED (the warm-tick RHS): ins.market, ins.band_lower, ins.band_upper, ins.band_decay.
-  H.i(static_cast<long long>(ins.combination.size()));
-  for (const auto& w : ins.combination) {
-    H.d(w.weight);
-    hash_instrument(H, w.instrument);  // a portfolio's components are Instruments too
-  }
-}
-
 }  // namespace fp_detail
-
-// The topology hash. Stable under a market re-quote; changed by any structural edit.
-inline std::uint64_t structure_fingerprint(const BundleProblem& p) {
-  fp_detail::FnvHasher H;
-  H.i(static_cast<long long>(p.curves.size()));
-  for (const auto& c : p.curves) {
-    H.i(c.base);
-    H.i(c.currency);
-    H.i(static_cast<long long>(c.regions.size()));
-    for (const auto& m : c.regions) {
-      H.i(static_cast<long long>(m.scheme));
-      H.d(m.sigma);
-      H.d(m.reg_lambda);
-      H.vd(m.knots);
-    }
-    H.i(static_cast<long long>(c.turns.size()));
-    for (const auto& t : c.turns) {
-      H.d(t.start);
-      H.d(t.end);
-    }
-  }
-  H.i(static_cast<long long>(p.instruments.size()));
-  for (const auto& ins : p.instruments) fp_detail::hash_instrument(H, ins);
-  if (!p.constraints.empty()) {  // constraint rows are structure too; absent, the hash is the pre-2026-10-12 one
-    H.i(static_cast<long long>(p.constraints.size()));
-    for (const auto& ins : p.constraints) fp_detail::hash_instrument(H, ins);
-  }
-  return H.h;
-}
 
 // The structural-equality check (no hash): see fp_detail::curve_equal / instrument_equal.
 // ---- STRUCTURAL STAMP (E8 prototype) ---------------------------------------------------------------
@@ -257,9 +125,8 @@ inline std::uint64_t structure_fingerprint(const BundleProblem& p) {
 //     resolved realized / realized_factor / forecast sub-periods -- exactly what obs_equal compares. So a
 //     client's unresolved document and the session's resolved copy stamp the SAME, which is what makes
 //     "hash once when the structure is built" hold across set_fixings / set_evaluation_date. (The older
-//     fingerprint is resolution-SENSITIVE on purpose -- it is an identity stamp for client caching -- so
-//     the two hashes answer different questions and both are kept.)
-//  2. It covers the mtm leg and hashes WHOLE edge vectors (the fingerprint summarises them by endpoints and
+//     resolution-SENSITIVE fingerprint that sat beside it was deleted on 2026-11-01: no reader.)
+//  2. It covers the mtm leg and hashes WHOLE edge vectors (the old fingerprint summarised them by endpoints and
 //     omits mtm entirely), so it cannot accept a structure the equality check would reject.
 namespace fp_detail {
 

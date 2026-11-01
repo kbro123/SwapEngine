@@ -194,7 +194,7 @@ class BundleSession {
   // validation are unchanged, so a wrong-sized or non-finite payload is still refused before anything moves.
   const cal::CalibrationResult& rebind(const cal::StampedBundle& b);
   // This session's STRUCTURAL stamp (cal::structural_stamp) -- the value a caller's stamped bundle must
-  // carry to rebind. Unlike structure_fingerprint() it does not change when fixings resolve.
+  // carry to rebind. It does not change when fixings resolve.
   std::uint64_t structural_stamp() const { return stamp_; }
 
   // The report of the LAST solve, whichever path produced it: a cold calibrate, an LM fallback, or a converged
@@ -207,10 +207,6 @@ class BundleSession {
   const cal::CalibrationResult& result() const { return result_; }
   const Eigen::VectorXd& x() const { return x_; }
   const cal::BundleProblem& problem() const { return prob_; }
-  // An IDENTITY STAMP of the document this session was compiled from (structure_fingerprint.hpp), for a
-  // client's own caching. NOT a gate: nothing in the engine compares it (2026-09-10) -- a structural edit
-  // is a new session by construction, and rebind checks structure by an O(n) equality, not a hash.
-  std::uint64_t structure_fingerprint() const { return fingerprint_; }
   // True iff `p` is STRUCTURALLY EQUAL to this session's problem -- same curves, regions, knots,
   // instrument kinds, legs, cashflow times and schedules -- differing at most in market targets and
   // bands (calibration::structure_equal: an O(n) walk, no hashing, no allocation). True for
@@ -473,7 +469,6 @@ class BundleSession {
 
   cal::BundleProblem prob_;  // the client's problem + the regions' smoothing rows at the tail of constraints
   int n_smoothing_ = 0;      // how many tail rows of prob_.constraints are the session's own (region data)
-  std::uint64_t fingerprint_ = 0;  // structure hash at compile time (the warm-vs-recompile switch)
   Eigen::VectorXd x_;
   Eigen::VectorXd parallel_dir_;  // pricing::parallel_direction(prob_.curves): the PV01 direction, fixed per structure
   cal::CalibrationResult result_;

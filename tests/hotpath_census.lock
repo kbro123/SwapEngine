@@ -5,7 +5,6 @@
 # stage             scenario
 DriftRefresh        intick_portfolio_rd0
 TrackRescale        walk_desk_3bp
-TrackRefresh        unreachable  # need_full_ needs a background-worker M without J, and the prefetch never arms on a banded problem (streaming.hpp ctor)
 Breakpoint          weak_direction_strip
 Pin                 walk_desk_3bp
 Release             walk_desk_3bp
@@ -17,7 +16,6 @@ FrozenCapRefresh    frozen_cap_ois
 CommitReanchor      weak_direction_strip
 FinalRefresh        intick_portfolio_rd0
 Truncated           weak_direction_strip
-PrefetchTake        prefetch_ois
 Fail                failed_portfolio_cap2
 FailRestore         failed_portfolio_cap2
 
@@ -34,14 +32,12 @@ desk_mixed_small              0       0  # 4070 / 20 -> 0 / 0 on 2026-11-01: anc
 desk_mixed_walk3bp          231      38  # new 2026-11-01: the MonotoneCubic desk along the +-3 bp walk
 desk_mixed_perrow           400      61  # new 2026-11-01: the MonotoneCubic desk along the per-row stress walk (bands requoted with the targets)
 desk_mixed_big             3870      18
-prefetch_ois                  -       -
 
 [callsites]
-set_anchor         8
+set_anchor         7  # 8 -> 7 on 2026-11-01: the TrackRefresh site (a background-worker M without J) went with the prefetch worker
 factor             4
 rescale_row        5
 residuals_vs       2  # eval()'s one call + the static_assert's requires-check (2026-10-12: the no-joint-form fallback was unreachable and is gone)
 jacobian_vs_into   3  # take_jacobian: the residuals-returning call and the plain one, + set_anchor's compile-time requires-check (S2); the regulariser is rows of the engine (constraint rows of the problem, 2026-10-12), nothing is stacked there
 model_rates        1  # set_anchor (sides from the model values when a tracked map has a zero-slope piece); eval()'s fallback for an engine without the joint form was unreachable and is gone (2026-10-12)
-request            1
 update_exact       2

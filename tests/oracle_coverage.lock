@@ -17,9 +17,7 @@ swaps/build/par_asset_swap.hpp
 swaps/build/ref_data.hpp
 swaps/build/schedule.hpp
 swaps/calibration/aad_block.hpp
-swaps/calibration/background_jacobian.hpp
 swaps/calibration/bundle_problem.hpp
-swaps/calibration/bundle_stage.hpp
 swaps/calibration/compiled_bundle.hpp
 swaps/calibration/compiled_residual.hpp
 swaps/calibration/hybrid_residual.hpp

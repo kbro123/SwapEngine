@@ -524,7 +524,8 @@ include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instr
                              residual/Jacobian engine trait driving the streamer),
                              compiled_residual.hpp (single-curve = 1-curve delegate to compiled_bundle.hpp),
                              compiled_bundle.hpp (CompiledBundleResidual: multi-curve W-cache residual),
-                             bundle_problem.hpp + bundle_stage.hpp (Stage 3 multi-curve bundle)
+                             bundle_problem.hpp (Stage 3 multi-curve bundle; the staged solve is a
+                             tests/bundle_stage.hpp fixture since 2026-11-01)
 include/swaps/pricing/       templated, QuantLib-free pricing kernel (cashflows.hpp: the GENERIC
                              RateObservation/FloatCoupon/FixedCoupon model (§7c) -- the index-flavoured
                              legacy structs (OisSwap/CompoundedFuture/AveragedFuture) were retired; every
@@ -758,7 +759,8 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   The bundle's frozen envelope is *tighter* than the single curve's (the coupled multi-curve residual is
   more nonlinear), so a 1bp move triggers one Jacobian refresh — but the refresh is now ANALYTIC (no AAD
   sweep), which is what took warm re-cal from ~7× (AAD engine) to ~71×.
-- **Staged solve (`bundle_stage.hpp`).** Decompose the dependency graph (Tarjan SCC), solve each SCC
+- **Staged solve (`tests/bundle_stage.hpp` -- a FIXTURE since 2026-11-01, review item 1.3: no verb or session
+  ever staged; the joint solve is the one shipped path).** Decompose the dependency graph (Tarjan SCC), solve each SCC
   in dependency order: a **singleton** SCC → a LOCAL LM over just that curve's block with earlier
   curves FROZEN as constants; a **cycle** → a joint LM over just its members. Frozen curves must carry
   a block-SIZED zero gradient (`xb[0]*0.0`), not an empty one, or Eigen `AutoDiffScalar` adds
@@ -767,7 +769,7 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   are **~20× faster than QuantLib IterativeBootstrap, ~64× vs GlobalBootstrap** (`bench/bundle_build_bench.cpp`).
 - **`reference_bundle.hpp` (`build_realistic_bundle`, chain OR star) is the canonical realistic multi-curve
   model for benchmarks.** (The branch-parallel SCC solve that used to be documented here was deleted in
-  E6.1, 2026-09-10 — no consumer; the serial `calibrate_staged` stays.)
+  E6.1, 2026-09-10 — no consumer; the serial `calibrate_staged` followed it out of `include/` on 2026-11-01.)
 - **Outright vs spread is in the curve DEFINITION, not the solver.** `CurveSpec` carries `base`:
   `base < 0` = OUTRIGHT (free vars are its own forwards); `base >= 0` = SPREAD, i.e. the curve IS
   `curves[base] + spread` and its free vars are the forward SPREADs. `build_bundle_curves<Scalar>`
@@ -819,8 +821,8 @@ There is ONE cashflow model (`RateObservation`/`FloatCoupon`/`FixedCoupon`) and 
   discount}` / `FixedLeg{coupons, discount}`. That is what makes tenor-basis representable without a
   new type. `Instrument` = legs + `QuoteKind{ParRate, ParSpread, Rate}` + market quote;
   `instrument_model_quote<Scalar>(ins, C)` / `instrument_residual<Scalar>(ins, C)` are role-accessor-
-  templated, so ONE residual definition serves `CalibrationProblem`, `BundleProblem` and
-  `BundleBlockProblem`.
+  templated, so ONE residual definition serves `CalibrationProblem`, `BundleProblem` and the staged
+  fixture's `BundleBlockProblem`.
 - **Residual order (THE CONTRACT — the Jacobian rows, W-cache batches, `market()`, the risk ladder
   and warm/streaming all depend on it):**
   `1. avg_futs | 2. comp_futs | 3. swaps | 4. bases | 5. instruments (insertion order)`.

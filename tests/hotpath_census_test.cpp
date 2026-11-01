@@ -254,29 +254,12 @@ Outcome weak_direction_strip() {
   return run(st, 0, 1, [&](int) { return st.update(q1); });
 }
 
-Outcome prefetch_ois() {  // the background worker hands over M: a thread, so the allocation count is not the scenario's cost
-  const Shape& s = rung("ois_nolag");
-  cal::HybridBundleResidual eng(s.prob);
-  SC::Options o = pinned();
-  o.prefetch = true;
-  o.adaptive_stall = false;
-  o.max_frozen = 1;  // every tick refreshes, so a ready background M is taken
-  SC st(eng, s.prob, calibrated(s), s.q0, o);
-  Outcome out;
-  out.counted = false;
-  for (int k = 0; k < 400 && !(out.stages & (1u << static_cast<unsigned>(Stage::PrefetchTake))); ++k) {
-    out.stages |= st.update(k % 2 == 0 ? s.q_big : s.q0).stages;
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-  }
-  return out;
-}
-
 using Scenario = Outcome (*)();
 const std::vector<std::pair<std::string, Scenario>>& scenarios() {  // cheapest first: the print mode names the first that reaches a stage
   static const std::vector<std::pair<std::string, Scenario>> v = {
       {"square_big_ois", square_big_ois},       {"frozen_cap_ois", frozen_cap_ois}, {"intick_portfolio_rd0", intick_portfolio_rd0},
       {"failed_portfolio_cap2", failed_portfolio_cap2}, {"weak_direction_strip", weak_direction_strip}, {"reg_desk_small", reg_desk_small}, {"walk_desk_3bp", walk_desk_3bp},
-      {"desk_mixed_small", desk_mixed_small},   {"desk_mixed_walk3bp", desk_mixed_walk3bp}, {"desk_mixed_perrow", desk_mixed_perrow}, {"desk_mixed_big", desk_mixed_big}, {"prefetch_ois", prefetch_ois}};
+      {"desk_mixed_small", desk_mixed_small},   {"desk_mixed_walk3bp", desk_mixed_walk3bp}, {"desk_mixed_perrow", desk_mixed_perrow}, {"desk_mixed_big", desk_mixed_big}};
   return v;
 }
 

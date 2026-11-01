@@ -122,7 +122,7 @@ graph LR
     subgraph problems
       CP["CalibrationProblem (1 curve)"]
       BP["BundleProblem (N curves)"]
-      OTHER["BundleBlockProblem, test-only problems"]
+      OTHER["test-only problems (the staged fixture's BundleBlockProblem, the spread problem)"]
     end
     CP -->|single_curve_bundle| CBR
     CP -.->|residual_engine trait| CR["CompiledResidual (thin delegate)"]
@@ -172,7 +172,7 @@ graph LR
   live market *inside* its log-basis, so the streamer threads `q` through `instrument_residual(ins, C, q)`
   (a market-override overload of the single residual definition — no forked residual code).
 - **AAD tier** — the fully-generic fallback for a bundle with **no `W` at all** — a value-dependent
-  scheme (`MonotoneCubic`) — plus the staged `BundleBlockProblem` and test-only problems.
+  scheme (`MonotoneCubic`) — plus the test-only problems (the staged fixture's `BundleBlockProblem`).
 
 `StreamingCalibrator` is written against the interface, so it drives either tier
 unchanged.

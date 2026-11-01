@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
-#include "swaps/calibration/bundle_stage.hpp"
+#include "bundle_stage.hpp"  // tests/: the staged solve, a test/bench fixture since 2026-11-01
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
@@ -137,7 +137,7 @@ BENCHMARK(BM_BundleScale_ColdJoint);
 static void BM_BundleScale_ColdStaged(benchmark::State& state) {
   const auto& f = fx();
   for (auto _ : state) {
-    auto r = cal::calibrate_staged(f.prob, f.x0, true);
+    auto r = swaps::testing::calibrate_staged(f.prob, f.x0, true);
     benchmark::DoNotOptimize(r.x.data());
   }
 }

@@ -2,7 +2,7 @@
 // Allocation counter for the T4 hot-path invariants (PRINCIPLES.md P5): counts every malloc / realloc / free made BY
 // THE THREAD THAT ARMED the scope, through libmalloc's logger hook (macOS), not Eigen's guard alone. The hook itself
 // is process-wide, so it filters on the arming thread: a pin measures the TICK on the calling thread, never an
-// off-thread refresh (FLK1, 2026-09-14: the streaming BackgroundJacobian worker's allocations landed in the window
+// off-thread refresh (FLK1, 2026-09-14: the streaming BackgroundJacobian worker's allocations -- the worker was retired on 2026-11-01 -- landed in the window
 // on a loaded machine). On other platforms available() is false and the T4 assertions are skipped with a printed
 // reason (never silently green).
 #include <cstdint>

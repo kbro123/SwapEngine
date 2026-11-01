@@ -392,8 +392,8 @@ struct Instrument {
   // ---- what the instrument SAYS of itself (2026-09-22): every consumer asks these, none re-derives them ----
   // The curve references this quote kind READS, in the order it reads them -- the one encoding of "which members
   // a given `quote` reads" (the comment above). fn(curve_index, role) per role; a Portfolio walks its components.
-  // Behind validate_problem's range check, bundle_adjacency's dependency edges, the AAD block's touched set and
-  // primary_curve. (The four copies it replaced disagreed: the staged solver read a TurnJump's and a Portfolio's
+  // Behind validate_problem's range check, the AAD block's touched set, primary_curve and the staged fixture's
+  // dependency edges. (The four copies it replaced disagreed: the staged solver read a TurnJump's and a Portfolio's
   // DEFAULT fwd/fixed legs as curve 0, the AAD block seeded a ParRate's unused bench/mtm legs.)
   template <class Fn>
   void for_each_curve_ref(Fn&& fn) const;

@@ -1,4 +1,11 @@
 #pragma once
+// TEST / BENCH FIXTURE (moved out of include/ on 2026-11-01, review item 1.3; namespace swaps::testing like the
+// fixed-base spread problem in spread_reference.hpp): the staged solve has no production consumer -- every verb and
+// session calibrates JOINTLY -- and CLAUDE.md records that it ties the joint solve at production size. It stays as
+// the like-for-like sequential-bootstrap comparison in bench/bundle_build_bench.cpp / bundle_scale_bench.cpp and as
+// the dependency-graph property the multicurrency tests pin (bundle_adjacency reads Instrument::for_each_curve_ref /
+// primary_curve, so the tests exercise those).
+//
 // Staged bundle calibration (CLAUDE.md Stage 3): decompose the curve dependency graph and solve only
 // what must be solved jointly. Curve c (an instrument's forecast leg) DEPENDS on the other curves that
 // instrument references (benchmark / discount). Condense into strongly-connected components (Tarjan):
@@ -24,7 +31,16 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/curve/curve_module.hpp"
 
-namespace swaps::calibration {
+namespace swaps::testing {
+
+namespace cal = swaps::calibration;
+using cal::BundleProblem;
+using cal::Instrument;
+using cal::CalibrationResult;
+using cal::CurveHandle;
+using cal::build_bundle_curves;
+using cal::instrument_residual;
+using cal::calibrate;
 
 // The curve dependency graph: adj[c] = the curves curve c depends on (its instruments' other role
 // curves + its spread base). Shared by the SCC decomposition and the topological-wave grouping.
@@ -184,4 +200,4 @@ inline CalibrationResult calibrate_staged(const BundleProblem& p, const Eigen::V
   return staged_result(p, std::move(x), iters);
 }
 
-}  // namespace swaps::calibration
+}  // namespace swaps::testing

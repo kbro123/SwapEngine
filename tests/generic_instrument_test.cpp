@@ -28,7 +28,7 @@
 
 #include "swaps/ad/dual.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
-#include "swaps/calibration/bundle_stage.hpp"
+#include "bundle_stage.hpp"  // tests/: the staged solve, a test/bench fixture since 2026-11-01
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/compiled_residual.hpp"
 #include "swaps/calibration/lm.hpp"
@@ -285,7 +285,7 @@ TEST(GenericInstrument, MixedFrequencyMultiCurveCalibrationRecoversTheCurves) {
   x0.head(kNk).setConstant(0.04);
   x0.tail(kNk).setConstant(0.04);
   const auto joint = cal::calibrate(p, x0);
-  const auto staged = cal::calibrate_staged(p, x0);
+  const auto staged = swaps::testing::calibrate_staged(p, x0);
   const double dj = (joint.x - x_true).cwiseAbs().maxCoeff();
   const double ds = (staged.x - x_true).cwiseAbs().maxCoeff();
   std::cout << "  [generic-inst] joint ||x*-xtrue||=" << dj << " iters=" << joint.iterations

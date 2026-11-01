@@ -1,7 +1,7 @@
 // E5 taxonomy: T6 regression (fails on the reverted bug)
 // FLK1 REPRODUCTION (2026-09-14). bench/fixtures/malloc_count.hpp's AllocScope armed libmalloc's PROCESS-WIDE logger, so
 // the hot-path allocation pins (tests/hotpath_shapes_test.cpp ShapeLadder desk_mixed: 3600 small-tick allocations) also
-// counted the streaming calibrator's BackgroundJacobian worker thread (calibration/background_jacobian.hpp: J + complete
+// counted the streaming calibrator's (since retired, 2026-11-01) BackgroundJacobian worker thread (J + complete
 // orthogonal decomposition, ~15k Eigen allocations) whenever a loaded machine delayed that off-thread refresh into the
 // 20-tick window -- four sightings in one session's ctest -j 8 runs, exact 3600 in every serial run. The pin measures the
 // TICK; the refresh is off the critical thread by design. So a scope must count only the thread that armed it.

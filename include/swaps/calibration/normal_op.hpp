@@ -119,10 +119,9 @@ class NormalOp {
 
   // Adopt an M computed elsewhere (the background worker hands over M alone for a square, unbanded, unregularised
   // problem). G follows it lazily (G() forms M Mᵀ from whatever M is current).
-  void adopt_M(Eigen::MatrixXd M) { M_ = std::move(M); g_valid_ = false; }
 
   const Eigen::MatrixXd& M() const { return M_; }
-  // (JᵀJ)⁺ = J⁺ J⁺ᵀ, formed on first use after a form() / adopt_M (an n_knots x n_res x n_knots product that a refresh
+  // (JᵀJ)⁺ = J⁺ J⁺ᵀ, formed on first use after a form() (an n_knots x n_res x n_knots product that a refresh
   // with no band re-scale never needs, 2026-11-01) and updated in place by rank_one_update.
   const Eigen::MatrixXd& G() const {
     if (!g_valid_) { G_.noalias() = M_ * M_.transpose(); g_valid_ = true; }

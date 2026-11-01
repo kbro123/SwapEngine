@@ -14,6 +14,7 @@ target_link_libraries(swaps_bench PRIVATE swaps benchmark::benchmark_main)
 # optimizations (no QuantLib needed; not a fingerprint gate metric).
 add_executable(bundle_scale_bench bundle_scale_bench.cpp)
 target_link_libraries(bundle_scale_bench PRIVATE swaps benchmark::benchmark_main)
+target_include_directories(bundle_scale_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests)  # bundle_stage.hpp (the staged-solve fixture)
 
 # Compiled multi-curve book reprice vs the templated CurveHandle path (audit U2; ours-only).
 add_executable(compiled_multi_bench compiled_multi_bench.cpp)

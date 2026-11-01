@@ -18,7 +18,7 @@ import argparse, os, re, sys, tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEADER = os.path.join(ROOT, "include", "swaps", "calibration", "streaming.hpp")
 LOCK = os.path.join(ROOT, "tests", "hotpath_census.lock")
-CALLS = ["set_anchor", "factor", "rescale_row", "residuals_vs", "jacobian_vs_into", "model_rates", "request", "update_exact"]
+CALLS = ["set_anchor", "factor", "rescale_row", "residuals_vs", "jacobian_vs_into", "model_rates", "update_exact"]
 
 
 def strip_comments(s):

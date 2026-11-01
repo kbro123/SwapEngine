@@ -238,6 +238,6 @@ TEST(FxSpotTimeCompiled, StructureEqualitySeesTheSpotTime) {
   s.instruments[0].fx_spot_time = kTs5;
   q.instruments[0].market *= 1.001;  // control: a re-quote is not structural
   EXPECT_FALSE(cal::structure_equal(a, s));
-  EXPECT_NE(cal::structure_fingerprint(a), cal::structure_fingerprint(s));
+  EXPECT_NE(cal::structural_stamp(a), cal::structural_stamp(s));
   EXPECT_TRUE(cal::structure_equal(a, q));
 }

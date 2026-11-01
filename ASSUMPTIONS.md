@@ -15,8 +15,8 @@ Status: **PINNED** (test named, assertion read) · **OPEN** (needs work; the ver
 
 `curve_rel = 1e-10` (curve values vs an oracle) · `jacobian_rel = 1e-6` · `analytics_rel = 1e-10` ·
 `kRankThreshold = 1e-10` (`calibration/residual_engine.hpp`: THE relative rank threshold on singular values;
-every consumer -- LM completion, the streamer's operator, the prefetch worker, WarmCalibrator, generate_risk's
-null completion -- uses it since 2026-09-10).
+every consumer -- LM completion, the streamer's operator, generate_risk's null completion -- uses it since
+2026-09-10; the prefetch worker and WarmCalibrator, two more, were retired).
 
 ## Retired premises (kept so nobody re-introduces them)
 
@@ -28,7 +28,7 @@ null completion -- uses it since 2026-09-10).
 | R4 | `pricing/cashflows.hpp`, `compiled_book.hpp` | a fixed 32×2 / 8×2 Gauss rule integrates f², f³ "to ~1e-15" | not knot-aligned: 3.3e-3 of ∫f² (1.7e-7 of the rate) on the Flat-front Fed-funds shape | 8eeb9f0: knot-aligned 4/5-pt Gauss per piece in both kernels (`moment_gauss_nodes`) |
 | S1 | `calibration/structure_fingerprint.hpp` | an edge-only hash is collision-safe for structural edits | interior sub-period / weight edits collided (probe G-4) | MOOT since e09f472: no hash gates anything; `structure_equal` compares full vectors |
 | S2 | `cashflows.hpp` `xccy_mtm_leg_pv`, `compiled_book.hpp` | the observation window is the accrual period and a reset is always a curve-implied forward | a seasoned coupon's window shrinks on resolution; a past reset was discounted at DF ≡ 1 | 18f91c9: `FloatCoupon::accrual_*`, `reset_fx`; past reset without it REFUSED; seasoned MtM → AAD block |
-| S3 | `calibration/background_jacobian.hpp`, `streaming.hpp` | the prefetch worker's M-only hand-over is exact for any stream | wrong for banded / regularised / over-determined streams; un-thresholded QR (|M| 6e14) | 12c4cb8: COD at `kRankThreshold`; prefetch armed only for square, unbanded, unregularised |
+| S3 | (RETIRED 2026-11-01, review item 1.2: the prefetch worker `background_jacobian.hpp` and `Options::prefetch` are deleted -- the worker armed only on a square row set, and every session bundle carries smoothing rows) | the prefetch worker's M-only hand-over is exact for any stream | wrong for banded / regularised / over-determined streams; un-thresholded QR (|M| 6e14) | 12c4cb8: COD at `kRankThreshold`; prefetch armed only for square, unbanded, unregularised |
 | S4 | `api/generate_risk.cpp` | a knot is "unseen" when its normal-equation eigenvalue < 1e-9·max | that is σ < 3e-5·σmax, five orders looser than `kRankThreshold` | 12c4cb8: JacobiSVD rank at `kRankThreshold` |
 | S5 | `calibration/warm.hpp` | the warm problem is full column rank | no protection on a rank-deficient bundle | 12c4cb8: thresholded COD |
 | C1 | `calibration/streaming.hpp` | a failed tick leaves a usable anchor | the anchor sat at the divergent iterate; later ticks reported converged on a 1289 bp stale curve | ba6708e: `StreamStatus`, anchor restored to the last committed (x, q) |
@@ -63,7 +63,7 @@ null completion -- uses it since 2026-09-10).
 | # | where | rule | pinned by | status |
 |---|---|---|---|---|
 | K2 | `ad/dual.hpp`, `aad_block.hpp` | pooled dual when touched width ≤ `kPooledMaxW = 48`, else heap; bit-identical | `aad_block_pooled_test` (== 0.0) | PINNED |
-| K3 | `calibration/streaming.hpp` Options | `step_tol 1e-9`, `max_frozen 8` (hard cap; the ADAPTIVE STALL refreshes when the contraction-predicted remaining steps, with a factor-2 margin, cost more than a refresh whose break-even is measured at construction), `max_refresh 6`, `max_steps 64`, `refresh_drift 1e-3` (measured 0.4 bp at 30 bp), `prefetch_drift 5e-4`; `predict_convergence` (stop when the contraction bounds the next step below step_tol/20); `rescale_update` (a band re-scale is a rank-one Sherman–Morrison update of (JᵀJ+RᵀR)⁺, falling back to a factorisation when 1+βs < 1e-3); a non-converged tick is never committed | `streaming_test`, `streaming_contract_test` (predictive vs fully iterated 1e-10), `StreamingBand::RescaledOperatorEqualsARefactorisation` (3e-14) | PINNED |
+| K3 | `calibration/streaming.hpp` Options | `step_tol 1e-9`, `max_frozen 8` (hard cap; the ADAPTIVE STALL refreshes when the contraction-predicted remaining steps, with a factor-2 margin, cost more than a refresh whose break-even is measured at construction), `max_refresh 6`, `max_steps 64`, `refresh_drift 1e-3` (measured 0.4 bp at 30 bp); `predict_convergence` (stop when the contraction bounds the next step below step_tol/20); `rescale_update` (a band re-scale is a rank-one Sherman–Morrison update of (JᵀJ+RᵀR)⁺, falling back to a factorisation when 1+βs < 1e-3); a non-converged tick is never committed | `streaming_test`, `streaming_contract_test` (predictive vs fully iterated 1e-10), `StreamingBand::RescaledOperatorEqualsARefactorisation` (3e-14) | PINNED |
 | D6 | `calibration/streaming.hpp` active set (2026-09-10) | pins are stiff rows `kPinWeight = 1e3` (gap ≈ λ/w² ~ 1e-11); `kink_tol = 1e-3·band`; multiplier hysteresis 1e-3; one release per row per tick; `max_rescales = 8 + 4·n_bands` (exhaustion = RescaleCap, a failed tick); divergence bound 1e3× the first residual or |x| > 10 | `streaming_band_test::SubBpMovesAtSmallDecay…`, `AQuoteOscillatingAroundItsEdge…` (first-order optimality in 240 directions) | PINNED |
 | K5′ | `problem.hpp` Huber band | r² is convex iff the MARKET lies inside its band; under streaming the bands are absolute and the market can walk out, giving two basins (3 bp / decay 0.5: streamer at a verified kink optimum, cold LM 4 % lower elsewhere) | `streaming_band_test::ColdLeastSquaresHasOneMinimum` (inside-band only) | OPEN decision (TASKS-ENGINE E4.B K5′): bands relative to the live target, or reject/clamp a market outside its band |
 | K4 | `calibration/warm.hpp` | `step_tol 1e-8`, `max_frozen 3`, `max_refresh 3` | `warm_test` | PINNED (deletion of WarmCalibrator is E6.1) |
@@ -130,7 +130,7 @@ null completion -- uses it since 2026-09-10).
 | D9 | `api/exposure.cpp` | `sigma 0.008`, `kappa 0.08`, `pfe_q 0.975`, `reg.lambda 0.5` (second-difference Light; 0.02 tension until 2026-09-21) | labelled illustrative; λ unlabelled | OPEN: label λ |
 | D10 | `api/bundle_api.cpp` `flat_x0` | mean outright quote clamped to [1e-3, 0.20], 0.02 fallback | OPEN: state in `docs/api-surface.md` |
 | T4 | `pricing/compiled.hpp`, `jacobian.hpp`, `aad_block.hpp` | an empty-gradient integral zeroes its W row "defensively" | OPEN: assert in the W-builders (only t ≤ 0 is legitimately constant) |
-| K30 | `calibration/bundle_stage.hpp` | staged `stationarity = −1.0` ("not computed") | reported honestly | PINNED |
+| K30 | `tests/bundle_stage.hpp` (a fixture since 2026-11-01) | staged `stationarity = −1.0` ("not computed") | reported honestly | PINNED |
 | E4.A.3 | `api/bundle_api.hpp` fixings | a fixing / evaluation-date change RECOMPILES the engine, streamer and the bound book rows (correct; not a tick) | `api_state_test::FixingsAfterStartStreaming…` | PINNED (making a fixing a scalar row update is E4.A.3) |
 
 ## Numeric hygiene (class E)

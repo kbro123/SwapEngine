@@ -22,7 +22,7 @@
 
 #include "reference_multicurrency.hpp"
 #include "swaps/ad/dual.hpp"
-#include "swaps/calibration/bundle_stage.hpp"
+#include "bundle_stage.hpp"  // tests/: the staged solve, a test/bench fixture since 2026-11-01
 #include "swaps/calibration/compiled_bundle.hpp"
 #include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
@@ -82,7 +82,7 @@ TEST(MultiCcyEur, MarketIsSelfConsistentAtXTrue) {
 TEST(MultiCcyEur, JointAndStagedRecoverAllThreeCurves) {
   const rb::MultiCcyBundle b = rb::build_eur_bundle();
   const auto joint = cal::calibrate(b.prob, b.x0);
-  const auto staged = cal::calibrate_staged(b.prob, b.x0);
+  const auto staged = swaps::testing::calibrate_staged(b.prob, b.x0);
   const double dj = (joint.x - b.x_true).cwiseAbs().maxCoeff();
   const double ds = (staged.x - b.x_true).cwiseAbs().maxCoeff();
   std::cout << "  [mc-eur] joint ||x*-xtrue||=" << dj << " iters=" << joint.iterations
@@ -212,7 +212,7 @@ TEST(MultiCcyUsd, MarketIsSelfConsistentAtXTrue) {
 TEST(MultiCcyUsd, JointAndStagedRecoverSofrAndFf) {
   const rb::MultiCcyBundle b = rb::build_usd_bundle();
   const auto joint = cal::calibrate(b.prob, b.x0);
-  const auto staged = cal::calibrate_staged(b.prob, b.x0);
+  const auto staged = swaps::testing::calibrate_staged(b.prob, b.x0);
   const double dj = (joint.x - b.x_true).cwiseAbs().maxCoeff();
   const double ds = (staged.x - b.x_true).cwiseAbs().maxCoeff();
   std::cout << "  [mc-usd] joint ||x*-xtrue||=" << dj << " iters=" << joint.iterations
@@ -324,7 +324,7 @@ TEST(MultiCcyXccy, MarketSelfConsistentAndRecovers) {
   const rb::MultiCcyBundle b = rb::build_xccy_bundle();
   const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
   const auto joint = cal::calibrate(b.prob, b.x0);
-  const auto staged = cal::calibrate_staged(b.prob, b.x0);
+  const auto staged = swaps::testing::calibrate_staged(b.prob, b.x0);
   const double dj = (joint.x - b.x_true).cwiseAbs().maxCoeff();
   const double ds = (staged.x - b.x_true).cwiseAbs().maxCoeff();
   std::cout << "  [mc-xccy] curves=" << b.n_curves() << " knots=" << b.prob.n_knots()
@@ -348,7 +348,7 @@ TEST(MultiCcyXccy, CompiledBundleResidualMatchesAad) {
 // The dependency graph must order the EUR-in-USD spread AFTER its ESTR base; SOFR is an independent SCC.
 TEST(MultiCcyXccy, DependencyGraphOrdersEurInUsdAfterEstr) {
   const rb::MultiCcyBundle b = rb::build_xccy_bundle();
-  const auto sccs = cal::bundle_dependency_order(b.prob);  // dependency order: base before spread
+  const auto sccs = swaps::testing::bundle_dependency_order(b.prob);  // dependency order: base before spread
   int pos_estr = -1, pos_eurusd = -1;
   for (int i = 0; i < static_cast<int>(sccs.size()); ++i)
     for (int c : sccs[i]) {
@@ -681,10 +681,10 @@ TEST(XccyFx, HybridStreamingEqualsRecalibrate) {
 // EUR-in-USD genuinely depends on BOTH ESTR (spread base) and SOFR (FX-forward denominator / funding leg).
 TEST(XccyFx, DependsOnBothSofrAndEstr) {
   const rb::MultiCcyBundle b = rb::build_xccy_fx_bundle();
-  const auto adj = cal::bundle_adjacency(b.prob);
+  const auto adj = swaps::testing::bundle_adjacency(b.prob);
   const bool on_sofr = std::count(adj[b.EURUSD].begin(), adj[b.EURUSD].end(), b.SOFR) > 0;
   const bool on_estr = std::count(adj[b.EURUSD].begin(), adj[b.EURUSD].end(), b.ESTR) > 0;
-  const auto sccs = cal::bundle_dependency_order(b.prob);
+  const auto sccs = swaps::testing::bundle_dependency_order(b.prob);
   int p_sofr = -1, p_estr = -1, p_eurusd = -1;
   for (int i = 0; i < static_cast<int>(sccs.size()); ++i)
     for (int c : sccs[i]) {
@@ -755,7 +755,7 @@ TEST(XccyFx, AadJacobianMatchesFiniteDifference) {
 TEST(EurCurves, ThreeCurvesAreOneCyclicSCC) {
   const rb::MultiCcyBundle b = rb::build_eur_curves();
   const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
-  const auto sccs = cal::bundle_dependency_order(b.prob);
+  const auto sccs = swaps::testing::bundle_dependency_order(b.prob);
   std::size_t biggest = 0;
   for (const auto& s : sccs) biggest = std::max(biggest, s.size());
   std::cout << "  [eur3] curves=" << b.n_curves() << " knots=" << b.prob.n_knots()
@@ -944,8 +944,8 @@ TEST(EurCurves, CompiledBundleResidualMatchesAad) {
 TEST(EurMultiCcy, EurTrioIsOneSccAndXccyDependsOnEstrAndSofr) {
   const rb::MultiCcyBundle b = rb::build_eur_multicurrency();
   const double r = b.prob.residuals<double>(b.x_true).cwiseAbs().maxCoeff();
-  const auto adj = cal::bundle_adjacency(b.prob);
-  const auto sccs = cal::bundle_dependency_order(b.prob);
+  const auto adj = swaps::testing::bundle_adjacency(b.prob);
+  const auto sccs = swaps::testing::bundle_dependency_order(b.prob);
   std::size_t trio = 0;
   int pos_trio = -1, pos_eurusd = -1, pos_sofr = -1;
   for (int i = 0; i < static_cast<int>(sccs.size()); ++i) {

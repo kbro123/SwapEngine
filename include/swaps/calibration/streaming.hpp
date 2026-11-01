@@ -44,7 +44,6 @@
 #include <stdexcept>
 #include <vector>
 
-#include "swaps/calibration/background_jacobian.hpp"
 #include "swaps/calibration/normal_op.hpp"  // THE normal-equations operator: M, G, B, the rank-one re-scale
 #include "swaps/calibration/problem.hpp"  // band_slope / band_residual_d, QuoteKind
 #include "swaps/calibration/residual_engine.hpp"
@@ -90,14 +89,13 @@ inline const char* to_string(StreamStatus s) {
 // tests/hotpath_census.lock (with the scenario's allocation / factorisation pins), and tools/check_hotpath_census.py locks the
 // streamer's refresh / factorisation call sites: a new stage or site cannot land without a scenario and a pin.
 enum class StreamStage : unsigned {
-  DriftRefresh, TrackRescale, TrackRefresh, Breakpoint, Pin, Release, RescaleFallback, KinkDamp, Predicted, StallRefresh, FrozenCapRefresh, CommitReanchor, FinalRefresh, Truncated, PrefetchTake, Fail, FailRestore,
+  DriftRefresh, TrackRescale, Breakpoint, Pin, Release, RescaleFallback, KinkDamp, Predicted, StallRefresh, FrozenCapRefresh, CommitReanchor, FinalRefresh, Truncated, Fail, FailRestore,
   kCount
 };
 inline const char* to_string(StreamStage s) {
   switch (s) {
     case StreamStage::DriftRefresh: return "DriftRefresh";
     case StreamStage::TrackRescale: return "TrackRescale";
-    case StreamStage::TrackRefresh: return "TrackRefresh";
     case StreamStage::Breakpoint: return "Breakpoint";
     case StreamStage::Pin: return "Pin";
     case StreamStage::Release: return "Release";
@@ -109,7 +107,6 @@ inline const char* to_string(StreamStage s) {
     case StreamStage::CommitReanchor: return "CommitReanchor";
     case StreamStage::FinalRefresh: return "FinalRefresh";
     case StreamStage::Truncated: return "Truncated";
-    case StreamStage::PrefetchTake: return "PrefetchTake";
     case StreamStage::Fail: return "Fail";
     case StreamStage::FailRestore: return "FailRestore";
     case StreamStage::kCount: break;
@@ -123,7 +120,6 @@ struct StreamTick {
   bool refreshed = false;  // this tick recomputed the analytic Jacobian (>=1 refresh)
   int newton_steps = 0;    // total frozen Gauss-Newton steps taken this tick
   int refreshes = 0;       // analytic Jacobian recomputations this tick (0 on the pure fast path)
-  int prefetched = 0;      // refreshes served from the BACKGROUND worker (no inline Jacobian this tick)
   double drift = 0;        // ||q_new - q_anchor||_inf: the market move since the anchor this tick started from -- reported
                            // also when that move triggered the accuracy refresh (`refreshed`); until 2026-09-15 such a
                            // tick zeroed it (C8)
@@ -200,12 +196,9 @@ class StreamingCalibrator {
     // of convergence speed. A SQUARE full-rank problem is exact for any drift and is exempt (its fixed point
     // is r = 0 whatever M is), so the pure fast path is untouched.
     double refresh_drift = 1e-3;  // 10 bp
-    // SPECULATIVE background Jacobian (EXACT mode): a dedicated thread pre-computes M as drift grows, so
-    // a refresh swaps in a ready M (~µs) instead of computing J+factorize inline (0.5-20ms). Pure
-    // tail-latency win; correctness is identical (frozen-Newton is exact for any invertible M). Armed
-    // ONLY for a square, unbanded, unregularised problem (the worker hands over M alone; see the ctor).
-    bool prefetch = false;
-    double prefetch_drift = 5e-4;  // request a background M once drift from the anchor exceeds this (5bp)
+    // (The speculative BACKGROUND Jacobian -- a worker thread pre-computing M so a refresh became a matrix swap -- was
+    // deleted on 2026-11-01, review item 1.2: it armed only on a SQUARE row set, and every session bundle carries
+    // smoothing rows, so no production stream ever used it.)
     // (A smoothness regulariser is not an option of the streamer any more, 2026-10-12: it is CONSTRAINT ROWS of the
     // problem -- BundleProblem::constraints, regularize.hpp add_smoothing_rows -- so the engine's rows are the frozen
     // system, r = [r_quotes; R·x] and J = [J; R], with nothing stacked here. Until 2026-10-09 the same algebra was an
@@ -263,12 +256,6 @@ class StreamingCalibrator {
     // exactly -- and so, to the tie-breaker's O(w^2) leak, does a square quote set plus its smoothing rows
     // (Options::tie_breaker_rows), which is therefore exempt too (K48).
     drift_refresh_ = (n_res_ - opt_.tie_breaker_rows != static_cast<int>(x0.size())) || !bands_.empty();
-    // The background worker hands over M ONLY (no B, no band re-scaling, and its private engine copy never
-    // sees a later set_quotes), which is exact for a SQUARE, unbanded, unregularised problem and wrong for
-    // the rest (E3 register S3 / G5): a regularised or banded stream would mix an un-regularised M with a
-    // stale B and converge to the wrong fixed point. So the prefetch is armed only where it is exact;
-    // elsewhere the option is ignored (prefetch_hits() stays 0).
-    if (opt_.prefetch && !drift_refresh_ && n_res_ == static_cast<int>(x0.size())) bg_ = std::make_unique<BackgroundJacobian<Problem>>(prob);
     if (!set_anchor(x0, q0))
       throw std::invalid_argument("StreamingCalibrator: the Jacobian at the anchor state is non-finite");
     breakeven_steps_ = opt_.breakeven_steps > 0.0 ? opt_.breakeven_steps : kBreakevenCap;
@@ -397,7 +384,6 @@ class StreamingCalibrator {
   const Eigen::VectorXd& anchor_market() const { return q_anchor_; }
   const Eigen::MatrixXd& sensitivity() const { return op_.M(); }
   int refresh_count() const { return refresh_count_; }
-  int prefetch_hits() const { return prefetch_hits_; }  // refreshes served from the background worker
   int rescale_count() const { return rescale_count_; }  // band-edge re-scales (cheap M refactors) so far
   // GUARD COUNTERS (2026-09-15, G1): cumulative and allocation-free; the guard tests read deltas. factor_count is every factorisation
   // of M (construction, an anchor or refresh, and rescale_row's degenerate-update fallback); pin_count / release_count are the band
@@ -524,16 +510,9 @@ class StreamingCalibrator {
         //             linearised multiplier misjudged by a hair: it is re-pinned for good, s clamped).
         apply_pins();
         if (track_bands()) {
-          if (need_full_) {
-            stamp(StreamStage::TrackRefresh);
-            if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
-            t.refreshed = true;
-            ++t.refreshes;
-          } else {
-            stamp(StreamStage::TrackRescale);
-            ++t.rescales;  // the operator was updated row by row inside track_bands (rescale_row)
-            ++rescale_count_;
-          }
+          stamp(StreamStage::TrackRescale);
+          ++t.rescales;  // the operator was updated row by row inside track_bands (rescale_row)
+          ++rescale_count_;
           frozen = 0;
           dx_prev = -1.0;  // a new operator: the contraction history no longer applies
           have_last_step_ = false;  // an active-set change legitimately turns the step
@@ -543,7 +522,7 @@ class StreamingCalibrator {
       double alpha = 1.0;
       std::size_t hit = 0;
       int hit_piece = 0;
-      if (!bands_.empty() && have_J_) alpha = breakpoint(&hit, &hit_piece);
+      if (!bands_.empty()) alpha = breakpoint(&hit, &hit_piece);
       // KINK 2-CYCLE (FLK2, 2026-09-14). On a piecewise-smooth residual (MonotoneCubic's Hyman filter) a Newton step can
       // jump a kink and the step from the far side jumps straight back: dx_{k+1} = -dx_k, |r| unchanged, and a refresh at
       // either point reproduces it until max_refresh fails the tick (desk_mixed: knot 11 alternating 0.0341513 / 0.0342819
@@ -609,8 +588,6 @@ class StreamingCalibrator {
         // A drift refresh anchored J at the PREVIOUS solution; the frozen-J answer is then exact only to
         // second order in the move. One more anchor at the converged point and a re-converge (a genuine
         // Newton step with the fresh J) removes that term -- two Jacobians per refresh_drift of drift.
-        // Not with the background prefetch on: there tail latency is the contract, and the second inline
-        // Jacobian would be exactly the spike the worker exists to hide.
         if (truncated_ && !full_rank_) {
           // TWO-THRESHOLD COMMIT RULE: this point is a fixed point of a TRUNCATED operator -- exact only in the directions it
           // kept. Re-anchor here at the shared threshold and re-converge (the rest of the tick stays at full rank).
@@ -627,7 +604,7 @@ class StreamingCalibrator {
           have_last_step_ = false;
           continue;
         }
-        if (drift_refreshed && !final_refresh_done && !bg_ && t.refreshes < opt_.max_refresh) {
+        if (drift_refreshed && !final_refresh_done && t.refreshes < opt_.max_refresh) {
           final_refresh_done = true;
           stamp(StreamStage::FinalRefresh);
           if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
@@ -651,10 +628,6 @@ class StreamingCalibrator {
     }
     x_cur_ = x;  // committed: the exact solution at q_new
     q_cur_ = q_new;
-    // Speculatively pre-compute the NEXT M once the market has drifted enough that a refresh is plausibly
-    // near -- so the worker is done (on a spare core) before the envelope is hit. Coalesces: a request
-    // while one is in flight just updates the target x.
-    if (bg_ && !bg_->computing() && t.drift > opt_.prefetch_drift) bg_->request(x_cur_);
     t.stages = tick_stages_;
     return t;
   }
@@ -762,11 +735,9 @@ class StreamingCalibrator {
   // FREE rows: reconcile the installed slope with the piece the model value is ACTUALLY on (the breakpoint
   // prediction is linear; the true quote map is not, so a walked-onto breakpoint can land a hair either side --
   // and a row not on a breakpoint can still change piece under a full step). Updates J_cur_ rows whose slope
-  // changed; returns true if M must be rebuilt. Sets need_full_ when a row cannot be re-scaled (no J
-  // behind M: it came from the background worker).
+  // changed; returns true if M must be rebuilt.
   bool track_bands() {
     bool changed = false;
-    need_full_ = false;
     for (std::size_t k = 0; k < bands_.size(); ++k) {
       BandRow& b = bands_[k];
       if (!b.active || b.pin >= 0) continue;  // pinned: handled by apply_pins / verify_pins
@@ -783,11 +754,6 @@ class StreamingCalibrator {
       const double slope = b.s(b.piece);
       if (slope == b.slope_cur) continue;
       changed = true;
-      if (!have_J_) {
-        need_full_ = true;
-        b.slope_cur = slope;
-        continue;
-      }
       SWAPS_TRACE("  row %d actual piece %d slope %.2f->%.2f\n", b.row, b.piece, b.slope_cur, slope);
       rescale_row(k, slope);
     }
@@ -860,24 +826,9 @@ class StreamingCalibrator {
     n_pinned_ = 0;
   }
 
-  // One Jacobian refresh (either trigger: stall or drift). Prefer a Jacobian the BACKGROUND worker
-  // already computed (a ~µs matrix swap); fall back to an inline compute only if none is ready. Adopting
-  // a slightly-stale background M is exact for a square problem -- it just sets the frozen-Newton rate --
-  // so no freshness check is needed (a too-stale M merely triggers another refresh, bounded by
-  // max_refresh). The worker hands over M only, so band rows cannot be re-scaled off it (have_J_).
+  // One Jacobian refresh (either trigger: stall or drift): a new anchor at (x, q), counted on the tick.
   bool refresh(const Eigen::VectorXd& x, const Eigen::VectorXd& q, StreamTick& t) {
-    if (bg_ && bg_->try_take(bg_x_, bg_M_)) {
-      op_.adopt_M(std::move(bg_M_));
-      x_anchor_ = std::move(bg_x_);
-      q_anchor_ = q;  // reset drift from here
-      have_J_ = false;
-      ++refresh_count_;
-      ++t.prefetched;
-      ++prefetch_hits_;
-      stamp(StreamStage::PrefetchTake);
-    } else {
-      if (!set_anchor(x, q)) return false;  // inline compute (the spike the prefetch exists to hide)
-    }
+    if (!set_anchor(x, q)) return false;
     t.refreshed = true;
     ++t.refreshes;
     return true;
@@ -894,7 +845,7 @@ class StreamingCalibrator {
     }
     take_jacobian(x, q, J_ref_, sides_from_j ? &r_anchor_ : nullptr);  // in place (C6); band term consistent with residuals_vs(·,q)
     if (!J_ref_.allFinite()) {
-      if (have_J_) J_ref_ = J_cur_;  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
+      if (J_cur_.size() > 0) J_ref_ = J_cur_;  // keep the previous anchor usable (J_cur_ is its re-scaled copy)
       return false;
     }
     x_anchor_ = x;
@@ -930,7 +881,6 @@ class StreamingCalibrator {
     J_cur_ = J_ref_;  // sized once (the first anchor); the same shape after
     for (const BandRow& b : bands_)
       if (b.active && b.slope_cur == 0.0) J_cur_.row(b.row).setZero();  // a dead-zone anchor: installed slope 0, reference row the quote row
-    have_J_ = true;
     factor(J_cur_);
     ++refresh_count_;
     return true;
@@ -971,15 +921,15 @@ class StreamingCalibrator {
     const int row = b.row;
     // c = new/old: a row leaving a zero-slope piece has no finite ratio (its row was zero) -- the full factorisation below.
     const double c = b.slope_cur != 0.0 ? new_slope / b.slope_cur : std::numeric_limits<double>::infinity();
-    if (have_J_ && c != 1.0 && std::isfinite(c) && opt_.rescale_update && op_.rank_one_update(row, c, J_cur_)) {  // J_cur_ is still the OLD J here
+    if (c != 1.0 && std::isfinite(c) && opt_.rescale_update && op_.rank_one_update(row, c, J_cur_)) {  // J_cur_ is still the OLD J here
       J_cur_.row(row) = J_ref_.row(row) * (new_slope / b.slope_ref);
       b.slope_cur = new_slope;
       return;
     }
     J_cur_.row(row) = J_ref_.row(row) * (new_slope / b.slope_ref);
     b.slope_cur = new_slope;
-    if (have_J_) stamp(StreamStage::RescaleFallback);
-    if (have_J_) factor(J_cur_);  // degenerate update: fall back to a full factorisation
+    stamp(StreamStage::RescaleFallback);
+    factor(J_cur_);  // degenerate update: fall back to a full factorisation
   }
 
   int n_res_;                               // every row of the problem: the quotes, then its constraint rows
@@ -990,13 +940,12 @@ class StreamingCalibrator {
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
   Eigen::VectorXd q_cur_;  // the market x_cur_ solves (a failed tick restores the anchor here)
   int refresh_count_ = 0;
-  int prefetch_hits_ = 0;
   int rescale_count_ = 0;
   int factor_count_ = 0, pin_count_ = 0, release_count_ = 0;  // guard counters (factor_count() ...)
   unsigned tick_stages_ = 0;  // StreamStage bits of the tick in progress (copied into StreamTick::stages on return)
   void stamp(StreamStage s) { tick_stages_ |= 1u << static_cast<unsigned>(s); }
   // Band-edge tracking: the frozen anchor Jacobian, its current re-scaled copy, and per banded row the
-  // slope at the anchor / now. have_J_ is false when M was adopted from the background worker.
+  // slope at the anchor / now.
   std::vector<BandRow> bands_;  // the tracked rows and the walk's state on each (one record per row)
   bool all_strict_ = true;      // every tracked map strictly monotone (anchor sides from residuals, S2)
   Eigen::VectorXd qm_;          // the model values the last eval() read (sized once; tracked rows copy theirs)
@@ -1004,14 +953,8 @@ class StreamingCalibrator {
   std::vector<char> band_eligible_;          // per row: may carry a tracked band (FX forwards never do)
   int n_pinned_ = 0;
   Eigen::MatrixXd J_ref_, J_cur_;
-  bool have_J_ = false;
-  bool need_full_ = false;
   bool drift_refresh_ = false;  // Options::refresh_drift applies (a non-square row set / a tracked band)
   double breakeven_steps_ = kBreakevenCap;  // adaptive stall: refresh cost in residual-evaluation units
-  // Speculative background Jacobian (null unless opt_.prefetch): a dedicated thread computes the next M.
-  std::unique_ptr<BackgroundJacobian<Problem>> bg_;
-  Eigen::VectorXd bg_x_;  // scratch for a taken background result
-  Eigen::MatrixXd bg_M_;
   // Per-tick scratch so the exact frozen-Newton loop allocates nothing (sized on first use).
   Eigen::VectorXd x_, r_, dx_;
   Eigen::VectorXd r_anchor_;  // set_anchor: the residuals at (x, q) the Jacobian pass returns, read for the band sides (S2)

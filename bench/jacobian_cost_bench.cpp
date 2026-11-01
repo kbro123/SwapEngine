@@ -1,9 +1,9 @@
-// Profiling probe for the SPECULATIVE background-Jacobian idea (research): what does a Jacobian recompute
-// actually cost on the streaming path, vs a normal frozen-Newton tick? These numbers set the ceiling on
-// what a background-thread prefetch could hide. Ours-only (not a gate metric).
+// Profiling probe: what does a Jacobian recompute actually cost on the streaming path, vs a normal
+// frozen-Newton tick? (Written for the speculative background-Jacobian idea, which was retired on 2026-11-01
+// -- review item 1.2; the refresh cost it measures is still the one a stall or drift refresh pays.)
+// Ours-only (not a gate metric).
 //
-//   BM_*_TickFastPath   : a streaming tick that RIDES the cached M (the common case) -- the cost the
-//                         prefetch does NOT touch.
+//   BM_*_TickFastPath   : a streaming tick that RIDES the cached M (the common case).
 //   BM_*_JacAAD         : the full AAD Jacobian recompute (the expensive refresh; the ONLY option for a
 //                         non-linear curve or an un-compiled problem).
 //   BM_*_JacAnalytic    : the analytic W-cache Jacobian refresh (compiled problems).

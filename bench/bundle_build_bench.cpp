@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
-#include "swaps/calibration/bundle_stage.hpp"
+#include "bundle_stage.hpp"  // tests/: the staged solve, a test/bench fixture since 2026-11-01
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 #include "swaps/curve/curve_module.hpp"
@@ -215,7 +215,7 @@ BENCHMARK(BM_BundleWarm4_Warm);
   BENCHMARK(BM_BundleBuild##NN##_OursJoint);                                                          \
   static void BM_BundleBuild##NN##_OursStaged(benchmark::State& s) {                                  \
     const auto& f = FX();                                                                             \
-    for (auto _ : s) { auto r = cal::calibrate_staged(f.prob, f.x0, true); benchmark::DoNotOptimize(r.x.data()); } \
+    for (auto _ : s) { auto r = swaps::testing::calibrate_staged(f.prob, f.x0, true); benchmark::DoNotOptimize(r.x.data()); } \
   }                                                                                                   \
   BENCHMARK(BM_BundleBuild##NN##_OursStaged);
 
