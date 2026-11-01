@@ -86,7 +86,7 @@ TEST(BondReference, ExcelOpenFormulaPriceYield) {
                  issue = bld::Date::ymd(2019, 8, 15);
   for (int m : {2028, 2031, 2034, 2044}) {
     for (double coupon : {0.02, 0.045, 0.07}) {
-      const bld::BuiltBond b = bld::us_treasury(val, settle, issue, bld::Date::ymd(m, 2, 15), coupon);
+      const bld::BuiltBond b = bld::bond_from_convention("US-TREASURY", val, settle, issue, bld::Date::ymd(m, 2, 15), coupon);
       for (double y : {0.02, 0.04, 0.06}) {
         const double clean_ref = excel_clean(b, settle, coupon, 2, y);
         EXPECT_NEAR(px::bond_clean_from_yield(b.yield, y), clean_ref, 1e-12) << "price m=" << m;
@@ -115,7 +115,7 @@ TEST(BondReference, CfrAppendixBShortFirstCoupon) {
                  fcpn = bld::Date::ymd(2024, 11, 15), qp = bld::Date::ymd(2024, 5, 15),
                  mat = bld::Date::ymd(2034, 11, 15);
   const double coupon = 0.045, f = 2.0;
-  const bld::BuiltBond wi = bld::us_treasury_wi(val, dated, fcpn, mat, coupon);  // settle == dated (new issue)
+  const bld::BuiltBond wi = bld::wi_bond_from_convention("US-TREASURY", val, dated, fcpn, mat, coupon, dated);  // settle == dated (new issue)
   const double E = double(fcpn - qp), s = double(fcpn - dated) / E, w0 = double(fcpn - dated) / E;
   const int N = static_cast<int>(wi.yield.flows.size());
   const double c = coupon / f;
@@ -176,8 +176,8 @@ TEST(BondReference, ExternalStrataGolden) {
     } else {
       ++seasoned_rows;
     }
-    const bld::BuiltBond b = when_issued ? bld::us_treasury_wi(vdate, iss, bld::Date::from_iso(fc), mat, cpn)
-                                         : bld::us_treasury(vdate, settle, iss, mat, cpn);
+    const bld::BuiltBond b = when_issued ? bld::wi_bond_from_convention("US-TREASURY", vdate, iss, bld::Date::from_iso(fc), mat, cpn, iss)
+                                         : bld::bond_from_convention("US-TREASURY", vdate, settle, iss, mat, cpn);
     EXPECT_NEAR(b.accrued, std::stod(ac), 1e-9) << "accrued row " << rows;
     EXPECT_NEAR(px::bond_clean_from_yield(b.yield, y), std::stod(cl), 1e-9) << "clean row " << rows;
     EXPECT_NEAR(px::bond_dirty_from_yield(b.yield, y), std::stod(di), 1e-9) << "dirty row " << rows;

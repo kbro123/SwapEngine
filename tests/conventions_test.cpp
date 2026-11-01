@@ -149,10 +149,13 @@ TEST(Conventions, BondConventionsDriveTheNamedBuilders) {
   // DB-driven construction == the hand-written named builder, to the last bit.
   const auto db_street = bld::bond_from_convention("US-TREASURY", value, settle, issue, maturity, coupon);
   const auto db_tsy = bld::bond_from_convention("US-TREASURY-TSY", value, settle, issue, maturity, coupon);
-  EXPECT_EQ(px::bond_dirty_from_yield(db_street.yield, y),
-            px::bond_dirty_from_yield(bld::us_treasury(value, settle, issue, maturity, coupon).yield, y));
-  EXPECT_EQ(px::bond_dirty_from_yield(db_tsy.yield, y),
-            px::bond_dirty_from_yield(bld::us_treasury_tsy(value, settle, issue, maturity, coupon).yield, y));
+  // (The named spellings us_treasury / us_treasury_tsy, which inlined freq = 2 and the stub flags, were deleted on
+  // 2026-11-01 -- review item 1.9: the convention id IS the bond type.) The two conventions resolve to the two rules:
+  EXPECT_EQ(db_street.yield.conv.stub, px::StubDiscount::Compound);
+  EXPECT_TRUE(db_street.yield.conv.final_period_simple);
+  EXPECT_EQ(db_tsy.yield.conv.stub, px::StubDiscount::Simple);
+  EXPECT_FALSE(db_tsy.yield.conv.final_period_simple);
+  EXPECT_EQ(db_street.yield.conv.freq, 2.0);
 
   // ... and the two conventions are the two DIFFERENT numbers QuantLib gives for the same bond.
   Settings::instance().evaluationDate() = QuantLib::Date(15, January, 2024);

@@ -25,7 +25,7 @@ namespace {
 
 b::Date d(const char* iso) { return b::Date::from_iso(iso); }
 
-b::SwapConv sofr_ois() { return b::Index("USD-SOFR").par_convention().resolve(); }
+b::SwapConv sofr_ois() { return b::Index("USD-SOFR").swap_conv(); }
 
 void premises(const b::SwapConv& sc) {
   ASSERT_EQ(sc.product_id, "USD-SOFR-OIS") << "premise";

@@ -28,7 +28,7 @@ TEST(StreamingDriftReportRepro, ATickThatRefreshedOnItsDriftReportsThatDrift) {
 
   const cal::StreamTick t = st.update(r.target);
   ASSERT_TRUE(t.converged) << t.reason();
-  ASSERT_TRUE(t.refreshed) << "premise: the drift triggered the accuracy refresh";
+  ASSERT_GT(t.refreshes, 0) << "premise: the drift triggered the accuracy refresh";
   EXPECT_DOUBLE_EQ(t.drift, moved) << "a tick reports the market move it started from, also when that move refreshed it";
 
   // The next tick measures from the anchor the refresh set: a 0.01 bp move reads as 0.01 bp.
@@ -36,6 +36,6 @@ TEST(StreamingDriftReportRepro, ATickThatRefreshedOnItsDriftReportsThatDrift) {
   q2[0] += 1e-6;
   const cal::StreamTick t2 = st.update(q2);
   ASSERT_TRUE(t2.converged) << t2.reason();
-  EXPECT_FALSE(t2.refreshed);
+  EXPECT_EQ(t2.refreshes, 0);
   EXPECT_NEAR(t2.drift, 1e-6, 1e-12);
 }

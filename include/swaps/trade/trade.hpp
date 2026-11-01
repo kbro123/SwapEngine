@@ -66,17 +66,6 @@ struct Trade {
   int forecast_curve = 0;
   int discount_curve = 0;
 
-  // Optional booked structure (defaults empty => a plain scalar-rate, no-principal-exchange swap, and
-  // to_position() is byte-identical to before):
-  //   * fixed_rate_schedule: per-fixed-coupon contract rates for a step-up / amortizer-with-step /
-  //     structured swap. When set its size MUST equal the built fixed leg's coupon count; a CONSTANT
-  //     schedule reproduces the scalar `fixed_rate` (to FP summation order). Carried onto the Position's
-  //     fixed_rates, which routes the position to the templated fallback (off the compiled hot path).
-  //   * principal_exchanges: (date, signed amount per unit notional) notional-exchange cashflows for an
-  //     xccy / resolved trade (initial + final principal). Resolved to discount-curve time in to_position().
-  std::vector<double> fixed_rate_schedule;
-  std::vector<std::pair<build::Date, double>> principal_exchanges;
-
   // Factory for the common case: a vanilla fixed-vs-float swap. Stores the resolved effective/maturity
   // dates; `trade_date` defaults to `effective` (callers can overwrite the field afterwards).
   static Trade vanilla_swap(std::string id, double notional, Pay pay, double fixed_rate,
@@ -155,25 +144,17 @@ struct Trade {
     p.fixed_coupons = std::move(fx.coupons);
     p.fixed_curve = discount_curve;
     p.fixed_rate = fixed_rate;
-
-    // Optional booked structure (both default empty -> the block leaves p byte-identical to a plain swap).
-    if (!fixed_rate_schedule.empty()) {
-      if (fixed_rate_schedule.size() != p.fixed_coupons.size())
-        throw std::invalid_argument("fixed_rate_schedule size must equal the fixed leg's coupon count");
-      p.fixed_rates = fixed_rate_schedule;  // stepped fixed rate -> routes to the templated fallback
-    }
-    for (const auto& [d, amt] : principal_exchanges)
-      p.principal_flows.emplace_back(build::curve_time(value_date, d), amt);
-
+    // (A stepped fixed-rate schedule / principal exchanges on a Trade were deleted 2026-11-01, review 1.10: no decoder
+    // ever set them. A "positions" row carries fixed_rates / principal_flows directly.)
     return p;
   }
 
   // Materialize resolving the conventions from THE TRADE'S OWN index (conventions DB via build::Index ->
-  // par_convention). This is the honest form for a mixed book: a USD-SOFR swap and a EUR-ESTR swap each
+  // swap_conv). This is the honest form for a mixed book: a USD-SOFR swap and a EUR-ESTR swap each
   // roll under their own calendar / day count / frequency — one caller-supplied SwapConv cannot serve
   // both. The (vd, conv) overload above remains for callers that resolved (or overrode) the convention.
   portfolio::MultiCurveBook::Position to_position(const build::Date& value_date) const {
-    return to_position(value_date, build::Index(index).par_convention().resolve());
+    return to_position(value_date, build::Index(index).swap_conv());
   }
 
   // Direction-signed notional for the payer-of-fixed valuation kernel. Payer of fixed => +, receiver => -.

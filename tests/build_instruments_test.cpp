@@ -128,13 +128,9 @@ TEST(BuildInstruments, AScheduledObservationResolvesToTheBakedOne) {
     const auto baked = b::observation(vd, s, e, "averaged", 0.0, "ACT/360", "USD-FED");
     const auto sched = b::scheduled_observation(vd, s, e, "averaged", "ACT/360", "USD-FED", "USD-FEDFUNDS");
 
-    swaps::pricing::FixingSchedule fs;
-    fs.index = sched.fixing_index;
-    fs.days = sched.fixing_schedule;
-    fs.tau_index = sched.tau_index;
-    fs.compounded = sched.compounded;
     const swaps::pricing::PricingContext ctx{static_cast<int>(vd.serial()), nullptr};  // nothing has fixed yet
-    const auto resolved = swaps::pricing::resolve(fs, ctx);
+    auto resolved = sched;
+    swaps::pricing::resolve_into(resolved, ctx);
 
     ASSERT_EQ(resolved.sub_start.size(), baked.sub_start.size()) << w.what;
     for (std::size_t i = 0; i < baked.sub_start.size(); ++i) {

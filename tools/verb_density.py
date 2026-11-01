@@ -97,7 +97,7 @@ def vocabulary():
     build -= {"sv_str", "upper"}  # string helpers, not resolvers
     ref_types = set(re.findall(r"^struct (\w+)", rd("include/swaps/build/ref_data.hpp"), re.M))
     for must, got in (({"product", "index", "require_product", "require_bond"}, db),
-                      ({"swap_conv", "conv_from_product"}, build), ({"Calendar", "Index"}, ref_types)):
+                      ({"swap_conv", "conv_from_product"}, build), ({"Index"}, ref_types)):
         if not must <= got:
             raise SystemExit(f"verb_density: lookup vocabulary extraction broke (missing {sorted(must - got)}); "
                              "a header changed shape -- fix vocabulary() before trusting any count")

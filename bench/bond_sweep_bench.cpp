@@ -152,7 +152,7 @@ struct Fixture {
       const QuantLib::Date s = b->settlementDate();
       const bld::Date settle = bld::Date::ymd(s.year(), unsigned(int(s.month())), unsigned(s.dayOfMonth()));
 
-      const bld::BuiltBond ours = bld::us_treasury(value, settle, issue, maturity, coupon);
+      const bld::BuiltBond ours = bld::bond_from_convention("US-TREASURY", value, settle, issue, maturity, coupon);
       ql.push_back(b);
       dcs.push_back(dc);
       settles.push_back(s);

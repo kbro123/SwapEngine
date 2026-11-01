@@ -24,13 +24,13 @@ namespace px = swaps::pricing;
 namespace json = boost::json;
 
 TEST(SeasonedEvalDateRepro, ADayBeforeCurveTimeZeroIsPastEvenWithNoEvaluationDate) {
-  px::FixingSchedule sch;
-  sch.index = "USD-SOFR";
-  sch.tau_index = 1.0;
-  sch.compounded = true;
-  sch.days.push_back(px::FixingDay{int(b::Date::from_iso("2025-07-10").serial()), 1.0 / 360.0, -0.99, -0.987, 1.0});
+  px::RateObservation o;
+  o.fixing_index = "USD-SOFR";
+  o.tau_index = 1.0;
+  o.compounded = true;
+  o.fixing_schedule.push_back(px::FixingDay{int(b::Date::from_iso("2025-07-10").serial()), 1.0 / 360.0, -0.99, -0.987, 1.0});
   const px::PricingContext no_date{};  // no evaluation date, no fixings table
-  EXPECT_THROW((void)px::resolve(sch, no_date), px::MissingFixing)
+  EXPECT_THROW(px::resolve_into(o, no_date), px::MissingFixing)
       << "a day starting at curve time -0.99 was forecast as if it were in the future";
 }
 

@@ -307,9 +307,6 @@ class BundleSession {
   // times the NPV pass ONLY, exactly as price_portfolio does (also cached in last_price_us()). Allocation-
   // free on an all-compilable book — the streaming hot path. Throws if no book is bound.
   PortfolioReprice reprice_bound() const;
-  // True once bind_portfolio() has been called (the compiled twin may be rebuilt lazily, but the bound book
-  // is retained until the next bind_portfolio()).
-  bool has_bound_portfolio() const { return static_cast<bool>(bound_book_); }
 
   // ---- batched swaption VOL CUBE reprice off the calibrated curve (the options hot path) ----------
   // Price a whole expiry x tenor x strike surface off the CURRENTLY CALIBRATED curve in one pass. The spec
@@ -426,7 +423,6 @@ class BundleSession {
   }
   int evaluation_date() const { return eval_date_; }
   int n_unresolved() const { return n_unresolved_; }
-  const swaps::pricing::FixingTable& fixings() const { return fixings_; }
 
  private:
   // A BOOK's fixings-resolvable coupons (a seasoned trade's accruing period, or a "positions" row that

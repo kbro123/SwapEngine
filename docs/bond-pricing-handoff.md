@@ -22,7 +22,7 @@ a small yield convention), never a subclass, so new bond types are new builders 
 - **Yield/street space** — `dirty(y) = Σ CF·(1+y/f)^{−E}`, penny-perfect vs the street convention.
   `portfolio::BondUniverse` is the batched **price↔yield-to-maturity** sweep (Horner fast path).
 
-**When-issued** (`build::when_issued_bond`/`us_treasury_wi`): issue-date settlement (zero accrued for a new
+**When-issued** (`build::when_issued_bond` / `wi_bond_from_convention`): issue-date settlement (zero accrued for a new
 issue, original-dated accrual for a reopening) + prorated short first coupon, per 31 CFR Part 356 App B.
 
 ## 2. File inventory
@@ -30,9 +30,9 @@ issue, original-dated accrual for a reopening) + prorated short first coupon, pe
 New engine headers (all header-only, templated, QuantLib-free):
 - `include/swaps/pricing/bond.hpp` — `Bond`/`BondCashflow`, `YieldBond`/`YieldFlow`, the pricing kernels.
 - `include/swaps/portfolio/bond_universe.hpp` — `BondUniverse` (yield sweep), `CompiledBondBook` (curve).
-- `include/swaps/build/bond.hpp` — `fixed_rate_bond`/`us_treasury`/`when_issued_bond`/`us_treasury_wi`,
+- `include/swaps/build/bond.hpp` — `fixed_rate_bond`/`bond_from_convention`/`when_issued_bond`/`wi_bond_from_convention` (the `us_treasury*` spellings were deleted 2026-11-01),
   `accrued_interest`.
-- `include/swaps/build/day_count.hpp` — added ACT/ACT ISDA (`year_frac`) and ICMA (`act_act_icma`).
+- `include/swaps/build/day_count.hpp` — added ACT/ACT ISDA (`year_frac`); the ICMA accrual is baked into the bond exponents (the standalone `act_act_icma` was deleted 2026-11-01, no consumer).
 
 Tests:
 - `tests/bond_yield_test.cpp` — QL-FREE self-consistency (in `swaps_tests`).

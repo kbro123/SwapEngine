@@ -386,26 +386,6 @@ inline cal::Instrument turn_jump(int ci, int turn_index, double market) {
   return ins;
 }
 
-// ---- Convention-object overloads: let a caller pass a build::Convention (from Index::par_convention())
-// straight to the builders, so the ground-up flow reads Index -> Convention -> Instrument object-to-object
-// instead of threading a raw SwapConv. Each just flattens via conv.resolve(). ------------------------------
-inline cal::Instrument par_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int disc,
-                                double market, double float_spread = 0.0,
-                                const std::vector<double>& notionals = {},
-                                const std::string& fixed_freq = "") {  // "" = the product's
-  return par_swap(vd, conv.resolve(), mat, fc, disc, market, float_spread, notionals, fixed_freq);
-}
-inline cal::Instrument basis_swap(const Date& vd, const Convention& conv, const Date& mat, int fc, int bench,
-                                  int disc, double market, double fwd_spread = 0.0,
-                                  const std::vector<double>& notionals = {}) {
-  return basis_swap(vd, conv.resolve(), mat, fc, bench, disc, market, fwd_spread, notionals);
-}
-inline cal::FixedLeg fixed_coupons(const Date& vd, const Convention& conv, const Date& mat, int disc,
-                                   const std::string& fixed_freq = "",  // "" = the product's
-                                   const std::vector<double>& notionals = {}) {
-  return fixed_coupons(vd, conv.resolve(), mat, disc, fixed_freq, notionals);
-}
-
 }  // namespace swaps::build
 
 #endif  // SWAPS_BUILD_INSTRUMENTS_HPP

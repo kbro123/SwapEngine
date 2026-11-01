@@ -680,35 +680,6 @@ std::string run_json(const json::object& o) {
     // if-arms before, each re-parsing the request string).
 #include "run_json_stateless.gen.inc"
 
-    // Stateless SWAPTION verb: price European swaptions off a calibrated curve (Bachelier / SABR).
-
-    // Stateless SABR strip calibration (no bundle): fit (alpha,rho,nu) to a market vol strip.
-
-    // Stateless BONDS verb (no bundle): street/yield-space bond math (price<->yield, accrued, duration,
-    // convexity) for a list of fixed-rate bonds.
-
-    // Stateless ASSET_SWAP verb: par asset-swap spread(s) for bonds off a calibrated bundle (curve-space).
-
-    // Stateless BOND_FUTURE verb: CTD selection, conversion factors, gross/net basis, implied repo.
-
-    // Stateless INFLATION verb: ZCIS/YoY breakeven-inflation curve calibration + index/breakeven output.
-
-    // Stateless CREDIT verb: hazard-rate survival curve calibrated to a par CDS-spread strip.
-
-    // Stateless FX_OPTION / FX_VOL verb: Garman-Kohlhagen vanilla FX options + delta-quoted smile.
-
-    // Conventions registry (P2): add/override market conventions at runtime; list what the engine knows.
-
-    // Stateless NDF verb: non-deliverable FX forwards / NDS (covered-interest-parity, linear, no vol).
-
-    // Stateless CALIB_REPORT verb: calibration diagnostics (Jacobian condition number + identifiability).
-
-    // Stateless RV verbs (api/rv.cpp): batched bond-universe analytics; the minimum-pricing-error govvie
-    // fit (spline / Nelson-Siegel / Svensson) with the per-bond RV ladder; and the headline swap-spread
-    // derivation returning the {pin, asw} asset-swap BASIS rows as instrument JSON.
-
-    // Stateless EXPOSURE verb: EPE/ENE/PFE counterparty-exposure profile for a swap book off a calibrated curve.
-
     if (!o.contains("bundle")) return err("request is missing the required 'bundle' object");
 
     cal::BundleProblem prob = bundle_from_json(o.at("bundle"));

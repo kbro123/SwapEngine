@@ -186,7 +186,6 @@ class CompiledBundleResidual {
     }
   }
 
-  const pricing::CompiledCurveSet& curve_set() const { return cs_; }
   // The piecewise-linear tier's observability: is it engaged, how many syncs changed W, of which analytic,
   // distinct cells visited (opt-in: enable_pwl_stats, a std::set insert per change).
   bool pwl_active() const { return cs_.pwl(); }
@@ -203,21 +202,9 @@ class CompiledBundleResidual {
   // a Portfolio row has several components. Observability for the row model, not a hot-path quantity.
   int n_terms() const { return static_cast<int>(terms_.size()); }
 
-  // Overwrite the quote RHS -- targets and soft-quote bands -- WITHOUT touching the compiled structure.
-  // The W-cache, batches and scatter maps depend only on topology (legs, times, curve roles); the market
-  // vector and the row maps are plain per-row data read at residual time. This is what makes a session's
-  // rebind/recalibrate a true warm path: mutate the RHS here, re-solve on the SAME engine, no recompile.
-  // `p` must be the same problem shape this engine was compiled from (row count enforced; topology is the
-  // caller's contract, guarded upstream by the structure fingerprint).
-  void set_quotes(const BundleProblem& p) {
-    if (p.n_residuals() != n_gen_)
-      throw std::invalid_argument("CompiledBundleResidual::set_quotes: instrument count differs");
-    for (int row = 0; row < n_gen_; ++row) {
-      const Instrument& ins = p.row(row);
-      set_quote(row, ins.market, ins.band_lower, ins.band_upper, ins.band_decay);
-    }
-    // The DF memo (df_x_) keys on x alone -- DF = exp(-Wx) is quote-independent -- so it stays valid.
-  }
+  // Quote updates are SCALAR and per row (the hybrid requotes row by row; the whole-problem set_quotes this engine
+  // used to carry had no caller, 2026-11-01). The W-cache, batches and scatter maps depend only on topology; the
+  // market vector and the row maps are per-row data read at residual time, and the DF memo keys on x alone.
   // SCALAR quote updates (the object model, 2026-09-10): the compiled structure is immutable, the quote RHS
   // is per-row data. No Instrument is copied. A log-residual (standalone FX-forward) row never carries a
   // band (the templated instrument_residual applies the log map first; see register_generic).
@@ -245,7 +232,6 @@ class CompiledBundleResidual {
       maps_dirty_ = true;
   }
   void set_market(int row, double market) { market_[row] = market; }
-  double market_of(int row) const { return market_[row]; }
   // The FX spot of row `row`'s resetting (MtM) leg (an Npv row under an FX move, SC2): the leg's weight in the float
   // batch IS the spot, so this re-scales that leg and its coupons in place -- bitwise a fresh compile at that spot. A
   // row without such a term is untouched (an XccyMtmBasis quote is spot-invariant: mtm/(fx·ann) with mtm ∝ fx).

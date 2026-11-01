@@ -40,10 +40,6 @@
 
 namespace swaps::pricing {
 
-// direction encoded as +1 (buy ND fwd) / −1 (sell). A convenience alias mirroring vol::CallPut's spirit.
-enum class NdfSide { Buy, Sell };
-inline double ndf_sign(NdfSide s) { return s == NdfSide::Buy ? 1.0 : -1.0; }
-
 // Covered-interest-parity fair outright: F = S·e^{(r_settle − r_nd)T} (settlement ccy per 1 ND unit).
 // r_settle plays the "domestic"/numeraire role, r_nd the "foreign"/asset role — so this is gk_forward.
 template <class S>
@@ -52,7 +48,7 @@ inline S ndf_fair_forward(const S& spot, double T, const S& r_settle, const S& r
 }
 
 // PV of an NDF, in SETTLEMENT-CURRENCY units, for a notional in ND-currency units. `direction` is a signed
-// scalar (+1 buy / −1 sell); use ndf_sign(NdfSide) to build it. A trade struck at ndf_fair_forward has PV 0.
+// scalar (+1 buy / −1 sell). A trade struck at ndf_fair_forward has PV 0.
 template <class S>
 inline S ndf_pv(const S& spot, const S& strike, double T, const S& r_settle, const S& r_nd,
                 const S& notional, const S& direction) {

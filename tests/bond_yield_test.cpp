@@ -156,7 +156,7 @@ TEST(BondWhenIssued, NewIssueAndReopening) {
   const bld::Date dated = bld::Date::ymd(2024, 6, 15), fcpn = bld::Date::ymd(2024, 11, 15),
                  mat = bld::Date::ymd(2034, 11, 15);
   const double coupon = 0.045;
-  const bld::BuiltBond wi = bld::us_treasury_wi(bld::Date::ymd(2024, 6, 14), dated, fcpn, mat, coupon);
+  const bld::BuiltBond wi = bld::wi_bond_from_convention("US-TREASURY", bld::Date::ymd(2024, 6, 14), dated, fcpn, mat, coupon, dated);
   EXPECT_NEAR(wi.accrued, 0.0, 1e-15);
   pf::BondUniverse bu;
   bu.set({wi.yield});
@@ -176,8 +176,9 @@ TEST(BondWhenIssued, NewIssueAndReopening) {
 
 TEST(BondWhenIssued, RejectsLongFirstCouponForNow) {
   // A LONG first coupon (dated before the prior quasi-coupon date) is a documented follow-up, rejected.
-  EXPECT_THROW(bld::us_treasury_wi(bld::Date::ymd(2024, 1, 10), bld::Date::ymd(2024, 1, 10),
-                                   bld::Date::ymd(2024, 11, 15), bld::Date::ymd(2034, 11, 15), 0.04),
+  EXPECT_THROW(bld::wi_bond_from_convention("US-TREASURY", bld::Date::ymd(2024, 1, 10), bld::Date::ymd(2024, 1, 10),
+                                            bld::Date::ymd(2024, 11, 15), bld::Date::ymd(2034, 11, 15), 0.04,
+                                            bld::Date::ymd(2024, 1, 10)),
                std::invalid_argument);
 }
 

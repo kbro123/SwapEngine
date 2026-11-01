@@ -212,12 +212,11 @@ TEST(BookRows, SplitsCompiledAndFallbackPositions) {
   int n_fb = 0;
   const pf::MultiCurveBook book = mixed_book(&n_fb);
   const cal::BookRows cmb(specs, book);
-  EXPECT_EQ(cmb.n_positions(), static_cast<int>(book.positions.size()));
+  EXPECT_EQ(cmb.n_rows(), static_cast<int>(book.positions.size())) << "one row per position (an xccy position is ONE row now)";
   EXPECT_EQ(cmb.n_fallback(), n_fb);
   EXPECT_EQ(cmb.n_compiled(), static_cast<int>(book.positions.size()) - n_fb);
   EXPECT_GT(cmb.n_times(), 0);
   EXPECT_EQ(cmb.n_knots(), kNx);
-  EXPECT_EQ(cmb.n_rows(), cmb.n_positions()) << "one row per position (an xccy position is ONE row now)";
   for (int r = 0; r < cmb.n_rows(); ++r)
     EXPECT_EQ(cmb.engine().compiled_row(r) < 0, book.positions[static_cast<std::size_t>(r)].float_coupons[0].obs.compounded)
         << "row " << r << ": exactly the compounded position is off the W-cache";

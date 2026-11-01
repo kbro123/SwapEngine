@@ -647,7 +647,6 @@ class MonotoneCubic {
   // EXPERIMENT (analytic re-take).
   void set_tangent_override(const Scalar* m) { m_override_ = m; }  // nullptr restores the filter
   int n_nodes() const { return static_cast<int>(xs_.size()); }       // tangents N (valid after a build)
-  const std::vector<double>& node_spacing() const { return h_; }
   // DECODE a node's canonical code into its formula over the filter inputs z = [S (N-1); m_raw (N)]:
   // m_j = phi · z, written into phi[0 .. 2N-2]. The exact inverse of the encoding in hyman_filter:
   //   kind 0 -> 0;  kind 1 -> m_raw_j;  kind 2/3 -> sign(m) * factor * sign(cand) * cand,
@@ -1624,7 +1623,6 @@ class Tension {
     return z_[i] * tension_detail::Phi_d2(sigma_, h, h - u) + z_[i + 1] * tension_detail::Phi_d2(sigma_, h, u);
   }
   std::vector<double> pieces() const { return xs_; }
-  double sigma() const { return sigma_; }
   Scalar integral(double t) const {
     if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
     if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());

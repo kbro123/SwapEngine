@@ -117,7 +117,6 @@ inline const char* to_string(StreamStage s) {
 struct StreamTick {
   StreamStatus status = StreamStatus::StepCap;
   const char* reason() const { return to_string(status); }
-  bool refreshed = false;  // this tick recomputed the analytic Jacobian (>=1 refresh)
   int newton_steps = 0;    // total frozen Gauss-Newton steps taken this tick
   int refreshes = 0;       // analytic Jacobian recomputations this tick (0 on the pure fast path)
   double drift = 0;        // ||q_new - q_anchor||_inf: the market move since the anchor this tick started from -- reported
@@ -381,10 +380,8 @@ class StreamingCalibrator {
   // a report, not a re-evaluation; nothing on the tick is spent on it. Stale after a failed tick. The INSTRUMENT
   // rows only (the regulariser's constraint rows sit below them in r_).
   Eigen::Ref<const Eigen::VectorXd> last_residual() const { return r_.head(n_res_); }
-  const Eigen::VectorXd& anchor_market() const { return q_anchor_; }
   const Eigen::MatrixXd& sensitivity() const { return op_.M(); }
   int refresh_count() const { return refresh_count_; }
-  int rescale_count() const { return rescale_count_; }  // band-edge re-scales (cheap M refactors) so far
   // GUARD COUNTERS (2026-09-15, G1): cumulative and allocation-free; the guard tests read deltas. factor_count is every factorisation
   // of M (construction, an anchor or refresh, and rescale_row's degenerate-update fallback); pin_count / release_count are the band
   // walk's kink pins and their KKT releases.
@@ -512,7 +509,6 @@ class StreamingCalibrator {
         if (track_bands()) {
           stamp(StreamStage::TrackRescale);
           ++t.rescales;  // the operator was updated row by row inside track_bands (rescale_row)
-          ++rescale_count_;
           frozen = 0;
           dx_prev = -1.0;  // a new operator: the contraction history no longer applies
           have_last_step_ = false;  // an active-set change legitimately turns the step
@@ -551,7 +547,6 @@ class StreamingCalibrator {
         stamp(StreamStage::Breakpoint);
         switch_row(hit, hit_piece);  // (updates the operator in place, rescale_row)
         ++t.rescales;
-        ++rescale_count_;
         frozen = 0;
         dx_prev = -1.0;
         continue;
@@ -580,7 +575,6 @@ class StreamingCalibrator {
       if (dx_inf < opt_.step_tol || predicted) {  // converged for the CURRENT active set
         if (!bands_.empty() && n_pinned_ > 0 && verify_pins(x, q_new)) {
           ++t.rescales;  // a pin was released onto its true side (rescale_row updated the operator): iterate on
-          ++rescale_count_;
           frozen = 0;
           dx_prev = -1.0;
           continue;
@@ -597,7 +591,6 @@ class StreamingCalibrator {
           // below guarantees. Taking both re-anchored twice one re-convergence apart (S3, 2026-09-15).
           final_refresh_done = true;
           if (!set_anchor(x, q_new)) return fail(t, StreamStatus::NonFinite);
-          t.refreshed = true;
           ++t.refreshes;
           frozen = 0;
           dx_prev = -1.0;
@@ -829,7 +822,6 @@ class StreamingCalibrator {
   // One Jacobian refresh (either trigger: stall or drift): a new anchor at (x, q), counted on the tick.
   bool refresh(const Eigen::VectorXd& x, const Eigen::VectorXd& q, StreamTick& t) {
     if (!set_anchor(x, q)) return false;
-    t.refreshed = true;
     ++t.refreshes;
     return true;
   }
@@ -940,7 +932,6 @@ class StreamingCalibrator {
   Eigen::VectorXd x_anchor_, q_anchor_, x_cur_;
   Eigen::VectorXd q_cur_;  // the market x_cur_ solves (a failed tick restores the anchor here)
   int refresh_count_ = 0;
-  int rescale_count_ = 0;
   int factor_count_ = 0, pin_count_ = 0, release_count_ = 0;  // guard counters (factor_count() ...)
   unsigned tick_stages_ = 0;  // StreamStage bits of the tick in progress (copied into StreamTick::stages on return)
   void stamp(StreamStage s) { tick_stages_ |= 1u << static_cast<unsigned>(s); }

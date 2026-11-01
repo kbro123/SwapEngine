@@ -56,7 +56,7 @@ inline long business_days_between(const std::string& cal_id, const Date& d1, con
 }
 
 // Accrual factor between two dates under `dc` (calendars.year_frac). Reference-period-free, CALENDAR-FREE
-// day counts only; ACT/ACT(ICMA) needs the coupon period (`act_act_icma` below) and BUS/252 needs a
+// day counts only; ACT/ACT(ICMA) needs the coupon period (the bond builders bake it into the exponents, build/bond.hpp) and BUS/252 needs a
 // calendar (the 4-arg overload below) — the 3-arg form throws for BUS/252 rather than silently guessing one.
 // The denominator of a "days / basis" day count (repo / money-market accrual): ACT/360 -> 360, ACT/365F -> 365,
 // BUS/252 -> 252. Anything else has no fixed basis and throws (never defaulted).
@@ -86,16 +86,6 @@ inline double year_frac(const std::string& dc, const Date& d1, const Date& d2) {
 inline double year_frac(const std::string& dc, const Date& d1, const Date& d2, const std::string& cal_id) {
   if (dc == "BUS/252") return double(business_days_between(cal_id, d1, d2)) / 252.0;
   return year_frac(dc, d1, d2);
-}
-
-// ACT/ACT (ICMA / ISMA) year fraction over [d1,d2] measured against a coupon reference period
-// [ref_start, ref_end] paid `freq` times a year (bond basis). For a sub-span of a regular period this
-// is (d2−d1) / (freq·(ref_end−ref_start)); a full period is exactly 1/freq. This is the treasury/bond
-// accrual and street-yield day count — QuantLib::ActualActual(ActualActual::ISMA) with that reference.
-inline double act_act_icma(const Date& d1, const Date& d2, const Date& ref_start, const Date& ref_end,
-                           int freq) {
-  const double period_days = double(ref_end - ref_start);
-  return (d2 - d1) / (double(freq) * period_days);
 }
 
 }  // namespace swaps::build

@@ -90,20 +90,10 @@ class AadBlock final : public RowEngine {
   int size() const { return static_cast<int>(rows_.size()); }
   const std::vector<int>& rows() const override { return rows_; }
 
-  // Overwrite the quote RHS (target + band) of every block instrument from the FULL problem `p`, matched
-  // by each block instrument's global residual row. Quote fields are read at residual time, never during
-  // init's structure discovery (touched knots / DF cache key on the schedule alone), so this is the
-  // block's half of a warm rebind: no re-init, no re-discovery, no seed rebuild.
-  void set_quotes(const BundleProblem& p) {
-    for (int j = 0; j < size(); ++j) {
-      Instrument& dst = sub_.instruments[j];
-      const Instrument& src = p.row(rows_[j]);
-      dst.market = src.market;
-      dst.band_lower = src.band_lower;
-      dst.band_upper = src.band_upper;
-      dst.band_decay = src.band_decay;
-    }
-  }
+  // Quote updates arrive ROW BY ROW from the hybrid (set_quote / set_market below; the whole-problem set_quotes a
+  // block used to carry had no caller, 2026-11-01). Quote fields are read at residual time, never during init's
+  // structure discovery (touched knots / DF cache key on the schedule alone): no re-init, no re-discovery, no seed
+  // rebuild on a requote.
   // Scalar counterparts for one GLOBAL row (a no-op when the row is not in this block; the block is small,
   // so the linear row lookup is cheaper than a map).
   void set_quote(int global_row, double market, double lower, double upper, double decay) override {

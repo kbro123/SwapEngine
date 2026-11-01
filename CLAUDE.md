@@ -1047,9 +1047,11 @@ delete those, they enforce the rule. Two honest residues:
         per-cashflow `exp` path (`is_regular()` gates it). `CompiledBondBook` is the curve-space counterpart:
         build W once, reprice PV/dirty/clean + per-bond z-spread off `DF=exp(-Wx)`
         (z-spread/asset-swap/relative-value), no per-bond QuantLib pricing.
-      - **Construction** (`build/bond.hpp`): `fixed_rate_bond`/`us_treasury` build both representations from
-        bond terms; ACT/ACT ISDA (`year_frac`) + ACT/ACT ICMA (`act_act_icma`) added to `build/day_count.hpp`.
-      - **When-issued (WI)** (`when_issued_bond`/`us_treasury_wi`): settle on the dated date (new issue => ZERO accrued; a reopening settles later within
+      - **Construction** (`build/bond.hpp`): `fixed_rate_bond` / `bond_from_convention(id, ...)` build both representations
+        from bond terms (the named `us_treasury*` spellings, which inlined freq = 2 and the stub flags, were deleted on
+        2026-11-01, review item 1.9: the convention id IS the type); ACT/ACT ISDA (`year_frac`) in `build/day_count.hpp`
+        (the ICMA accrual is baked into the bond exponents by the builders).
+      - **When-issued (WI)** (`when_issued_bond` / `wi_bond_from_convention`): settle on the dated date (new issue => ZERO accrued; a reopening settles later within
         the first period => accrued from the ORIGINAL dated date), with a SHORT first coupon PRORATED to
         actual days (`coupon/f·(first_coupon−dated)/E`). Stays on the Horner fast path — the short coupon only
         changes the first coefficient, not the exponent spacing, so `is_regular()` holds. Long first coupon
@@ -1063,12 +1065,12 @@ delete those, they enforce the rule. Two honest residues:
           * `stub=Compound, final=false` — `Q(v)·v^w`. UK gilt / French OAT / Chinese GB. **Default**, and
             what the kernel always computed. Oracle: QuantLib `Compounded`.
           * `stub=Compound, final=TRUE` — compound, but SIMPLE once only one cashflow remains. **US
-            Treasury STREET** and Bund (`build::us_treasury`). Before this landed we compounded to the end
+            Treasury STREET** and Bund (`bond_from_convention("US-TREASURY", ...)`). Before this landed we compounded to the end
             and were **~0.7 bp rich on every bond in its last six months** — invisible because no test had
             a final-period bond, and because our QuantLib oracle used `Compounded` too (a shared
             assumption, the same failure mode twice).
           * `stub=Simple` — `Q(v)/(1+w·y/f)`. **31 CFR Part 356 App B / Bloomberg Treasury method**
-            (`build::us_treasury_tsy`, `us_treasury_wi_tsy`). The regulation is uniform: every Section II
+            (`bond_from_convention("US-TREASURY-TSY", ...)` / `wi_bond_from_convention`). The regulation is uniform: every Section II
             sub-case is written `P[1 + (r/s)(i/2)] = …`, never a compound `(1+i/2)^(r/s)`.
         **BOTH forms have a first-class QuantLib oracle** — `Compounding::SimpleThenCompounded` reproduces
         App B exactly (it applies simple interest precisely when the step `t <= 1/f`, i.e. the stub), so

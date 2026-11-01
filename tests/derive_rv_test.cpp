@@ -255,7 +255,7 @@ TEST(DeriveAssetSwap, SwapSpreadIsTheIndexConventionTenorSwap) {
 
   // The pre-lift verb's chain, by hand: the index's par convention, the tenor from SPOT on its calendar, the par
   // swap, then derive_asset_swap anchored at that swap's maturity.
-  const b::SwapConv sc = b::Index("USD-SOFR").par_convention().resolve();
+  const b::SwapConv sc = b::Index("USD-SOFR").swap_conv();
   const b::Date mat = b::resolve("5Y", kVd, sc.calendar, sc.bdc, sc.spot_lag);
   const cal::Instrument swap = b::par_swap(kVd, sc, mat, 0, 0, 0.0);
   EXPECT_EQ(res.anchor, b::curve_time(kVd, mat));

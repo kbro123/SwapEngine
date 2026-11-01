@@ -46,7 +46,7 @@ TEST(TradeBook, PerTradeConventionsAndCsaDiscountRole) {
                                         /*forecast*/ 0, /*discount*/ 0);
   // Resolving from the trade's OWN index equals resolving its convention by hand — one source of truth.
   const auto own = t.to_position(vd);
-  const auto handed = t.to_position(vd, bld::Index("USD-SOFR").par_convention().resolve());
+  const auto handed = t.to_position(vd, bld::Index("USD-SOFR").swap_conv());
   ASSERT_EQ(own.float_coupons.size(), handed.float_coupons.size());
   EXPECT_EQ(own.float_coupons.back().pay, handed.float_coupons.back().pay);
   EXPECT_EQ(own.fixed_coupons.size(), handed.fixed_coupons.size());

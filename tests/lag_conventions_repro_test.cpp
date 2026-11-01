@@ -20,7 +20,7 @@ namespace b = swaps::build;
 namespace {
 
 b::Date d(const char* iso) { return b::Date::from_iso(iso); }
-b::SwapConv product_of(const char* index) { return b::Index(index).par_convention().resolve(); }
+b::SwapConv product_of(const char* index) { return b::Index(index).swap_conv(); }
 
 }  // namespace
 

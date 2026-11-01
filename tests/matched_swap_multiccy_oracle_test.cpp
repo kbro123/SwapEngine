@@ -94,7 +94,7 @@ struct HandleCurve {
 // Control rows (identity only; lags and calendars are read from them).
 const char* const kUsdIndex = "USD-SOFR";
 const char* const kGbpIndex = "GBP-SONIA";
-bld::SwapConv product_of(const std::string& index) { return bld::Index(index).par_convention().resolve(); }
+bld::SwapConv product_of(const std::string& index) { return bld::Index(index).swap_conv(); }
 
 struct Case {
   const char* index;

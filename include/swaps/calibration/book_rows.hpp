@@ -145,10 +145,9 @@ class BookRows {
         xccy_.push_back({static_cast<int>(k), book.positions[k].fx_spot});
   }
 
-  int n_positions() const { return prob_.n_residuals(); }
   int n_rows() const { return prob_.n_residuals(); }  // one row per position
   int n_compiled() const { return eng_.n_compiled_rows(); }
-  int n_fallback() const { return n_positions() - n_compiled(); }  // rows the router sent to the AAD tier
+  int n_fallback() const { return n_rows() - n_compiled(); }  // rows the router sent to the AAD tier
   int n_times() const { return eng_.n_times(); }
   int n_knots() const { return prob_.n_knots(); }
   const BundleProblem& problem() const { return prob_; }

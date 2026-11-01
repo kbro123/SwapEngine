@@ -54,7 +54,6 @@ struct RegionIface {
   // Analytic re-take (EXPERIMENT): tangent override + the node structure the decoder needs. No-ops if linear.
   virtual void set_tangent_override(const S*) {}
   virtual int n_nodes() const { return 0; }
-  virtual const std::vector<double>* node_spacing() const { return nullptr; }
   // The piecewise-linear capability (2026-09-22): the region's own cell description. 0 / no-op when linear.
   virtual int node_pattern_bytes() const { return 0; }
   virtual void node_formula(int, const unsigned char*, double*) const {}
@@ -192,10 +191,6 @@ struct RegionHolder final : RegionIface<S> {
   int n_nodes() const override {
     if constexpr (requires { p.n_nodes(); }) return p.n_nodes();
     return 0;
-  }
-  const std::vector<double>* node_spacing() const override {
-    if constexpr (requires { p.node_spacing(); }) return &p.node_spacing();
-    return nullptr;
   }
   int node_pattern_bytes() const override {
     if constexpr (requires { p.node_pattern_bytes(); }) return p.node_pattern_bytes();
@@ -349,7 +344,6 @@ class ModularCurve {
   }
 
   int n_knots() const { return n_; }
-  int n_regions() const { return static_cast<int>(regions_.size()); }
   double max_time() const { return regions_.back()->t_end(); }
   bool is_linear_map() const {
     for (const auto& r : regions_)
@@ -486,10 +480,6 @@ class ModularCurve {
     for (const auto& r : regions_) if (!r->linear()) return r->n_nodes();
     return 0;
   }
-  const std::vector<double>* pwl_spacing() const {
-    for (const auto& r : regions_) if (!r->linear()) return r->node_spacing();
-    return nullptr;
-  }
   // The single value-dependent region's cell description (the capability; 0 / no-op on a linear curve).
   int pwl_pattern_bytes() const {
     for (const auto& r : regions_) if (!r->linear()) return r->node_pattern_bytes();
@@ -513,7 +503,6 @@ class ModularCurve {
       o += k;
     }
   }
-  S zero(double t) const { return t <= 0.0 ? forward(0.0) : integral(t) / t; }
 
  private:
   template <class Fn>

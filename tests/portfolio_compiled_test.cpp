@@ -185,7 +185,6 @@ TEST(SessionCompiledReprice, ThrowsBeforeBind) {
   Fixture f;
   api::BundleSession sess(f.prob);
   sess.calibrate(f.x0);
-  EXPECT_FALSE(sess.has_bound_portfolio());
   EXPECT_THROW(sess.reprice_bound(), std::runtime_error);
 }
 
@@ -198,7 +197,6 @@ TEST(SessionCompiledReprice, MatchesTemplatedAcrossXMoves) {
 
   const pf::MultiCurveBook book = compilable_book();
   sess.bind_portfolio(book);  // build the W-cache twin ONCE
-  ASSERT_TRUE(sess.has_bound_portfolio());
 
   expect_reprice_parity(sess.reprice_bound(), sess.price_portfolio(book), "all-compiled @ calibrated x");
   EXPECT_GT(std::abs(sess.reprice_bound().pv01), 0.0) << "the book must carry parallel-shift risk";

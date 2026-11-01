@@ -154,27 +154,6 @@ inline BuiltBond fixed_rate_bond(const FixedBondTerms& t) {
   return out;
 }
 
-// Convenience: a US Treasury note/bond (semiannual, ACT/ACT ISMA), quoted on the US STREET convention —
-// compound stub, EXCEPT once settlement reaches the final coupon period, where the market (and QuantLib
-// via SimpleThenCompounded, and Rateslib `us_gb`) discounts the remaining stub simple. Before that final
-// period the two are identical; inside it they differ by ~0.7 bp, so the flag is not cosmetic.
-inline BuiltBond us_treasury(const Date& value_date, const Date& settle, const Date& issue,
-                             const Date& maturity, double coupon) {
-  return fixed_rate_bond(FixedBondTerms{value_date, settle, issue, maturity, coupon, /*freq=*/2,
-                                        px::StubDiscount::Compound, /*final_period_simple=*/true});
-}
-
-// The TREASURY METHOD: 31 CFR Part 356 Appendix B, as Rateslib's `ust_31bii`/`us_gb_tsy` implements it for any
-// settlement date (App B's reopening examples price mid-period settlement; whether Bloomberg's "Treasury" yield is
-// identical is UNVERIFIED -- its documentation is not public). The regulation writes EVERY
-// sub-case as "P[1 + (r/s)(i/2)] = ...", i.e. the fractional period is discounted SIMPLE always — not
-// only in the final period. Oracle: QuantLib with Compounding::SimpleThenCompounded.
-inline BuiltBond us_treasury_tsy(const Date& value_date, const Date& settle, const Date& issue,
-                                 const Date& maturity, double coupon) {
-  return fixed_rate_bond(FixedBondTerms{value_date, settle, issue, maturity, coupon, /*freq=*/2,
-                                        px::StubDiscount::Simple, /*final_period_simple=*/false});
-}
-
 // =================================================================================================
 // WHEN-ISSUED (WI) / odd-first-period bonds — the subtly-different yield path.
 // =================================================================================================
@@ -258,27 +237,6 @@ inline BuiltBond when_issued_bond(const Date& value_date, const Date& dated, con
     out.yield.flows.push_back(yf);
   }
   return out;
-}
-
-// Convenience: a when-issued US Treasury settling on its issue (dated) date (semiannual), STREET quoted.
-// New issue => zero accrued; pass an explicit `settle` (via when_issued_bond) for a reopening within the
-// first period. A WI bond is by construction in its FIRST period, never its last, so `final_period_simple`
-// cannot fire here — street and plain-compound coincide for a WI quote, and the meaningful choice is
-// street vs the Treasury method below.
-inline BuiltBond us_treasury_wi(const Date& value_date, const Date& dated, const Date& first_coupon,
-                                const Date& maturity, double coupon) {
-  return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, /*freq=*/2, /*settle=*/dated,
-                          px::StubDiscount::Compound, /*final_period_simple=*/true);
-}
-
-// A when-issued US Treasury on the TREASURY METHOD (31 CFR Part 356 App B). This is the combination the
-// regulation is actually written for: App B's worked examples are new issues and reopenings, and its
-// short-first-coupon proration (already applied by when_issued_bond) travels WITH its simple-stub
-// discounting. Quoting a WI bond off `us_treasury_wi` gives the STREET number instead; they differ.
-inline BuiltBond us_treasury_wi_tsy(const Date& value_date, const Date& dated, const Date& first_coupon,
-                                    const Date& maturity, double coupon, const Date& settle) {
-  return when_issued_bond(value_date, dated, first_coupon, maturity, coupon, /*freq=*/2, settle,
-                          px::StubDiscount::Simple, /*final_period_simple=*/false);
 }
 
 // =================================================================================================

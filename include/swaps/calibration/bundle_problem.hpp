@@ -58,9 +58,7 @@ using BundleCurveSpec = pricing::CurveStructure;
 
 class BundleProblem {
  public:
-  using CurveSpec = BundleCurveSpec;
-
-  std::vector<CurveSpec> curves;
+  std::vector<BundleCurveSpec> curves;
   // Every calibration instrument is a generic Instrument (design §3): legs carrying their OWN curve
   // roles + a quote transform. OIS swaps, tenor bases, averaging/compounding futures, IBOR legs,
   // spreads, mixed day counts are all THIS type with different DATA -- there is no index-flavoured

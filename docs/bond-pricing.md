@@ -152,8 +152,8 @@ Both conventions agree on the cashflows, on accrued, and on the entire coupon po
 | convention | fractional first period | `YieldConvention` | builder | QuantLib oracle |
 |---|---|---|---|---|
 | UK gilt / French OAT / Chinese GB | `Q(v)·v^w` (compound) always | `stub=Compound`, `final_period_simple=false` | `fixed_rate_bond` (default) | `Compounded` |
-| **US Treasury STREET**, Bund | compound, **simple once only the final coupon remains** | `stub=Compound`, `final_period_simple=true` | `us_treasury`, `us_treasury_wi` | `Compounded`, then `SimpleThenCompounded` in the final period |
-| **US Treasury METHOD** (31 CFR App B; Bloomberg unverified) | `Q(v)/(1 + w·y/f)` (simple) always | `stub=Simple` | `us_treasury_tsy`, `us_treasury_wi_tsy` | `SimpleThenCompounded` |
+| **US Treasury STREET**, Bund | compound, **simple once only the final coupon remains** | `stub=Compound`, `final_period_simple=true` | `bond_from_convention("US-TREASURY", …)`, `wi_bond_from_convention("US-TREASURY", …)` | `Compounded`, then `SimpleThenCompounded` in the final period |
+| **US Treasury METHOD** (31 CFR App B; Bloomberg unverified) | `Q(v)/(1 + w·y/f)` (simple) always | `stub=Simple` | `bond_from_convention("US-TREASURY-TSY", …)`, `wi_bond_from_convention("US-TREASURY-TSY", …)` | `SimpleThenCompounded` |
 
 The regulation is uniform on this — Appendix B Section II writes *every* sub-case (regular first period,
 short first, long first, and the three reopened cases) as `P[1 + (r/s)(i/2)] = …`, never as a compound
@@ -253,7 +253,7 @@ per bond at 100 / 1k / 5k / 10k, against a flat ~500 µs per bond for QuantLib.
 
 A when-issued treasury trades before issue, for settlement ON the issue (dated) date, and its FIRST coupon
 period is frequently irregular. Two subtleties, both in the first period, make the yield calc differ from a
-seasoned bond (`build::when_issued_bond` / `us_treasury_wi`). Its **coupon proration** follows **31 CFR
+seasoned bond (`build::when_issued_bond` / `wi_bond_from_convention`). Its **coupon proration** follows **31 CFR
 Part 356 Appendix B**; its **discounting** is the street convention, not App B's — see "Street vs Treasury
 (31 CFR App B) discounting" above:
 

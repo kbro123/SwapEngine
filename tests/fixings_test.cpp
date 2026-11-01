@@ -4,8 +4,9 @@
 //     (compounded -> `realized_factor`) and leaves FUTURE days as forecast sub-periods — bit-identical to
 //     the hand-baked observation the market layer builds today (tests/reference_curve.hpp);
 //   * a missing PAST fixing THROWS MissingFixing (pricing can't silently proceed);
-//   * a BoundObservation OBSERVES the table: build the context with no table -> error(); attach a table /
-//     add fixings -> it re-resolves and becomes ok(); update the table -> it re-resolves again.
+//   * the schedule survives resolution, so a later table or evaluation date re-resolves the same observation
+//     (the session's resolve_fixings; the attach-and-observe BoundObservation design that used to sit beside it
+//     had no production reader and was deleted on 2026-11-01, review item 1.5).
 //
 // Pure engine (no QuantLib): dates are integer serials.
 
@@ -17,13 +18,14 @@ using namespace swaps::pricing;
 
 namespace {
 
-// A 5-day averaged RFR observation: fixing serials 97,98,99,100,101 (eval = 100), accrual 1/360 each,
-// forecast sub-periods for the future days. Weights are 1.0 here (so resolve() clears the weight vector).
-FixingSchedule make_schedule(bool compounded = false) {
-  FixingSchedule s;
-  s.index = "USD-SOFR";
-  s.tau_index = 5.0 / 360.0;
-  s.compounded = compounded;
+// A 5-day averaged RFR observation carrying its fixing schedule: fixing serials 97,98,99,100,101 (eval = 100),
+// accrual 1/360 each, forecast sub-periods for the future days. Weights are 1.0 here (so resolution clears the
+// weight vector).
+RateObservation make_obs(bool compounded = false) {
+  RateObservation o;
+  o.fixing_index = "USD-SOFR";
+  o.tau_index = 5.0 / 360.0;
+  o.compounded = compounded;
   for (int i = 0; i < 5; ++i) {
     FixingDay d;
     d.fixing_date = 97 + i;
@@ -31,9 +33,14 @@ FixingSchedule make_schedule(bool compounded = false) {
     d.t_start = 0.001 * i;           // arbitrary but ordered curve times for the forecast subs
     d.t_end = 0.001 * (i + 1);
     d.weight = 1.0;
-    s.days.push_back(d);
+    o.fixing_schedule.push_back(d);
   }
-  return s;
+  return o;
+}
+// resolve_into on a copy: the resolved observation.
+RateObservation resolved(RateObservation o, const PricingContext& ctx) {
+  resolve_into(o, ctx);
+  return o;
 }
 
 const double kR97 = 0.043, kR98 = 0.044, kR99 = 0.045, kR100 = 0.046;
@@ -49,7 +56,7 @@ TEST(Fixings, AveragedResolvesPastIntoRealizedFutureIntoSubs) {
   seed_past(table);
   PricingContext ctx{/*eval=*/100, &table};
 
-  const RateObservation obs = resolve(make_schedule(), ctx);
+  const RateObservation obs = resolved(make_obs(), ctx);
 
   // 97,98,99 are past -> realized; 100 (today, no fixing) and 101 are future -> two sub-periods.
   EXPECT_DOUBLE_EQ(obs.realized, (kR97 + kR98 + kR99) / 360.0);
@@ -67,7 +74,7 @@ TEST(Fixings, TodayCountsAsPastOnlyWhenAFixingExists) {
   table.set("USD-SOFR", 100, kR100);              // now day 100 has a fixing -> it's realized
   PricingContext ctx{100, &table};
 
-  const RateObservation obs = resolve(make_schedule(), ctx);
+  const RateObservation obs = resolved(make_obs(), ctx);
   EXPECT_DOUBLE_EQ(obs.realized, (kR97 + kR98 + kR99 + kR100) / 360.0);
   ASSERT_EQ(obs.sub_start.size(), 1u);            // only day 101 remains forecast
 }
@@ -77,7 +84,7 @@ TEST(Fixings, MissingPastFixingThrows) {
   table.bulk_set("USD-SOFR", {{97, kR97}, {99, kR99}});  // 98 missing
   PricingContext ctx{100, &table};
   try {
-    resolve(make_schedule(), ctx);
+    resolved(make_obs(), ctx);
     FAIL() << "expected MissingFixing";
   } catch (const MissingFixing& e) {
     EXPECT_EQ(e.index, "USD-SOFR");
@@ -87,14 +94,14 @@ TEST(Fixings, MissingPastFixingThrows) {
 
 TEST(Fixings, NoTableAttachedIsMissingForPastDays) {
   PricingContext ctx{100, nullptr};               // built WITHOUT a fixing table
-  EXPECT_THROW(resolve(make_schedule(), ctx), MissingFixing);
+  EXPECT_THROW(resolved(make_obs(), ctx), MissingFixing);
 }
 
 TEST(Fixings, CompoundedUsesRealizedFactorProduct) {
   FixingTable table;
   seed_past(table);
   PricingContext ctx{100, &table};
-  const RateObservation obs = resolve(make_schedule(/*compounded=*/true), ctx);
+  const RateObservation obs = resolved(make_obs(/*compounded=*/true), ctx);
   const double expect_rf = (1 + kR97 / 360.0) * (1 + kR98 / 360.0) * (1 + kR99 / 360.0);
   EXPECT_TRUE(obs.compounded);
   EXPECT_DOUBLE_EQ(obs.realized_factor, expect_rf);
@@ -106,7 +113,7 @@ TEST(Fixings, ResolvedEqualsBakedObservation) {
   FixingTable table;
   seed_past(table);
   PricingContext ctx{100, &table};
-  const RateObservation got = resolve(make_schedule(), ctx);
+  const RateObservation got = resolved(make_obs(), ctx);
 
   RateObservation baked;                          // built directly, the "old" way
   baked.tau_index = 5.0 / 360.0;
@@ -121,33 +128,28 @@ TEST(Fixings, ResolvedEqualsBakedObservation) {
   EXPECT_EQ(got.tau_index, baked.tau_index);
 }
 
-// ---- the observer story: build with no table, attach one, update it -------------------------------
-TEST(Fixings, BoundObservationBuildsWithoutTableThenAttachAndUpdate) {
-  FixingSchedule sch = make_schedule();
-
-  // 1) Built with NO fixing table -> past days can't resolve -> un-priceable, but ALIVE (not throwing).
-  BoundObservation bound(sch, PricingContext{100, nullptr});
-  EXPECT_FALSE(bound.ok());
-  ASSERT_TRUE(bound.error().has_value());
-  EXPECT_EQ(bound.error()->date, 97);             // the first past day it couldn't resolve
-
-  // 2) Attach a table that still lacks 98 -> still un-priceable, but now pointing at the missing 98.
+// The schedule SURVIVES resolution: the same observation re-resolves against a later table / date (what the
+// session's resolve_fixings relies on), and a missing fixing names the first past day it could not resolve.
+TEST(Fixings, AResolvedObservationReResolvesAgainstALaterTable) {
+  RateObservation o = make_obs();
   FixingTable table;
-  table.bulk_set("USD-SOFR", {{97, kR97}, {99, kR99}});
-  bound.attach(PricingContext{100, &table});
-  EXPECT_FALSE(bound.ok());
-  EXPECT_EQ(bound.error()->date, 98);
-
-  // 3) Add the missing fixing -> the table NOTIFIES the observer -> it re-resolves and becomes ok().
+  table.bulk_set("USD-SOFR", {{97, kR97}, {99, kR99}});  // 98 missing
+  try {
+    resolve_into(o, PricingContext{100, &table});
+    FAIL() << "expected MissingFixing";
+  } catch (const MissingFixing& e) {
+    EXPECT_EQ(e.date, 98);
+  }
   table.set("USD-SOFR", 98, kR98);
-  ASSERT_TRUE(bound.ok());
-  EXPECT_DOUBLE_EQ(bound.observation().realized, (kR97 + kR98 + kR99) / 360.0);
-
-  // 4) A later fixing for TODAY (100) updates the table -> re-resolve pulls day 100 into realized too.
-  table.set("USD-SOFR", 100, kR100);
-  ASSERT_TRUE(bound.ok());
-  EXPECT_DOUBLE_EQ(bound.observation().realized, (kR97 + kR98 + kR99 + kR100) / 360.0);
-  EXPECT_EQ(bound.observation().sub_start.size(), 1u);   // only day 101 still forecast
+  resolve_into(o, PricingContext{100, &table});
+  EXPECT_TRUE(o.resolved);
+  EXPECT_DOUBLE_EQ(o.realized, (kR97 + kR98 + kR99) / 360.0);
+  ASSERT_EQ(o.sub_start.size(), 2u);
+  table.set("USD-SOFR", 100, kR100);  // a later fixing for TODAY: re-resolving pulls day 100 into realized too
+  resolve_into(o, PricingContext{100, &table});
+  EXPECT_DOUBLE_EQ(o.realized, (kR97 + kR98 + kR99 + kR100) / 360.0);
+  EXPECT_EQ(o.sub_start.size(), 1u);  // only day 101 still forecast
+  EXPECT_EQ(o.fixing_schedule.size(), 5u) << "the schedule is preserved";
 }
 
 // The engine's ONE integer date convention: Unix-day serials (days since 1970-01-01). Until 2026-09-09 the
@@ -166,13 +168,13 @@ TEST(Fixings, TableRejectsDatesThatAreNotUnixDaySerials) {
 // whatever the evaluation date says. With no evaluation date and no table it must throw, never be forecast; a day after
 // curve time 0 still forecasts. tests/seasoned_eval_date_repro_test.cpp reproduces the silent forecast end to end.
 TEST(FixingsResolve, ADayBeforeCurveTimeZeroIsPastWithoutAnEvaluationDate) {
-  swaps::pricing::FixingSchedule sch;
-  sch.index = "USD-SOFR";
-  sch.tau_index = 1.0;
-  sch.compounded = true;
-  sch.days.push_back(swaps::pricing::FixingDay{20279, 1.0 / 360.0, -0.99, -0.987, 1.0});
-  EXPECT_THROW((void)swaps::pricing::resolve(sch, swaps::pricing::PricingContext{}), swaps::pricing::MissingFixing);
-  sch.days[0].t_start = 0.01;
-  sch.days[0].t_end = 0.013;
-  EXPECT_NO_THROW((void)swaps::pricing::resolve(sch, swaps::pricing::PricingContext{})) << "a future day forecasts";
+  swaps::pricing::RateObservation o;
+  o.fixing_index = "USD-SOFR";
+  o.tau_index = 1.0;
+  o.compounded = true;
+  o.fixing_schedule.push_back(swaps::pricing::FixingDay{20279, 1.0 / 360.0, -0.99, -0.987, 1.0});
+  EXPECT_THROW(swaps::pricing::resolve_into(o, swaps::pricing::PricingContext{}), swaps::pricing::MissingFixing);
+  o.fixing_schedule[0].t_start = 0.01;
+  o.fixing_schedule[0].t_end = 0.013;
+  EXPECT_NO_THROW(swaps::pricing::resolve_into(o, swaps::pricing::PricingContext{})) << "a future day forecasts";
 }

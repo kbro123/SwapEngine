@@ -50,7 +50,7 @@ namespace {
 b::Date d(const char* iso) { return b::Date::from_iso(iso); }
 
 // The par product a swap index names (its conventions DB row, resolved).
-b::SwapConv product_of(const char* index) { return b::Index(index).par_convention().resolve(); }
+b::SwapConv product_of(const char* index) { return b::Index(index).swap_conv(); }
 
 // The CONTROL rows a wrong spot is taken from: another currency's standard swap. Index ids name the rows; every lag and
 // calendar is read from them.

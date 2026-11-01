@@ -267,7 +267,7 @@ inline SwapSpreadResult swap_spread(const SwapSpreadRequest& r) {
   AssetSwapConvention conv = asset_swap_convention(r.bond.yield_conv, r.settlement);
   conv.type = r.type;
   conv.swap_index = r.index;
-  const build::SwapConv sconv = build::Index(r.index).par_convention().resolve();
+  const build::SwapConv sconv = build::Index(r.index).swap_conv();
   const SpreadSwap m = spread_swap(r, sconv);
   SwapSpreadResult out;
   out.swap_maturity = m.maturity;
