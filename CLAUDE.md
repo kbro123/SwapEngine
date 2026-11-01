@@ -215,7 +215,7 @@ silent NaN; caught at construction).
 - **THE GUARD (detect non-linear → route to AAD, never the W-cache):** `is_linear_map` is now enforced,
   not just documented. (a) Compile-time: `integral_weight_matrix` (`pricing/compiled.hpp`) `static_assert`s
   its curve `is_linear_map`, so a value-dependent scheme can NEVER silently reach the W-cache — it is a
-  compile error. (b) Type-routing: `residual_engine_t<Problem>` maps only `CalibrationProblem`/`BundleProblem`
+  compile error. (b) Type-routing: `residual_engine_t<Problem>` maps only `BundleProblem` (and the test fixture's single-curve `CalibrationProblem`)
   (both hard-wired linear) to the compiled engine; every other problem (incl. a non-linear-curve problem)
   falls to `AadResidualEngine` by default — locked by a `static_assert` in `monotone_cubic_test.cpp`.
   (c) Runtime: `ModularCurve::is_linear_map()` returns false when it contains a value-dependent region. Any FUTURE
@@ -241,7 +241,7 @@ combine into prices.** Exploit this — it is the whole optimization thesis:
   spline re-solve, no schedule regeneration, no per-coupon loop.
 - **Swap math directly on curve parameters.** `∂DF/∂x = -DF·w(t)`, so PV and bucketed sensitivities
   to the knot forwards are direct; chain through the calibration Jacobian (IFT) for quote deltas.
-- **The calibration Jacobian is ANALYTIC (no AAD in the hot path).** `CompiledResidual::jacobian`
+- **The calibration Jacobian is ANALYTIC (no AAD in the hot path).** `CompiledBundleResidual::jacobian`
   computes `J = ∂r/∂x = -(∂r/∂DF · diag(DF))·W`: the per-instrument `∂r/∂DF` (analytic, sparse)
   scattered, then one `W` matmul. Matches AAD to 1e-15, ~15× faster (25 µs vs 373 µs) — this is what
   makes the streaming Jacobian *refresh* cheap. AAD has exactly TWO remaining roles (PRINCIPLES.md P3):
@@ -518,11 +518,12 @@ include/swaps/curve/         regions.hpp (Flat/Linear/NaturalCubic/Hermite/Monot
                              ModularCurve + make_modular_curve from CurveModule{knots,scheme}, plus the
                              named layouts flat_hermite -- the SHIPPED one -- flat_bspline, flat_monotone),
                              ql_term_structure.hpp (generic CurveTermStructure<Curve>)
-include/swaps/calibration/   problem.hpp (CalibrationProblem + the GENERIC Instrument/FloatLeg/FixedLeg/
+include/swaps/calibration/   problem.hpp (the GENERIC Instrument/FloatLeg/FixedLeg/
                              QuoteKind model -- see §7c), lm.hpp, risk.hpp, streaming.hpp (the exact
                              frozen-Newton live feed = the warm path), residual_engine.hpp (per-problem
                              residual/Jacobian engine trait driving the streamer),
-                             compiled_residual.hpp (single-curve = 1-curve delegate to compiled_bundle.hpp),
+                             (the single-curve CalibrationProblem + its CompiledResidual delegate are the
+                             tests/single_curve.hpp FIXTURE since 2026-11-01, review item 2.1),
                              compiled_bundle.hpp (CompiledBundleResidual: multi-curve W-cache residual),
                              bundle_problem.hpp (Stage 3 multi-curve bundle; the staged solve is a
                              tests/bundle_stage.hpp fixture since 2026-11-01)
@@ -561,8 +562,8 @@ measured levers (the order matters — measure before optimising, CLAUDE.md disc
   (E6.1, 2026-09-10: the separate cached-Jacobian `WarmCalibrator` and its one-matvec `recalibrate_linear`
   — the "168 ns first-order update" — had no production caller and were deleted; the streamer's exact
   tick is the µs path and the accuracy story is the one below.)
-- **Vectorized compiled residual (`compiled_residual.hpp` on `pricing/compiled.hpp`).** The
-  calibration instruments are just a portfolio valued off `DF = exp(-Wx)`; `CompiledResidual` shares
+- **Vectorized compiled residual (`compiled_bundle.hpp` on `pricing/compiled.hpp`).** The
+  calibration instruments are just a portfolio valued off `DF = exp(-Wx)`; `CompiledBundleResidual` shares
   that engine. **Honest result: only ~1.3× vs the scalar kernel** — our scalar residual was already
   fast (no virtual dispatch, telescoped, L1-resident), so the `W`-cache that gave 126× vs QuantLib's
   slow per-swap loop gives little here. It's the DRY unification, not the speed lever.
@@ -733,8 +734,8 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   `BundleFloat/Fixed/Comp/Avg` batches are the shared primitives; `calibration/compiled_bundle.hpp`
   `CompiledBundleResidual` is the residual view (`J = -(dr/dDF diag(DF)) W_all`, analytic). It matches
   the templated residual to ~5e-15 and AAD to ~2e-15 (outright) / ~3e-16 (spread).
-- **This is the ONE `CompiledBook`.** The single-curve `CompiledResidual` is now a thin delegate to a
-  1-curve `CompiledBundleResidual`, and `portfolio/compiled.hpp` `CompiledPortfolio` reprices NPVs off the
+- **This is the ONE `CompiledBook`.** The test fixture's single-curve `CompiledResidual` is a thin delegate to a
+  1-curve `CompiledBundleResidual` (`tests/single_curve.hpp`), and `portfolio/compiled.hpp` `CompiledPortfolio` reprices NPVs off the
   SAME `CompiledCurveSet` + `BundleFloat/Fixed` primitives — one compiled kernel for calibration AND
   analytics, not three. Perf-neutral (measured): `portfolio_analytics` and `warm_recalibration` gates
   unchanged. **And a BOOK is rows of that engine (2026-10-06, `calibration/book_rows.hpp`):** a position is an
@@ -749,7 +750,7 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
   see `BundleFloatLegs::pv`).
 - **The streamed re-cal is problem-generic (`calibration/residual_engine.hpp`).** `StreamingCalibrator`
   is templated on the problem via `residual_engine_t<Problem>`:
-  `CalibrationProblem` → `CompiledResidual`, `BundleProblem` → `CompiledBundleResidual`, anything else →
+  `BundleProblem` → `HybridBundleResidual` (the fixture's `CalibrationProblem` → its `CompiledResidual` delegate), anything else →
   the generic AAD engine. One frozen-Jacobian control flow, on the analytic fast path for the bundle.
   Measured on the 4-curve bundle at a ~1bp tick (`bench/bundle_build_bench.cpp`, `tests/bundle_test.cpp`):
   a warm tick lands within second order of an independent cold LM re-solve (1.3e-7 at ~1 bp on the
@@ -796,7 +797,7 @@ all SOFR-discounted, 73 knots / 85 instruments; joint & staged recover to ~1e-13
 
 **Status: the generic pipeline is BUILT, GATE-VERIFIED, and ADOPTED. The legacy shapes are DELETED.**
 Every call site — the reference market (`tests/reference_curve.hpp` `build_problem`/`build_square_problem`),
-ALL benchmarks (`baselines/baselines.json`), the `Portfolio`, the single-curve `CalibrationProblem` and
+ALL benchmarks (`baselines/baselines.json`), the `Portfolio`, the single-curve `CalibrationProblem` fixture and
 the multi-curve `BundleProblem` — constructs generic `Instrument`s only. `OisSwap`/`CompoundedFuture`/
 `AveragedFuture`, their pricing functions (`ois_par_rate`/`compounded_future_rate`/`averaged_future_rate`/
 `basis_par_spread`/`ois_swap_npv`), their extractors (`extract_ois_swap`/`extract_compounded_future`/
@@ -821,8 +822,8 @@ There is ONE cashflow model (`RateObservation`/`FloatCoupon`/`FixedCoupon`) and 
   discount}` / `FixedLeg{coupons, discount}`. That is what makes tenor-basis representable without a
   new type. `Instrument` = legs + `QuoteKind{ParRate, ParSpread, Rate}` + market quote;
   `instrument_model_quote<Scalar>(ins, C)` / `instrument_residual<Scalar>(ins, C)` are role-accessor-
-  templated, so ONE residual definition serves `CalibrationProblem`, `BundleProblem` and the staged
-  fixture's `BundleBlockProblem`.
+  templated, so ONE residual definition serves `BundleProblem` and the test fixtures' `CalibrationProblem`
+  and `BundleBlockProblem`.
 - **Residual order (THE CONTRACT — the Jacobian rows, W-cache batches, `market()`, the risk ladder
   and warm/streaming all depend on it):**
   `1. avg_futs | 2. comp_futs | 3. swaps | 4. bases | 5. instruments (insertion order)`.
@@ -1016,7 +1017,7 @@ delete those, they enforce the rule. Two honest residues:
       The `scheme` selector on the problem structs EXISTS for the bundle (noted 2026-10-12): `BundleCurveSpec`
       (= `pricing::CurveStructure`) carries its region list, so a `BundleProblem` selects B-spline / MonotoneCubic /
       MonotoneConvex per region (the compile verb's `policy`, the shape ladder's rungs); only the legacy single-curve
-      `CalibrationProblem` is fixed to `flat_hermite(meeting, back)` (its `single_curve_bundle` view builds that layout).
+      `CalibrationProblem` (a `tests/single_curve.hpp` fixture since 2026-11-01) is fixed to `flat_hermite(meeting, back)`.
 - [x] **Stage 6 — bonds & bond asset swaps — DONE (pricing + universe sweep + asset swaps + API verbs + perf gate).**
       Merged to `main`. Design `docs/bond-pricing.md`. A bond is DATA (dated
       cashflows + a small yield convention), NOT a subclass — "US Treasury" is field values a builder fills

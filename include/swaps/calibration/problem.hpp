@@ -503,7 +503,7 @@ inline bool Instrument::noncacheable() const {
 }
 
 // Compile-time detection: does the curve object a CurveOf accessor returns expose turn_jump(int)? True
-// for the bundle's CurveHandle, false for a bare ModularCurve (single-curve CalibrationProblem, which
+// for the bundle's CurveHandle, false for a bare ModularCurve (the test fixtures' single-curve problems, which
 // never carries a TurnJump instrument). Lets instrument_model_quote's TurnJump branch stay well-formed
 // for BOTH curve types via `if constexpr`.
 template <class C, class = void>
@@ -720,7 +720,7 @@ Scalar instrument_model_quote(const Instrument& ins, const CurveOf& C) {
     case QuoteKind::StateLinear: {
       // Σ coeff·state: the raw free variables off the handle (CurveHandle::state -- an outright's knot values, a
       // spread's spread values, a turned curve's δ's), each carrying its AAD gradient. LINEAR in x. Only the bundle's
-      // handles expose state; a bare ModularCurve (single-curve CalibrationProblem) never carries this kind.
+      // handles expose state; a bare ModularCurve (a test fixture's single-curve problem) never carries this kind.
       using CurveT = std::decay_t<decltype(C(0))>;
       if constexpr (has_state<CurveT>::value) {
         Scalar acc(0.0);
@@ -851,47 +851,9 @@ Scalar instrument_residual(const Instrument& ins, const CurveOf& C) {
   return instrument_residual<Scalar>(ins, C, ins.market);
 }
 
-struct CalibrationProblem {
-  // Curve topology (year fractions on the curve day count).
-  std::vector<double> meeting_times;
-  std::vector<double> back_times;
-
-  // Every calibration instrument is a generic Instrument (design §3). This problem has exactly ONE
-  // curve, so every leg role resolves to it and the legs' curve indices are ignored (single_curve_bundle()
-  // likewise forces them all to curve 0, so the templated and compiled paths cannot diverge).
-  std::vector<Instrument> instruments;
-
-  int n_knots() const { return static_cast<int>(meeting_times.size() + back_times.size()); }
-  int n_residuals() const { return static_cast<int>(instruments.size()); }
-
-  // r in rate units for an ARBITRARY curve (anything with `Scalar discount(double)`). RESIDUAL ORDER
-  // is the instruments' INSERTION order (the Jacobian rows, the W-cache batches and the warm/streaming
-  // feeds all index off it; CompiledResidual fills the same rows).
-  template <class Scalar, class Curve>
-  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> price_residuals(const Curve& c) const {
-    Eigen::Matrix<Scalar, Eigen::Dynamic, 1> r(n_residuals());
-    const auto one_curve = [&c](int) -> const Curve& { return c; };  // every role IS this curve
-    int i = 0;
-    for (const auto& ins : instruments) r[i++] = instrument_residual<Scalar>(ins, one_curve);
-    return r;
-  }
-
-  // THE single-curve layout (flat front over the meeting dates + Hermite back), built once here so every
-  // consumer (residuals, risk.hpp's operators, tests) derives it from the same place (E6.1c: it used to be
-  // re-derived in five headers).
-  template <class Scalar>
-  curve::ModularCurve<Scalar> make_curve() const {
-    return curve::make_modular_curve<Scalar>(curve::flat_hermite(meeting_times, back_times));
-  }
-
-  // r(x) with x = the knot forwards of a standalone two-region curve.
-  template <class Scalar, class Vec>
-  Eigen::Matrix<Scalar, Eigen::Dynamic, 1> residuals(const Vec& x) const {
-    auto c = make_curve<Scalar>();
-    c.set_forwards(x);
-    return price_residuals<Scalar>(c);
-  }
-};
+// (The single-curve CalibrationProblem -- meeting_times / back_times + instruments over ONE flat_hermite curve -- is
+// a TEST FIXTURE since 2026-11-01, tests/single_curve.hpp, review item 2.1: no verb or session ever built one; the
+// shipped problem is BundleProblem, of which it was a one-curve spelling.)
 
 // D = diag(−∂r_i/∂q_i): how each residual row scales with ITS market quote (risk.hpp / BundleSession share
 // this one definition, E6.1c). Identity for a hard pin (r = model − q); an FX forward's residual is
@@ -908,7 +870,8 @@ inline Eigen::VectorXd residual_market_scale(const std::vector<Instrument>& inst
 }
 
 // NOTE: fixed-base spread calibration (the former SpreadCalibrationProblem, with its SpreadCurve) was
-// TEST-ONLY -- production spreads calibrate jointly through the bundle path (SpreadHandle). Both now live
-// in tests/spread_reference.hpp (namespace swaps::testing) so they don't sit in the shipped object model.
+// TEST-ONLY -- production spreads calibrate jointly through the bundle path (SpreadHandle). Both live in
+// tests/spread_reference.hpp (namespace swaps::testing), beside the single-curve CalibrationProblem in
+// tests/single_curve.hpp, so neither sits in the shipped object model.
 
 }  // namespace swaps::calibration

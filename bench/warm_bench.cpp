@@ -52,14 +52,14 @@ struct Fixture {
   DayCounter dc = mk.dc;
   Date today = mk.today;
 
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
   Eigen::VectorXd x0 = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
   Eigen::VectorXd q0 = [&] {
     Eigen::VectorXd q(prob.n_residuals());
     for (int i = 0; i < q.size(); ++i) q[i] = prob.instruments[i].market;
     return q;
   }();
-  mutable cal::StreamingCalibrator<> sc{prob, x0, q0, cal::StreamingCalibrator<>::Options{}};
+  mutable cal::StreamingCalibrator<swaps::testing::CalibrationProblem> sc{prob, x0, q0, cal::StreamingCalibrator<swaps::testing::CalibrationProblem>::Options{}};
   Eigen::VectorXd dq03 = tick(prob.n_residuals(), 0.3);   // 0.3 bp live tick (inside the J envelope)
   Eigen::VectorXd dq10 = tick(prob.n_residuals(), 10.0);  // 10 bp move (outside: forces a J refresh)
 
@@ -127,7 +127,7 @@ BENCHMARK(BM_WarmRecal_Ours_10bp);
 
 static void BM_WarmRecal_OursFullLM(benchmark::State& state) {
   const auto& f = fx();
-  cal::CalibrationProblem p = f.prob;  // apply dq to targets once (instrument order == residual order)
+  swaps::testing::CalibrationProblem p = f.prob;  // apply dq to targets once (instrument order == residual order)
   for (int i = 0; i < static_cast<int>(p.instruments.size()); ++i) p.instruments[i].market += f.dq03[i];
   for (auto _ : state) {
     auto r = cal::calibrate(p, f.x0, true);  // warm-started full LM

@@ -12,9 +12,8 @@
 //     per-type transforms, analytic Jacobian -- no AAD in the hot loop) for the cacheable rows, PLUS a
 //     width-reduced AAD block for any non-cacheable rows (FX/MtM). When nothing is non-cacheable it is a
 //     zero-overhead delegate to a single CompiledBundleResidual -- the fast path is unchanged.
-//   * CalibrationProblem -> CompiledResidual: NOT a second kernel -- a thin delegate that wraps the
-//     single curve as a 1-curve bundle (single_curve_bundle) and runs the exact same CompiledBundleResidual.
-//     Kept only so single-curve callers/tests get the simpler CalibrationProblem interface.
+//   * (the test fixtures' single-curve CalibrationProblem -> its CompiledResidual delegate, a 1-curve bundle on
+//     the same engine: tests/single_curve.hpp registers that specialisation, 2026-11-01)
 //   * anything ELSE (e.g. the test fixtures' BundleBlockProblem for the staged solve, or a test-only problem such as the
 //     fixed-base spread problem in tests/spread_reference.hpp) -> the generic AadResidualEngine:
 //     templated residuals<double>(x) + the AAD Jacobian. Correct and generic, but a refresh here costs
@@ -26,7 +25,6 @@
 #include <Eigen/Dense>
 
 #include "swaps/calibration/compiled_bundle.hpp"
-#include "swaps/calibration/compiled_residual.hpp"
 #include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/jacobian.hpp"
 
@@ -102,16 +100,12 @@ class RegularizedEngine {
   const Eigen::VectorXd* centre_ = nullptr;  // rows R·(x − centre) when set
 };
 
-// CalibrationProblem -> the single-curve analytic CompiledResidual; BundleProblem -> the multi-curve
+// BundleProblem -> the multi-curve
 // analytic CompiledBundleResidual (W_all fast path); anything else -> the generic AAD engine. All three
 // expose the same residuals/jacobian/model_rates/n_residuals ops, so warm/streaming are oblivious.
 template <class Problem>
 struct residual_engine {
   using type = AadResidualEngine<Problem>;
-};
-template <>
-struct residual_engine<CalibrationProblem> {
-  using type = CompiledResidual;
 };
 template <>
 struct residual_engine<BundleProblem> {

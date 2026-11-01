@@ -12,7 +12,7 @@
 #include <Eigen/Core>
 
 #include "reference_curve.hpp"
-#include "swaps/calibration/compiled_residual.hpp"
+#include "single_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 
 using namespace QuantLib;
@@ -22,11 +22,11 @@ namespace cal = swaps::calibration;
 struct Compiled : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
 };
 
 TEST_F(Compiled, ResidualMatchesScalarKernel) {
-  const cal::CompiledResidual cr(prob);
+  const swaps::testing::CompiledResidual cr(prob);
   ASSERT_EQ(cr.n_residuals(), prob.n_residuals());
 
   std::vector<Eigen::VectorXd> curves;
@@ -49,7 +49,7 @@ TEST_F(Compiled, ResidualMatchesScalarKernel) {
 }
 
 TEST_F(Compiled, AnalyticJacobianMatchesAad) {
-  const cal::CompiledResidual cr(prob);
+  const swaps::testing::CompiledResidual cr(prob);
   double worst_abs = 0, scale = 0;
   for (double lvl : {0.030, 0.040}) {
     const Eigen::VectorXd x = Eigen::VectorXd::Constant(prob.n_knots(), lvl);

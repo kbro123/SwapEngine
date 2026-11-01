@@ -1,10 +1,10 @@
 #pragma once
 // Compiled (W-cache) residual for the multi-curve BundleProblem -- the bundle analogue of
-// CompiledResidual, built on the multi-curve pricing/compiled_book.hpp engine. Produces model rates /
+// residual, built on the multi-curve pricing/compiled_book.hpp engine. Produces model rates /
 // residuals and the ANALYTIC block Jacobian (no AAD in the hot loop), so the warm & streaming
 // re-calibrators drive the bundle on the microsecond fast path instead of an AAD sweep per refresh.
 //
-// Same factorization as the single-curve CompiledResidual: DF_all = exp(-W_all x) once, then the cheap
+// The factorization: DF_all = exp(-W_all x) once, then the cheap
 // per-row transform, and J = -(dr/dDF diag(DF)) W_all with dr/dDF the analytic per-instrument sensitivity
 // scattered into the global DF columns. Residual order matches BundleProblem::residuals: the generic
 // instruments in insertion order (batched internally by shape, then scattered to each row).
@@ -47,22 +47,6 @@
 #include "swaps/pricing/compiled_book.hpp"
 
 namespace swaps::calibration {
-
-// A single-curve CalibrationProblem IS a 1-curve bundle: one self-discounting outright curve, every
-// instrument forecasting and discounting curve 0. This lets the single-curve CompiledResidual be a
-// thin delegate to CompiledBundleResidual -- one compiled engine, not two.
-inline BundleProblem single_curve_bundle(const CalibrationProblem& p) {
-  BundleProblem b;
-  b.curves.push_back({.regions = curve::flat_hermite(p.meeting_times, p.back_times)});  // base = -1
-  for (Instrument ins : p.instruments) {  // by value: force every role onto the single curve, so the
-    ins.fwd.forecast = ins.fwd.discount = 0;  // compiled path cannot disagree with price_residuals(),
-    ins.bench.forecast = ins.bench.discount = 0;  // which resolves every role to the one curve.
-    ins.fixed.discount = 0;
-    ins.forecast = 0;
-    b.instruments.push_back(std::move(ins));
-  }
-  return b;
-}
 
 class CompiledBundleResidual {
  public:

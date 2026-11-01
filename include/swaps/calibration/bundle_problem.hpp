@@ -12,7 +12,7 @@
 // Both are wrapped as a type-erased CurveHandle<Scalar> so the pricing kernel is oblivious. The
 // virtual dispatch lands only in the calibration residual; the microsecond streaming path is on W.
 //
-// The key reuse: BundleProblem exposes the SAME interface as CalibrationProblem -- residuals<Scalar>(x),
+// The key reuse: BundleProblem exposes the ONE calibration interface -- residuals<Scalar>(x),
 // n_knots(), n_residuals() -- so calibrate / aad_jacobian / streaming / risk drive it UNCHANGED, and
 // the block-structured Jacobian falls straight out of AAD over the stacked residual.
 

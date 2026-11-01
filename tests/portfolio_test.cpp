@@ -25,7 +25,7 @@ namespace rm = swaps::refmkt;
 struct PortfolioVec : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
   swaps::portfolio::Portfolio pf;
 
   void SetUp() override {

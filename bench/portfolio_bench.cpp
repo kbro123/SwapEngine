@@ -34,7 +34,7 @@ constexpr int kBook = 1000;
 struct Fixture {
   mutable RelinkableHandle<YieldTermStructure> h;  // relinked during the QuantLib benchmark
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
   Eigen::VectorXd x = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
 
   swaps::curve::ModularCurve<double> curve =

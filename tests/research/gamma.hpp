@@ -36,11 +36,14 @@
 
 #include "research/reverse.hpp"
 #include "swaps/calibration/jacobian.hpp"       // aad_jacobian (the IFT sensitivity's J)
-#include "swaps/calibration/problem.hpp"        // CalibrationProblem
+#include "single_curve.hpp"                     // the single-curve CalibrationProblem fixture (swaps::testing, 2026-11-01)
+#include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/risk.hpp"           // ift_operator (the shared, rank-safe dx/dq)
 #include "swaps/curve/curve_module.hpp"
 
 namespace swaps::calibration {
+
+using swaps::testing::CalibrationProblem;  // the fixture type this research probe is written against
 
 // One reverse evaluation of a book's NPV off the calibration curve, in a caller-chosen tape value type T.
 // Returns the n_knots adjoints of the seeded knot forwards. `seed[i]` is the T-value to seed knot i as an

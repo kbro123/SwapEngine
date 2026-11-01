@@ -316,7 +316,7 @@ CalibrationResult calibrate_with(const Engine& engine, int n_knots, int n_residu
 }
 
 // use_aad = drive the LM with the ANALYTIC residual engine (default; compiled W-cache Jacobian for
-// CalibrationProblem/BundleProblem, AAD otherwise) or Eigen NumericalDiff. The engine is built ONCE, so
+// BundleProblem, AAD otherwise) or Eigen NumericalDiff. The engine is built ONCE, so
 // cold calibrate no longer does a per-iteration AAD sweep or a per-eval curve rebuild.
 template <class Problem>
 CalibrationResult calibrate(const Problem& prob, const Eigen::VectorXd& x0, bool use_aad = true) {

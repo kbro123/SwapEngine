@@ -42,7 +42,7 @@ struct SquareFixture {
   Date far = mk.today + 29 * Years;
 
   std::vector<ext::shared_ptr<RateHelper>> helpers;             // QuantLib side
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);  // our side (generic Instruments)
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);  // our side (generic Instruments)
   Eigen::VectorXd x0;
 
   SquareFixture() {

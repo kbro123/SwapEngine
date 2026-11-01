@@ -20,7 +20,7 @@ namespace {
 struct Fixture {
   QuantLib::RelinkableHandle<QuantLib::YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_problem(mk);
   Eigen::VectorXd x = [] {
     Eigen::VectorXd v(rm::n_knots);
     int i = 0;
@@ -34,7 +34,7 @@ const Fixture& fixture() {
   return f;
 }
 
-Eigen::MatrixXd bump_jacobian(const cal::CalibrationProblem& p, const Eigen::VectorXd& x, double bump) {
+Eigen::MatrixXd bump_jacobian(const swaps::testing::CalibrationProblem& p, const Eigen::VectorXd& x, double bump) {
   Eigen::MatrixXd J(p.n_residuals(), p.n_knots());
   for (int k = 0; k < p.n_knots(); ++k) {
     Eigen::VectorXd xp = x, xm = x;

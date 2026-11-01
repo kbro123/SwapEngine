@@ -19,7 +19,6 @@ swaps/build/schedule.hpp
 swaps/calibration/aad_block.hpp
 swaps/calibration/bundle_problem.hpp
 swaps/calibration/compiled_bundle.hpp
-swaps/calibration/compiled_residual.hpp
 swaps/calibration/hybrid_residual.hpp
 swaps/calibration/jacobian.hpp
 swaps/calibration/lm.hpp

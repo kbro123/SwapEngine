@@ -85,7 +85,7 @@ struct Fixture {
   // --- curve side: the reference market, calibrated, exposed to QuantLib as a term structure ---
   mutable RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
   Eigen::VectorXd x = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
   swaps::curve::ModularCurve<double> curve =
       swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times));

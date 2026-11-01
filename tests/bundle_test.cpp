@@ -63,7 +63,7 @@ struct BundleRealistic : ::testing::Test {
 
   void SetUp() override {
     Settings::instance().evaluationDate() = today;
-    const cal::CalibrationProblem sofr = rb::build_problem(mk);  // real SOFR: meetings + 1M/3M futures + swaps
+    const swaps::testing::CalibrationProblem sofr = rb::build_problem(mk);  // real SOFR: meetings + 1M/3M futures + swaps
 
     // ---- knot specs (all curves: flat meeting-date front + par-swap back). Knot times are the exact
     // date-based year fractions of each tenor. SOFR: reference knots. FF: meeting front + basis-tenor

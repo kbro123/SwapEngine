@@ -25,7 +25,7 @@
 #include <vector>
 
 #include "reference_curve.hpp"
-#include "swaps/calibration/compiled_residual.hpp"
+#include "single_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
 
@@ -36,8 +36,8 @@ namespace cal = swaps::calibration;
 struct Streaming : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
-  cal::CompiledResidual cr{prob};
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CompiledResidual cr{prob};
   Eigen::VectorXd x0, q0;
 
   void SetUp() override {
@@ -59,7 +59,7 @@ struct Streaming : ::testing::Test {
 };
 
 TEST_F(Streaming, ExactPathRoundTripsAndMatchesExactSolve) {
-  cal::StreamingCalibrator<>::Options opt;  // exact=true by default
+  cal::StreamingCalibrator<swaps::testing::CalibrationProblem>::Options opt;  // exact=true by default
   cal::StreamingCalibrator sc(prob, x0, q0, opt);
 
   double worst_rt = 0, worst_ex = 0;
@@ -81,7 +81,7 @@ TEST_F(Streaming, ExactPathRoundTripsAndMatchesExactSolve) {
 }
 
 TEST_F(Streaming, SubBpMovesReuseTheCachedJacobian) {
-  cal::StreamingCalibrator<>::Options opt;
+  cal::StreamingCalibrator<swaps::testing::CalibrationProblem>::Options opt;
   cal::StreamingCalibrator sc(prob, x0, q0, opt);
   for (int t = 1; t <= 200; ++t) {
     Eigen::VectorXd q = q0;

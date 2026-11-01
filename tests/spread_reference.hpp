@@ -16,6 +16,7 @@
 
 #include "swaps/calibration/problem.hpp"   // CalibrationProblem (instrument set + pricing) is reused
 #include "swaps/curve/curve_module.hpp"
+#include "single_curve.hpp"  // the single-curve CalibrationProblem fixture (2026-11-01)
 
 namespace swaps::testing {
 
@@ -64,7 +65,7 @@ class SpreadCurve {
 // generic AAD-LM + risk code drives it unchanged (it falls to AadResidualEngine -- it has no compiled
 // engine, which is fine for a test-only path).
 struct SpreadCalibrationProblem {
-  calibration::CalibrationProblem inst;         // instruments + spread knot times
+  swaps::testing::CalibrationProblem inst;         // instruments + spread knot times
   const curve::ModularCurve<double>* base;      // fixed base curve
 
   int n_knots() const { return inst.n_knots(); }

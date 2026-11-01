@@ -39,7 +39,7 @@ Eigen::VectorXd reference_x() {
 }
 
 // Central-difference bump-and-reprice Jacobian (the thing AAD replaces).
-Eigen::MatrixXd bump_jacobian(const cal::CalibrationProblem& p, const Eigen::VectorXd& x, double h) {
+Eigen::MatrixXd bump_jacobian(const swaps::testing::CalibrationProblem& p, const Eigen::VectorXd& x, double h) {
   Eigen::MatrixXd J(p.n_residuals(), p.n_knots());
   for (int k = 0; k < p.n_knots(); ++k) {
     Eigen::VectorXd xp = x, xm = x;
@@ -55,7 +55,7 @@ Eigen::MatrixXd bump_jacobian(const cal::CalibrationProblem& p, const Eigen::Vec
 struct Aad : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_problem(mk);
 };
 
 TEST_F(Aad, JacobianMatchesBumpAndReprice) {

@@ -47,7 +47,7 @@ Eigen::MatrixXd bump_jacobian(const swaps::testing::SpreadCalibrationProblem& p,
 struct SpreadCal : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem base_prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem base_prob = rb::build_square_problem(mk);
   swaps::curve::ModularCurve<double> base =
       swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(base_prob.meeting_times, base_prob.back_times));
   swaps::testing::SpreadCalibrationProblem sp;

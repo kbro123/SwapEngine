@@ -10,7 +10,7 @@
 // path: one set of region math, one linearity check, one W-cache, one risk path.
 //
 // Region types are erased, so composing a curve costs a virtual call per region per evaluation. That is
-// setup-only cost: the microsecond calibration hot path runs on the cached W matrix (CompiledResidual),
+// setup-only cost: the microsecond calibration hot path runs on the cached W matrix (CompiledBundleResidual),
 // never on a curve object. Measured against the compile-time alternative it was not slower --
 // risk_full_jacobian 662us vs 809us -- because AAD gradient allocation dominates the dispatch entirely.
 // Templated on Scalar so AAD flows through (e.g. to build W or a risk gradient).

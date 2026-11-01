@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "swaps/build/instruments.hpp"
-#include "swaps/calibration/compiled_residual.hpp"
+#include "single_curve.hpp"
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/curve/curve_module.hpp"
 
@@ -131,14 +131,14 @@ TEST(InstrumentParams, PaymentLagShiftsPayTimes) {
 // and the templated + AAD path. A self-consistent single-curve problem mixes a spread swap, an amortizing
 // swap and a plain swap; compiled must equal templated (residual) and AAD (Jacobian) to rounding.
 TEST(InstrumentParams, CompiledEqualsTemplatedWithSpreadAndNotional) {
-  cal::CalibrationProblem prob;
+  swaps::testing::CalibrationProblem prob;
   prob.back_times = {0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0};
   prob.instruments.push_back(b::par_swap(kVd, sofr(), b::resolve("2y", kVd, "NONE", "Following", 0), 0, 0, 0.030, /*spread=*/0.0005));
   prob.instruments.push_back(
       b::par_swap(kVd, sofr(), b::resolve("5y", kVd, "NONE", "Following", 0), 0, 0, 0.035, 0.0, {1.0, 0.8, 0.6, 0.4, 0.2}));
   prob.instruments.push_back(b::par_swap(kVd, sofr(), b::resolve("7y", kVd, "NONE", "Following", 0), 0, 0, 0.040));  // plain
 
-  const cal::CompiledResidual cr(prob);
+  const swaps::testing::CompiledResidual cr(prob);
   ASSERT_EQ(cr.n_residuals(), prob.n_residuals());
 
   std::vector<Eigen::VectorXd> xs;

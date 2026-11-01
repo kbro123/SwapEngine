@@ -30,7 +30,7 @@
 #include "swaps/calibration/bundle_problem.hpp"
 #include "bundle_stage.hpp"  // tests/: the staged solve, a test/bench fixture since 2026-11-01
 #include "swaps/calibration/compiled_bundle.hpp"
-#include "swaps/calibration/compiled_residual.hpp"
+#include "single_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
 
@@ -297,7 +297,7 @@ TEST(GenericInstrument, MixedFrequencyMultiCurveCalibrationRecoversTheCurves) {
 
 // ---- The single-curve problem carries the generic model too --------------------------------------
 TEST(GenericInstrument, SingleCurveProblemPricesGenericInstruments) {
-  cal::CalibrationProblem p;
+  swaps::testing::CalibrationProblem p;
   p.meeting_times = kMeeting;
   p.back_times = kBack;
   p.instruments.push_back(par_rate_inst(5.0, 1.0, 0, 0));  // a plain annual OIS swap (single curve)
@@ -311,7 +311,7 @@ TEST(GenericInstrument, SingleCurveProblemPricesGenericInstruments) {
 
   // The compiled single-curve delegate must agree with the templated path -- including forcing every
   // generic leg role onto the one curve.
-  const cal::CompiledResidual cr(p);
+  const swaps::testing::CompiledResidual cr(p);
   const double dr = (cr.residuals(x) - p.residuals<double>(x)).cwiseAbs().maxCoeff();
   const double dj = (cr.jacobian(x) - cal::aad_jacobian(p, x)).cwiseAbs().maxCoeff();
   std::cout << "  [generic-inst] single-curve |residual - kernel| = " << dr << " |J - AAD| = " << dj

@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
   auto prob = rb::build_square_problem(mk);
   const int M = prob.n_knots(), R = prob.n_residuals();
 
-  cal::CompiledResidual cr(prob);
+  swaps::testing::CompiledResidual cr(prob);
   const int nf = static_cast<int>(prob.meeting_times.size());  // front (meeting) knots
   // Base curve = a realistic policy path, NOT a flat line. The front knots are the instantaneous
   // forward in each inter-meeting segment (the priced-in expected overnight rate), so distinct levels

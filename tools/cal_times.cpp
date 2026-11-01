@@ -84,12 +84,12 @@ int main() {
     const Eigen::VectorXd xref = reference_x();
 
     // Self-consistent: quotes = model quotes at xref (bump each market by its residual at xref -> r(xref)=0).
-    cal::CalibrationProblem sc = rb::build_problem(mk);
+    swaps::testing::CalibrationProblem sc = rb::build_problem(mk);
     const Eigen::VectorXd r0 = sc.residuals<double>(xref);
     for (int i = 0; i < static_cast<int>(sc.instruments.size()); ++i) sc.instruments[i].market += r0[i];
 
     // Realistic: the self-consistent quotes + independent 0.4bp noise -> the strip no longer agrees.
-    cal::CalibrationProblem ns = sc;
+    swaps::testing::CalibrationProblem ns = sc;
     for (auto& ins : ns.instruments) ins.market += noise(rng);
 
     // Same start well away from the answer (+40bp parallel + alternating tilt) for both.

@@ -13,7 +13,7 @@
 #include <cstdio>
 
 #include "reference_curve.hpp"
-#include "swaps/calibration/compiled_residual.hpp"
+#include "single_curve.hpp"
 #include "swaps/calibration/lm.hpp"
 
 using namespace QuantLib;
@@ -24,7 +24,7 @@ int main() {
   RelinkableHandle<YieldTermStructure> h;
   auto mk = rb::build_market(h);
   auto prob = rb::build_square_problem(mk);
-  cal::CompiledResidual cr(prob);
+  swaps::testing::CompiledResidual cr(prob);
   const int R = prob.n_residuals();
   const Eigen::MatrixXd I = Eigen::MatrixXd::Identity(R, R);
 

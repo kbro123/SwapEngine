@@ -33,6 +33,7 @@
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/regions.hpp"
 #include "swaps/pricing/cashflows.hpp"
+#include "single_curve.hpp"  // the single-curve CalibrationProblem fixture (2026-11-01)
 
 using swaps::curve::CurveModule;
 using swaps::curve::make_modular_curve;
@@ -128,7 +129,7 @@ void expect_positive_finite(const cv::ModularCurve<double>& c, double t_hi) {
 // leading region was a B-spline (empty vs width-m derivative in de Boor). No W-cache here, so a spec
 // containing MonotoneCubic (non-linear) would work too.
 struct ModularProblem {
-  cal::CalibrationProblem inst;      // instruments (schedules + market)
+  swaps::testing::CalibrationProblem inst;      // instruments (schedules + market)
   std::vector<CurveModule> spec;     // the curve layout being calibrated
   int n_knots() const { return inst.n_residuals(); }  // square system: one free value per instrument
   int n_residuals() const { return inst.n_residuals(); }

@@ -14,6 +14,7 @@
 #include "swaps/calibration/problem.hpp"
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/ql/extract.hpp"
+#include "single_curve.hpp"  // the single-curve CalibrationProblem fixture (2026-11-01)
 
 namespace swaps::refbuild {
 
@@ -209,8 +210,8 @@ inline cal::Instrument future_instrument(const Market& mk, const Future& f, doub
 // avg | comp | swaps (CLAUDE.md §2): the 1M averaging futures first, then the 3M compounding futures,
 // then the swaps, all in the ONE instrument list (the legacy avg_futs/comp_futs/swaps groups stay
 // empty, so the overall residual sequence is byte-identical to the legacy build).
-inline swaps::calibration::CalibrationProblem build_problem(const Market& mk) {
-  swaps::calibration::CalibrationProblem p;
+inline swaps::testing::CalibrationProblem build_problem(const Market& mk) {
+  swaps::testing::CalibrationProblem p;
   p.meeting_times = mk.meeting_times;
   p.back_times = mk.back_times;
   for (const auto& f : mk.futures)
@@ -234,9 +235,9 @@ inline Curve reference_curve(const Market& mk) {
 // pillar dates, zero convexity. Shared by the curve-build and risk benchmarks/tests so this exact
 // problem lives in ONE place. `build_square_ql` fills `quotes` with the SimpleQuotes so a caller can
 // bump them and force a QuantLib re-bootstrap.
-inline swaps::calibration::CalibrationProblem build_square_problem(const Market& mk) {
+inline swaps::testing::CalibrationProblem build_square_problem(const Market& mk) {
   using namespace QuantLib;
-  swaps::calibration::CalibrationProblem p;
+  swaps::testing::CalibrationProblem p;
   auto t = [&](const Date& d) { return mk.dc.yearFraction(mk.today, d); };
   std::vector<double> front, back;
   // Residual order avg | comp | swaps, all as generic Rate/ParRate instruments, zero convexity to

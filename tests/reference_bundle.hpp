@@ -53,7 +53,7 @@ inline RealisticBundle build_realistic_bundle(Market& mk,
   const int NC = 1 + n_basis;
 
   RealisticBundle rb;
-  const cal::CalibrationProblem sofr = build_problem(mk);  // real SOFR: meetings + 1M/3M futures + swaps
+  const swaps::testing::CalibrationProblem sofr = build_problem(mk);  // real SOFR: meetings + 1M/3M futures + swaps
 
   const std::vector<Period> back_periods{18 * Months, 2 * Years,  3 * Years,  4 * Years,
                                          5 * Years,   7 * Years,  10 * Years, 12 * Years,

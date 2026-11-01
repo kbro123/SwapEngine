@@ -39,8 +39,8 @@ Eigen::VectorXd reference_x() {
 // A calibration problem whose quotes are exactly the model quotes at the reference forwards, so the
 // global minimum sits there with zero residual. Set via the residual-bump trick (market += r(xref)),
 // which is curve-agnostic -- it uses the problem's own calibration curve, whatever the interpolation.
-cal::CalibrationProblem self_consistent_problem(const rb::Market& mk) {
-  cal::CalibrationProblem p = rb::build_problem(mk);
+swaps::testing::CalibrationProblem self_consistent_problem(const rb::Market& mk) {
+  swaps::testing::CalibrationProblem p = rb::build_problem(mk);
   const Eigen::VectorXd r0 = p.residuals<double>(reference_x());
   // Instrument insertion order IS the residual order (avg | comp | swaps), so bump row i onto
   // instrument i directly.
@@ -56,14 +56,14 @@ struct Calibration : ::testing::Test {
 };
 
 TEST_F(Calibration, ProblemDimensionsAreOverDetermined) {
-  cal::CalibrationProblem p = rb::build_problem(mk);
+  swaps::testing::CalibrationProblem p = rb::build_problem(mk);
   EXPECT_EQ(p.n_knots(), rm::n_knots);         // 23
   EXPECT_EQ(p.n_residuals(), rm::n_instruments);  // 29
   EXPECT_GT(p.n_residuals(), p.n_knots());
 }
 
 TEST_F(Calibration, RecoversTheGeneratingCurve) {
-  const cal::CalibrationProblem p = self_consistent_problem(mk);
+  const swaps::testing::CalibrationProblem p = self_consistent_problem(mk);
   const Eigen::VectorXd xref = reference_x();
 
   // Residual is exactly zero at the reference forwards (construction check).
@@ -83,7 +83,7 @@ TEST_F(Calibration, RecoversTheGeneratingCurve) {
 }
 
 TEST_F(Calibration, ReachesStationarityOnOverDeterminedMarket) {
-  const cal::CalibrationProblem p = rb::build_problem(mk);  // real quotes; residual != 0
+  const swaps::testing::CalibrationProblem p = rb::build_problem(mk);  // real quotes; residual != 0
   const cal::CalibrationResult res = cal::calibrate(p, reference_x());
 
   std::cout << "  [market] iters=" << res.iterations << " rms=" << res.rms_residual

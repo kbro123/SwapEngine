@@ -20,6 +20,7 @@
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/regions.hpp"
 #include "swaps/pricing/cashflows.hpp"
+#include "single_curve.hpp"  // the single-curve CalibrationProblem fixture (2026-11-01)
 
 using swaps::curve::Boundary;
 using swaps::curve::MonotoneCubic;
@@ -124,7 +125,7 @@ TEST(MonotoneCubic, IntegralMatchesDenseQuadrature) {
 // calibrate through AAD, never the W-cache.
 namespace {
 struct MonotoneCubicProblem {
-  cal::CalibrationProblem inst;
+  swaps::testing::CalibrationProblem inst;
   int n_knots() const { return inst.n_knots(); }
   int n_residuals() const { return inst.n_residuals(); }
   template <class Scalar, class Vec>

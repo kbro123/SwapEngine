@@ -20,7 +20,7 @@
 //                              and this header depends on no concrete model.
 //
 // Both are plain single-curve Problem ADAPTERS: they expose residuals<Scalar>(x) / n_knots() /
-// n_residuals() exactly like CalibrationProblem, so cal::calibrate and aad_jacobian drive them UNCHANGED.
+// n_residuals() exactly like BundleProblem, so cal::calibrate and aad_jacobian drive them UNCHANGED.
 // Deliberately OVERDETERMINED (N ≫ params); the engine's LM handles the rectangular least squares. The
 // fitted curve is what an AssetSwapConvention (derive/asset_swap.hpp) references by name — an asset swap
 // computed against the fitted curve IS the bond's asset-swap richness.

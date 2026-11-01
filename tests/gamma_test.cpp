@@ -23,6 +23,7 @@
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "swaps/portfolio/portfolio.hpp"
+#include "single_curve.hpp"  // the single-curve CalibrationProblem fixture (2026-11-01)
 
 namespace cal = swaps::calibration;
 namespace pr = swaps::pricing;
@@ -59,8 +60,8 @@ Legs make_swap(const std::vector<double>& t) {
 // A small, identifiable single-curve problem: 2 flat-front knots + 4 Hermite-back knots (6 total), with 6
 // ParRate swaps whose maturities pin every knot so the calibration Jacobian J is full column rank (needed
 // only by the market-space transport). The market quotes are irrelevant to gamma and set arbitrarily.
-cal::CalibrationProblem build_problem() {
-  cal::CalibrationProblem p;
+swaps::testing::CalibrationProblem build_problem() {
+  swaps::testing::CalibrationProblem p;
   p.meeting_times = {0.5, 1.0};
   p.back_times = {2.0, 3.0, 5.0, 7.0};
   const std::vector<std::vector<double>> grids = {
@@ -101,9 +102,9 @@ pf_ns::Portfolio build_book() {
 }
 
 // Forward-AAD (ad::Dual) gradient d(NPV)/dx at an arbitrary x -- the parity/FD reference.
-Eigen::VectorXd forward_grad(const cal::CalibrationProblem& prob, const Eigen::VectorXd& x,
+Eigen::VectorXd forward_grad(const swaps::testing::CalibrationProblem& prob, const Eigen::VectorXd& x,
                              const pf_ns::Portfolio& pf) {
-  return cal::book_curve_grad<swaps::ad::Dual>(prob, x, pf, swaps::ad::seed(x));
+  return swaps::testing::book_curve_grad<swaps::ad::Dual>(prob, x, pf, swaps::ad::seed(x));
 }
 
 Eigen::VectorXd base_forwards(int n) {
@@ -115,7 +116,7 @@ Eigen::VectorXd base_forwards(int n) {
 }  // namespace
 
 TEST(Gamma, ReverseGradientMatchesForwardAAD) {
-  const cal::CalibrationProblem prob = build_problem();
+  const swaps::testing::CalibrationProblem prob = build_problem();
   const pf_ns::Portfolio pf = build_book();
   const Eigen::VectorXd x = base_forwards(prob.n_knots());
 
@@ -129,7 +130,7 @@ TEST(Gamma, ReverseGradientMatchesForwardAAD) {
 }
 
 TEST(Gamma, CurveGammaMatchesFiniteDifferenceOfGradient) {
-  const cal::CalibrationProblem prob = build_problem();
+  const swaps::testing::CalibrationProblem prob = build_problem();
   const pf_ns::Portfolio pf = build_book();
   const int n = prob.n_knots();
   const Eigen::VectorXd x = base_forwards(n);
@@ -161,7 +162,7 @@ TEST(Gamma, CurveGammaMatchesFiniteDifferenceOfGradient) {
 }
 
 TEST(Gamma, MarketGammaGaussNewtonTransportIsConsistentAndSymmetric) {
-  const cal::CalibrationProblem prob = build_problem();
+  const swaps::testing::CalibrationProblem prob = build_problem();
   const pf_ns::Portfolio pf = build_book();
   const int n = prob.n_knots();
   const int m = prob.n_residuals();

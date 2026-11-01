@@ -294,7 +294,7 @@ inline MultiCcyBundle build_usd_bundle() {
   b.dc = mk.dc;
   b.sofr = mk.sofr;
   const DayCounter dc = mk.dc;
-  const cal::CalibrationProblem sofr_prob = build_problem(mk);
+  const swaps::testing::CalibrationProblem sofr_prob = build_problem(mk);
 
   b.SOFR = 0;
   b.FF = 1;
@@ -930,7 +930,7 @@ inline MultiCcyBundle build_eur_multicurrency() {
   // SOFR reference market (build_market re-sets eval to rm::evaluation_date == 8 Jul 2026 and seeds fixings).
   RelinkableHandle<YieldTermStructure> hS;
   Market mk = build_market(hS);
-  const cal::CalibrationProblem sofr = build_problem(mk);
+  const swaps::testing::CalibrationProblem sofr = build_problem(mk);
 
   // Global roles: SOFR 0 | ESTR 1 | EUR3M 2 | EUR6M 3 | EUR-in-USD 4.
   b.SOFR = 0;
@@ -1184,7 +1184,7 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
                                    : build_eur_streamable(eval);  // full-rank + €STR-futures front (jumps) -> streamable
   RelinkableHandle<YieldTermStructure> hS;
   Market mk = build_market(hS);
-  const cal::CalibrationProblem sofr = build_problem(mk);
+  const swaps::testing::CalibrationProblem sofr = build_problem(mk);
 
   b.SOFR = 0;
   b.FF = 1;

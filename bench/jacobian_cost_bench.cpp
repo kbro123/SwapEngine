@@ -17,7 +17,7 @@
 #include "reference_curve.hpp"
 #include "swaps/calibration/bundle_problem.hpp"
 #include "swaps/calibration/compiled_bundle.hpp"
-#include "swaps/calibration/compiled_residual.hpp"
+#include "single_curve.hpp"
 #include "swaps/calibration/jacobian.hpp"
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/streaming.hpp"
@@ -31,8 +31,8 @@ namespace {
 struct Single {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
-  cal::CompiledResidual cr{prob};
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CompiledResidual cr{prob};
   Eigen::VectorXd x0 = cal::calibrate(prob, Eigen::VectorXd::Constant(prob.n_knots(), 0.035), true).x;
   Eigen::VectorXd q0 = cr.model_rates(x0);
 };
@@ -63,7 +63,7 @@ BENCHMARK(BM_Single_RefreshAnalytic)->Unit(benchmark::kMicrosecond);
 
 static void BM_Single_TickFastPath(benchmark::State& s) {  // a streaming tick riding the cached M
   Single f;
-  cal::StreamingCalibrator<> sc(f.prob, f.x0, f.q0, {});
+  cal::StreamingCalibrator<swaps::testing::CalibrationProblem> sc(f.prob, f.x0, f.q0, {});
   double t = 0;
   for (auto _ : s) {
     Eigen::VectorXd q = f.q0;

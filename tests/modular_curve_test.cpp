@@ -46,7 +46,7 @@ namespace {
 TEST(ModularCurve, RuntimeBuilderMatchesCompileTimeCurve) {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
 
   // Same region composition, one compile-time and one assembled at runtime from CurveModule pieces.
   auto ref = cv::make_modular_curve<double>(cv::flat_hermite(prob.meeting_times, prob.back_times));
@@ -73,7 +73,7 @@ TEST(ModularCurve, RuntimeBuilderMatchesCompileTimeCurve) {
 struct HermiteOracle : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
   cv::ModularCurve<double> curve = cv::make_modular_curve<double>(cv::flat_hermite(prob.meeting_times, prob.back_times));
   ext::shared_ptr<swaps::qlx::CurveTermStructure<cv::ModularCurve<double>>> ts;
 

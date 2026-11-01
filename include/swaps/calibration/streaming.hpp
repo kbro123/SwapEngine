@@ -128,14 +128,14 @@ struct StreamTick {
 };
 
 // Row i of a streamed problem: BundleProblem::row (its quotes, then its constraint rows); a problem without a row
-// accessor (the single-curve CalibrationProblem) has only its instruments.
+// accessor (a test fixture's single-curve problem) has only its instruments.
 template <class Problem>
 const Instrument& problem_row(const Problem& p, int i) {
   if constexpr (requires { p.row(i); }) return p.row(i);
   else return p.instruments[static_cast<std::size_t>(i)];
 }
 
-template <class Problem = CalibrationProblem>
+template <class Problem>
 class StreamingCalibrator {
  public:
   struct Options {

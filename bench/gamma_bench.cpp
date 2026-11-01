@@ -17,6 +17,7 @@
 #include "swaps/calibration/risk.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "swaps/portfolio/portfolio.hpp"
+#include "single_curve.hpp"  // the single-curve CalibrationProblem fixture (2026-11-01)
 
 namespace cal = swaps::calibration;
 namespace pr = swaps::pricing;
@@ -50,8 +51,8 @@ Legs make_swap(double maturity) {
 }
 
 // 4 flat-front + 8 Hermite-back = 12 knots, with 12 ParRate swaps pinning them (J full column rank).
-cal::CalibrationProblem build_problem() {
-  cal::CalibrationProblem p;
+swaps::testing::CalibrationProblem build_problem() {
+  swaps::testing::CalibrationProblem p;
   p.meeting_times = {0.25, 0.5, 0.75, 1.0};
   p.back_times = {2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 15.0, 20.0};
   const double mats[12] = {1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 15.0, 20.0, 6.0, 8.0, 12.0};
@@ -86,7 +87,7 @@ Eigen::VectorXd base_forwards(int n) {
   return x;
 }
 
-const cal::CalibrationProblem g_prob = build_problem();
+const swaps::testing::CalibrationProblem g_prob = build_problem();
 const pf_ns::Portfolio g_book = build_book(50);
 const Eigen::VectorXd g_x = base_forwards(g_prob.n_knots());
 
@@ -103,7 +104,7 @@ BENCHMARK(BM_CurveGradient);
 
 static void BM_BucketedDelta(benchmark::State& state) {
   for (auto _ : state) {
-    Eigen::VectorXd d = cal::bucketed_delta(g_prob, g_x, g_book);
+    Eigen::VectorXd d = swaps::testing::bucketed_delta(g_prob, g_x, g_book);
     benchmark::DoNotOptimize(d.data());
     benchmark::ClobberMemory();
   }

@@ -18,6 +18,7 @@
 #include "swaps/curve/regions.hpp"
 #include "swaps/pricing/cashflows.hpp"
 #include "swaps/pricing/compiled.hpp"
+#include "single_curve.hpp"  // the single-curve CalibrationProblem fixture (2026-11-01)
 
 using swaps::curve::BSpline;
 using swaps::curve::Boundary;
@@ -155,7 +156,7 @@ TEST(BSpline, SecondMomentMatchesQuadrature) {
 // oracle): the calibrated B-spline curve must reprice the market it was fit to.
 namespace {
 struct BSplineProblem {
-  cal::CalibrationProblem inst;  // instruments + knot times (front meetings, back control-point knots)
+  swaps::testing::CalibrationProblem inst;  // instruments + knot times (front meetings, back control-point knots)
   int n_knots() const { return inst.n_knots(); }
   int n_residuals() const { return inst.n_residuals(); }
   template <class Scalar, class Vec>

@@ -15,7 +15,7 @@
 #include "reference_bundle.hpp"
 #include "reference_curve.hpp"
 #include "reference_multicurrency.hpp"
-#include "swaps/calibration/compiled_bundle.hpp"  // single_curve_bundle
+#include "single_curve.hpp"  // single_curve_bundle (the single-curve fixture, 2026-11-01)
 #include "swaps/calibration/diagnostics.hpp"
 
 namespace cal = swaps::calibration;
@@ -36,8 +36,8 @@ void expect_anchored(const std::string& name, const cal::BundleProblem& p) {
 TEST(FrontAnchorReference, TheSofrReferenceMarketIsAnchored) {
   QuantLib::RelinkableHandle<QuantLib::YieldTermStructure> h;
   const rb::Market mk = rb::build_market(h);
-  expect_anchored("sofr_reference", cal::single_curve_bundle(rb::build_problem(mk)));
-  expect_anchored("sofr_reference_square", cal::single_curve_bundle(rb::build_square_problem(mk)));
+  expect_anchored("sofr_reference", swaps::testing::single_curve_bundle(rb::build_problem(mk)));
+  expect_anchored("sofr_reference_square", swaps::testing::single_curve_bundle(rb::build_square_problem(mk)));
 }
 
 TEST(FrontAnchorReference, TheRealisticBasisBundlesAreAnchored) {

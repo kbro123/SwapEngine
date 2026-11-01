@@ -40,7 +40,7 @@ struct Fixture {
   std::vector<ext::shared_ptr<OvernightIndexedSwap>> book;
 
   // ---- our side ----
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
   swaps::portfolio::Portfolio pf;
   Eigen::VectorXd xstar;
 
@@ -95,7 +95,7 @@ BENCHMARK(BM_Risk_QuantLib_Bump);
 static void BM_Risk_Ours_Analytic(benchmark::State& state) {
   const auto& f = fx();
   for (auto _ : state) {
-    Eigen::VectorXd ladder = cal::bucketed_delta(f.prob, f.xstar, f.pf);
+    Eigen::VectorXd ladder = swaps::testing::bucketed_delta(f.prob, f.xstar, f.pf);
     benchmark::DoNotOptimize(ladder.data());
   }
 }

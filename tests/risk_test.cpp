@@ -29,12 +29,12 @@ namespace {
 
 // Perturb the market quote of instrument j. Instrument insertion order IS the residual order
 // (avg futures, comp futures, swaps), so residual row j is instrument j.
-cal::CalibrationProblem bump_quote(cal::CalibrationProblem p, int j, double eps) {
+swaps::testing::CalibrationProblem bump_quote(swaps::testing::CalibrationProblem p, int j, double eps) {
   p.instruments[j].market += eps;
   return p;
 }
 
-double portfolio_npv_at(const cal::CalibrationProblem& prob, const Eigen::VectorXd& x,
+double portfolio_npv_at(const swaps::testing::CalibrationProblem& prob, const Eigen::VectorXd& x,
                         const swaps::portfolio::Portfolio& pf) {
   auto c = swaps::curve::make_modular_curve<double>(swaps::curve::flat_hermite(prob.meeting_times, prob.back_times));
   c.set_forwards(x);
@@ -46,7 +46,7 @@ double portfolio_npv_at(const cal::CalibrationProblem& prob, const Eigen::Vector
 struct Risk : ::testing::Test {
   RelinkableHandle<YieldTermStructure> h;
   rb::Market mk = rb::build_market(h);
-  cal::CalibrationProblem prob = rb::build_square_problem(mk);
+  swaps::testing::CalibrationProblem prob = rb::build_square_problem(mk);
   swaps::portfolio::Portfolio pf;
   Eigen::VectorXd xstar;
 
@@ -63,7 +63,7 @@ struct Risk : ::testing::Test {
 };
 
 TEST_F(Risk, AnalyticLadderMatchesBumpAndRecalibrate) {
-  const Eigen::VectorXd analytic = cal::bucketed_delta(prob, xstar, pf);
+  const Eigen::VectorXd analytic = swaps::testing::bucketed_delta(prob, xstar, pf);
   ASSERT_EQ(analytic.size(), prob.n_residuals());
 
   const double eps = 1e-6;
@@ -90,7 +90,7 @@ TEST_F(Risk, AnalyticLadderMatchesBumpAndRecalibrate) {
 }
 
 TEST_F(Risk, LadderIsNonTrivial) {
-  const Eigen::VectorXd d = cal::bucketed_delta(prob, xstar, pf);
+  const Eigen::VectorXd d = swaps::testing::bucketed_delta(prob, xstar, pf);
   EXPECT_GT(d.cwiseAbs().maxCoeff(), 0.0);
   // A swap book has meaningful sensitivity to the long swap quotes.
   std::cout << "  [risk ladder] |delta|_inf=" << d.cwiseAbs().maxCoeff() << "\n";
