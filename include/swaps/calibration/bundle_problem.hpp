@@ -20,6 +20,7 @@
 #include <Eigen/Core>
 
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <functional>
@@ -237,6 +238,26 @@ inline std::vector<FrontAnchor> front_anchors(const BundleProblem& p, double fro
       if (ends_at_knot) { a.row = r; a.start = s; a.end = e; }
     }
     out.push_back(a);
+  }
+  return out;
+}
+
+// The P15 WARNINGS for a compiled bundle, one per unanchored curve, naming it by the caller's display name and id
+// (the compile verb appends them to its warnings; a warning, not a refusal: the spec compiles, and the composer shows
+// which curve needs its fixing / deposit / first-pillar instrument). Curves with no interpolation knots are skipped.
+inline std::vector<std::string> front_anchor_warnings(const BundleProblem& p, const std::vector<std::string>& names,
+                                                      const std::vector<std::string>& ids) {
+  std::vector<std::string> out;
+  for (const FrontAnchor& a : front_anchors(p)) {
+    if (a.row >= 0 || a.first_knot < 0.0) continue;
+    char knot[32];
+    std::snprintf(knot, sizeof knot, "%.3g", a.first_knot);
+    const std::size_t c = static_cast<std::size_t>(a.curve);
+    out.push_back("No front anchor (P15): curve '" + (c < names.size() ? names[c] : std::string("?")) + "' (id " +
+                  (c < ids.size() ? ids[c] : std::string("?")) +
+                  ") has no instrument reading its forward over one window from the value date to its first knot (" +
+                  std::string(knot) + "y); its front is held by smoothing alone. Add a fixing, deposit or " +
+                  "first-pillar swap (a spread curve: its 1D fixing at zero spread).");
   }
   return out;
 }

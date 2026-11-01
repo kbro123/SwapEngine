@@ -1,12 +1,12 @@
-// RV seam: the stateless bond-RV / swap-spread verbs — the production wiring of the derive/ + market/
-// preview layers (the audit's "unreachable capabilities" 1-5).
+// RV seam: the stateless bond-RV / swap-spread verbs — the production wiring of the derive/ layer
+// (the audit's "unreachable capabilities" 1-5).
 //
 //   * bond_universe — BATCHED street/yield-space analytics over a whole universe on the vectorized
 //     portfolio::BondUniverse (Horner/FMA sweep + batched Newton), not a per-bond loop: cleans<->yields,
 //     modified duration, convexity, accrued, in one call.
 //   * govvie_fit    — MINIMUM-PRICING-ERROR govvie curve fit over a universe of bond clean prices
-//     (spline / Nelson-Siegel / Svensson), via derive::make_govvie_fit / make_parametric_fit over a real
-//     market::Market built from the request. Returns the fitted state, per-bond fair-value residuals (the
+//     (spline / Nelson-Siegel / Svensson), via derive::make_govvie_fit / make_parametric_fit over the
+//     request's value date and clean prices. Returns the fitted state, per-bond fair-value residuals (the
 //     RV richness/cheapness ladder), and — for the spline — per-bond z-spreads off the fitted curve
 //     (portfolio::CompiledBondBook, the W-cache bond repricer).
 //   * swap_spread   — the HEADLINE swap-spread derivation (derive::derive_asset_swap): benchmark bond

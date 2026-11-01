@@ -17,7 +17,7 @@
 // sub-periods) — bit-identical to today's baked observation — so the W-cache / AAD hot paths are
 // unchanged. Resolution runs on attach and on each table update, and is cached in between. QuantLib-free
 // (the shipped core links no QuantLib): dates are Unix-day serials (days since 1970-01-01 == build::Date::serial();
-// 2026-01-01 == 20454), index is a string. This is the engine's ONE integer date convention — FixingSeries, the
+// 2026-01-01 == 20454), index is a string. This is the engine's ONE integer date convention — the
 // CB meeting schedule and the builders' fixing schedules all use it; set() REJECTS a value outside the plausible
 // range so a Python date.toordinal() (739xxx) can never be stored as a date.
 

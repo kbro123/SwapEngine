@@ -298,6 +298,38 @@ struct StateRef {
 //
 // Sign convention for ParSpread: the quoted spread s satisfies pv(fwd) + s·annuity = pv(bench), hence
 // s = (pv_bench − pv_fwd)/annuity.
+// THE QUOTE HAND-OFF (K5', 2026-09-14; moved here from the retired market/quote.hpp on 2026-11-01): a market quote
+// reaches an Instrument as these four numbers. Instrument::set_target reads them; the API compiler's wire quote
+// (api/compile.cpp band_target) and every test feed THIS setter, so the band semantics below are defined once.
+struct CalibrationTarget {
+  double target = 0.0;
+  double band_lower = 0.0;
+  double band_upper = 0.0;
+  double band_decay = 1.0;
+
+  // Convenience predicates mirroring the engine's band test (band_upper > band_lower => soft).
+  bool is_soft_band() const { return band_upper > band_lower; }
+  bool is_hard_pin() const { return !is_soft_band(); }
+};
+
+// A WIRE QUOTE's four numbers -> the hand-off (the API compiler's quote). A real band (upper > lower) must contain its
+// target and carry a decay in [0, 1] (absent: 1, parity with server/compile.py); upper == lower is a HARD PIN and must
+// equal the target; an inverted band is refused. Every refusal is std::invalid_argument. validate_quote re-checks the
+// same rule on the instrument -- this is the wire's own reading of a pin, which the band fields cannot express.
+inline CalibrationTarget band_target(double target, double lower, double upper, std::optional<double> decay) {
+  if (!(upper >= lower))
+    throw std::invalid_argument("quote: inverted band (upper < lower) -- a band must contain its target");
+  if (upper == lower) {
+    if (target != upper) throw std::invalid_argument("quote: a hard pin (upper == lower) must equal its target");
+    return CalibrationTarget{target, 0.0, 0.0, 1.0};
+  }
+  const double d = decay.value_or(1.0);
+  if (target < lower || target > upper)
+    throw std::invalid_argument("quote: target outside its band [lower, upper] -- a band gives the solve freedom around its target");
+  if (!(d >= 0.0 && d <= 1.0)) throw std::invalid_argument("quote: band decay outside [0, 1]");
+  return CalibrationTarget{target, lower, upper, d};
+}
+
 struct Instrument {
   QuoteKind quote = QuoteKind::ParRate;
   FloatLeg fwd;
@@ -347,14 +379,10 @@ struct Instrument {
   // checks each index against its curve's state count.
   std::vector<StateRef> state;
 
-  // Set the FULL quote RHS -- target and soft-quote band -- from any target-shaped object exposing
-  // {target, band_lower, band_upper, band_decay}. This is THE one hand-off from a market quote into a
-  // calibration instrument: market::Quote::to_target() (market/quote.hpp CalibrationTarget) and the
-  // API compiler's wire quote (api/compile.cpp) both feed THIS setter, so the band semantics above are
-  // defined exactly once -- here. Duck-typed on purpose: the calibration layer sits BELOW the market
-  // layer and must not include it; any POD with those four fields is a valid source.
-  template <class Target>
-  void set_target(const Target& t) {
+  // Set the FULL quote RHS -- target and soft-quote band -- from a CalibrationTarget. This is THE one hand-off from
+  // a market quote into a calibration instrument (the API compiler's wire quote, api/compile.cpp band_target), so
+  // the band semantics above are defined exactly once -- here.
+  void set_target(const CalibrationTarget& t) {
     market = t.target;
     band_lower = t.band_lower;
     band_upper = t.band_upper;

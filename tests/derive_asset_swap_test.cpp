@@ -25,15 +25,12 @@
 #include "swaps/curve/curve_module.hpp"
 #include "swaps/curve/parametric.hpp"
 #include "swaps/derive/asset_swap.hpp"
-#include "swaps/market/market.hpp"
-#include "swaps/market/quote.hpp"
 #include "swaps/portfolio/bond_universe.hpp"
 
 namespace cal = swaps::calibration;
 namespace bd = swaps::build;
 namespace cv = swaps::curve;
 namespace der = swaps::derive;
-namespace mkt = swaps::market;
 namespace pf = swaps::portfolio;
 namespace px = swaps::pricing;
 
@@ -77,7 +74,7 @@ der::AssetSwapConvention usd_headline() {
 
 }  // namespace
 
-TEST(DeriveAssetSwap, HeadlineSpreadDerivesTheBenchmarkYieldAndRowsFromTheMarket) {
+TEST(DeriveAssetSwap, HeadlineSpreadDerivesTheBenchmarkYieldAndRowsFromTheMarketPrice) {
   const bd::Date today = iso("2026-09-04");
   const der::AssetSwapConvention conv = usd_headline();
   const bd::BondId otr5{.id = "UST-5Y",
@@ -88,8 +85,6 @@ TEST(DeriveAssetSwap, HeadlineSpreadDerivesTheBenchmarkYieldAndRowsFromTheMarket
   const double clean = 0.991;      // the benchmark's market clean price (per unit notional)
   const double spread = -0.0032;   // the quoted 5y swap spread (−32bp)
 
-  mkt::Market m;
-  m.as_of(today).add_quote(otr5.id, mkt::Quote::mid(clean)).add_quote("USD-SS-5Y", mkt::Quote::mid(spread));
 
   // Direct yield via the SAME settlement + convention, to cross-check the derivation.
   const bd::Date settle = bd::advance_bd(conv.settle_calendar, today, conv.settle_lag);
@@ -99,7 +94,7 @@ TEST(DeriveAssetSwap, HeadlineSpreadDerivesTheBenchmarkYieldAndRowsFromTheMarket
 
   const cal::Instrument spot = par_swap(5.0, /*swap curve*/ 0);
   const der::DerivedAssetSwap d = der::derive_asset_swap(conv, otr5, spot, /*factor_curve*/ 1, /*anchor*/ 5.0,
-                                                         m, "USD-SS-5Y");
+                                                         today, clean, spread);
 
   EXPECT_NEAR(d.bond_yield, y_direct, 1e-12) << "benchmark_yield must invert the market clean price";
   EXPECT_GT(d.bond_yield, otr5.coupon) << "a sub-par bond yields above its coupon";
@@ -156,13 +151,9 @@ TEST(DeriveAssetSwap, RvMinimumPricingErrorFitAndZSpreadSignal) {
   pf::CompiledBondBook book(meeting, back, bonds);
   const Eigen::VectorXd clean_true = book.clean_prices(x_true);
 
-  // A Market carrying those on-curve clean prices, then the minimum-pricing-error fit.
-  mkt::Market m;
-  m.as_of(today);
-  for (int i = 0; i < static_cast<int>(universe.size()); ++i)
-    m.add_quote(universe[i].id, mkt::Quote::mid(clean_true[i]));
-
-  cal::GovvieBondFit fit = der::make_govvie_fit(conv, universe, m, meeting, back);
+  // Those on-curve clean prices, then the minimum-pricing-error fit.
+  const std::vector<double> clean_v(clean_true.data(), clean_true.data() + clean_true.size());
+  cal::GovvieBondFit fit = der::make_govvie_fit(conv, universe, today, clean_v, meeting, back);
   ASSERT_EQ(fit.n_residuals(), 8);
   ASSERT_EQ(fit.n_knots(), 4);
   const cal::CalibrationResult res = cal::calibrate(fit, Eigen::VectorXd::Constant(4, 0.03));
@@ -176,12 +167,8 @@ TEST(DeriveAssetSwap, RvMinimumPricingErrorFitAndZSpreadSignal) {
   const int k = 4;  // B5
   Eigen::VectorXd clean_mkt = clean_true;
   clean_mkt[k] -= 0.010;  // 1 point cheap
-  mkt::Market m2;
-  m2.as_of(today);
-  for (int i = 0; i < static_cast<int>(universe.size()); ++i)
-    m2.add_quote(universe[i].id, mkt::Quote::mid(clean_mkt[i]));
-
-  cal::GovvieBondFit fit2 = der::make_govvie_fit(conv, universe, m2, meeting, back);
+  const std::vector<double> clean_mkt_v(clean_mkt.data(), clean_mkt.data() + clean_mkt.size());
+  cal::GovvieBondFit fit2 = der::make_govvie_fit(conv, universe, today, clean_mkt_v, meeting, back);
   const cal::CalibrationResult res2 = cal::calibrate(fit2, Eigen::VectorXd::Constant(4, 0.03));
 
   Eigen::VectorXd target_dirty(universe.size());
@@ -234,13 +221,9 @@ TEST(DeriveAssetSwap, ParametricNelsonSiegelFitRecoversStableParamsAndFlagsRv) {
     clean_true[i] = px::bond_clean_price<double>(bb.curve, truth);
   }
 
-  mkt::Market m;
-  m.as_of(today);
-  for (int i = 0; i < static_cast<int>(universe.size()); ++i)
-    m.add_quote(universe[i].id, mkt::Quote::mid(clean_true[i]));
-
+  const std::vector<double> clean_v(clean_true.data(), clean_true.data() + clean_true.size());
   // Fit the 3 Nelson-Siegel parameters to the 8-bond universe by minimum pricing error.
-  auto fit = der::make_parametric_fit<cv::NelsonSiegel>(conv, universe, m, tau);
+  auto fit = der::make_parametric_fit<cv::NelsonSiegel>(conv, universe, today, clean_v, tau);
   ASSERT_EQ(fit.n_knots(), 3);
   ASSERT_EQ(fit.n_residuals(), 8);
   Eigen::VectorXd seed(3);
@@ -255,12 +238,8 @@ TEST(DeriveAssetSwap, ParametricNelsonSiegelFitRecoversStableParamsAndFlagsRv) {
   const int k = 4;
   Eigen::VectorXd clean_mkt = clean_true;
   clean_mkt[k] -= 0.010;  // 1 point cheap
-  mkt::Market m2;
-  m2.as_of(today);
-  for (int i = 0; i < static_cast<int>(universe.size()); ++i)
-    m2.add_quote(universe[i].id, mkt::Quote::mid(clean_mkt[i]));
-
-  auto fit2 = der::make_parametric_fit<cv::NelsonSiegel>(conv, universe, m2, tau);
+  const std::vector<double> clean_mkt_v(clean_mkt.data(), clean_mkt.data() + clean_mkt.size());
+  auto fit2 = der::make_parametric_fit<cv::NelsonSiegel>(conv, universe, today, clean_mkt_v, tau);
   const cal::CalibrationResult res2 = cal::calibrate(fit2, res.x);
 
   // The RV signal: model − market per bond off the fitted fair-value curve. The cheapened bond reads CHEAP —

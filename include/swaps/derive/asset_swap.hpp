@@ -1,8 +1,10 @@
 #pragma once
 // derive/asset_swap.hpp — the market→calibration BRIDGE for asset swaps / swap spreads. This is the layer
-// that turns a per-currency asset-swap CONVENTION + a market snapshot into the calibration rows (and, for
-// RV, the minimum-pricing-error govvie fit). It depends on market/ (the snapshot), build/ (bond +
-// swap-spread instrument builders) and calibration/ (the Problem types) — the composition layer above them.
+// that turns a per-currency asset-swap CONVENTION + the market's numbers (the value date, a bond's clean
+// price, a quoted spread) into the calibration rows (and, for RV, the minimum-pricing-error govvie fit). It
+// depends on build/ (bond + swap-spread instrument builders) and calibration/ (the Problem types) — the
+// composition layer above them. (It took a market::Market snapshot until 2026-11-01; the snapshot's two
+// production readers only ever stored an as-of date and clean prices, so those are the arguments now.)
 //
 // TWO workflows over ONE substrate (this is the design tie-in the RV goal needs):
 //   * HEADLINE / asset-swap SPREAD (curve calibration): the benchmark bond's yield is an OBSERVED market
@@ -15,8 +17,8 @@
 // Because both reference the same named govvie curve on the same curve-space bond kernel, an asset swap
 // computed against the RV-fitted curve IS the bond's asset-swap richness — bonds and swaps share one curve.
 //
-// The bond street-yield / price↔yield inversion is a PRECOMPUTE off the Market, never on the calibration hot
-// path (the compiled solve for the swap curve never sees a bond).
+// The bond street-yield / price↔yield inversion is a PRECOMPUTE off the market price, never on the calibration
+// hot path (the compiled solve for the swap curve never sees a bond).
 
 #include <optional>
 #include <stdexcept>
@@ -36,16 +38,13 @@
 #include "swaps/calibration/bond_fit.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/curve/curve_module.hpp"
-#include "swaps/market/market.hpp"
 #include "swaps/pricing/bond.hpp"
-#include "swaps/pricing/bond_future.hpp"
 
 namespace swaps::derive {
 
 namespace build = swaps::build;
 namespace cal = swaps::calibration;
 namespace curve = swaps::curve;
-namespace market = swaps::market;
 namespace pricing = swaps::pricing;
 
 // How a currency turns a bond yield + a matched swap into a swap-spread quote. HeadlineYield and MatchedMaturity are
@@ -58,9 +57,9 @@ enum class SwapSpreadType {
 };
 
 // A bond's identity is build::BondId (build/bond.hpp) — the ONE canonical identity type: convention-keyed,
-// when-issued-capable (first_coupon), independent of any market snapshot. Its live PRICE is a Quote in the
-// Market, keyed by BondId::id — ref data and market data stay separate. (This layer previously carried its
-// own BondRef restating a subset of the terms; folded per the CurveStructure de-dup rule.)
+// when-issued-capable (first_coupon), independent of any market data. Its live clean PRICE is a separate
+// argument — ref data and market data stay separate. (This layer previously carried its own BondRef restating
+// a subset of the terms; folded per the CurveStructure de-dup rule.)
 
 // A per-currency asset-swap convention. Data — the benchmark selection, the govvie curve it references (by
 // NAME, so it can be a 1-knot headline factor today and a fitted RV curve later), the settlement rule, and
@@ -100,13 +99,12 @@ inline build::Date settlement_date(const AssetSwapConvention& conv, const build:
   return build::advance_bd(conv.settle_calendar, today, conv.settle_lag);
 }
 
-// The benchmark's STREET yield, precomputed from the Market: build the bond on its convention, read its
-// market CLEAN price (Market.quote(id).mid()), and invert to yield via the engine's Newton (pricing/bond).
-inline double benchmark_yield(const AssetSwapConvention& conv, const build::BondId& bond,
-                              const market::Market& mkt) {
-  const build::Date settle = settlement_date(conv, mkt.today());
-  const build::BuiltBond bb = build::build_bond(bond, mkt.today(), settle);  // WI-aware via the identity
-  const double clean = mkt.quote(bond.id).mid();  // bond quotes are CLEAN prices, per unit notional
+// The benchmark's STREET yield: build the bond on its convention as of `today`, and invert its market CLEAN
+// price (per unit notional) to yield via the engine's Newton (pricing/bond).
+inline double benchmark_yield(const AssetSwapConvention& conv, const build::BondId& bond, const build::Date& today,
+                              double clean) {
+  const build::Date settle = settlement_date(conv, today);
+  const build::BuiltBond bb = build::build_bond(bond, today, settle);  // WI-aware via the identity
   return pricing::bond_yield_from_clean(bb.yield, clean);
 }
 
@@ -114,114 +112,58 @@ inline double benchmark_yield(const AssetSwapConvention& conv, const build::Bond
 struct DerivedAssetSwap {
   build::AssetSwapSpread rows;  // {pin, asw} — add both to the bundle (pin's row = bond bucket, asw = basis)
   double bond_yield = 0.0;      // the precomputed benchmark yield (the pin target)
-  double spread = 0.0;          // the quoted swap spread (from the Market)
+  double spread = 0.0;          // the quoted swap spread
 };
 
 // Derive the swap-spread rows for one benchmark. `spot_swap` is the matched par swap on the swap curve
 // (built by the general problem-derivation from the convention's swap_index + tenor); `factor_curve`/`anchor`
-// locate the govvie yield factor; `spread_quote_id` names the Market quote holding the quoted spread.
+// locate the govvie yield factor; `clean` is the benchmark's market clean price and `spread` the quoted spread.
 inline DerivedAssetSwap derive_asset_swap(const AssetSwapConvention& conv, const build::BondId& bond,
                                           const cal::Instrument& spot_swap, int factor_curve, double anchor,
-                                          const market::Market& mkt, const std::string& spread_quote_id) {
+                                          const build::Date& today, double clean, double spread) {
   // The convention's spread_type SELECTS the derivation. The yield-vs-matched-swap forms are wired here
   // (HeadlineYield / MatchedMaturity share this derivation — they differ in which swap the caller matched);
-  // Invoice (bond-future CTD FORWARD yield) has its own entry point derive_invoice_asset_swap() below, which
-  // needs the futures contract's basket + delivery data this signature does not carry; ParAssetSwap
-  // (endogenous) is still unwired. Fail loudly rather than silently deriving the wrong number.
-  if (conv.type == SwapSpreadType::Invoice)
-    throw std::invalid_argument("derive_asset_swap: use derive_invoice_asset_swap() for the Invoice spread");
+  // Invoice (bond-future CTD FORWARD yield) and ParAssetSwap (endogenous) are named conventions without a
+  // derivation (the Invoice path's forward-yield code had no consumer and was deleted on 2026-11-01, review
+  // item 1.8). Fail loudly rather than silently deriving the wrong number.
   if (conv.type != SwapSpreadType::HeadlineYield && conv.type != SwapSpreadType::MatchedMaturity)
     throw std::invalid_argument("derive_asset_swap: this spread_type's derivation is not implemented yet");
   DerivedAssetSwap out;
-  out.bond_yield = benchmark_yield(conv, bond, mkt);
-  out.spread = mkt.quote(spread_quote_id).mid();
+  out.bond_yield = benchmark_yield(conv, bond, today, clean);
+  out.spread = spread;
   out.rows = build::asset_swap_spread(spot_swap, factor_curve, anchor, out.bond_yield, out.spread);
   return out;
 }
 
-// =================================================================================================
-// INVOICE spread — the bond-future CTD FORWARD yield feeds the same asset-swap basis machinery.
-// =================================================================================================
-// An INVOICE (bond-future) spread quotes the cheapest-to-deliver's FORWARD yield to the future's delivery
-// date against the matched swap — the exact analogue of the headline benchmark yield, but carried forward.
-// The CTD is chosen off the deliverable basket by max implied repo (pricing/bond_future.hpp); its forward
-// yield is its spot clean price carried to delivery at `repo` (ACT/360, interim coupons reinvested), then
-// inverted through the bond kernel as of the DELIVERY settlement. That forward yield is the pin target of
-// the SAME build::asset_swap_spread rows, so the Invoice basis buckets identically to the headline ASW.
-
-// The CTD's forward yield to `delivery`: carry its spot dirty price forward at `repo`, subtract accrued at
-// delivery, invert the resulting forward clean through the yield kernel (bond rebuilt as of delivery). The
-// futures price does NOT enter — the forward yield is a pure cash-carry number; the futures/CF only enter
-// the basket's CTD selection and the invoice/basis. Seasoned CTD (regular coupons); interim coupons in
-// (settle, delivery] are enumerated off the coupon grid and reinvested at repo.
-inline double ctd_forward_yield(const AssetSwapConvention& conv, const build::BondId& ctd,
-                                const build::Date& delivery, double repo, const market::Market& mkt) {
-  const build::Date settle = settlement_date(conv, mkt.today());
-  const build::BuiltBond bb_now = build::build_bond(ctd, mkt.today(), settle);
-  const double clean_now = mkt.quote(ctd.id).mid();        // CTD live CLEAN price, per unit notional
-  const double dirty_now = clean_now + bb_now.accrued;
-  const double days = double(delivery - settle);
-  const int freq = int(bb_now.yield.conv.freq + 0.5);
-  const double cpn_per_period = ctd.coupon / double(freq);
-
-  // Carry the dirty price to delivery at repo (the CURRENCY's repo day-count basis, currencies[].repo_day_count),
-  // reinvesting any interim coupon paid in (settle, delivery].
-  const double repo_basis = build::day_count_basis(std::string(conventions::require_currency(conv.currency).repo_day_count));
-  double fwd_dirty = dirty_now * (1.0 + repo * days / repo_basis);
-  build::Date ref_start;
-  for (const build::Date& cd : build::coupon_dates_backward(ctd.issue, ctd.maturity, freq, ref_start))
-    if (cd > settle && cd <= delivery)
-      fwd_dirty -= cpn_per_period * (1.0 + repo * double(delivery - cd) / repo_basis);
-
-  // Invert the forward CLEAN price through the CTD rebuilt as of delivery (accrued + flows at delivery).
-  const build::BuiltBond bb_del = build::build_bond(ctd, delivery, delivery);
-  return pricing::bond_yield_from_clean(bb_del.yield, fwd_dirty - bb_del.accrued);
-}
-
-// Derive the Invoice-spread {pin, asw} rows: identical to derive_asset_swap but the pinned yield is the CTD
-// FORWARD yield (not a spot benchmark yield). `ctd` is the cheapest-to-deliver (typically chosen off the
-// basket via pricing::select_ctd on the conversion-factor/basis analytics); `delivery` is the futures'
-// delivery date; `repo` is the funding rate used to carry the CTD forward.
-inline DerivedAssetSwap derive_invoice_asset_swap(const AssetSwapConvention& conv, const build::BondId& ctd,
-                                                  const build::Date& delivery, double repo,
-                                                  const cal::Instrument& spot_swap, int factor_curve,
-                                                  double anchor, const market::Market& mkt,
-                                                  const std::string& spread_quote_id) {
-  if (conv.type != SwapSpreadType::Invoice)
-    throw std::invalid_argument("derive_invoice_asset_swap: convention.type must be Invoice");
-  DerivedAssetSwap out;
-  out.bond_yield = ctd_forward_yield(conv, ctd, delivery, repo, mkt);
-  out.spread = mkt.quote(spread_quote_id).mid();
-  out.rows = build::asset_swap_spread(spot_swap, factor_curve, anchor, out.bond_yield, out.spread);
-  return out;
-}
-
-// Build every bond in the universe (curve-space cashflows) and pull its market clean price from the Market —
-// the shared front half of both the spline and the parametric minimum-pricing-error fits.
+// Build every bond in the universe (curve-space cashflows) as of `today` beside its market clean price (`clean`
+// is aligned with `universe`) — the shared front half of both the spline and the parametric
+// minimum-pricing-error fits.
 inline void load_universe(const AssetSwapConvention& conv, const std::vector<build::BondId>& universe,
-                          const market::Market& mkt, std::vector<pricing::Bond>& bonds, Eigen::VectorXd& mc) {
+                          const build::Date& today, const std::vector<double>& clean,
+                          std::vector<pricing::Bond>& bonds, Eigen::VectorXd& mc) {
+  if (clean.size() != universe.size())
+    throw std::invalid_argument("load_universe: one clean price per bond (clean.size() != universe.size())");
   bonds.clear();
   bonds.reserve(universe.size());
   mc.resize(static_cast<int>(universe.size()));
-  const build::Date settle = settlement_date(conv, mkt.today());
+  const build::Date settle = settlement_date(conv, today);
   for (std::size_t b = 0; b < universe.size(); ++b) {
-    const build::BondId& br = universe[b];
-    bonds.push_back(build::build_bond(br, mkt.today(), settle).curve);  // WI-aware via the identity
-    mc[static_cast<int>(b)] = mkt.quote(br.id).mid();
+    bonds.push_back(build::build_bond(universe[b], today, settle).curve);  // WI-aware via the identity
+    mc[static_cast<int>(b)] = clean[b];
   }
 }
 
-// Assemble a SPLINE minimum-pricing-error govvie fit over a bond UNIVERSE priced from the Market. The
+// Assemble a SPLINE minimum-pricing-error govvie fit over a bond UNIVERSE at its market clean prices. The
 // returned GovvieBondFit is driven by cal::calibrate like any Problem; after the fit,
 // portfolio::CompiledBondBook::z_spreads() over the SAME (meeting, back) topology gives the per-bond RV
 // ladder. `weight` (optional, per bond) lets a caller down-weight illiquid/off-the-run bonds.
 inline cal::GovvieBondFit make_govvie_fit(const AssetSwapConvention& conv, const std::vector<build::BondId>& universe,
-                                          const market::Market& mkt, const std::vector<double>& meeting,
-                                          const std::vector<double>& back,
+                                          const build::Date& today, const std::vector<double>& clean,
+                                          const std::vector<double>& meeting, const std::vector<double>& back,
                                           const std::vector<double>& weight = {}) {
   cal::GovvieBondFit fit;
   fit.regions = curve::flat_hermite(meeting, back);
-  load_universe(conv, universe, mkt, fit.bonds, fit.market_clean);
+  load_universe(conv, universe, today, clean, fit.bonds, fit.market_clean);
   if (!weight.empty()) fit.weight = Eigen::Map<const Eigen::VectorXd>(weight.data(), weight.size());
   return fit;
 }
@@ -235,13 +177,13 @@ inline cal::GovvieBondFit make_govvie_fit(const AssetSwapConvention& conv, const
 template <template <class> class Model>
 inline cal::ParametricBondFit<Model> make_parametric_fit(const AssetSwapConvention& conv,
                                                          const std::vector<build::BondId>& universe,
-                                                         const market::Market& mkt, double tau1,
-                                                         double tau2 = 5.0,
+                                                         const build::Date& today, const std::vector<double>& clean,
+                                                         double tau1, double tau2 = 5.0,
                                                          const std::vector<double>& weight = {}) {
   cal::ParametricBondFit<Model> fit;
   fit.tau1 = tau1;
   fit.tau2 = tau2;
-  load_universe(conv, universe, mkt, fit.bonds, fit.market_clean);
+  load_universe(conv, universe, today, clean, fit.bonds, fit.market_clean);
   if (!weight.empty()) fit.weight = Eigen::Map<const Eigen::VectorXd>(weight.data(), weight.size());
   return fit;
 }
@@ -261,8 +203,6 @@ inline cal::ParametricBondFit<Model> make_parametric_fit(const AssetSwapConventi
 // spread = swap par rate - benchmark yield for both (build/swap_spread.hpp). The govvie factor anchor defaults to the
 // swap's termination in curve time. The bond's and the index's currencies need not match (owner decision 2026-09-14:
 // a bond against another currency's swap curve is a wanted use; its cross-currency form is designed separately).
-inline constexpr const char* kSwapSpreadQuoteId = "spread";  // the Market key the quoted spread is stored under
-
 struct SwapSpreadRequest {
   build::Date value_date;
   build::BondId bond;  // the benchmark; bond.yield_conv is also the settlement convention
@@ -324,8 +264,6 @@ inline SwapSpreadResult swap_spread(const SwapSpreadRequest& r) {
   if (r.index.empty()) throw std::invalid_argument("swap_spread: missing swap 'index'");
   if (r.swap_curve < 0 || r.factor_curve < 0)
     throw std::invalid_argument("swap_spread: needs 'swap_curve' and 'factor_curve' (bundle curve roles)");
-  if (r.bond.id == kSwapSpreadQuoteId)
-    throw std::invalid_argument("swap_spread: a bond id may not be the reserved quote name 'spread'");
   AssetSwapConvention conv = asset_swap_convention(r.bond.yield_conv, r.settlement);
   conv.type = r.type;
   conv.swap_index = r.index;
@@ -334,11 +272,7 @@ inline SwapSpreadResult swap_spread(const SwapSpreadRequest& r) {
   SwapSpreadResult out;
   out.swap_maturity = m.maturity;
   out.anchor = r.anchor.value_or(build::curve_time(r.value_date, m.maturity));
-  market::Market mk;
-  mk.as_of(r.value_date);
-  mk.add_quote(r.bond.id, market::Quote::mid(r.clean));
-  mk.add_quote(kSwapSpreadQuoteId, market::Quote::mid(r.spread));
-  out.derived = derive_asset_swap(conv, r.bond, m.swap, r.factor_curve, out.anchor, mk, kSwapSpreadQuoteId);
+  out.derived = derive_asset_swap(conv, r.bond, m.swap, r.factor_curve, out.anchor, r.value_date, r.clean, r.spread);
   return out;
 }
 

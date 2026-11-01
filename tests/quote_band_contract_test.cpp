@@ -1,7 +1,7 @@
 // E5 taxonomy: T5 properties + value pins (hand / closed-form literals, identities, FD) | T3 cross-path parity (two engine paths, same inputs)
 // K5' QUOTE CONTRACT (owner 2026-09-14): a quote is four numbers {target, lower, upper, decay}; a band only gives the solve freedom
 // around its target, so the target lies inside it. Header-only (tools/mutate.py reaches it): cal::validate_quote, the wire's
-// market::band_target, and the streamer's four-number requote (StreamingCalibrator::set_bands) -- which must be a row re-scale,
+// calibration::band_target (the hand-off POD CalibrationTarget), and the streamer's four-number requote (StreamingCalibrator::set_bands) -- which must be a row re-scale,
 // never a Jacobian refresh, and land on the requoted problem's optimum.
 #include <cmath>
 #include <optional>
@@ -16,10 +16,8 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/calibration/problem.hpp"
 #include "swaps/calibration/streaming.hpp"
-#include "swaps/market/quote.hpp"
 
 namespace cal = swaps::calibration;
-namespace mk = swaps::market;
 using swaps::shapes::Shape;
 
 namespace {
@@ -72,18 +70,18 @@ TEST(QuoteBandContract, ValidateQuoteAcceptsTheEdgesAndRefusesEveryBadQuote) {
 }
 
 TEST(QuoteBandContract, AWireQuotesBandMustContainItsTargetAndAPinMustEqualIt) {
-  const mk::CalibrationTarget band = mk::band_target(0.030, 0.029, 0.031, std::nullopt);
+  const cal::CalibrationTarget band = cal::band_target(0.030, 0.029, 0.031, std::nullopt);
   EXPECT_EQ(band.target, 0.030);
   EXPECT_EQ(band.band_lower, 0.029);
   EXPECT_EQ(band.band_upper, 0.031);
   EXPECT_EQ(band.band_decay, 1.0) << "absent decay: 1 (parity with server/compile.py)";
-  const mk::CalibrationTarget pin = mk::band_target(0.030, 0.030, 0.030, 0.0);
+  const cal::CalibrationTarget pin = cal::band_target(0.030, 0.030, 0.030, 0.0);
   EXPECT_TRUE(pin.is_hard_pin());
   EXPECT_EQ(pin.target, 0.030);
-  EXPECT_THROW(mk::band_target(0.030, 0.031, 0.029, std::nullopt), std::invalid_argument) << "inverted";
-  EXPECT_THROW(mk::band_target(0.0301, 0.030, 0.030, std::nullopt), std::invalid_argument) << "pin != target";
-  EXPECT_THROW(mk::band_target(0.032, 0.029, 0.031, std::nullopt), std::invalid_argument) << "target outside";
-  EXPECT_THROW(mk::band_target(0.030, 0.029, 0.031, 1.2), std::invalid_argument) << "decay 1.2";
+  EXPECT_THROW(cal::band_target(0.030, 0.031, 0.029, std::nullopt), std::invalid_argument) << "inverted";
+  EXPECT_THROW(cal::band_target(0.0301, 0.030, 0.030, std::nullopt), std::invalid_argument) << "pin != target";
+  EXPECT_THROW(cal::band_target(0.032, 0.029, 0.031, std::nullopt), std::invalid_argument) << "target outside";
+  EXPECT_THROW(cal::band_target(0.030, 0.029, 0.031, 1.2), std::invalid_argument) << "decay 1.2";
 }
 
 // A requote that moves every target AND band is a per-row constant change: no Jacobian refresh, and the streamed point is the
@@ -167,4 +165,20 @@ TEST(QuoteBandContract, SetBandsRefusesAMembershipChangeAndTheStreamerRefusesATa
   const Eigen::VectorXd before = st.current();
   EXPECT_THROW(st.update(q), std::invalid_argument);
   EXPECT_EQ(st.current(), before) << "a refused tick commits nothing";
+}
+
+// THE hand-off: a CalibrationTarget -> Instrument::set_target -- the one path a market quote takes into a calibration
+// instrument (problem.hpp defines the band semantics; nothing is hand-copied). Carried over from the retired
+// market_quote_test (2026-11-01: the market/ layer had no production reader).
+TEST(QuoteBandContract, SetTargetLandsTheFullQuoteRhsOnAnInstrument) {
+  cal::Instrument ins;
+  ins.set_target(cal::band_target(0.0372, 0.0370, 0.0374, 0.2));
+  EXPECT_DOUBLE_EQ(ins.market, 0.0372);
+  EXPECT_DOUBLE_EQ(ins.band_lower, 0.0370);
+  EXPECT_DOUBLE_EQ(ins.band_upper, 0.0374);
+  EXPECT_DOUBLE_EQ(ins.band_decay, 0.2);
+  ins.set_target(cal::CalibrationTarget{0.0372, 0.0, 0.0, 1.0});  // a mid-only quote resets to a HARD pin
+  EXPECT_DOUBLE_EQ(ins.market, 0.0372);
+  EXPECT_LE(ins.band_upper, ins.band_lower);
+  EXPECT_DOUBLE_EQ(ins.band_decay, 1.0);
 }

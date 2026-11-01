@@ -9,11 +9,11 @@
 //
 // A CSA is the collateral agreement under which a trade is funded. Its single most consequential output for
 // curve construction is the discount curve: a trade collateralised in cash in currency X discounts on X's
-// OIS. This object therefore DERIVES its discount index by delegating to market::Currency::discount_index()
-// (SOFR for USD, ESTR for EUR), so it can never drift from the DB-derived currency registry that already
-// drives calibration. It mirrors the reference-data value objects (build::Index / market::Currency): value
-// semantics, header-only, QuantLib-free, every cross-object accessor returning the same typed objects the
-// rest of the model uses. The economic terms (threshold, MTA, independent amount, rounding) are plain data.
+// OIS. This object therefore DERIVES its discount index from the conventions DB's currencies[] row
+// (currencies[].discount_index: SOFR for USD, ESTR for EUR), so it can never drift from the registry that
+// already drives calibration. It mirrors the reference-data value object build::Index: value semantics,
+// header-only, QuantLib-free. The economic terms (threshold, MTA, independent amount, rounding) are plain
+// data. (The typed market::Currency it used to delegate to was retired on 2026-11-01: no production reader.)
 
 #include <optional>
 #include <stdexcept>
@@ -21,16 +21,15 @@
 #include <utility>
 
 #include "swaps/build/ref_data.hpp"
-#include "swaps/market/currency.hpp"
+#include "swaps/conventions_data.hpp"
 
 namespace swaps::trade {
 
-namespace mkt = swaps::market;
 namespace bld = swaps::build;
 
 // A COLLATERAL AGREEMENT — a typed reference object describing how a trade is collateralised, and therefore
-// which curve it discounts on. Value semantics; holds the collateral terms and delegates the discount-curve
-// choice to the collateral currency's OIS via market::Currency.
+// which curve it discounts on. Value semantics; holds the collateral terms and reads the discount-curve choice
+// (the collateral currency's OIS) off the conventions DB.
 struct CSA {
   // How the exposure is collateralised. Cash collateral in `collateral_currency` pins discounting to that
   // currency's OIS; an uncollateralised trade has no collateral curve to pin to (it funds at the currency's
@@ -57,16 +56,16 @@ struct CSA {
   // --- Queries ------------------------------------------------------------------------------------------
   bool is_cash_collateralized() const { return type == Type::Cash; }
 
-  // The collateral currency as a typed reference object (SOFR/ESTR discount index, settlement calendar, ...).
-  mkt::Currency currency() const { return mkt::Currency::of(collateral_currency); }
-
-  // The index whose curve this trade DISCOUNTS on under this CSA = the collateral currency's OIS. Delegates
-  // to market::Currency::discount_index(), so it stays wired to the DB-derived currency registry. An unknown
-  // collateral currency yields an unknown (empty) Index, exactly as market::Currency does.
-  bld::Index discount_index() const { return currency().discount_index(); }
-
-  // The discount index id ("USD-SOFR", "EUR-ESTR", ...); empty for an unknown collateral currency.
-  std::string discount_index_id() const { return discount_index().id; }
+  // The discount index id ("USD-SOFR", "EUR-ESTR", ...) = the collateral currency's OIS, currencies[].discount_index
+  // in the conventions DB (baked or overlay); EMPTY for an unknown collateral currency (the callers --
+  // discount_index_for, the exposure verb -- refuse an empty id with their own message).
+  std::string discount_index_id() const {
+    const auto c = swaps::conventions::currency(collateral_currency);
+    return c ? std::string(c->discount_index) : std::string();
+  }
+  // The index whose curve this trade DISCOUNTS on under this CSA; an unknown collateral currency yields an unknown
+  // (empty) Index, exactly as build::Index treats an unknown id.
+  bld::Index discount_index() const { return bld::Index{discount_index_id()}; }
 };
 
 // The index a booked trade DISCOUNTS on: its CSA's collateral-currency OIS when it has a CSA, else an explicitly

@@ -115,7 +115,7 @@ oracle merely might.
 | `vol` | 3/8 | oracled: Bachelier, general-β SABR vol, `normal`. Not: `swaption.hpp`, `fx_black.hpp`, `fx_vol_surface.hpp`, `sabr_calibration.hpp`, `vega_ladder.hpp` |
 | `portfolio` | 1/4 | book aggregation is cross-path parity only (compiled vs templated) — a shared error cancels |
 | `api` | 3/21 | `bond.hpp`, `codec.hpp`, `bundle_api.hpp` reached since 2026-09-13 (`asset_swap_oracle_test.cpp` drives the verb); the rest see below — measured by verb, not by include |
-| `market`, `trade`, `csa`, `xva`, `derive` | 0 | mostly containers and role plumbing (`quote.hpp`, `currency.hpp`, `trade.hpp`, `csa.hpp`) where there is no independent number to compare; `derive/asset_swap.hpp` and `xva/exposure.hpp` DO produce numbers and do not have one |
+| `trade`, `csa`, `xva`, `derive` | 0 | mostly containers and role plumbing (`trade.hpp`, `csa.hpp`) where there is no independent number to compare; `derive/asset_swap.hpp` and `xva/exposure.hpp` DO produce numbers and do not have one |
 
 **Calibration, not just pricing.** Every oracle above except `calibration_oracle_test.cpp` compares a QUOTE at a
 FIXED curve. That checks the pricing kernel; it does not check what a client actually consumes — the curve the

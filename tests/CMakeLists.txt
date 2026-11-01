@@ -64,15 +64,8 @@ add_executable(swaps_tests
   build_instruments_test.cpp
   instrument_params_test.cpp
   structure_fingerprint_test.cpp
-  market_currency_test.cpp
-  market_fx_test.cpp
-  market_quote_test.cpp
-  market_env_test.cpp
   trade_test.cpp
   trade_book_test.cpp
-  market_scenario_test.cpp
-  market_fixing_series_test.cpp
-  market_vol_surface_test.cpp
   book_rows_test.cpp
   schedule_stub_eom_test.cpp
   rfr_lag_test.cpp

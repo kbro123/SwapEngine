@@ -18,7 +18,6 @@ namespace cal = swaps::calibration;
 namespace cv = swaps::curve;
 namespace cvd = swaps::conventions;
 namespace der = swaps::derive;
-namespace mkt = swaps::market;
 namespace pf = swaps::portfolio;
 namespace px = swaps::pricing;
 
@@ -60,12 +59,6 @@ std::vector<double> ns_cleans(const std::vector<b::BondId>& u) {
   for (const b::BondId& bi : u)
     clean.push_back(px::bond_clean_price<double>(b::build_bond(bi, kVd, row_settle(kVd)).curve, truth));
   return clean;
-}
-mkt::Market clean_market(const std::vector<b::BondId>& u, const std::vector<double>& clean) {
-  mkt::Market m;
-  m.as_of(kVd);
-  for (std::size_t i = 0; i < u.size(); ++i) m.add_quote(u[i].id, mkt::Quote::mid(clean[i]));
-  return m;
 }
 }  // namespace
 
@@ -171,8 +164,7 @@ TEST(DeriveRv, GovvieFitSplineIsTheHandAssembledPipeline) {
   // The pre-lift verb, restated: make_govvie_fit, calibrate from a flat 3 %, then REBUILD every bond at the
   // settlement date and target clean + accrued for the z-spreads.
   const der::AssetSwapConvention conv = row_convention();
-  const mkt::Market m = clean_market(u, clean);
-  cal::GovvieBondFit fit = der::make_govvie_fit(conv, u, m, r.meeting, r.back);
+  cal::GovvieBondFit fit = der::make_govvie_fit(conv, u, kVd, clean, r.meeting, r.back);
   const cal::CalibrationResult hand = cal::calibrate(fit, Eigen::VectorXd::Constant(fit.n_knots(), 0.03));
   EXPECT_TRUE(res.fit.x == hand.x);
   EXPECT_TRUE(res.residuals == fit.residuals<double>(hand.x));
@@ -204,9 +196,8 @@ TEST(DeriveRv, GovvieFitParametricRecoversNelsonSiegelAndCarriesTheDecays) {
   EXPECT_FALSE(ns.z_spread.has_value());
 
   const der::AssetSwapConvention conv = row_convention();
-  const mkt::Market m = clean_market(u, clean);
   const auto hand = [&](double tau1, double tau2) {
-    auto fit = der::make_parametric_fit<cv::Svensson>(conv, u, m, tau1, tau2);
+    auto fit = der::make_parametric_fit<cv::Svensson>(conv, u, kVd, clean, tau1, tau2);
     Eigen::VectorXd seed = Eigen::VectorXd::Zero(fit.n_knots());
     seed[0] = 0.03;
     return cal::calibrate(fit, seed).x;
@@ -268,9 +259,7 @@ TEST(DeriveAssetSwap, SwapSpreadIsTheIndexConventionTenorSwap) {
   const b::Date mat = b::resolve("5Y", kVd, sc.calendar, sc.bdc, sc.spot_lag);
   const cal::Instrument swap = b::par_swap(kVd, sc, mat, 0, 0, 0.0);
   EXPECT_EQ(res.anchor, b::curve_time(kVd, mat));
-  mkt::Market m = clean_market({r.bond}, {0.991});
-  m.add_quote("quoted-spread", mkt::Quote::mid(-0.0032));
-  const der::DerivedAssetSwap hand = der::derive_asset_swap(row_convention(), r.bond, swap, 1, res.anchor, m, "quoted-spread");
+  const der::DerivedAssetSwap hand = der::derive_asset_swap(row_convention(), r.bond, swap, 1, res.anchor, kVd, 0.991, -0.0032);
   EXPECT_EQ(res.derived.bond_yield, hand.bond_yield);
   EXPECT_EQ(res.derived.spread, hand.spread);
   EXPECT_EQ(res.derived.rows.pin.market, hand.rows.pin.market);
@@ -299,7 +288,4 @@ TEST(DeriveAssetSwap, SwapSpreadIsTheIndexConventionTenorSwap) {
   bad = r;
   bad.clean = std::nan("");
   EXPECT_THROW(der::swap_spread(bad), std::invalid_argument) << "NaN passed the old `clean <= 0` check";
-  bad = r;
-  bad.bond.id = der::kSwapSpreadQuoteId;
-  EXPECT_THROW(der::swap_spread(bad), std::invalid_argument);
 }

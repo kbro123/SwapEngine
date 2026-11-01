@@ -25,8 +25,8 @@ namespace swaps::build {
 namespace px = swaps::pricing;
 
 // Fixing dates are Unix-day serials (Date::serial(), days since 1970-01-01) — the engine's ONE integer date
-// convention (pricing/fixings.hpp, market/fixing_series.hpp, cb meetings). Until 2026-09-09 this file emitted
-// Python proleptic ordinals (+719163) while FixingSeries used serials, so the two fixing stores disagreed.
+// convention (pricing/fixings.hpp, cb meetings). Until 2026-09-09 this file emitted
+// Python proleptic ordinals (+719163) while the (since retired) FixingSeries used serials, so the two fixing stores disagreed.
 
 // Fixing dates in [start, end) on the index calendar (conventions.business_days). The id is REQUIRED; the DB
 // calendar "NONE" is the explicit weekends-only calendar (an empty id used to mean that silently).

@@ -25,7 +25,6 @@
 #include "swaps/api/bundle_api.hpp"        // bundle_to_json (reused for the "bundle" field)
 #include "swaps/api/json_util.hpp"         // required_number / required_text: fields with no default
 #include "swaps/build/instruments.hpp"     // the whole build/ object model (schedule/conventions/observations)
-#include "swaps/market/quote.hpp"          // CalibrationTarget -- the ONE quote->instrument hand-off POD
 
 namespace swaps::api {
 
@@ -139,13 +138,13 @@ QuoteBand quote_band(const json::object& ins) {
 // Attach a bid/offer band to the instrument when it declares a REAL band (upper > lower), in rate units
 // (compile._apply_band). A hard pin emits no band, so it stays exact. The wire shape is target + band —
 // the target is NOT necessarily the band mid and the default decay is 1 (parity with server/compile.py) —
-// so this maps onto the ONE hand-off POD (market::CalibrationTarget) and lands via Instrument::set_target,
+// so this maps onto the ONE hand-off POD (calibration::CalibrationTarget) and lands via Instrument::set_target,
 // the single definition of how a target + band reaches an instrument (no third band semantics here).
 void apply_band(cal::Instrument& obj, const json::object& ins, const std::string& unit) {
   const QuoteBand q = quote_band(ins);
-  swaps::market::CalibrationTarget t{obj.market, 0.0, 0.0, 1.0};  // the already-set target, hard pin
+  swaps::calibration::CalibrationTarget t{obj.market, 0.0, 0.0, 1.0};  // the already-set target, hard pin
   // K5': the four numbers are checked by the library (a band must contain its target; a pin must equal it; no inverted band).
-  if (q.lower && q.upper) t = swaps::market::band_target(obj.market, to_decimal(*q.lower, unit), to_decimal(*q.upper, unit), q.decay);
+  if (q.lower && q.upper) t = swaps::calibration::band_target(obj.market, to_decimal(*q.lower, unit), to_decimal(*q.upper, unit), q.decay);
   obj.set_target(t);
 }
 
@@ -721,19 +720,12 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   for (const json::object* cp : order) R.curve_names.push_back(get_s(*cp, "name", "?"));
   for (const json::object* cp : order) R.order_ids.push_back(get_s(*cp, "id"));
   // EVERY CURVE HAS A FRONT ANCHOR (PRINCIPLES P15, 2026-11-01): a curve whose front no single-window instrument reads
-  // is held there by the smoothing tie-breaker alone and streams on refreshes (the unanchored CCP curves: a 0.1 bp
-  // tick swung the spreads 600 bp). The rule is a WARNING here, not a refusal: the spec compiles, and the composer
-  // shows the client which curve needs its 1D fixing / depo / first-pillar instrument.
-  for (const cal::FrontAnchor& a : cal::front_anchors(R.bundle))
-    if (a.row < 0 && a.first_knot >= 0.0) {
-      char knot[32];
-      std::snprintf(knot, sizeof knot, "%.3g", a.first_knot);
-      const std::size_t c = static_cast<std::size_t>(a.curve);
-      R.warnings.push_back("No front anchor (P15): curve '" + R.curve_names[c] + "' (id " + R.order_ids[c] +
-                           ") has no instrument reading its forward over one window from the value date to its first knot (" +
-                           std::string(knot) + "y); its front is held by smoothing alone. Add a fixing, deposit or " +
-                           "first-pillar swap (a spread curve: its 1D fixing at zero spread).");
-    }
+  // is held there by the smoothing tie-breaker alone (the unanchored CCP curves: a 0.1 bp tick swung the spreads
+  // 600 bp). A WARNING per such curve (calibration::front_anchor_warnings), not a refusal.
+  {
+    const std::vector<std::string> p15 = cal::front_anchor_warnings(R.bundle, R.curve_names, R.order_ids);
+    R.warnings.insert(R.warnings.end(), p15.begin(), p15.end());
+  }
   R.currency_codes = ccy_order;
   R.smoothness = get_s(spec, "smoothness", "light");
   // SMOOTHING IS REGION DATA (2026-10-13): a region's own `reg_lambda` is the only source of smoothing rows. A LEGACY

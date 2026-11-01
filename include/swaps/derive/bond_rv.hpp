@@ -24,7 +24,6 @@
 #include "swaps/calibration/lm.hpp"
 #include "swaps/curve/parametric.hpp"
 #include "swaps/derive/asset_swap.hpp"
-#include "swaps/market/market.hpp"
 #include "swaps/portfolio/bond_universe.hpp"
 
 namespace swaps::derive {
@@ -103,9 +102,9 @@ struct GovvieFitResult {
 
 namespace bond_rv_detail {
 template <template <class> class Model>
-GovvieFitResult fit_parametric(const AssetSwapConvention& conv, const GovvieFitRequest& r, const market::Market& m) {
+GovvieFitResult fit_parametric(const AssetSwapConvention& conv, const GovvieFitRequest& r) {
   const cal::ParametricBondFit<Model> defaults;
-  auto fit = make_parametric_fit<Model>(conv, r.bonds, m, r.tau1.value_or(defaults.tau1),
+  auto fit = make_parametric_fit<Model>(conv, r.bonds, r.value_date, r.clean, r.tau1.value_or(defaults.tau1),
                                         r.tau2.value_or(defaults.tau2), r.weight);
   Eigen::VectorXd seed = Eigen::VectorXd::Zero(fit.n_knots());
   seed[0] = r.x0;
@@ -124,17 +123,13 @@ inline GovvieFitResult govvie_fit(const GovvieFitRequest& r) {
     throw std::invalid_argument("govvie_fit: 'clean' length must match the bond count");
   std::unordered_set<std::string> ids;
   for (const build::BondId& b : r.bonds)
-    if (!ids.insert(b.id).second)  // a Market holds one quote per id: a duplicate was silently priced at the last one
+    if (!ids.insert(b.id).second)  // the result rows are keyed by id: a duplicate would be unreadable
       throw std::invalid_argument("govvie_fit: duplicate bond id '" + b.id + "'");
-
-  market::Market m;  // the snapshot the derive layer consumes: as-of + one CLEAN-price quote per bond
-  m.as_of(r.value_date);
-  for (std::size_t i = 0; i < r.bonds.size(); ++i) m.add_quote(r.bonds[i].id, market::Quote::mid(r.clean[i]));
 
   switch (r.model) {
     case GovvieModel::Spline: {
       if (r.back.empty()) throw std::invalid_argument("govvie_fit: spline model needs 'back' knot times");
-      cal::GovvieBondFit fit = make_govvie_fit(conv, r.bonds, m, r.meeting, r.back, r.weight);
+      cal::GovvieBondFit fit = make_govvie_fit(conv, r.bonds, r.value_date, r.clean, r.meeting, r.back, r.weight);
       GovvieFitResult out;
       out.model = r.model;
       out.fit = cal::calibrate(fit, Eigen::VectorXd::Constant(fit.n_knots(), r.x0));
@@ -148,9 +143,9 @@ inline GovvieFitResult govvie_fit(const GovvieFitRequest& r) {
       return out;
     }
     case GovvieModel::NelsonSiegel:
-      return bond_rv_detail::fit_parametric<curve::NelsonSiegel>(conv, r, m);
+      return bond_rv_detail::fit_parametric<curve::NelsonSiegel>(conv, r);
     case GovvieModel::Svensson:
-      return bond_rv_detail::fit_parametric<curve::Svensson>(conv, r, m);
+      return bond_rv_detail::fit_parametric<curve::Svensson>(conv, r);
   }
   throw std::invalid_argument("govvie_fit: unknown model");
 }
