@@ -76,7 +76,7 @@ class CompiledBundleResidual {
   // copied every instrument a second time -- two deep copies of every coupon per engine build).
   CompiledBundleResidual(const BundleProblem& p, const std::vector<int>& rows, bool pwl)
       : n_gen_(static_cast<int>(rows.size())) {
-    cs_.init(p.curves);  // p.curves ARE pricing::CurveStructure now (BundleCurveSpec is an alias), no copy
+    cs_.init(p.curves);  // p.curves ARE pricing::CurveStructure (BundleCurveSpec is an alias); init keeps its own copy of the specs
     if (pwl) cs_.enable_pwl();
     market_.resize(n_gen_);
     rows_.reserve(static_cast<std::size_t>(n_gen_));

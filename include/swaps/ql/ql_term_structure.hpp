@@ -1,8 +1,9 @@
 #pragma once
 // Exposes our calibrated ModularCurve to QuantLib as a YieldTermStructure.
 //
-// This is a CORE ENGINE COMPONENT, not just a test tool (CLAUDE.md §1): our calibrated curve is a
-// QuantLib::YieldTermStructure, so it plugs straight into QuantLib pricing engines. QuantLib
+// This is the ORACLE adapter (test-only, like everything under ql/ -- the shipped engine does not link
+// QuantLib, CLAUDE.md §1): our calibrated curve is a QuantLib::YieldTermStructure, so it plugs straight into
+// QuantLib pricing engines. QuantLib
 // supplies the instrument machinery it is authoritative for — SOFR arithmetic-average vs
 // compounded accrual, IMM schedules, business-day and day-count conventions — while every discount
 // factor comes from our interpolator.

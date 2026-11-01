@@ -173,6 +173,74 @@ inline void validate_problem(const BundleProblem& p, const std::string& where = 
 // (ParRate/Rate/ZeroCouponRate) quote, clamped to [0.1%, 20%], falling back to 2% for a bundle with no outright
 // rows. Spread curves and turn deltas always seed at 0. (Moved from api/bundle_api.cpp, E7 3.6: it is a function
 // of the problem alone, and calibration-layer code seeds from it.)
+// ---- THE FRONT ANCHOR RULE (owner's rule, 2026-11-01; PRINCIPLES.md P15, ASSUMPTIONS K53) -----------------------
+// Every curve's front is pinned by an instrument that reads THAT curve's forward over ONE window starting at the
+// front: a Rate row forecast on it (a fixing, a deposit, a meeting-to-meeting or futures observation), a quotient row
+// whose leg on the curve is a single coupon (a 1Y OIS, a 6M IRS to its first pillar), an FX forward reading its
+// discount from the value date (one integral from 0), or a Portfolio with such a component (the CCP 1D zero-basis
+// row). A multi-coupon swap is NOT an anchor, nor is any discount-only read: a par rate's discounting column vanishes
+// at the front, which is how a spread curve with a knot per pillar ended up held by the smoothing tie-breaker alone.
+// Region 0 flat-extrapolates its first knot, so an unanchored front silently carries a term pillar's value to day one.
+struct FrontAnchor {
+  int curve = -1;
+  double first_knot = 0.0;  // the curve's first interpolation knot time (-1: no interp knots)
+  int row = -1;             // the anchoring row (global residual index), -1 = UNANCHORED
+  double start = 0.0, end = 0.0;  // the anchoring window on the curve
+};
+// The one window instrument `ins` reads of curve c's forward, if it is a single-window read (see above).
+inline bool anchor_window(const Instrument& ins, int c, double& s, double& e) {
+  const auto leg_window = [&](const FloatLeg& leg) {
+    if (leg.forecast != c || leg.coupons.size() != 1) return false;
+    const pricing::RateObservation& o = leg.coupons.front().obs;
+    if (o.sub_start.empty()) return false;
+    s = o.sub_start.front(); e = o.sub_end.back();
+    return true;
+  };
+  switch (ins.quote) {
+    case QuoteKind::Rate:
+      if (ins.forecast != c || ins.obs.sub_start.empty()) return false;
+      s = ins.obs.sub_start.front(); e = ins.obs.sub_end.back();
+      return true;
+    case QuoteKind::FxForward:
+      if (ins.fx_num != c && ins.fx_den != c) return false;
+      s = ins.fx_spot_time; e = ins.fx_time;
+      return true;
+    case QuoteKind::Portfolio:
+      for (const auto& comp : ins.combination)
+        if (anchor_window(comp.instrument, c, s, e)) return true;
+      return false;
+    case QuoteKind::ParRate: case QuoteKind::ParSpread: case QuoteKind::ZeroCouponRate: case QuoteKind::XccyMtmBasis: case QuoteKind::Npv:
+      return leg_window(ins.fwd) || leg_window(ins.bench);
+    default:
+      return false;
+  }
+}
+// Per curve, the first row that anchors its front, or row = -1. The window starts within `front_tol` years of the
+// value date (a spot lag; a futures window that opened before the value date starts at a negative time) and ENDS AT
+// the first knot: the front knot IS that instrument's maturity -- the knot sits at the window's end or within
+// `lag_tol` after it (a knot at the instrument's PAYMENT time, a pay lag past the accrual end). A leading Flat region
+// is the meeting-date front, whose first segment is one value however long: there the window only has to reach the
+// knot (the SOFR reference market: FOMC knots under a 1M futures strip). A window that ends past a non-Flat first
+// knot pins that knot together with the next one and leaves the front to extrapolation -- not an anchor.
+inline std::vector<FrontAnchor> front_anchors(const BundleProblem& p, double front_tol = 0.03, double lag_tol = 0.03) {
+  std::vector<FrontAnchor> out;
+  for (int c = 0; c < p.n_curves(); ++c) {
+    FrontAnchor a;
+    a.curve = c;
+    const auto& cs = p.curves[static_cast<std::size_t>(c)];
+    a.first_knot = cs.n_interp_knots() > 0 ? cs.regions.front().knots.front() : -1.0;
+    const bool flat_front = !cs.regions.empty() && cs.regions.front().scheme == curve::Scheme::Flat;
+    for (int r = 0; r < p.n_residuals() && a.row < 0; ++r) {
+      double s = 0.0, e = 0.0;
+      if (!anchor_window(p.row(r), c, s, e) || s > front_tol) continue;
+      const bool ends_at_knot = flat_front ? e + lag_tol >= a.first_knot : (a.first_knot >= e - 1e-6 && a.first_knot <= e + lag_tol);
+      if (ends_at_knot) { a.row = r; a.start = s; a.end = e; }
+    }
+    out.push_back(a);
+  }
+  return out;
+}
+
 inline Eigen::VectorXd flat_x0(const BundleProblem& prob, double level = 0.0) {
   if (level <= 0.0) {
     // Derive the flat seed level FROM THE MARKET: the mean outright quote (ParRate / Rate rows). This is

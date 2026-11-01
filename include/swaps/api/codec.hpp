@@ -20,6 +20,7 @@
 // Declared against a forward-declared CurveSample (defined in calibration/bundle_state.hpp, which bundle_api.hpp includes), so
 // including either header gives the whole API.
 
+#include <string>
 #include <vector>
 
 #include <boost/json/fwd.hpp>
@@ -69,6 +70,11 @@ using RegSpec = cal::RegSpec;  // calibration/regularize.hpp
 using CurveSample = cal::CurveSample;  // calibration/bundle_state.hpp
 
 // ---- the calibration problem -----------------------------------------------------------------------
+// The interpolation-scheme names of the JSON contract (one table: "Flat" .. "MonotoneConvex"; an unknown name throws
+// std::invalid_argument). The compile verb's `policy` words are these names.
+swaps::curve::Scheme scheme_from_str(const std::string& s);
+const char* scheme_to_str(swaps::curve::Scheme s);
+
 cal::BundleProblem bundle_from_json(const boost::json::value& v);
 boost::json::value bundle_to_json(const cal::BundleProblem& p);
 cal::Instrument instrument_from_json(const boost::json::value& v);

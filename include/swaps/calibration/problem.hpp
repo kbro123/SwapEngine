@@ -597,6 +597,9 @@ inline void validate_instrument(const Instrument& ins, const std::string& where)
     }
     for (int i = 0; i <= m.n; ++i)
       if (!(m.s[i] >= 0.0) || !std::isfinite(m.s[i])) fail("a penalty map slope must be finite and >= 0 (a monotone penalty)");
+    // The map IS the row's shape (Instrument::penalty reads it, never the four band numbers): a band beside it is dead
+    // data that the session would validate targets against and the engines ignore (review defect 4.2, 2026-11-01).
+    if (ins.band_upper > ins.band_lower) fail("a row with a penalty map carries no band: the map is the row's shape");
     if (!std::isfinite(ins.market)) fail("a non-finite target");
   }
   const auto leg = [&](const FloatLeg& l, const char* name) {

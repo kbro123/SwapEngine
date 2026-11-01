@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
@@ -180,4 +181,16 @@ TEST(StreamingDeadZone, ARowAnchoredInItsDeadZoneIsTrackedThroughItsQuoteRowAndW
   EXPECT_GT(t.rescales, 0) << "the crossing out of the dead zone is a walk step on the tracked row";
   EXPECT_EQ(t.refreshes, 0) << "no stall-triggered Jacobian refresh";
   EXPECT_LT(bp(sc.current(), cold(p, q0, xz)), 0.05);
+}
+
+// Review defect 4.2 (2026-11-01): a penalty map IS the row's shape (Instrument::penalty reads it and never the four
+// band numbers; the streamer's BandRow::general says the same), so a band beside it is dead data. validate_problem
+// refuses the pair; the session's set_band / banded stream_update refusals are pinned in quote_band_session_test.
+TEST(StreamingDeadZone, ABandBesideAPenaltyMapIsRefusedByValidation) {
+  cal::BundleProblem p = bundle(1.0, true);
+  const double m = p.instruments[3].market;
+  cal::validate_problem(p, "premise");
+  p.instruments[3].band_lower = m - 1e-4;
+  p.instruments[3].band_upper = m + 1e-4;
+  EXPECT_THROW(cal::validate_problem(p, "band+map"), std::invalid_argument);
 }

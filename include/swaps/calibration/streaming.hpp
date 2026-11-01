@@ -1038,6 +1038,20 @@ inline void validate_targets(const std::vector<Instrument>& ins, const Eigen::Ve
   }
 }
 
+// A band sent for a row that carries a PENALTY MAP is refused: the map is the row's shape on every engine and the
+// streamer (BandRow::general), so the band would be stored and never read (review defect 4.2, 2026-11-01). The map
+// itself is structure -- it changes by recompiling the bundle, not by a requote.
+inline void validate_band_on_row(const Instrument& ins, double lower, double upper, const char* where, int row) {
+  if (ins.penalty_map && upper > lower)
+    throw std::invalid_argument(std::string(where) + ": row " + std::to_string(row) +
+                                " carries a penalty map (its shape); a band cannot be quoted on it");
+}
+inline void validate_bands_on_rows(const std::vector<Instrument>& ins, const Eigen::VectorXd& lower, const Eigen::VectorXd& upper,
+                                   const char* where) {
+  for (std::size_t i = 0; i < ins.size() && static_cast<Eigen::Index>(i) < lower.size(); ++i)
+    validate_band_on_row(ins[i], lower[static_cast<Eigen::Index>(i)], upper[static_cast<Eigen::Index>(i)], where, static_cast<int>(i));
+}
+
 // A FOUR-NUMBER requote, validated whole before any of it lands: every row's (target, lower, upper, decay).
 inline void validate_quotes(const Eigen::VectorXd& target, const Eigen::VectorXd& lower, const Eigen::VectorXd& upper,
                             const Eigen::VectorXd& decay, int n, const char* where) {

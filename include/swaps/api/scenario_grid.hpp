@@ -4,7 +4,7 @@
 // `scenario` forks the calibrated market once per shock in a flat LIST, `scenario_grid` sweeps a whole
 // MATRIX of shocks — the outer product of one or two shock AXES — and returns a P&L SURFACE for a book.
 // It is the "do what QuantLib is too slow to do interactively" primitive: the base bundle is calibrated
-// ONCE, and every grid cell is a µs market fork (market::Scenario) repriced through the cached compiled
+// ONCE, and every grid cell is a µs market fork (derive/scenario.hpp) repriced through the cached compiled
 // book as rows of the compiled engine (calibration::BookRows, the reprice_bound kernel) — so an N×M grid costs one
 // calibration + N·M compiled repricings, not N·M calibrations.
 //
@@ -40,7 +40,7 @@
 //
 // The diagonal invariant: a single-axis parallel_bp grid cell i reproduces `scenario`'s npv_delta for the
 // same parallel_bp to rounding (both fork the SAME anchor with the SAME arithmetic; only the reprice path
-// differs — CompiledMultiCurveBook::npv == MultiCurveBook::value to ~1e-15 relative). QuantLib-free;
+// differs — the compiled rows' NPV == MultiCurveBook::value to ~1e-15 relative). QuantLib-free;
 // additive; a new verb off the gated hot path.
 
 #include <string>

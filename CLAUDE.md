@@ -1014,7 +1014,7 @@ delete those, they enforce the rule. Two honest residues:
       The `scheme` selector on the problem structs EXISTS for the bundle (noted 2026-10-12): `BundleCurveSpec`
       (= `pricing::CurveStructure`) carries its region list, so a `BundleProblem` selects B-spline / MonotoneCubic /
       MonotoneConvex per region (the compile verb's `policy`, the shape ladder's rungs); only the legacy single-curve
-      `CalibrationProblem` is fixed to `flat_hermite(meeting, back)` by `to_bundle`.
+      `CalibrationProblem` is fixed to `flat_hermite(meeting, back)` (its `single_curve_bundle` view builds that layout).
 - [x] **Stage 6 — bonds & bond asset swaps — DONE (pricing + universe sweep + asset swaps + API verbs + perf gate).**
       Merged to `main`. Design `docs/bond-pricing.md`. A bond is DATA (dated
       cashflows + a small yield convention), NOT a subclass — "US Treasury" is field values a builder fills

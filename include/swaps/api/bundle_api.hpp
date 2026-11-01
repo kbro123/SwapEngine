@@ -264,8 +264,8 @@ class BundleSession {
   // never the constraint rows), COLUMNS are the fitted knot forwards, so J(i,j) = ∂(model quote of instrument
   // i)/∂x_j -- the quote block of the engine's row Jacobian (the SAME one risk_operator() stacks, so the two can
   // never desync). A Python layer transforms a risk ladder from bundle A to bundle B via T = J_A · M_B
-  // (n_res_A x n_res_B), delta_B = delta_A · T. `reg` is accepted for signature symmetry with risk_operator() but
-  // does not affect J (a regulariser is constraint rows below the quote block, never a change to it).
+  // (n_res_A x n_res_B), delta_B = delta_A · T. (It takes no damping argument: a regulariser is constraint rows below the
+  // quote block, never a change to J; risk_operator(reg) carries the RISK-side damping.)
   Eigen::MatrixXd jacobian() const;
 
   // The analytic risk operator M = dx/dq (n_knots x n_quotes) by the implicit-function theorem on the

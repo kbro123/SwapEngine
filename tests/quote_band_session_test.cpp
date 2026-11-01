@@ -86,3 +86,37 @@ TEST(QuoteBandSession, ChangingWhichRowsAreBandedReanchorsAndStillMatchesAFreshS
   fresh.calibrate(s.x0);
   EXPECT_LT(inf(a.x(), fresh.x()), 1e-8);
 }
+
+// Review defect 4.2 (2026-11-01): a penalty map IS the row's shape (Instrument::penalty reads it, the engines and the
+// streamer's BandRow::general never read the four band numbers), so a band quoted on such a row was stored by the
+// session, validated targets against, and read by nothing. Refused now at set_band and at the banded stream_update,
+// WHOLE, before anything changes; a no-band requote (upper == lower) on the row is the one band it takes.
+TEST(QuoteBandSession, ABandOnAPenaltyMapRowIsRefusedNotIgnored) {
+  const Shape s = swaps::shapes::banded();
+  cal::BundleProblem p = s.prob;
+  const int n = p.n_quotes();
+  int row = -1;
+  for (int i = 0; i < n && row < 0; ++i)
+    if (p.instruments[static_cast<std::size_t>(i)].quote != cal::QuoteKind::FxForward) row = i;
+  ASSERT_GE(row, 0);
+  cal::Instrument& ins = p.instruments[static_cast<std::size_t>(row)];
+  ins.band_lower = ins.band_upper = ins.band_decay = 0.0;
+  ins.penalty_map = cal::PenaltyMap::stiff(cal::kSmoothedBandDecay);  // a one-piece map: the row's shape
+  cal::validate_problem(p, "premise");
+  api::BundleSession sess(p);
+  sess.calibrate(s.x0);
+  const double m = ins.market;
+  EXPECT_THROW(sess.set_band(row, m - 1e-4, m + 1e-4, 0.5), std::invalid_argument);
+  EXPECT_NO_THROW(sess.set_band(row, 0.0, 0.0, 0.0));
+  sess.start_streaming();
+  Eigen::VectorXd q(n), lo(n), up(n), dc(n);
+  for (int i = 0; i < n; ++i) {
+    const auto& r = p.instruments[static_cast<std::size_t>(i)];
+    q[i] = r.market; lo[i] = r.band_lower; up[i] = r.band_upper; dc[i] = r.band_decay;
+  }
+  EXPECT_NO_THROW(sess.stream_update(q, lo, up, dc));
+  lo[row] = m - 1e-4; up[row] = m + 1e-4; dc[row] = 0.5;
+  EXPECT_THROW(sess.stream_update(q, lo, up, dc), std::invalid_argument);
+  EXPECT_EQ(sess.problem().instruments[static_cast<std::size_t>(row)].band_upper,
+            sess.problem().instruments[static_cast<std::size_t>(row)].band_lower) << "refused whole: nothing landed";
+}

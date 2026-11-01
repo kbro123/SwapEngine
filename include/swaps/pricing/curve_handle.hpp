@@ -17,8 +17,8 @@
 #include <vector>
 
 #include "swaps/curve/curve_module.hpp"  // runtime ModularCurve for user-defined interpolation regions
-#include "swaps/pricing/cashflows.hpp"   // Turn / turn_overlap
-#include "swaps/pricing/curve_spec.hpp"  // CurveStructure — the curve definition these handles read
+#include "swaps/pricing/cashflows.hpp"   // moment_gauss_nodes (the moment-integration windows)
+#include "swaps/pricing/curve_spec.hpp"  // CurveStructure (and Turn) — the curve definition these handles read
 
 namespace swaps::pricing {
 

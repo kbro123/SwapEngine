@@ -6,7 +6,9 @@
 
 #include <boost/json.hpp>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -260,4 +262,62 @@ TEST(ApiPeriphery, AFailedSessionCreateRecordsItsDiagnostic) {
   const std::string diag = swaps_last_error();
   EXPECT_FALSE(diag.empty()) << "a NULL handle used to be the whole story";
   EXPECT_EQ(swaps_session_create(nullptr, "2026-07-08"), nullptr);
+}
+
+// Review defect 4.1 (2026-11-01): the compile verb kept its own seven-name scheme map, so a composer spec could not ask
+// for MonotoneConvex while a bundle document could, and an unknown Scheme printed as "Hermite". One table now
+// (api/codec.hpp scheme_from_str / scheme_to_str): every scheme the codec knows compiles, and the layout names it.
+TEST(ApiPeriphery, TheCompileVerbAcceptsEverySchemeTheCodecKnows) {
+  const char* spec_tpl = R"({"value_date":"2026-07-08","smoothness":"off","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
+    "regions":[{"id":"r0","name":"Flat","policy":"Flat","sigma":0.0},{"id":"r1","name":"Back","policy":"%s","sigma":0.0}],
+    "instruments":[
+      {"type":"rate","end":"1w","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
+      {"type":"swap","end":"1Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0415},
+      {"type":"swap","end":"2Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0398},
+      {"type":"swap","end":"5Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0389},
+      {"type":"swap","end":"10Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0396}]}]})";
+  for (int k = 0; k < swaps::curve::kSchemeCount; ++k) {
+    const auto scheme = static_cast<swaps::curve::Scheme>(k);
+    if (scheme == swaps::curve::Scheme::Flat) continue;  // the back region
+    const std::string name = api::scheme_to_str(scheme);
+    char buf[4096];
+    std::snprintf(buf, sizeof buf, spec_tpl, name.c_str());
+    const api::CompileResult cr = api::compile_spec(json::parse(buf), "2026-07-08");
+    ASSERT_EQ(cr.bundle.curves[0].regions.size(), 2u) << name;
+    EXPECT_EQ(cr.bundle.curves[0].regions[1].scheme, scheme) << name;
+    const json::object out = api::compile_to_json(cr).as_object();
+    const std::string policies = std::string(out.at("per_curve").as_array()[0].as_object().at("policies").as_string().c_str());
+    EXPECT_NE(policies.find(name), std::string::npos) << name << " not named in the layout: " << policies;
+  }
+  EXPECT_THROW(api::scheme_from_str("Hermit"), std::invalid_argument);
+}
+
+// PRINCIPLES P15 at the compile seam (review defect 4.3, 2026-11-01): the rule was test-only, so a client spec whose
+// spread curve had no front anchor compiled into the regime it exists to prevent. The verb WARNS, naming the curve:
+// the SOFR spec above (a 1w rate from the value date) is anchored; dropping that row for a 1Y swap that starts at
+// the first knot leaves the front to smoothing.
+TEST(ApiPeriphery, TheCompileVerbWarnsOnACurveWithoutAFrontAnchor) {
+  const char* anchored = R"({"value_date":"2026-07-08","smoothness":"light","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
+    "regions":[{"id":"r0","name":"Flat","policy":"Flat","sigma":0.0},{"id":"r1","name":"Hermite","policy":"Hermite","sigma":0.0}],
+    "instruments":[
+      {"type":"rate","end":"1w","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
+      {"type":"swap","end":"1Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0415},
+      {"type":"swap","end":"2Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0398},
+      {"type":"swap","end":"5Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0389}]}]})";
+  const auto ok = api::compile_spec(json::parse(anchored), "2026-07-08");
+  for (const auto& w : ok.warnings) EXPECT_EQ(w.find("No front anchor"), std::string::npos) << w;
+  // the same curve with its first pillar a FORWARD-STARTING swap (1Y x 1Y): no instrument reads the front window
+  const char* unanchored = R"({"value_date":"2026-07-08","smoothness":"light","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
+    "regions":[{"id":"r1","name":"Hermite","policy":"Hermite","sigma":0.0}],
+    "instruments":[
+      {"type":"swap","end":"2Y","start":"1Y","adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0398},
+      {"type":"swap","end":"5Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0389},
+      {"type":"swap","end":"10Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0396}]}]})";
+  const auto bad = api::compile_spec(json::parse(unanchored), "2026-07-08");
+  bool warned = false;
+  for (const auto& w : bad.warnings) warned = warned || (w.find("No front anchor") != std::string::npos && w.find("SOFR") != std::string::npos);
+  EXPECT_TRUE(warned) << "an unanchored curve compiles with a P15 warning naming it";
+  const auto anchors = cal::front_anchors(bad.bundle);
+  ASSERT_EQ(anchors.size(), 1u);
+  EXPECT_LT(anchors[0].row, 0) << "premise: the rule itself says the curve is unanchored";
 }

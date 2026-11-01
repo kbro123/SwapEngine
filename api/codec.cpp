@@ -119,6 +119,11 @@ cal::QuoteKind quote_from_str(const std::string& s) {
   if (s == "ParRate") return cal::QuoteKind::ParRate;
   throw std::invalid_argument("unknown quote kind: " + s);
 }
+}  // namespace
+
+// THE scheme <-> string pair (exported, 2026-11-01): the compile verb kept its own seven-name copy that lacked
+// MonotoneConvex and named every unknown Scheme "Hermite" (review defect 4.1). One table, exhaustive by the
+// kSchemeCount static_assert in curve_module.hpp.
 curve::Scheme scheme_from_str(const std::string& s) {
   if (s == "Flat") return curve::Scheme::Flat;
   if (s == "Linear") return curve::Scheme::Linear;
@@ -145,6 +150,8 @@ const char* scheme_to_str(curve::Scheme s) {
   // interpolation in any document that round-trips through the codec.
   throw std::logic_error("scheme_to_str: unhandled Scheme (add it here and to kSchemeCount)");
 }
+namespace {
+
 pf::MultiCurveBook::Kind position_kind_from_str(const std::string& s) {
   if (s == "swap") return pf::MultiCurveBook::Kind::Swap;
   if (s == "xccy") return pf::MultiCurveBook::Kind::Xccy;

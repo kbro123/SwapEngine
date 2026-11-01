@@ -1,6 +1,6 @@
 #pragma once
 #include <boost/json.hpp>
-// Scenario / stress seam (api/scenario.cpp): the production wiring of market::Scenario — the Tier-2
+// Scenario / stress seam (api/scenario.cpp): the production wiring of derive/scenario.hpp — the Tier-2
 // analytics "what-if" primitive. It takes ONE bundle, calibrates it ONCE to an anchor state, then forks
 // that fitted state per scenario ("fork over the market") and reports the shocked curve samples and,
 // when a book is supplied, the book NPV under the shock and its delta vs the base.
@@ -31,8 +31,8 @@
 //                    "scenarios": [{name, curves?, npv?, npv_delta?, shift_bp?, parallel_bp?, fx?}, ...]}}
 //
 // The base is calibrated/priced exactly once; each scenario is a pure fork of the anchor state (the base
-// is never mutated between scenarios). QuantLib-free; reuses market::Scenario for the curve-shift
-// arithmetic and portfolio::MultiCurveBook for the (unchanged) book pricing path.
+// is never mutated between scenarios). QuantLib-free; derive/scenario.hpp holds the curve-shift
+// arithmetic (one shock rule, shocks ADD) and portfolio::MultiCurveBook for the (unchanged) book pricing path.
 
 #include <string>
 

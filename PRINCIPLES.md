@@ -106,8 +106,8 @@ forward over one window starting at the front -- a fixing or deposit, a meeting-
 single-coupon swap, an FX forward from the value date; for a spread curve its 1D fixing at zero spread over the base,
 since the overnight fixing is the same whoever clears it. Never the leading region's flat extrapolation of a term
 pillar, and never a discount-only read (a par rate's discounting column vanishes at the front). The state at every
-knot is a forward; the front one is a market quote like any other. `calibration::front_anchors` is the check,
-`tests/front_anchor_rule_test.cpp` / `front_anchor_reference_test.cpp` walk every fixture in the repo (ratified
+knot is a forward; the front one is a market quote like any other. `calibration::front_anchors` (`bundle_problem.hpp`) is the check and the `compile` verb warns on
+an unanchored curve; `tests/front_anchor_rule_test.cpp` / `front_anchor_reference_test.cpp` walk every fixture in the repo (ratified
 2026-11-01, after the G4 desk's CCP curves were found carrying a 2Y spread from day one; ASSUMPTIONS K53).
 
 ## What "done" means

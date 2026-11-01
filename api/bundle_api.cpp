@@ -160,6 +160,7 @@ void BundleSession::set_band(int row, double lower, double upper, double decay) 
     throw std::runtime_error("set_band: non-finite band");
   cal::Instrument& ins = prob_.instruments[row];
   cal::validate_quote(ins.market, lower, upper, decay, "set_band", row);  // K5': the band must contain the row's target
+  cal::validate_band_on_row(ins, lower, upper, "set_band", row);          // a penalty-map row has no band (its map is its shape)
   ins.band_lower = lower;
   ins.band_upper = upper;
   ins.band_decay = decay;
@@ -625,6 +626,7 @@ const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& new_m
 const Eigen::VectorXd& BundleSession::stream_update(const Eigen::VectorXd& target, const Eigen::VectorXd& lower,
                                                    const Eigen::VectorXd& upper, const Eigen::VectorXd& decay) {
   cal::validate_quotes(target, lower, upper, decay, prob_.n_quotes(), "stream_update");  // refused whole: nothing changes
+  cal::validate_bands_on_rows(prob_.instruments, lower, upper, "stream_update");       // a penalty-map row has no band
   // In place when only band VALUES moved; a change in which rows are banded re-anchors (one Jacobian) before the tick.
   bands_changed_ = cal::requote_bands(prob_.instruments, engine_.get(), stream_.get(), lower, upper, decay, has_band_) || bands_changed_;
   return stream_update(target);

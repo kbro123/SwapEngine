@@ -7,10 +7,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -19,6 +21,7 @@
 
 #include <boost/json.hpp>
 
+#include "swaps/api/codec.hpp"             // scheme_from_str / scheme_to_str: the ONE scheme-name table
 #include "swaps/api/bundle_api.hpp"        // bundle_to_json (reused for the "bundle" field)
 #include "swaps/api/json_util.hpp"         // required_number / required_text: fields with no default
 #include "swaps/build/instruments.hpp"     // the whole build/ object model (schedule/conventions/observations)
@@ -95,27 +98,14 @@ std::string ins_key(const json::object& o, std::size_t j) {
   return "#" + std::to_string(j);
 }
 
+// A region's `policy` word is the codec's scheme name (api/codec.hpp scheme_from_str: one table, every Scheme);
+// an unknown word is a CompileError with the policy vocabulary.
 curve::Scheme scheme_from_policy(const std::string& p) {
-  if (p == "Flat") return curve::Scheme::Flat;
-  if (p == "Linear") return curve::Scheme::Linear;
-  if (p == "NaturalCubic") return curve::Scheme::NaturalCubic;
-  if (p == "Hermite") return curve::Scheme::Hermite;
-  if (p == "MonotoneCubic") return curve::Scheme::MonotoneCubic;
-  if (p == "BSpline") return curve::Scheme::BSpline;
-  if (p == "Tension") return curve::Scheme::Tension;
-  throw CompileError("unknown interpolation policy '" + p + "'.");
-}
-const char* policy_name(curve::Scheme s) {
-  switch (s) {
-    case curve::Scheme::Flat: return "Flat";
-    case curve::Scheme::Linear: return "Linear";
-    case curve::Scheme::NaturalCubic: return "NaturalCubic";
-    case curve::Scheme::Hermite: return "Hermite";
-    case curve::Scheme::MonotoneCubic: return "MonotoneCubic";
-    case curve::Scheme::BSpline: return "BSpline";
-    case curve::Scheme::Tension: return "Tension";
+  try {
+    return scheme_from_str(p);
+  } catch (const std::invalid_argument&) {
+    throw CompileError("unknown interpolation policy '" + p + "'.");
   }
-  return "Hermite";
 }
 
 double to_decimal(double value, const std::string& unit) {
@@ -333,7 +323,7 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
   L.classic = false;
   L.policies.clear();
   for (std::size_t i = 0; i < modules.size(); ++i)
-    L.policies += (i ? " \xE2\x86\x92 " : "") + std::string(policy_name(modules[i].scheme));
+    L.policies += (i ? " \xE2\x86\x92 " : "") + std::string(scheme_to_str(modules[i].scheme));
   L.modules = std::move(modules);
   return L;
 }
@@ -730,6 +720,20 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   R.grid = display_grid(max_t, all_knots);
   for (const json::object* cp : order) R.curve_names.push_back(get_s(*cp, "name", "?"));
   for (const json::object* cp : order) R.order_ids.push_back(get_s(*cp, "id"));
+  // EVERY CURVE HAS A FRONT ANCHOR (PRINCIPLES P15, 2026-11-01): a curve whose front no single-window instrument reads
+  // is held there by the smoothing tie-breaker alone and streams on refreshes (the unanchored CCP curves: a 0.1 bp
+  // tick swung the spreads 600 bp). The rule is a WARNING here, not a refusal: the spec compiles, and the composer
+  // shows the client which curve needs its 1D fixing / depo / first-pillar instrument.
+  for (const cal::FrontAnchor& a : cal::front_anchors(R.bundle))
+    if (a.row < 0 && a.first_knot >= 0.0) {
+      char knot[32];
+      std::snprintf(knot, sizeof knot, "%.3g", a.first_knot);
+      const std::size_t c = static_cast<std::size_t>(a.curve);
+      R.warnings.push_back("No front anchor (P15): curve '" + R.curve_names[c] + "' (id " + R.order_ids[c] +
+                           ") has no instrument reading its forward over one window from the value date to its first knot (" +
+                           std::string(knot) + "y); its front is held by smoothing alone. Add a fixing, deposit or " +
+                           "first-pillar swap (a spread curve: its 1D fixing at zero spread).");
+    }
   R.currency_codes = ccy_order;
   R.smoothness = get_s(spec, "smoothness", "light");
   // SMOOTHING IS REGION DATA (2026-10-13): a region's own `reg_lambda` is the only source of smoothing rows. A LEGACY
