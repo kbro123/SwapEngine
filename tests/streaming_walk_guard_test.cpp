@@ -99,9 +99,11 @@ TEST(StreamingWalkGuard, ABandWalkIsPinnedByAllocationsAndRefactorisations) {
   ASSERT_GT(pins, 0) << "premise: the walk reaches kink optima";
   ASSERT_GT(releases, 0) << "premise: the KKT check releases pins";
   EXPECT_EQ(refreshes, 0) << "a band walk is rescales, never a Jacobian refresh";
-  // Every factorisation in a refresh-free walk is rescale_row's fallback. Pinned at 28, and never more than one per release: a crossing
-  // (switch_row / track_bands) that refactorises instead of updating rank-one would push it past `releases`.
-  EXPECT_LE(factors, 28) << "the walk refactorised more often than its pin";
+  // Every factorisation in a refresh-free walk is rescale_row's fallback. Pinned at 29 (28 until the desk gained the EUR 6M
+  // fixing as the 6M curve's front anchor, 2026-11-01: one more row and knot, one more release on the same walk), and never
+  // more than one per release: a crossing (switch_row / track_bands) that refactorises instead of updating rank-one would
+  // push it past `releases`.
+  EXPECT_LE(factors, 29) << "the walk refactorised more often than its pin";
   EXPECT_LE(factors, releases) << "a crossing fell back to a full factorisation (only a pin release may)";
   if (swaps::testing::alloc_counting_available()) EXPECT_LE(allocs, 224u) << "the band walk allocates more than its pin";
 }

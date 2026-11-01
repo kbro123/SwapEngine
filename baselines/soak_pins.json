@@ -18,17 +18,17 @@
   "keys": {
     "Darwin|AppleClang 21.0.0.21000101|-march=x86-64-v3|AVX2+FMA": {
       "captured": "2026-09-21",
-      "note": "the reference machine (Mac Pro 2019, Xeon W-3223; perf fingerprint 966685f93279), seed 20260921. mixed_convex (2026-10-12): the mixed rung with its long end on MonotoneConvex (AAD block, ~110..150 us/tick) read 0 failed ticks on every walk, even the unsmoothed factor walk where MonotoneCubic's Hyman branches fail 49 -- no branch kinks to park on; dq pinned ~1.5x the measurement",
+      "note": "the reference machine (Mac Pro 2019, Xeon W-3223; perf fingerprint 966685f93279), seed 20260921. mixed_convex (2026-10-12): the mixed rung with its long end on MonotoneConvex (AAD block, ~110..150 us/tick) read 0 failed ticks on every walk, even the unsmoothed factor walk where MonotoneCubic's Hyman branches fail 49 -- no branch kinks to park on; dq pinned ~1.5x the measurement. RE-PINNED 2026-11-01 (mixed_scheme smoothed_per_row 63 -> 66, desk_mixed 9 -> 10): NormalOp::form() became the thin pseudo-inverse (T^-1 Q1^T, not Eigen's solve against a full identity), which differs from the full solve at the ulp (6e-16 relative on every desk, the same ||MJ-I||) -- on a Hyman-filtered rung that ulp re-routes the seeded walk exactly as a toolchain change does (the full solve on the same code read 58 / 2). An operator rounding change is a fingerprint change for these rows, not a regression. RE-PINNED AGAIN the same day (desk_mixed smoothed_factor 87 -> 106, smoothed_per_row 10 -> 24): the desk rungs gained the EUR 6M fixing as the 6M curve's front anchor (PRINCIPLES P15, a row and a knot), so desk_mixed is a different seeded walk; its linear twin `desk` streams every walk at 0 failed ticks as before, which is what says the anchor is right and the Hyman long end is what fails",
       "rungs": {
         "mixed_scheme": {
-          "smoothed_per_row": { "failed": 63, "dq": 2e-07 },
+          "smoothed_per_row": { "failed": 66, "dq": 2e-07 },
           "unsmoothed_factor": { "failed": 62, "dq": 2e-05 },
           "smoothed_factor": { "failed": 0, "dq": 2e-12 }
         },
         "desk_mixed": {
-          "smoothed_per_row": { "failed": 9, "dq": 2e-09 },
+          "smoothed_per_row": { "failed": 24, "dq": 2e-09 },
           "unsmoothed_factor": { "failed": 108, "dq": 2e-05 },
-          "smoothed_factor": { "failed": 87, "dq": 8e-08 }
+          "smoothed_factor": { "failed": 106, "dq": 8e-08 }
         },
         "mixed_convex": {
           "smoothed_per_row": { "failed": 0, "dq": 4e-10 },

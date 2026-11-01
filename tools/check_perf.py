@@ -155,6 +155,24 @@ METRICS = {
     "g10_g4turns_refresh_25bp": ("g10_turns_bench", "BM_G10_g4turns_RefreshTick25bp", None, {"refreshes": ">=1"}),
     "g10_noturns_jacobian": ("g10_turns_bench", "BM_G10_noturns_Jacobian", None),
     "g10_g4turns_jacobian": ("g10_turns_bench", "BM_G10_g4turns_Jacobian", None),
+    # THE G4 DESK (2026-11-01, bench/g4_profile_bench.cpp, bench/fixtures/g4_market.hpp, QuantLib-free): four currencies,
+    # 14 curves, 174 knots, 198 quotes, every curve front-anchored, under smoothing as a desk streams. Gated on the two
+    # production long ends -- Hermite (linear) and MonotoneConvex (the tangent tier); MonotoneCubic and the all-convex
+    # variant stay informational (the latter's small tick hits the refresh cap). The owner's target: a full off-hot-path
+    # re-calibration (cold, or the warm LM after a 25 bp move) under 50 ms. The small tick converges on frozen steps alone
+    # (refreshes == 0, the premise); the 25 bp move refreshes (the desk is over-determined).
+    "g4_hermite_cold_calibrate": ("g4_profile_bench", "BM_G4_hermite_Cold", None),
+    "g4_hermite_warm_lm_25bp": ("g4_profile_bench", "BM_G4_hermite_WarmLM25bp", None),
+    "g4_hermite_engine_build": ("g4_profile_bench", "BM_G4_hermite_EngineBuild", None),
+    "g4_hermite_jacobian": ("g4_profile_bench", "BM_G4_hermite_Jacobian", None),
+    "g4_hermite_stream_tick": ("g4_profile_bench", "BM_G4_hermite_StreamTick", None, {"refreshes": "==0"}),
+    "g4_hermite_refresh_25bp": ("g4_profile_bench", "BM_G4_hermite_RefreshTick25bp", None, {"refreshes": ">=1"}),
+    "g4_monoconvex_cold_calibrate": ("g4_profile_bench", "BM_G4_monoconvex_Cold", None),
+    "g4_monoconvex_warm_lm_25bp": ("g4_profile_bench", "BM_G4_monoconvex_WarmLM25bp", None),
+    "g4_monoconvex_engine_build": ("g4_profile_bench", "BM_G4_monoconvex_EngineBuild", None),
+    "g4_monoconvex_jacobian": ("g4_profile_bench", "BM_G4_monoconvex_Jacobian", None),
+    "g4_monoconvex_stream_tick": ("g4_profile_bench", "BM_G4_monoconvex_StreamTick", None, {"refreshes": "==0"}),
+    "g4_monoconvex_refresh_25bp": ("g4_profile_bench", "BM_G4_monoconvex_RefreshTick25bp", None, {"refreshes": ">=1"}),
     "multicurve4_cold_calibrate": ("multicurve_ql_bench", "BM_MultiCurve4_Ours", "BM_MultiCurve4_QuantLib"),
     "multicurve4_tick_0p3bp": ("multicurve_ql_bench", "BM_MultiCurve4_Ours_Tick", "BM_MultiCurve4_QuantLib_Tick"),
     "sofr_23k_risk_ladder_23q_book9": ("risk_bench",          "BM_Risk_Ours_Analytic",           "BM_Risk_QuantLib_Bump"),

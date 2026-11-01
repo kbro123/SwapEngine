@@ -66,10 +66,25 @@ class NormalOp {
   Eigen::Index rank() const { return cod_.rank(); }
   double max_pivot() const { return cod_.maxPivot(); }
 
-  // (2) Form M and G from the current decomposition.
+  // (2) Form M from the current decomposition (G is formed from it on first use, see G()).
+  // THE THIN FORM (2026-11-01): M = J⁺ = P [T⁻¹ Q₁ᵀ] with Q₁ the first `rank` columns of Q -- Eigen's own solve against
+  // a full n_res x n_res identity applied every Householder reflector to n_res columns when only the `rank` rows of Qᵀ
+  // that T reads are needed (half of a 9 ms refresh on the G4 desk went into it). The rank-deficient case (Z non-
+  // trivial) keeps Eigen's solve: it is rare and exact. Same math, same rounding class; not bit-identical to the full
+  // solve (the blocked reflector application sees a different column count).
   void form() {
-    M_ = cod_.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
-    G_.noalias() = M_ * M_.transpose();  // (JᵀJ)⁺ = J⁺ J⁺ᵀ
+    const Eigen::Index rank = cod_.rank();
+    g_valid_ = false;
+    if (rank == 0 || rank < n_knots_) {
+      M_ = cod_.solve(Eigen::MatrixXd::Identity(n_res_, n_res_));
+      return;
+    }
+    q1_.setIdentity(n_res_, rank);
+    q1_.applyOnTheLeft(cod_.householderQ().setLength(rank));  // Q₁ = Q [I; 0]
+    qt1_ = q1_.transpose();                                   // Q₁ᵀ (rank x n_res)
+    cod_.matrixT().topLeftCorner(rank, rank).template triangularView<Eigen::Upper>().solveInPlace(qt1_);  // T⁻¹ Q₁ᵀ
+    pm_.noalias() = cod_.colsPermutation() * qt1_;            // undo the column pivoting: M = P (T⁻¹ Q₁ᵀ)
+    M_.swap(pm_);
   }
   // decompose + form at the ONE shared threshold: what every non-streaming consumer wants.
   void factor(const Eigen::MatrixXd& J) {
@@ -87,7 +102,7 @@ class NormalOp {
   // the caller must re-factorise instead.
   bool rank_one_update(int row, double c, const Eigen::MatrixXd& J_old) {
     u_ = J_old.row(row).transpose();
-    v_.noalias() = G_ * u_;
+    v_.noalias() = G() * u_;
     const double s = u_.dot(v_), beta = c * c - 1.0, d = 1.0 + beta * s;
     // Releasing a PIN (c = decay / 1e3) on a row whose leverage s is close to 1 cancels d = 1 + βs
     // catastrophically; such a row is rare (one release per row per tick) -- re-factorise instead.
@@ -103,12 +118,16 @@ class NormalOp {
   }
 
   // Adopt an M computed elsewhere (the background worker hands over M alone for a square, unbanded, unregularised
-  // problem). G is NOT updated: a rank-one update after this would use a stale G, which is why the worker is
-  // armed only where no band re-scale can happen.
-  void adopt_M(Eigen::MatrixXd M) { M_ = std::move(M); }
+  // problem). G follows it lazily (G() forms M Mᵀ from whatever M is current).
+  void adopt_M(Eigen::MatrixXd M) { M_ = std::move(M); g_valid_ = false; }
 
   const Eigen::MatrixXd& M() const { return M_; }
-  const Eigen::MatrixXd& G() const { return G_; }
+  // (JᵀJ)⁺ = J⁺ J⁺ᵀ, formed on first use after a form() / adopt_M (an n_knots x n_res x n_knots product that a refresh
+  // with no band re-scale never needs, 2026-11-01) and updated in place by rank_one_update.
+  const Eigen::MatrixXd& G() const {
+    if (!g_valid_) { G_.noalias() = M_ * M_.transpose(); g_valid_ = true; }
+    return G_;
+  }
   int n_res() const { return n_res_; }  // the stacked row count
   int n_knots() const { return n_knots_; }
 
@@ -124,7 +143,9 @@ class NormalOp {
  private:
   int n_res_ = 0, n_knots_ = 0;
   Eigen::MatrixXd M_;
-  Eigen::MatrixXd G_;        // (JᵀJ)⁺ from the last form(), updated rank-one per band re-scale
+  mutable Eigen::MatrixXd G_;   // (JᵀJ)⁺, formed lazily (G()), updated rank-one per band re-scale
+  mutable bool g_valid_ = false;
+  Eigen::MatrixXd q1_, qt1_, pm_;  // form() scratch, sized once
   Eigen::VectorXd u_, v_, jv_;  // rank_one_update scratch (no per-rescale allocation after first use)
   Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> cod_;  // sized once (C6)
 };

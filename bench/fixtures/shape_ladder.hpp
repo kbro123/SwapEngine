@@ -107,6 +107,15 @@ inline std::vector<double> add_par_swaps(cal::BundleProblem& p, const b::SwapCon
   }
   return knots;
 }
+// THE FRONT ANCHOR of a term-index curve (PRINCIPLES P15): the index's own fixing over [spot, spot + tenor], a Rate
+// row reading the curve's forward -- the first knot (returned) is its end. Without it a 1Y IRS's two coupons pin the
+// 1Y knot and the leading region extrapolates that value back to day one.
+inline double add_fixing(cal::BundleProblem& p, const std::string& ccy, const std::string& index, const std::string& tenor, int fc) {
+  const b::SwapConv c = b::swap_conv(ccy, index);
+  const b::Date start = b::spot_date(vd(), c.calendar, c.spot_lag), end = b::resolve(tenor, vd(), c.calendar, c.bdc, c.spot_lag);
+  p.instruments.push_back(b::rate_instrument(fc, b::observation(vd(), start, end, "compounded", 0.0, b::index_day_count(index), b::index_calendar(index)), 0.03));
+  return b::curve_time(vd(), end);
+}
 inline std::vector<double> add_basis_swaps(cal::BundleProblem& p, const b::SwapConv& conv, int fc, int bench, int disc,
                                            const std::vector<std::string>& tenors) {
   std::vector<double> knots;
@@ -238,10 +247,14 @@ inline cal::Instrument butterfly(const cal::BundleProblem& p, int lo, int belly,
   for (auto& c : f.combination) c.instrument.market = 0.0;
   return f;
 }
+// `after_x` edits the generating state / seed before the markets are generated from it (a knot the fixture defines
+// at a value, e.g. a spread pinned to zero); `after_markets` edits the shape once the markets exist (a seed shape).
 inline Shape make(std::string name, std::string note, cal::BundleProblem prob, bool compiled = true,
-                  void (*after_markets)(Shape&) = nullptr) {
+                  void (*after_markets)(Shape&) = nullptr, void (*after_x)(Shape&) = nullptr) {
   Shape s; s.name = std::move(name); s.note = std::move(note); s.prob = std::move(prob); s.expect_compiled = compiled;
-  fill_x(s); set_markets(s);
+  fill_x(s);
+  if (after_x) after_x(s);
+  set_markets(s);
   if (after_markets) after_markets(s);
   finish(s);
   return s;
@@ -263,9 +276,11 @@ inline Shape ois_lag() {  // USD SOFR: self-discounted, 2-day pay lag
 inline Shape ibor_multicurve() {  // EUR: ESTR discount curve + 6M EURIBOR forecast curve as a spread over it
   cal::BundleProblem p;
   const auto k0 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-ESTR"), 0, 0);
-  const auto k1 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-EURIBOR-6M"), 1, 0);
+  std::vector<double> k1 = {detail::add_fixing(p, "EUR", "EUR-EURIBOR-6M", "6M", 1)};  // the 6M fixing anchors the front (P15)
+  const auto k1s = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-EURIBOR-6M"), 1, 0);
+  k1.insert(k1.end(), k1s.begin(), k1s.end());
   p.curves = {detail::spec(k0), detail::spec(k1, 0)};
-  return detail::make("ibor_multicurve", "EUR ESTR OIS + 6M EURIBOR IRS on ESTR discounting (spread curve)", std::move(p));
+  return detail::make("ibor_multicurve", "EUR ESTR OIS + 6M EURIBOR fixing + IRS on ESTR discounting (spread curve)", std::move(p));
 }
 inline Shape basis_spread() {  // USD SOFR + Fed funds as a ParSpread basis chain
   cal::BundleProblem p;
@@ -448,7 +463,9 @@ inline Shape desk_impl(bool mixed) {
     const b::Date mat = b::resolve(t, detail::vd(), xc.calendar, xc.bdc, xc.spot_lag);
     p.instruments.push_back(b::xccy_mtm_basis(detail::vd(), xc, mat, 3, 2, 0, 1.08, 0.0)); k3.push_back(p.instruments.back().fixed.coupons.back().pay);
   }
-  const auto k4 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-EURIBOR-6M"), 4, 2);
+  std::vector<double> k4 = {detail::add_fixing(p, "EUR", "EUR-EURIBOR-6M", "6M", 4)};  // the 6M fixing anchors the front (P15)
+  const auto k4s = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-EURIBOR-6M"), 4, 2);
+  k4.insert(k4.end(), k4s.begin(), k4s.end());
   const std::string dc = b::index_day_count("USD-SOFR"), cl = b::index_calendar("USD-SOFR");
   p.instruments.push_back(b::rate_instrument(0, b::observation(detail::vd(), b::Date::from_iso("2026-12-15"), b::Date::from_iso("2027-01-15"), "compounded", 0.0, dc, cl), 0.03));
   p.instruments.push_back(b::turn_jump(0, 0, 0.0));

@@ -66,6 +66,7 @@ formula-generated `x_true` (`reference_curve.hpp`, `reference_bundle.hpp`, `refe
 |---|---|---|
 | `calibration_test.cpp` | LM recovers the self-generated market; rms / stationarity thresholds | T2 calibration |
 | `aad_test.cpp` | AAD Jacobian vs the engine's own central finite differences (`jacobian_rel` 1e-6); `sv_min > 0` | T3 parity |
+| `front_anchor_reference_test.cpp` | PRINCIPLES P15 over every QuantLib-built reference fixture (the SOFR reference market, the realistic chain / star, every multi-currency bundle): `calibration::front_anchors` names a forward-reading single-window row at the front of every curve | T2 calibration |
 | `risk_test.cpp` | Analytic IFT delta ladder vs the engine's own bump-and-recalibrate (1e-4 rel) | T3 parity |
 | `portfolio_test.cpp` | Compiled batched book vs the scalar templated kernel (1e-10) | T3 parity |
 | `spread_test.cpp` | Fixed-base spread decomposition vs `spread_reference.hpp` (test-only re-implementation) + own FD | T2/T3 |

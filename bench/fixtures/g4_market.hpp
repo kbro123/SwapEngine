@@ -14,15 +14,27 @@
 //                                  NOT piecewise-linear, the AAD block). Each carries the year-end turn with its
 //                                  bracket observation and TurnJump pin when `turns` is set (as g10_market.hpp does).
 //   Tenor / index basis (3)        USD Fed funds as a spread over SOFR (6 monthly averaged futures + the FF/SOFR basis
-//                                  2Y..30Y, the `averaged` rung); EUR 6M EURIBOR as a spread over ESTR pinned by 6M
-//                                  IRS; EUR 3M EURIBOR as a spread over the 6M curve pinned by the 3s6s basis (the
-//                                  liquid EUR tenor-basis chain). GBP and JPY carry no term index in the DB
-//                                  (post-LIBOR), so no tenor basis is invented for them.
-//   CCP discount basis (4)         One curve per currency for the OTHER clearing house: a spread over the RFR curve
-//                                  pinned by the same par OIS discounted on it (CME-cleared SOFR vs LCH, Eurex vs LCH
-//                                  for ESTR, CME vs LCH for SONIA, JSCC vs LCH for TONA). The CCP basis is a swap rate
-//                                  difference, so its instrument IS the OIS with a different discount role -- a role
-//                                  choice, not a new convention, hence no DB product.
+//                                  2Y..30Y, the `averaged` rung); EUR 6M EURIBOR as a spread over ESTR pinned by its
+//                                  6M fixing then 6M IRS; EUR 3M EURIBOR as a spread over the 6M curve pinned by its
+//                                  3M fixing then the 3s6s basis (the liquid EUR tenor-basis chain). GBP and JPY carry
+//                                  no term index in the DB (post-LIBOR), so no tenor basis is invented for them.
+//   CCP discount basis (4)         One curve per currency for the OTHER clearing house (CME-cleared SOFR vs LCH, Eurex
+//                                  vs LCH for ESTR, CME vs LCH for SONIA, JSCC vs LCH for TONA): a SPREAD over the RFR
+//                                  curve whose state is the forward spread at each knot. The front is ANCHORED (owner's
+//                                  rule, 2026-11-01): at one day the fixing is the same at either clearing house, so the
+//                                  first knot is the 1D observation read off the CCP curve's forward against the same
+//                                  observation on the RFR curve, a basis of zero by definition. The CCP basis is then
+//                                  quoted AS THE MARKET QUOTES IT: one Portfolio row per pillar (the par OIS discounted
+//                                  on the CCP curve minus the same par OIS discounted on the RFR curve, market = the
+//                                  basis) at the eight quoted tenors 2Y..30Y, fitted in least squares by THREE market
+//                                  knots (5Y, 10Y, 30Y). A par rate sees the discount spread only through the
+//                                  re-weighting of its coupons, which is proportional to the forecast curve's slope: a
+//                                  2Y basis row moves ~0.01 bp per 100 bp of spread, so a spread knot per pillar (the
+//                                  fixture's first form) left the short-tenor knots held by the smoothing tie-breaker
+//                                  alone (singular values 1.4e-5 on all four curves, cond 2e5), and a 0.1 bp tick swung
+//                                  the spreads 200..600 bp -- the cold LM's answer too. Anchored and sparse the block's
+//                                  weakest direction is 3.7e-4 (cond 7.6e3) and every desk ticks on frozen steps alone.
+//                                  A role choice over the DB's OIS, not a new convention, hence no DB product.
 //   Cross-currency (3, outright)   EUR-in-USD, GBP-in-USD, JPY-in-USD collateral curves: FX forwards 1W..1Y then MtM
 //                                  xccy basis 2Y..30Y on the DB pairs EURUSD / GBPUSD / USDJPY (the JPY spot is quoted
 //                                  here in USD per JPY, the engine's foreign-in-USD form).
@@ -35,6 +47,7 @@
 
 #include <chrono>
 #include <stdexcept>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -79,6 +92,11 @@ struct Opts {
   bool vd_everywhere = false;  // the same scheme on every curve, not only the RFR long ends
   bool turns = true;           // a year-end turn on each RFR curve (bracket observation + TurnJump pin)
   bool smoothing = true;       // the K48 tie-breaker stamped on every non-Flat region (a desk streams smoothed)
+  // The CCP basis pillars: one Portfolio row (the par OIS discounted on the CCP curve minus the same par OIS discounted on
+  // the RFR curve, market = the quoted basis) and one spread knot per pillar.
+  std::vector<std::string> ccp_tenors = {"2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"};
+  // The CCP spread curve's knots (a subset of the pillars; fewer knots than rows = the least-squares fit of the strip).
+  std::vector<std::string> ccp_knots = {"5Y", "10Y", "30Y"};
 };
 inline const char* scheme_word(swaps::curve::Scheme s) {
   switch (s) {
@@ -120,6 +138,11 @@ inline void slope_the_rfr_seed(Shape& s) {
     if (p.curves[c].base < 0)
       for (int i = 0; i < p.curves[c].n_interp_knots(); ++i) s.x0[p.offset(c) + i] = 0.030 + 0.0002 * i;
 }
+// The CCP spread is ZERO at its 1D knot in the generating state and the seed (the anchor above).
+inline void zero_the_ccp_front(Shape& s) {
+  const auto& p = s.prob;
+  for (const Rfr& r : rfrs()) { s.x_true[p.offset(r.ccp)] = 0.0; s.x0[p.offset(r.ccp)] = 0.0; }
+}
 }  // namespace g4
 
 // The desk (see the header comment). Every curve's rows are contiguous in role order; a turned RFR curve adds its
@@ -139,7 +162,7 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     return s;
   };
   const auto P = detail::pillars();
-  const std::vector<std::string> ccp_tenors(P.begin() + 1, P.end());  // 2Y..30Y: the CCP basis is quoted from 2Y
+  const std::vector<std::string> ccp_tenors(P.begin() + 1, P.end());  // 2Y..30Y: the FF/SOFR basis is quoted from 2Y
 
   // ---- the four RFR curves: meeting-flat front + smooth back, the turn, and their CCP discount basis ----
   for (const g4::Rfr& r : g4::rfrs()) {
@@ -166,8 +189,36 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
       p.instruments.push_back(b::turn_jump(r.role, 0, 0.0));
     }
     p.curves[static_cast<std::size_t>(r.role)] = std::move(s);
-    // the other clearing house: the same par OIS, forecast on the RFR, discounted on the CCP curve (a spread over it)
-    const std::vector<double> kc = detail::add_par_swaps(p, conv, r.role, r.ccp, ccp_tenors);
+    // the other clearing house: THE CCP BASIS AS THE MARKET QUOTES IT -- per pillar one Portfolio row, the par OIS
+    // discounted on the CCP curve minus the same par OIS discounted on the RFR curve, market = the basis (the par rate
+    // difference between the two clearing houses), the spread knot at the pillar.
+    // THE FRONT ANCHOR (owner's rule, 2026-11-01): the CCP curve's state is a forward spread at each knot, and at one day
+    // the fixing is the same at either clearing house -- so the first knot is the 1D observation read off the CCP
+    // curve's FORWARD against the same observation on the RFR curve, a basis of zero by definition (a forward-reading
+    // row: its column is order one, where a 1D par rate's discounting column is zero). x_true and the seed carry zero
+    // there and the tick never moves the row.
+    std::vector<double> kc;
+    {
+      const b::Date on_end = b::resolve("1D", vd, conv.calendar, conv.bdc, conv.spot_lag);
+      const px::RateObservation on = b::observation(vd, spot, on_end, "compounded", 0.0, dc, cl);
+      cal::Instrument row;
+      row.quote = cal::QuoteKind::Portfolio;
+      row.combination = {{+1.0, b::rate_instrument(r.ccp, on, 0.0)}, {-1.0, b::rate_instrument(r.role, on, 0.0)}};
+      row.market = 0.0;
+      kc.push_back(b::curve_time(vd, on_end));
+      p.instruments.push_back(std::move(row));
+    }
+    for (const std::string& t : o.ccp_tenors) {
+      const b::Date mat = b::resolve(t, vd, conv.calendar, conv.bdc, conv.spot_lag);
+      cal::Instrument row;
+      row.quote = cal::QuoteKind::Portfolio;
+      row.combination = {{+1.0, b::par_swap(vd, conv, mat, r.role, r.ccp, 0.03)}, {-1.0, b::par_swap(vd, conv, mat, r.role, r.role, 0.03)}};
+      row.market = 0.0;
+      if (std::find(o.ccp_knots.begin(), o.ccp_knots.end(), t) != o.ccp_knots.end())
+        kc.push_back(row.combination.front().instrument.fixed.coupons.back().pay);
+      p.instruments.push_back(std::move(row));
+    }
+    if (kc.size() != o.ccp_knots.size() + 1) throw std::invalid_argument("g4_desk: every ccp_knots tenor must be a ccp_tenors pillar");
     px::CurveStructure sc = one_region(kc, r.role);
     sc.currency = r.ccy;
     p.curves[static_cast<std::size_t>(r.ccp)] = std::move(sc);
@@ -182,13 +233,24 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     p.curves[g4::USD_FF] = std::move(s);
   }
   // ---- EUR tenor basis: 6M IRS pins EUR6M over ESTR; the 3s6s basis pins EUR3M over EUR6M ----
+  // EVERY CURVE HAS A FRONT ANCHOR (owner's rule, 2026-11-01): each tenor curve's first knot is its own fixing -- the
+  // 6M EURIBOR fixing on the 6M curve, the 3M fixing on the 3M curve -- a Rate row reading the curve's forward over
+  // [spot, spot + tenor]; without it the leading region extrapolated the 1Y knot's spread back to day one.
+  const auto fixing_anchor = [&](const char* index, const char* tenor, int role) {
+    const b::SwapConv c = b::swap_conv("EUR", index);
+    const b::Date start = b::spot_date(vd, c.calendar, c.spot_lag), end = b::resolve(tenor, vd, c.calendar, c.bdc, c.spot_lag);
+    p.instruments.push_back(b::rate_instrument(role, b::observation(vd, start, end, "compounded", 0.0, b::index_day_count(index), b::index_calendar(index)), 0.03));
+    return b::curve_time(vd, end);
+  };
   {
-    const auto k6 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-EURIBOR-6M"), g4::EUR_6M, g4::EUR_ESTR);
+    std::vector<double> k6 = {fixing_anchor("EUR-EURIBOR-6M", "6M", g4::EUR_6M)};
+    const auto k6s = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-EURIBOR-6M"), g4::EUR_6M, g4::EUR_ESTR);
+    k6.insert(k6.end(), k6s.begin(), k6s.end());
     px::CurveStructure s6 = one_region(k6, g4::EUR_ESTR);
     s6.currency = g4::EUR;
     p.curves[g4::EUR_6M] = std::move(s6);
     const b::BasisConv bc = b::basis_conv("EUR-3S6S-BASIS");
-    std::vector<double> k3;
+    std::vector<double> k3 = {fixing_anchor("EUR-EURIBOR-3M", "3M", g4::EUR_3M)};
     for (const auto& t : P) {
       const b::Date mat = b::resolve(t, vd, bc.spread.calendar, bc.spread.bdc, bc.spread.spot_lag);
       p.instruments.push_back(b::basis_swap(vd, bc, mat, g4::EUR_3M, g4::EUR_6M, g4::EUR_ESTR, 0.0));
@@ -220,11 +282,21 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
   // Every row compiles unless the long end is MonotoneCubic (the piecewise-linear tier's rung keeps the ladder's
   // convention: its re-syncs are not held to zero allocations); MonotoneConvex rides the tangent tier (2026-10-31).
   const bool linear = o.back != cv::Scheme::MonotoneCubic;
-  return detail::make(g4::name_of(o),
+  Shape s = detail::make(g4::name_of(o),
                       std::string("G4 desk: 14 curves -- 4 RFR (meeting-flat front + ") + g4::scheme_word(o.back) +
                           " back" + (o.turns ? ", year-end turn" : "") + "), FF + EUR 3M/6M tenor basis, 4 CCP discount "
                           "curves, 3 xccy collateral curves" + (o.vd_everywhere ? "; every curve on the back scheme" : ""),
-                      std::move(p), linear, &g4::slope_the_rfr_seed);
+                      std::move(p), linear, &g4::slope_the_rfr_seed, &g4::zero_the_ccp_front);
+  // A BASIS QUOTE TICKS LIKE A BASIS: the small tick moves the CCP basis rows a tenth of what it moves an outright rate row
+  // (the ladder's q_big already scales basis rows so; its q_small does not distinguish). A CME/LCH basis is quoted to a
+  // hundredth of a basis point and moves by that, not by the 0.1 bp an outright par rate does.
+  for (int i = 0; i < s.prob.n_residuals(); ++i) {
+    const cal::Instrument& ins = s.prob.instruments[static_cast<std::size_t>(i)];
+    if (ins.quote != cal::QuoteKind::Portfolio) continue;
+    const bool anchor = ins.combination.front().instrument.quote == cal::QuoteKind::Rate;  // the 1D zero-basis anchor
+    s.q_small[i] = anchor ? s.q0[i] : s.q0[i] + 1e-6 * std::sin(0.7 * i + 0.3);  // definitional: never ticks
+  }
+  return s;
 }
 
 }  // namespace swaps::shapes

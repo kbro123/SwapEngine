@@ -10,9 +10,9 @@ Breakpoint          weak_direction_strip
 Pin                 walk_desk_3bp
 Release             walk_desk_3bp
 RescaleFallback     weak_direction_strip
-KinkDamp            desk_mixed_small
+KinkDamp            desk_mixed_perrow   # the per-row stress walk on the MonotoneCubic desk (2026-11-01: the anchored desk's small tick no longer parks on a kink)
 Predicted           square_big_ois
-StallRefresh        desk_mixed_small
+StallRefresh        desk_mixed_walk3bp  # the +-3 bp walk on the MonotoneCubic desk (2026-11-01, as above)
 FrozenCapRefresh    frozen_cap_ois
 CommitReanchor      weak_direction_strip
 FinalRefresh        intick_portfolio_rd0
@@ -29,8 +29,10 @@ intick_portfolio_rd0         60      20
 failed_portfolio_cap2         8       2
 weak_direction_strip         14       3
 reg_desk_small                0       0
-walk_desk_3bp               224      28
-desk_mixed_small           4070      20
+walk_desk_3bp               224      29  # 28 -> 29 on 2026-11-01: the desk gained the EUR 6M fixing as the 6M curve's front anchor (P15), one more release on the same walk
+desk_mixed_small              0       0  # 4070 / 20 -> 0 / 0 on 2026-11-01: anchored (P15), the small tick streams on frozen steps alone
+desk_mixed_walk3bp          231      38  # new 2026-11-01: the MonotoneCubic desk along the +-3 bp walk
+desk_mixed_perrow           400      61  # new 2026-11-01: the MonotoneCubic desk along the per-row stress walk (bands requoted with the targets)
 desk_mixed_big             3870      18
 prefetch_ois                  -       -
 

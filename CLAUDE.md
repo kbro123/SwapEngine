@@ -12,7 +12,7 @@ Guidance for Claude Code when working in this repository. Read this first, every
 
 ## 0. Design principles
 
-> **The law is [`PRINCIPLES.md`](PRINCIPLES.md) (P0–P13, ratified 2026-09-08).**
+> **The law is [`PRINCIPLES.md`](PRINCIPLES.md) (P0–P13, ratified 2026-09-08; P14 the verb codec; P15 every curve has a front anchor, 2026-11-01).**
 > **[`ASSUMPTIONS.md`](ASSUMPTIONS.md) is the inventory of every approximation, threshold, premise and default with its pinning test (2026-09-10); update the entry in the same commit as the code.** The bullets below are the
 > original statement kept for history; where they disagree with `PRINCIPLES.md`, `PRINCIPLES.md` wins.
 
@@ -325,13 +325,19 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   (29.7 µs, 0 refreshes, premise `refreshes == 0`) while the over-determined turned desk refreshes (1.45 ms), so the
   refresh pair now gates the exemption rather than a turn cost. The bench's premise check proves the RAW pair calibrates back to its generating state exactly (the four
   turns identified), and the kernel rungs take the problem WITH its rows so they time the objective the session streams.
-- **The G4 desk is the hardest bundle, and it is PROFILED, not yet gated (2026-10-15, `bench/fixtures/g4_market.hpp`,
-  `bench/g4_profile_bench.cpp`, `tests/g4_desk_test.cpp`).** Four currencies, 14 curves, 200 knots, 204 quotes: the RFR
-  curves carry a meeting-date Flat front (DB `cb_schedules`, one compounded meeting-to-meeting observation per knot) and a
-  long end whose scheme is the fixture's parameter (Hermite / MonotoneCubic / MonotoneConvex), a year-end turn each; FF and
-  EUR 3M/6M tenor basis; a CCP discount curve per currency (a spread over the RFR pinned by the same par OIS discounted on
-  it -- a role choice, not a DB product); EUR/GBP/JPY-in-USD collateral curves (FX forwards + MtM xccy on the DB pairs
-  EURUSD / GBPUSD / USDJPY). The bench splits a cold / warm LM into its pieces per iteration (engine build, residuals,
+- **The G4 desk is the hardest bundle, PROFILED since 2026-10-15 and GATED since 2026-11-01 (`bench/fixtures/g4_market.hpp`,
+  `bench/g4_profile_bench.cpp`, `tests/g4_desk_test.cpp`, `check_perf.py g4_*`).** Four currencies, 14 curves, 174 knots,
+  198 quotes: the RFR curves carry a meeting-date Flat front (DB `cb_schedules`, one compounded meeting-to-meeting
+  observation per knot) and a long end whose scheme is the fixture's parameter (Hermite / MonotoneCubic / MonotoneConvex),
+  a year-end turn each; FF and EUR 3M/6M tenor basis, each tenor curve anchored by its own fixing; a CCP discount curve per
+  currency (a spread over the RFR: its 1D fixing at zero basis in front, then three market knots fitted to the eight-pillar
+  CCP basis strip quoted as basis rows -- a role choice over the DB's OIS, not a DB product); EUR/GBP/JPY-in-USD collateral
+  curves (FX forwards + MtM xccy on the DB pairs EURUSD / GBPUSD / USDJPY). **EVERY CURVE HAS A FRONT ANCHOR (owner's rule,
+  2026-11-01, ASSUMPTIONS K53):** the fixture's first form pinned each CCP spread knot by the same par OIS under the CCP
+  discount role, one knot per pillar and nothing in front -- a par rate sees a discount spread only through the forecast
+  slope, so those knots were held by the smoothing tie-breaker alone (σ 1.4e-5, cond 2e5) and a 0.1 bp tick swung the
+  spreads 600 bp, the cold answer too, which the Hermite desk streamed through 10 frozen steps and a refresh per tick.
+  Anchored and quoted as the market quotes it: σ 3.7e-4, cond 7.6e3, every desk ticks on frozen steps alone. The bench splits a cold / warm LM into its pieces per iteration (engine build, residuals,
   Jacobian by tier, the LM's column-pivoted QR, NormalOp) beside the ticks. Measured (smoothed, 352 rows x 200 knots):
   Hermite cold 60 ms / 8 iterations with the Jacobian 1.1 ms, the QR 1.9 ms and the engine build 11.8 ms; MonotoneConvex
   cold 213 ms with ONE AAD block at 16 ms per Jacobian because its touched width was the whole state (200 > kPooledMaxW
@@ -349,8 +355,21 @@ honest same-algorithm-class comparison, and it is a settled decision, do not re-
   is on AAD -- the Jacobian 3.7 → 1.12 ms (the linear desk's own 1.13), the residual pass 249 → 16 µs, the streamed
   tick 1.1 ms → 419 µs (the W re-take is lazy: a tick's Newton steps pay only the exact integrals), the cold solve
   78 → 44 ms and the warm re-solve after 25 bp 65 → 40 ms -- under the 50 ms target on the value-dependent desk; the
-  ladder's mixed_convex rung streams at 16 µs a tick where the AAD block gave ~110. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
-  columns vanish and the joint LM wanders from the ladder's flat seed; the fixture's cold seed carries a 2 bp/knot slope.
+  ladder's mixed_convex rung streams at 16 µs a tick where the AAD block gave ~110. THE ENGINE BUILD AND THE REFRESH
+  (2026-11-01): the 12 ms engine build was memory traffic, not math -- a full-width (times x knots) zero matrix per
+  ancestry level copied row by row into W, a `std::map` registry keyed on doubles, and every instrument deep-copied
+  twice (the router's sub-problem, then the engine's own copy); the curve set now scatters each ancestry block
+  straight into W, hashes the registry and the engine reads its rows in place keeping a `RowMeta` each: 12.1 → 5.1 ms
+  on the desk, and every cold-calibrate metric 0.72..0.92x (g10 2.93 → 2.25 ms). A refresh spent half its 9 ms in
+  `NormalOp::form()` applying every Householder reflector to a full n_res x n_res identity; the THIN FORM
+  (`M = P T⁻¹ Q₁ᵀ`, Q₁ the first `rank` columns of Q; G = M Mᵀ formed lazily on the first band re-scale) matches the
+  full solve to 6e-16 and takes the 25 bp refresh tick 41 → 14.7 ms (3 refreshes). With the anchored fixture the
+  Hermite desk: cold 21.0 ms, warm LM after 25 bp 22.2 ms, small tick 194 µs on 5 frozen steps and no refresh (it was
+  10.1 ms with a refresh every tick on the unanchored CCP curves); MonotoneConvex: cold 22.8, warm 28.9 ms, tick
+  382 µs, refresh 17.0 ms. Gated: `g4_{hermite,monoconvex}_{cold_calibrate,warm_lm_25bp,engine_build,jacobian,
+  stream_tick,refresh_25bp}`, the small tick's premise `refreshes == 0`. THE SEED FACT: at a flat forecast curve a par rate is independent of its discounting, so the CCP
+  market knots' columns vanish (the 1D anchor's does not: it reads the forward) and the joint LM wanders from the ladder's
+  flat seed; the fixture's cold seed carries a 2 bp/knot slope.
 
 ### Numerical tolerances (single source of truth: `tests/tolerances.hpp`)
 - Discount factors / par rates vs QuantLib: `rel <= 1e-10`.

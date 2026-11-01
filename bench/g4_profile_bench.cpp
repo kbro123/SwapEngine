@@ -7,10 +7,12 @@
 // here time each of those pieces on the calibrated state beside the whole cold solve, per variant of the long end:
 //   hermite     every row W-cached (the linear control: analytic Jacobian, no AAD)
 //   monocubic   the RFR long ends on MonotoneCubic -- value-dependent, piecewise-linear: the W tier, re-synced per branch
-//   monoconvex  the RFR long ends on MonotoneConvex -- not piecewise-linear: the rows past each horizon on the AAD block
-//   monoconvex_all  every curve on MonotoneConvex: the whole bundle on the AAD block (the worst case)
+//   monoconvex  the RFR long ends on MonotoneConvex -- not piecewise-linear: the tangent tier (W re-taken per state)
+//   monoconvex_all  every curve on MonotoneConvex: the whole bundle on the tangent tier (the worst case)
 // Counters report the partition (compiled vs AAD rows, the block's touched width and whether it is pooled or on the
-// heap dual) and the LM's iteration count, so a timing can be read as iterations x (pieces). Not gated yet: a probe.
+// heap dual) and the LM's iteration count, so a timing can be read as iterations x (pieces). GATED since 2026-11-01
+// (tools/check_perf.py g4_*): the hermite and monoconvex variants' cold / warm LM / engine build / Jacobian / small tick
+// (premise: no refresh) / 25 bp refresh tick; monocubic and monoconvex_all stay informational.
 #include <benchmark/benchmark.h>
 
 #include <stdexcept>

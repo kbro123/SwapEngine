@@ -823,21 +823,23 @@ TEST(EurCurves, OverDeterminedFuturesCarryRealTension) {
   EXPECT_LT(stat, 1e-5) << "and it is first-order optimal on the objective solved (‖Jᵀr‖∞ ≈ 0)";
 }
 
-// The SMOOTHNESS regulariser resolves the null: penalising curvature of the EUR3M/EUR6M forwards
-// (NOT ESTR -- its €STR-futures front has real policy steps) selects the smoothest market-consistent
-// curve, so the coupled basis-only trio now recovers x_true tightly.
-TEST(EurCurves, SmoothnessRegulariserRecoversTheCoupledTrio) {
+// THE NULL SPACE WAS THE UNANCHORED FRONT (PRINCIPLES P15, 2026-11-01). Until the fixture gained its front anchors (a 1M
+// ESTR OIS, the 3M EURIBOR fixing) the coupled basis-only trio wandered 1e-3 from x_true in a null direction and this
+// test showed the smoothness regulariser (curvature of the EUR3M/EUR6M forwards, NOT ESTR -- its €STR-futures front has
+// real policy steps) resolving it. Anchored, the trio is identified: the raw solve recovers x_true to ~1e-13 and the
+// regulariser, a tie-breaker among curves the quotes allow, changes nothing it should not.
+TEST(EurCurves, TheAnchoredCoupledTrioRecoversWithOrWithoutTheRegulariser) {
   const rb::MultiCcyBundle b = rb::build_eur_curves();
   const double raw = (cal::calibrate(b.prob, b.x0).x - b.x_true).cwiseAbs().maxCoeff();
   const auto reg = regularised(b.prob, 1.0, {b.EUR3M, b.EUR6M}, b.x0);
   const double err = (reg.x - b.x_true).cwiseAbs().maxCoeff();
   std::cout << "  [eur3-reg] raw ||x*-xtrue||=" << raw << "  regularised=" << err << "\n";
-  EXPECT_GT(raw, 1e-3) << "the unregularised basis-only trio wanders in the null space";
-  EXPECT_LT(err, 1e-6) << "the smoothness regulariser recovers the coupled trio tightly";
+  EXPECT_LT(raw, 1e-9) << "the anchored basis-only trio is identified: no null space to wander in (P15)";
+  EXPECT_LT(err, 1e-6) << "and the smoothness regulariser leaves the identified answer where it is";
 }
 
-// The regulariser folded into the STREAMING operator (M = (JᵀJ + RᵀR)⁻¹Jᵀ) lets the rank-deficient
-// coupled trio stream DIRECTLY: without it M is singular and streaming diverges; with it every tick
+// The regulariser folded into the STREAMING operator (M = (JᵀJ + RᵀR)⁻¹Jᵀ) lets the coupled trio stream DIRECTLY (it
+// was rank-deficient until the front anchors of 2026-11-01, P15; the recipe is unchanged): with it every tick
 // reprices the market exactly and tracks the smooth true curve, staying on the fast path.
 TEST(EurCurves, RegularisedStreamingTracksTheCoupledTrio) {
   const rb::MultiCcyBundle b = rb::build_eur_curves();

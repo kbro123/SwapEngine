@@ -1,4 +1,4 @@
-// E5 taxonomy: T2 calibration (every variant recovers its generating state; the CCP block vanishes at a flat seed) | T4 hot-path invariant (the router partition and the AAD block width on the desk)
+// E5 taxonomy: T2 calibration (every variant recovers its generating state; the CCP block's discount columns vanish at a flat seed, its 1D anchor does not) | T4 hot-path invariant (the router partition and the AAD block width on the desk)
 // The G4 desk fixture (bench/fixtures/g4_market.hpp): the hardest bundle the engine calibrates -- four currencies,
 // fourteen curves, meeting-date Flat fronts on the RFR curves with a value-dependent long end, tenor / CCP / xccy
 // basis -- pinned here so the profile bench (bench/g4_profile_bench.cpp) measures a fixture that is what it says.
@@ -34,8 +34,8 @@ TEST(G4Desk, StructureIsTheDesk) {
   const Shape s = swaps::shapes::g4_desk(raw(cv::Scheme::MonotoneConvex));
   const auto& p = s.prob;
   EXPECT_EQ(p.n_curves(), 14);
-  EXPECT_EQ(p.n_knots(), 200);
-  EXPECT_EQ(p.n_quotes(), 204);
+  EXPECT_EQ(p.n_knots(), 174);
+  EXPECT_EQ(p.n_quotes(), 198);
   EXPECT_EQ(p.n_constraints(), 0);
   // the four RFR curves: a Flat front with one knot per DB meeting before the 1Y pillar, then the smooth back, a turn
   const int meetings[] = {8, 8, 4, 4};
@@ -49,11 +49,30 @@ TEST(G4Desk, StructureIsTheDesk) {
     EXPECT_EQ(c.regions[1].knots.size(), 12u) << r.index;
     EXPECT_EQ(c.turns.size(), 1u) << r.index;
     EXPECT_LT(c.base, 0) << r.index;
-    EXPECT_EQ(p.curves[static_cast<std::size_t>(r.ccp)].base, r.role) << r.ccp_note;  // the CCP curve is a spread over its RFR
+    // the CCP curve is a spread over its RFR: a 1D knot anchored at zero basis, then the three market knots the
+    // eight-pillar basis strip fits (owner's rule, 2026-11-01)
+    const auto& cc = p.curves[static_cast<std::size_t>(r.ccp)];
+    EXPECT_EQ(cc.base, r.role) << r.ccp_note;
+    ASSERT_EQ(cc.regions.size(), 1u) << r.ccp_note;
+    EXPECT_EQ(cc.regions[0].knots.size(), 4u) << r.ccp_note;
+    EXPECT_LT(cc.regions[0].knots.front(), 0.02) << r.ccp_note;  // the 1D anchor
+    int basis_rows = 0, anchor_rows = 0;
+    for (const auto& ins : p.instruments)
+      if (ins.quote == cal::QuoteKind::Portfolio && ins.combination.size() == 2 &&
+          [&] { bool reads = false; ins.combination.front().instrument.for_each_curve_ref([&](int c, const char*) { reads = reads || c == static_cast<int>(r.ccp); }); return reads; }()) {
+        if (ins.combination.front().instrument.quote == cal::QuoteKind::Rate) ++anchor_rows; else ++basis_rows;
+      }
+    EXPECT_EQ(anchor_rows, 1) << r.ccp_note;
+    EXPECT_EQ(basis_rows, 8) << r.ccp_note;
+    EXPECT_EQ(s.x_true[p.offset(r.ccp)], 0.0) << r.ccp_note;  // zero basis at 1D in the generating state
   }
   for (const g4::Xccy& x : g4::xccys()) EXPECT_LT(p.curves[static_cast<std::size_t>(x.role)].base, 0) << x.pair;
   EXPECT_EQ(p.curves[g4::EUR_3M].base, g4::EUR_6M);
   EXPECT_EQ(p.curves[g4::EUR_6M].base, g4::EUR_ESTR);
+  // every curve has a front anchor: the tenor curves' first knots are their own fixings (6M, 3M), not the 1Y pillar
+  EXPECT_LT(p.curves[g4::EUR_6M].regions[0].knots.front(), 0.6);
+  EXPECT_LT(p.curves[g4::EUR_3M].regions[0].knots.front(), 0.3);
+  for (const auto& c : p.curves) EXPECT_LT(c.regions[0].knots.front(), 0.6) << "no curve's front is extrapolated from a term pillar: a fixing (<= 6M) anchors it";
   EXPECT_EQ(p.curves[g4::USD_FF].base, g4::USD_SOFR);
   // a smoothed build stamps every non-Flat region and only those
   const Shape sm = swaps::shapes::g4_desk(g4::Opts{});
@@ -78,11 +97,13 @@ TEST(G4Desk, EveryVariantCalibratesToItsGeneratingState) {
   }
 }
 
-// THE CCP BLOCK IS IDENTIFIED ONLY THROUGH THE CURVE'S SLOPE (2026-10-15): at a flat forecast curve every float coupon
-// is the same rate, so a par rate is independent of its discounting and the CCP columns vanish there (to the second
-// order of the accrual, ~1e-6: a compounded coupon is exp(f tau) - 1, not f tau) -- which is why the fixture's cold seed
-// carries a slope -- and at x_true they are still three orders below the RFR columns.
-TEST(G4Desk, TheCcpBlockIsIdentifiedOnlyThroughTheSlope) {
+// THE CCP BLOCK'S MARKET KNOTS ARE IDENTIFIED ONLY THROUGH THE CURVE'S SLOPE (2026-10-15): at a flat forecast curve
+// every float coupon is the same rate, so a par rate is independent of its discounting and the basis rows' columns
+// vanish there (to the second order of the accrual, ~1e-6: a compounded coupon is exp(f tau) - 1, not f tau) -- which
+// is why the fixture's cold seed carries a slope -- and at x_true they are still two orders below the RFR columns. The
+// 1D ANCHOR is the exception by design (2026-11-01): it reads the CCP curve's forward, so its column is order one at
+// any state, flat or sloped.
+TEST(G4Desk, TheCcpMarketKnotsAreIdentifiedOnlyThroughTheSlope) {
   const Shape s = swaps::shapes::g4_desk(raw(cv::Scheme::Hermite));
   const auto& p = s.prob;
   const cal::HybridBundleResidual h(p);
@@ -92,9 +113,11 @@ TEST(G4Desk, TheCcpBlockIsIdentifiedOnlyThroughTheSlope) {
   const Eigen::MatrixXd J0 = h.jacobian(flat), J1 = h.jacobian(s.x_true);
   for (const g4::Rfr& r : g4::rfrs()) {
     const int off = p.offset(r.ccp), n = p.curves[static_cast<std::size_t>(r.ccp)].n_knots();
-    const double ccp0 = J0.middleCols(off, n).colwise().norm().maxCoeff();
-    const double ccp = J1.middleCols(off, n).colwise().norm().minCoeff();
-    EXPECT_LT(ccp0, 1e-5) << r.ccp_note << ": vanishes at a flat forecast";
+    EXPECT_GT(J0.col(off).norm(), 0.1) << r.ccp_note << ": the 1D anchor reads the forward";
+    EXPECT_GT(J1.col(off).norm(), 0.1) << r.ccp_note;
+    const double ccp0 = J0.middleCols(off + 1, n - 1).colwise().norm().maxCoeff();
+    const double ccp = J1.middleCols(off + 1, n - 1).colwise().norm().minCoeff();
+    EXPECT_LT(ccp0, 1e-5) << r.ccp_note << ": the market knots vanish at a flat forecast";
     EXPECT_LT(ccp0, 1e-1 * ccp) << r.ccp_note << ": the flat-seed column is far below the sloped one";
     const double rfr = J1.middleCols(p.offset(r.role), p.curves[static_cast<std::size_t>(r.role)].n_knots()).colwise().norm().maxCoeff();
     EXPECT_GT(ccp, 1e-5) << r.ccp_note;

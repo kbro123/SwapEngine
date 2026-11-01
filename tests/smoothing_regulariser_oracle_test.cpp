@@ -48,8 +48,11 @@ Spectrum spectrum(const Eigen::MatrixXd& A) {
 // direction. R is scaled so R^T R sits at the same trace (overall magnitude) as J^T J -- so the drop is a
 // property of the operator's SHAPE (it spans exactly the weakly-identified smoothness directions), not of
 // an outsized weight swamping the data.
+// THE SUBJECT IS A RANK-DEFICIENT BUNDLE, kept on purpose (2026-11-01): the EUR trio's null space was its UNANCHORED
+// front (PRINCIPLES P15 -- the reference fixture is anchored now and identified to 1e-13), so these two oracles build the
+// fixture's first form (`anchored = false`) to keep a genuine null for the regulariser to act on.
 TEST(SmoothingRegulariserOracle, DropsCalibrationJacobianConditionNumber) {
-  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  const rb::MultiCcyBundle b = rb::build_eur_curves(QuantLib::Date(8, QuantLib::July, 2026), /*anchored=*/false);
   const Eigen::MatrixXd J = cal::aad_jacobian(b.prob, b.x_true);
   const Eigen::MatrixXd JtJ = J.transpose() * J;
   const Spectrum raw = spectrum(JtJ);
@@ -82,7 +85,7 @@ TEST(SmoothingRegulariserOracle, DropsCalibrationJacobianConditionNumber) {
 // null). We assert exactly that -- optimality preserved, fit preserved, wander sharply reduced -- not a
 // machine-precision recovery the operator does not (and should not be expected to) deliver here.
 TEST(SmoothingRegulariserOracle, FirstOrderOptimalAndDampsTheNullWander) {
-  const rb::MultiCcyBundle b = rb::build_eur_curves();
+  const rb::MultiCcyBundle b = rb::build_eur_curves(QuantLib::Date(8, QuantLib::July, 2026), /*anchored=*/false);  // the unanchored first form: see above
 
   const cal::CalibrationResult raw = cal::calibrate(b.prob, b.x0);
   const double raw_err = (raw.x - b.x_true).cwiseAbs().maxCoeff();

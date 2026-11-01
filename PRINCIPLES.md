@@ -101,6 +101,15 @@ that needs something the library cannot do gets a library function first. A defa
 library struct, never re-stated in a decoder. `tools/verb_density.py` (verify.sh) counts what each api file still
 carries from clang's typed AST and locks it in `tests/verb_density.lock`: a count may only go down (E7).
 
+**P15. Every curve has a front anchor.** A curve's first knot is pinned by an instrument that reads THAT curve's
+forward over one window starting at the front -- a fixing or deposit, a meeting-to-meeting or futures observation, a
+single-coupon swap, an FX forward from the value date; for a spread curve its 1D fixing at zero spread over the base,
+since the overnight fixing is the same whoever clears it. Never the leading region's flat extrapolation of a term
+pillar, and never a discount-only read (a par rate's discounting column vanishes at the front). The state at every
+knot is a forward; the front one is a market quote like any other. `calibration::front_anchors` is the check,
+`tests/front_anchor_rule_test.cpp` / `front_anchor_reference_test.cpp` walk every fixture in the repo (ratified
+2026-11-01, after the G4 desk's CCP curves were found carrying a 2Y spread from day one; ASSUMPTIONS K53).
+
 ## What "done" means
 
 A capability is done when: it is on the hot path it claims (P3/P5), benchmarked (P6), oracle-pinned or

@@ -22,6 +22,7 @@
 #include <gtest/gtest.h>
 
 #include "malloc_count.hpp"  // bench/fixtures (an include dir of swaps_tests)
+#include "market_walk.hpp"
 #include "shape_ladder.hpp"
 #include "swaps/calibration/hybrid_residual.hpp"
 #include "swaps/calibration/lm.hpp"
@@ -161,6 +162,36 @@ Outcome desk_mixed_small() {
   return run(st, 6, 20, [&](int k) { return st.update(k % 2 == 0 ? s.q_small : s.q0); });
 }
 
+// The MonotoneCubic desk along a +-3 bp WALK (the same sequence walk_desk_3bp drives on the linear desk): the Hyman long
+// end parks on its branch kinks here, which is where the kink 2-cycle damping and the stall refresh live. (Until the desk
+// rungs gained their EUR 6M front anchor, 2026-11-01, the small-tick scenario reached both; anchored, it streams on frozen
+// steps alone and reaches neither.)
+Outcome desk_mixed_walk3bp() {
+  const Shape& s = rung("desk_mixed");
+  cal::HybridBundleResidual eng(s.prob);
+  SC st(eng, s.prob, calibrated(s), s.q0, pinned());
+  const auto seq = walk_sequence(s, 3e-4, 26);
+  return run(st, 6, 20, [&](int k) { return st.update(seq[static_cast<std::size_t>(k)]); });
+}
+
+// The MonotoneCubic desk along the PER-ROW stress walk (bench/fixtures/market_walk.hpp, the soak's second walk: every quote
+// its own noise), the walk that parks the Hyman long end on a branch kink and makes the frozen corrector 2-cycle there --
+// the kink damping's scenario.
+Outcome desk_mixed_perrow() {
+  const Shape& s = rung("desk_mixed");
+  cal::HybridBundleResidual eng(s.prob);
+  SC st(eng, s.prob, calibrated(s), s.q0, pinned());
+  swaps::shapes::MarketWalk walk(s, swaps::shapes::WalkKind::PerRow, 20260921u);
+  std::vector<Shape::Requote> seq;  // the bands move with their targets, as the soak requotes them
+  for (int k = 0; k < 66; ++k) seq.push_back(s.requote(walk.next()));
+  return run(st, 6, 60, [&](int k) {
+    const Shape::Requote& r = seq[static_cast<std::size_t>(k)];
+    for (int j = 0; j < s.prob.n_residuals(); ++j) eng.set_quote(j, r.target[j], r.lower[j], r.upper[j], r.decay[j]);
+    if (!st.set_bands(r.lower, r.upper, r.decay)) throw std::logic_error("desk_mixed_perrow: a band move re-anchored");
+    return st.update(r.target);
+  });
+}
+
 Outcome desk_mixed_big() {  // the 25 bp four-number requote each way (bands move with their targets)
   const Shape& s = rung("desk_mixed");
   cal::HybridBundleResidual eng(s.prob);
@@ -245,7 +276,7 @@ const std::vector<std::pair<std::string, Scenario>>& scenarios() {  // cheapest 
   static const std::vector<std::pair<std::string, Scenario>> v = {
       {"square_big_ois", square_big_ois},       {"frozen_cap_ois", frozen_cap_ois}, {"intick_portfolio_rd0", intick_portfolio_rd0},
       {"failed_portfolio_cap2", failed_portfolio_cap2}, {"weak_direction_strip", weak_direction_strip}, {"reg_desk_small", reg_desk_small}, {"walk_desk_3bp", walk_desk_3bp},
-      {"desk_mixed_small", desk_mixed_small},   {"desk_mixed_big", desk_mixed_big}, {"prefetch_ois", prefetch_ois}};
+      {"desk_mixed_small", desk_mixed_small},   {"desk_mixed_walk3bp", desk_mixed_walk3bp}, {"desk_mixed_perrow", desk_mixed_perrow}, {"desk_mixed_big", desk_mixed_big}, {"prefetch_ois", prefetch_ois}};
   return v;
 }
 

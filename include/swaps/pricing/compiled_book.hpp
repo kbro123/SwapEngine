@@ -27,9 +27,12 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
+#include <cstring>
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -440,6 +443,7 @@ class CompiledCurveSet {
   void enable_pwl_stats() { pwl_stats_ = true; }
 
   int reg(int curve, double t) {
+    if (t == 0.0) t = 0.0;  // one key for +-0 (the registry hashes the bits)
     const auto key = std::make_pair(curve, t);
     auto it = idx_.find(key);
     if (it != idx_.end()) return it->second;
@@ -450,20 +454,17 @@ class CompiledCurveSet {
   }
 
   void finalize() {
-    W_ = Eigen::MatrixXd::Zero(static_cast<int>(pts_.size()), n_knots_);
-    // Group registered times by curve (one integral_weight_matrix call per curve), then scatter each
-    // computed weight row back to its GLOBAL row index.
+    W_.setZero(static_cast<int>(pts_.size()), n_knots_);  // sized once; a rebuild writes into the same storage
+    // Group registered times by curve (one integral_weight_matrix call per ancestry block), each curve's rows
+    // written straight into their GLOBAL rows' own and ancestry columns (logdf_weight_into).
     std::vector<std::vector<int>> rows(specs_.size());
     std::vector<std::vector<double>> tms(specs_.size());
     for (int g = 0; g < static_cast<int>(pts_.size()); ++g) {
       rows[pts_[g].first].push_back(g);
       tms[pts_[g].first].push_back(pts_[g].second);
     }
-    for (int c = 0; c < static_cast<int>(specs_.size()); ++c) {
-      if (tms[c].empty()) continue;
-      const Eigen::MatrixXd Wc = logdf_weight(c, tms[c]);
-      for (int k = 0; k < static_cast<int>(rows[c].size()); ++k) W_.row(rows[c][k]) = Wc.row(k);
-    }
+    for (int c = 0; c < static_cast<int>(specs_.size()); ++c)
+      if (!tms[c].empty()) logdf_weight_into(c, tms[c], rows[c]);
     // BLOCK-SPARSE form of W for the per-tick DF stage (E4.D "per-curve W ancestry", 2026-09-10): a curve's
     // log-DF row is nonzero only on its OWN knot block and its base chain's, so the dense n_times x n_knots
     // GEMV multiplied zeros for every other curve (the desk: 857 times x 67 knots, ~2.8x the nonzeros --
@@ -614,24 +615,30 @@ class CompiledCurveSet {
   // region W-cache; each turn δ takes a closed-form `overlap` column (docs/turns-calibration.md §2):
   // the log-DF integral gains Σⱼ δⱼ·overlap(tᵢ, turnⱼ), which is LINEAR in the δⱼ and needs no AAD. A
   // spread/dependent curve observes the base's turns FOR FREE via the same base recursion below.
-  Eigen::MatrixXd logdf_weight(int c, const std::vector<double>& times) const {
-    const int ni = specs_[c].n_interp_knots();
-    Eigen::MatrixXd W = Eigen::MatrixXd::Zero(static_cast<int>(times.size()), n_knots_);
-    if (pwl_ && value_dependent(c)) {  // the state's W: the branch-pattern cell's (piecewise-linear) or the tangent's
-      const Eigen::VectorXd xs = eval_x_[c].size() == ni ? eval_x_[c] : Eigen::VectorXd::Constant(ni, 0.03);
-      W.middleCols(knot_offset_[c], ni) = tangent_curve(c) ? integral_tangent_matrix(specs_[c].modules(), times, xs)
-                                                           : integral_weight_matrix_at(specs_[c].modules(), times, xs);
-    } else {
-      W.middleCols(knot_offset_[c], ni) =
-          integral_weight_matrix(specs_[c].modules(), times);  // one W-cache, any region layout
+  // Written into W_ at the rows' GLOBAL indices, one ancestry block at a time: c's own block, then its base's, up the
+  // chain -- the blocks are disjoint columns, so this is the sum without the full-width temporaries it used to be
+  // written with (a (times x n_knots) zero matrix per ancestry level, copied row by row into W_: on the G4 desk's
+  // 1973 times x 200 knots that was most of the engine build, 2026-11-01).
+  void logdf_weight_into(int c, const std::vector<double>& times, const std::vector<int>& rows) {
+    const int n = static_cast<int>(times.size());
+    for (int a = c; a >= 0; a = specs_[a].base) {
+      const int ni = specs_[a].n_interp_knots(), off = knot_offset_[a];
+      if (ni > 0) {
+        Eigen::MatrixXd Wa;
+        if (pwl_ && value_dependent(a)) {  // the state's W: the branch-pattern cell's (piecewise-linear) or the tangent's
+          const Eigen::VectorXd xs = eval_x_[a].size() == ni ? eval_x_[a] : Eigen::VectorXd::Constant(ni, 0.03);
+          Wa = tangent_curve(a) ? integral_tangent_matrix(specs_[a].modules(), times, xs)
+                                : integral_weight_matrix_at(specs_[a].modules(), times, xs);
+        } else {
+          Wa = integral_weight_matrix(specs_[a].modules(), times);  // one W-cache, any region layout
+        }
+        for (int k = 0; k < n; ++k) W_.row(rows[static_cast<std::size_t>(k)]).segment(off, ni) = Wa.row(k);
+      }
+      for (int j = 0; j < static_cast<int>(specs_[a].turns.size()); ++j) {
+        const int col = off + ni + j;  // δⱼ sits after the interp knots in a's block
+        for (int i = 0; i < n; ++i) W_(rows[static_cast<std::size_t>(i)], col) = turn_overlap(times[i], specs_[a].turns[j]);
+      }
     }
-    for (int j = 0; j < static_cast<int>(specs_[c].turns.size()); ++j) {
-      const int col = knot_offset_[c] + ni + j;  // δⱼ sits after the interp knots in c's block
-      for (int i = 0; i < static_cast<int>(times.size()); ++i)
-        W(i, col) = turn_overlap(times[i], specs_[c].turns[j]);
-    }
-    if (specs_[c].base >= 0) W += logdf_weight(specs_[c].base, times);
-    return W;
   }
 
   std::vector<CurveStructure> specs_;
@@ -652,7 +659,18 @@ class CompiledCurveSet {
     t.crv.pwl_node_formula(j, pat.data() + j * t.npb, t.phi.data());
     t.row.noalias() = Eigen::Map<const Eigen::RowVectorXd>(t.phi.data(), static_cast<Eigen::Index>(t.phi.size())) * t.G;
   }
-  std::map<std::pair<int, double>, int> idx_;
+  // The registry: (curve, time) -> global index, hashed on the time's bits (a std::map's ordered compare on doubles was
+  // a tenth of the G4 engine build, 2026-11-01); pts_ keeps registration order, which is the global index.
+  struct KeyHash {
+    std::size_t operator()(const std::pair<int, double>& k) const noexcept {
+      std::uint64_t b;
+      std::memcpy(&b, &k.second, sizeof b);
+      b ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(k.first)) * 0x9E3779B97F4A7C15ULL;
+      b ^= b >> 29; b *= 0xBF58476D1CE4E5B9ULL; b ^= b >> 32;
+      return static_cast<std::size_t>(b);
+    }
+  };
+  std::unordered_map<std::pair<int, double>, int, KeyHash> idx_;
   std::vector<std::pair<int, double>> pts_;  // global index -> (curve, time)
   Eigen::MatrixXd W_;
   // Block-sparse W for df_into (finalize): per curve its global rows and one dense block per ancestry curve.

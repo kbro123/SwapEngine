@@ -88,11 +88,15 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
   // ESTR: a single flat front segment [0, 0.5] then a smooth Hermite back at the OIS pillars.
   const std::vector<double> estr_meet{0.5};
   const std::vector<double> estr_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
-  // EUR3M / EUR6M: forward-SPREAD curves over their base, same front + a shorter back.
+  // EUR3M / EUR6M: forward-SPREAD curves over their base, same front + a shorter back. THE FRONT ANCHOR (PRINCIPLES P15,
+  // 2026-11-01): the 3M curve's first knot is its own 3M fixing's end (the 6M IRS has two quarterly coupons and cannot
+  // anchor the front); the 6M curve's 6M IRS is one coupon and anchors itself.
   const std::vector<double> eur_meet{0.5};
   const std::vector<double> eur_back{1, 2, 3, 5, 7, 10};
+  const Date fix3m_start = Euribor3M().valueDate(eval), fix3m_end = Euribor3M().maturityDate(fix3m_start);
+  const std::vector<double> eur3m_meet{t(fix3m_end), 0.5};
   b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};      // outright
-  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(eur_meet, eur_back)};   // spread over ESTR
+  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(eur3m_meet, eur_back)};   // spread over ESTR
   b.prob.curves[b.EUR6M] = swaps::pricing::CurveStructure{.base = b.EUR3M, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(eur_meet, eur_back)};  // spread over EUR3M
 
   b.off.assign(3, 0);
@@ -194,7 +198,14 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
     ois_keep.push_back(o);
   }
 
-  // EUR3M pillars: one 3M-EURIBOR IRS per EUR3M knot.
+  // EUR3M pillars: the 3M fixing (the front anchor, P15), then one 3M-EURIBOR IRS per EUR3M knot.
+  {
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::Rate;
+    ins.forecast = b.EUR3M;
+    ins.obs = swaps::qlx::make_observation({{fix3m_start, fix3m_end}}, 0.0, b.eur3m->dayCounter().yearFraction(fix3m_start, fix3m_end), eval, dc);
+    b.prob.instruments.push_back(ins);
+  }
   {
     auto [ins, s] = make_ibor_inst(6 * Months, b.eur3m, b.EUR3M, disc_estr, "EUR-EURIBOR-3M-IRS");
     b.prob.instruments.push_back(ins);
@@ -631,7 +642,10 @@ inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(
 // Futures carry ZERO convexity here (the convexity MODEL is orthogonal and already validated for SOFR;
 // hull_white_convexity can be wired in exactly as reference_curve.hpp does).
 // ===============================================================================================
-inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, QuantLib::July, 2026)) {
+// `anchored` (PRINCIPLES P15, 2026-11-01): the ESTR 1M OIS and the 3M EURIBOR fixing in front of the futures strips.
+// false rebuilds the fixture's first form -- a front left to the leading region's extrapolation -- which IS the
+// basis-only trio's null space; the smoothing-regulariser oracle keeps that form as its subject.
+inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, QuantLib::July, 2026), bool anchored = true) {
   using namespace QuantLib;
   MultiCcyBundle b;
   b.today = eval;
@@ -671,6 +685,17 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
 
   // ---------------- ESTR curve (0): €STR futures front + ESTR/3M basis back ----------------
   std::vector<double> estr_back;
+  // THE FRONT ANCHOR (PRINCIPLES P15, 2026-11-01): the futures strip opens on 1 August, three weeks after the value date,
+  // so a 1M ESTR OIS (one compounded coupon from spot) reads the forward over the weeks the strip leaves open.
+  if (anchored) {
+    auto o = ext::shared_ptr<OvernightIndexedSwap>(MakeOIS(Period(1, Months), b.estr, 0.03).withDiscountingTermStructure(b.h[b.ESTR]));
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::ParRate;
+    ins.fwd = {swaps::qlx::extract_float_leg(o->overnightLeg(), eval, dc), b.ESTR, b.ESTR};
+    ins.fixed = {swaps::qlx::extract_fixed_leg(o->fixedLeg(), eval, dc), b.ESTR};
+    b.prob.instruments.push_back(ins);
+    keep_ois.push_back(o);
+  }
   // 12 monthly 1M €STR averaging futures (Aug-2026 .. Jul-2027), fully forecast.
   {
     int m = 8, y = 2026;
@@ -727,6 +752,16 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
 
   // ---------------- EURIBOR-3M curve (1): 3M EURIBOR futures front + 3s6s basis back ----------------
   std::vector<double> eur3m_back;
+  // THE FRONT ANCHOR (P15): the 3M EURIBOR fixing at the value date, read off the 3M curve's forward over [spot, 3M]; its
+  // end is the curve's flat-front knot (the first future opens at the September IMM date, ~0.19y out).
+  const Date fix3m_start = b.eur3m->valueDate(eval), fix3m_end = b.eur3m->maturityDate(fix3m_start);
+  if (anchored) {
+    cal::Instrument ins;
+    ins.quote = cal::QuoteKind::Rate;
+    ins.forecast = b.EUR3M;
+    ins.obs = swaps::qlx::make_observation({{fix3m_start, fix3m_end}}, 0.0, b.eur3m->dayCounter().yearFraction(fix3m_start, fix3m_end), eval, dc);
+    b.prob.instruments.push_back(ins);
+  }
   // 12 quarterly 3M EURIBOR futures (IMM Sep-2026 .. Jun-2029). A future settles on the ACTUAL fixing,
   // so its dates come from the INDEX (valueDate/maturityDate), NOT the par-coupon approximation.
   for (const auto& [im, iy] : std::vector<std::pair<int, int>>{
@@ -815,7 +850,7 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
   // directly. A spread chain (EUR6M over EUR3M over ESTR) accumulates and is less stable; a single
   // outright + spreads-over-it is the desk-standard parameterization. EUR3M's first futures pillar is
   // ~0.44y so its flat-front knot sits below that (Flat/Hermite join needs back.front() > meeting.back()).
-  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({0.1}, eur3m_back)};
+  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({anchored ? t(fix3m_end) : 0.1}, eur3m_back)};  // the fixing's end (P15); 0.1 was the first form's
   b.prob.curves[b.EUR6M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({0.5}, eur6m_back)};
   b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
   const int N = b.off[2] + b.prob.curves[2].n_knots();
@@ -1078,13 +1113,19 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
     ins.fixed = {swaps::qlx::extract_fixed_leg(s->fixedLeg(), eval, dc), 0};
     kvs.push_back(s); return ins;
   };
+  const Date fix3m_start = b.eur3m->valueDate(eval), fix3m_end = b.eur3m->maturityDate(fix3m_start);
+  {  // the 3M fixing anchors the 3M curve's front (P15): its end is the curve's first knot
+    cal::Instrument ins; ins.quote = cal::QuoteKind::Rate; ins.forecast = 1;
+    ins.obs = swaps::qlx::make_observation({{fix3m_start, fix3m_end}}, 0.0, b.eur3m->dayCounter().yearFraction(fix3m_start, fix3m_end), eval, dc);
+    b.prob.instruments.push_back(ins);
+  }
   b.prob.instruments.push_back(irs_par(b.eur3m, 1, 6 * Months));
   for (int y : pillars) b.prob.instruments.push_back(irs_par(b.eur3m, 1, Period(y, Years)));
   b.prob.instruments.push_back(irs_par(b.eur6m, 2, 6 * Months));
   for (int y : pillars) b.prob.instruments.push_back(irs_par(b.eur6m, 2, Period(y, Years)));
 
   b.prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};
-  b.prob.curves[1] = swaps::pricing::CurveStructure{.base = 0, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({0.5}, eur_back)};  // EUR3M = ESTR + spread
+  b.prob.curves[1] = swaps::pricing::CurveStructure{.base = 0, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({t(fix3m_end), 0.5}, eur_back)};  // EUR3M = ESTR + spread
   b.prob.curves[2] = swaps::pricing::CurveStructure{.base = 1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({0.5}, eur_back)};  // EUR6M = EUR3M + spread
   b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
   const int N = b.off[2] + b.prob.curves[2].n_knots();

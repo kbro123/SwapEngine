@@ -98,8 +98,8 @@ inline bool instrument_within_horizons(const Instrument& ins, const std::vector<
 // outputs back onto the global rows. `engine()` is exposed for the whole-bundle direct delegate (no stitch).
 class CompiledRows final : public RowEngine {
  public:
-  CompiledRows(const BundleProblem& sub, std::vector<int> rows, int n_res, bool pwl)
-      : eng_(sub, pwl), rows_(std::move(rows)), pos_(static_cast<std::size_t>(n_res), -1) {
+  CompiledRows(const BundleProblem& p, const std::vector<int>& rows, int n_res, bool pwl)
+      : eng_(p, rows, pwl), rows_(rows), pos_(static_cast<std::size_t>(n_res), -1) {
     for (std::size_t j = 0; j < rows_.size(); ++j) pos_[static_cast<std::size_t>(rows_[j])] = static_cast<int>(j);
   }
   const std::vector<int>& rows() const override { return rows_; }
@@ -346,9 +346,7 @@ class HybridBundleResidual {
   // linear horizon to the AAD block (the horizon partition); `pwl`: build the compiled engine on the tier.
   // Returns false (and builds nothing) when the tier was asked for and cannot be engaged.
   bool build(const BundleProblem& p, const std::vector<double>& horizons, bool use_horizons, bool pwl) {
-    BundleProblem c;
-    c.curves = p.curves;
-    std::vector<Instrument> nc;
+    std::vector<Instrument> nc;  // the AAD rows (a block prices them through the templated kernel: its own copy)
     std::vector<int> nc_rows, rows;
     for (int r = 0; r < n_res_; ++r) {
       const Instrument& ins = p.row(r);  // a constraint row is partitioned like any other row
@@ -358,20 +356,20 @@ class HybridBundleResidual {
         nc.push_back(ins);
         nc_rows.push_back(r);
       } else {
-        c.instruments.push_back(ins);
         rows.push_back(r);
       }
     }
-    if (pwl && c.instruments.empty()) return false;
+    if (pwl && rows.empty()) return false;
     engines_.clear();
     compiled_ = nullptr;
     aad_blocks_.clear();
     // The compiled engine is built for every fully-linear bundle (even an all-AAD instrument mix, which keeps
-    // n_times() honest) and for a mixed bundle whenever some row stayed on the W-cache.
-    if (!use_horizons || !c.instruments.empty()) {
+    // n_times() honest) and for a mixed bundle whenever some row stayed on the W-cache. It reads its rows off the
+    // problem in place (CompiledBundleResidual's row-list constructor): no sub-problem is built.
+    if (!use_horizons || !rows.empty()) {
       std::unique_ptr<CompiledRows> cr;
       try {
-        cr = std::make_unique<CompiledRows>(c, rows, n_res_, pwl);
+        cr = std::make_unique<CompiledRows>(p, rows, n_res_, pwl);
       } catch (const std::exception&) {
         if (pwl) return false;  // the tier is refused: the caller falls back to the horizon partition
         throw;

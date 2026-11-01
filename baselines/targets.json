@@ -381,6 +381,54 @@
     "g10_g4turns_jacobian": {
       "target_ns": 159800,
       "note": "initial = 2026-10-13 baseline x1.3 (the G10 desk with/without G4 year-end turns, both under Light smoothing, bench/g10_turns_bench.cpp); ratchets DOWN only"
+    },
+    "g4_hermite_cold_calibrate": {
+      "target_ns": 29547400,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_hermite_engine_build": {
+      "target_ns": 7133500,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_hermite_jacobian": {
+      "target_ns": 1457900,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_hermite_refresh_25bp": {
+      "target_ns": 18876500,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_hermite_stream_tick": {
+      "target_ns": 258800,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_hermite_warm_lm_25bp": {
+      "target_ns": 30020900,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_monoconvex_cold_calibrate": {
+      "target_ns": 31573200,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_monoconvex_engine_build": {
+      "target_ns": 6957200,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_monoconvex_jacobian": {
+      "target_ns": 1467900,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_monoconvex_refresh_25bp": {
+      "target_ns": 21938700,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_monoconvex_stream_tick": {
+      "target_ns": 499200,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
+    },
+    "g4_monoconvex_warm_lm_25bp": {
+      "target_ns": 38272300,
+      "note": "initial = 2026-11-01 baseline x1.3 (the G4 desk, bench/g4_profile_bench.cpp: four currencies, 14 curves, every curve front-anchored, under smoothing; the owner's ceiling for a full off-hot-path re-calibration is 50 ms); ratchets DOWN only"
     }
   }
 }

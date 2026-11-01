@@ -62,7 +62,11 @@ inline Shape g10_desk(bool g4_turns, bool light = true) {
   const b::Date obs_s = b::Date::from_iso("2026-12-15"), obs_e = b::Date::from_iso("2027-01-15");
   for (const g10::Leg& lg : g10::legs()) {
     const b::SwapConv conv = b::swap_conv(lg.ccy_code, lg.index);
-    const std::vector<double> knots = detail::add_par_swaps(p, conv, lg.role, lg.discount, g10::tenors());
+    std::vector<double> knots;
+    if (lg.discount != lg.role)  // a term-index curve: its own fixing anchors the front (PRINCIPLES P15)
+      knots.push_back(detail::add_fixing(p, lg.ccy_code, lg.index, "3M", lg.role));
+    const std::vector<double> ks = detail::add_par_swaps(p, conv, lg.role, lg.discount, g10::tenors());
+    knots.insert(knots.end(), ks.begin(), ks.end());
     px::CurveStructure s = detail::spec(knots);
     s.currency = lg.ccy;
     if (g4_turns && lg.g4) {

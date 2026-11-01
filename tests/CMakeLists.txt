@@ -114,6 +114,7 @@ add_executable(swaps_tests
   gamma_test.cpp
   kernel_pins_test.cpp
   g4_desk_test.cpp
+  front_anchor_rule_test.cpp
   aad_block_groups_test.cpp
   lm_driver_test.cpp
   curve_tangent_test.cpp
@@ -197,6 +198,7 @@ if(TARGET quantlib_oracle)
     compiled_residual_test.cpp
     migration_guard_test.cpp
     smoothing_regulariser_oracle_test.cpp
+    front_anchor_reference_test.cpp
   )
   target_link_libraries(swaps_consistency_tests PRIVATE swaps quantlib_oracle GTest::gtest_main)
   target_include_directories(swaps_consistency_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

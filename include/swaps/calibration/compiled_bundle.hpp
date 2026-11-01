@@ -39,6 +39,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <utility>
+#include <optional>
 #include <vector>
 
 #include "swaps/calibration/bundle_problem.hpp"
@@ -68,16 +69,24 @@ class CompiledBundleResidual {
   // `pwl` (EXPERIMENT, exp/piecewise-linear-w): accept value-dependent (piecewise-linear) curves at any time;
   // their W is taken at a state and the OWNER must call rebuild_W(x) whenever x's branch pattern changes.
   explicit CompiledBundleResidual(const BundleProblem& p, bool pwl = false)
-      : n_gen_(p.n_residuals()), instruments_(all_rows(p)), market_(p.market()) {
+      : CompiledBundleResidual(p, identity_rows(p.n_residuals()), pwl) {}
+  // The engine over a SUBSET of the problem's rows (global indices, in the engine's local order): the router's
+  // compiled partition. Nothing is copied out of the problem: each row is read in place at registration, and what
+  // the engine keeps of a row is its RowMeta (2026-11-01; until then the router built a sub-problem and this engine
+  // copied every instrument a second time -- two deep copies of every coupon per engine build).
+  CompiledBundleResidual(const BundleProblem& p, const std::vector<int>& rows, bool pwl)
+      : n_gen_(static_cast<int>(rows.size())) {
     cs_.init(p.curves);  // p.curves ARE pricing::CurveStructure now (BundleCurveSpec is an alias), no copy
     if (pwl) cs_.enable_pwl();
+    market_.resize(n_gen_);
+    rows_.reserve(static_cast<std::size_t>(n_gen_));
     band_lo_.assign(n_gen_, 0.0);
     band_up_.assign(n_gen_, 0.0);
     band_dc_.assign(n_gen_, 1.0);
     maps_.reserve(n_gen_);  // row_maps() never allocates after this
     dead_rows_.reserve(static_cast<std::size_t>(n_gen_));  // jacobian_core never allocates for them after this
 
-    register_generic(p);
+    register_generic(p, rows);
 
     cs_.finalize();  // builds W_all now that every (curve, time) is registered
     if (pwl) cs_.pwl_init();  // the piecewise-linear trackers (structure-only; W is re-taken on the first sync)
@@ -103,10 +112,8 @@ class CompiledBundleResidual {
        // map has such a piece, sized here so a refresh that finds one allocates nothing (a zero-slope map installed later
        // by set_quote grows it once, in that refresh).
       int cap = 0;
-      for (const Instrument& ins : instruments_) {
-        const PenaltyMap pm = ins.penalty();
-        for (int i = 0; i <= pm.n; ++i) if (pm.s[i] == 0.0) { ++cap; break; }
-      }
+      for (const RowMeta& m : rows_)
+        for (int i = 0; i <= m.penalty.n; ++i) if (m.penalty.s[i] == 0.0) { ++cap; break; }
       dead_J_.resize(cap, cs_.n_knots());
     }
 
@@ -216,13 +223,13 @@ class CompiledBundleResidual {
   // band (the templated instrument_residual applies the log map first; see register_generic).
   void set_quote(int row, double market, double lower, double upper, double decay) {
     market_[row] = market;
-    if (instruments_[static_cast<std::size_t>(row)].quote == QuoteKind::FxForward) return;
+    if (rows_[static_cast<std::size_t>(row)].quote == QuoteKind::FxForward) return;
     // The common tick re-sends every row's band with a new target: an UNCHANGED band touches nothing (2026-10-07 --
     // rebuilding the row-map list per tick cost 0.7 us on the banded rung once a map was a PenaltyMap, not three
     // doubles). A changed band updates its map in place while the row stays banded; a band appearing or
     // disappearing rebuilds the list.
     if (lower == band_lo_[row] && upper == band_up_[row] && decay == band_dc_[row]) return;
-    if (instruments_[static_cast<std::size_t>(row)].penalty_map) {  // a general map is the row's shape: the band numbers are not read
+    if (rows_[static_cast<std::size_t>(row)].penalty_map) {  // a general map is the row's shape: the band numbers are not read
       band_lo_[row] = lower;
       band_up_[row] = upper;
       band_dc_[row] = decay;
@@ -645,12 +652,10 @@ class CompiledBundleResidual {
   }
 
   // ---- the row model ------------------------------------------------------------------------------
-  // The problem's rows in residual order: the quotes, then the constraint rows (the flat source this engine keeps).
-  static std::vector<Instrument> all_rows(const BundleProblem& p) {
-    std::vector<Instrument> rows;
-    rows.reserve(static_cast<std::size_t>(p.n_residuals()));
-    for (int i = 0; i < p.n_residuals(); ++i) rows.push_back(p.row(i));
-    return rows;
+  static std::vector<int> identity_rows(int n) {
+    std::vector<int> r(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) r[static_cast<std::size_t>(i)] = i;
+    return r;
   }
   // Curve `c`'s local state `i` (interp knots, then δ's) in the stacked x: the ONE encoding a State term uses.
   static int global_state_index(const std::vector<BundleCurveSpec>& curves, int c, int i) {
@@ -774,13 +779,15 @@ class CompiledBundleResidual {
   // ParRate and ParSpread share ONE pair of float batches: both are (pv_pos - pv_neg)/annuity, with
   // ParRate contributing an EMPTY `neg` leg (a leg with no coupons has no entries in R_cpn, so its
   // pv row is exactly 0.0 and its d_pv contributes nothing).
-  void register_generic(const BundleProblem& p) {
-    for (int row = 0; row < p.n_residuals(); ++row) {  // the quotes, then the constraint rows (BundleProblem::row)
-      const Instrument& ins = p.row(row);
+  void register_generic(const BundleProblem& p, const std::vector<int>& rows) {
+    for (int row = 0; row < n_gen_; ++row) {  // the engine's rows, in its local order (global: BundleProblem::row)
+      const Instrument& ins = p.row(rows[static_cast<std::size_t>(row)]);
+      rows_.push_back(RowMeta{ins.quote, ins.fx_time, ins.penalty_map, ins.penalty()});
+      market_[row] = ins.market;
       // The row's residual map is decided by the TOP-LEVEL quote kind, exactly as instrument_residual does:
       // a standalone FX forward is the log-basis row (never banded -- the templated residual applies the log
       // map first); everything else takes the bid/offer band when one is set (r = w(q)·(q − market), a per-
-      // row scalar post-transform, so the row stays on the W-cache path). row_maps() asks instruments_.
+      // row scalar post-transform, so the row stays on the W-cache path). row_maps() reads the RowMeta.
       band_lo_[row] = ins.band_lower;
       band_up_[row] = ins.band_upper;
       band_dc_[row] = ins.band_decay;
@@ -905,10 +912,16 @@ class CompiledBundleResidual {
   }
 
   int n_gen_;
-  // THE FLAT SOURCE, kept beside the compiled arrays (2026-09-22): whatever the engine needs to know about an
-  // instrument that is not a hot-path number (its quote kind, its FX tenor, what it reads) it asks the
-  // instrument, never re-derives from what it packed. The router hands in a sub-problem, so this is a copy.
-  std::vector<Instrument> instruments_;
+  // WHAT THE ENGINE KEEPS OF A ROW beside its compiled arrays (2026-09-22, slimmed 2026-11-01): whatever it needs to
+  // know about an instrument that is not a hot-path number -- its quote kind, its FX tenor, its penalty shape -- read
+  // off the instrument ONCE at registration (never re-derived from what it packed), not a copy of the instrument.
+  struct RowMeta {
+    QuoteKind quote;
+    double fx_time;
+    std::optional<PenaltyMap> penalty_map;  // the row's general map, if it carries one
+    PenaltyMap penalty;                     // Instrument::penalty() at registration (the dead-row capacity)
+  };
+  std::vector<RowMeta> rows_;
   pricing::CompiledCurveSet cs_;
   // The ONE generic block (design §3): every float leg of every quotient term in ONE float batch (signed, mapped
   // back to its term by leg_q_/leg_sign_), the fixed annuities, and the rate batch for the futures.
@@ -923,7 +936,7 @@ class CompiledBundleResidual {
   std::vector<Term> terms_;
   std::vector<int> qterm_, rterm_;
   std::vector<FxRatio> fx_;  // FxRatio terms' DF indices, by Term::idx
-  // The per-row residual map: a log row (a standalone FX forward -- asked of instruments_, never banded) or a
+  // The per-row residual map: a log row (a standalone FX forward -- its RowMeta says so, never banded) or a
   // band (upper > lower, the mutable quote state below). The RowMap list is DERIVED from these (rebuilt lazily
   // after a scalar set_quote; the vector was reserved to n_gen_ in the ctor, so a rebuild never allocates).
   // Empty for a plain bundle, so the fast path is untouched when no row is mapped.
@@ -938,7 +951,7 @@ class CompiledBundleResidual {
       gen_maps_.clear();
       map_pos_.assign(static_cast<std::size_t>(n_gen_), -1);
       for (int row = 0; row < n_gen_; ++row) {
-        const Instrument& ins = instruments_[static_cast<std::size_t>(row)];
+        const RowMeta& ins = rows_[static_cast<std::size_t>(row)];
         if (ins.quote == QuoteKind::FxForward) {
           maps_.push_back({row, true, ins.fx_time, PenaltyMap::TwoEdge{}});
         } else if (ins.penalty_map) {
