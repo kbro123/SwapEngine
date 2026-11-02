@@ -36,6 +36,7 @@
 // The RV request/result types (derive/bond_rv.hpp, derive/asset_swap.hpp) are forward-declared: including those
 // headers here would pull portfolio/ and the LM into every bundle_api.hpp translation unit.
 namespace swaps::derive {
+struct ExposureSet;         // derive/exposure.hpp
 struct BondUniverseRequest;
 struct BondUniverseResult;
 struct GovvieFitRequest;
@@ -97,6 +98,11 @@ boost::json::value instrument_to_json(const cal::Instrument& ins);
 //                  "effective", "maturity", "csa": {"collateral_currency"} | "discount_index"} ] }
 //   The discount index is trade::discount_index_for(csa, discount_index): the CSA decides when present.
 swaps::portfolio::MultiCurveBook book_from_json(const boost::json::value& v);
+// The `exposure` verb's netting sets: {"value_date", "curve_roles", "netting_sets": [{id, csa: {collateral_currency},
+// trades: [typed trades as above]}]} -> one (id, book) per set, every trade of a set discounting on the set's CSA
+// role (the collateral currency's OIS, resolved through "curve_roles": trade::NettingSet::to_book). A trade's own
+// fields follow the typed-trade rules (a missing notional / pay / fixed_rate / effective / maturity throws).
+std::vector<swaps::derive::ExposureSet> netting_sets_from_json(const boost::json::object& o);
 
 // ---- street bond analytics (the `bonds` verb) ---------------------------------------------------------
 // {value_date?, bonds:[{convention, settle, maturity, coupon, issue | dated + first_coupon, freq?, clean? | yield?}]}

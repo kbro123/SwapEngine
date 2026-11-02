@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,6 +27,8 @@
 #include "swaps/derive/var.hpp"  // VarRequest, VarResult
 #include "swaps/calibration/pnl_explain.hpp"  // PnlRequest, PnlReport
 #include "swaps/trade/csa.hpp"    // discount_index_for
+#include "swaps/derive/exposure.hpp"
+#include "swaps/trade/book.hpp"
 #include "swaps/trade/trade.hpp"  // Trade::vanilla_swap / to_position
 
 namespace swaps::api {
@@ -567,6 +570,82 @@ json::value bundle_to_json(const cal::BundleProblem& p) {
   return o;
 }
 
+// One typed trade (the rules in the header), its curve roles resolved through `role_of`; `forced_discount_role`
+// (a netting set's CSA role) replaces the trade's own csa / discount_index when given.
+namespace {
+swaps::trade::Trade typed_trade_from_json(const json::object& to,
+                                          const std::function<int(const std::string&, const char*)>& role_of,
+                                          std::optional<int> forced_discount_role) {
+  const auto term = [&](const char* k) -> const json::value& {
+    return need(to, k, std::string("book: every typed trade needs '") + k + "'");
+  };
+  const std::string index = str(term("index"));
+  if (index.empty()) throw std::invalid_argument("book: every typed trade needs an 'index'");
+  std::string id, currency;
+  into(to, "id", id);
+  into(to, "currency", currency);
+  int disc_role = 0;
+  if (forced_discount_role) {
+    disc_role = *forced_discount_role;
+  } else {
+    std::optional<swaps::trade::CSA> csa;
+    if (to.contains("csa")) {
+      std::string ccy;
+      into(to.at("csa").as_object(), "collateral_currency", ccy);
+      csa = swaps::trade::CSA::cash(ccy);
+    }
+    std::string explicit_discount;
+    into(to, "discount_index", explicit_discount);
+    disc_role = role_of(swaps::trade::discount_index_for(csa, explicit_discount), "discount index");
+  }
+  return swaps::trade::Trade::vanilla_swap(
+      id, term("notional").to_number<double>(), pay_from_str(str(term("pay"))),
+      term("fixed_rate").to_number<double>(), currency, index,
+      swaps::build::Date::from_iso(str(term("effective"))), swaps::build::Date::from_iso(str(term("maturity"))),
+      role_of(index, "trade index"), disc_role);
+}
+std::function<int(const std::string&, const char*)> role_resolver(const json::object& o, const char* who) {
+  std::map<std::string, int> roles;
+  if (o.contains("curve_roles"))
+    for (const auto& kv : o.at("curve_roles").as_object())
+      roles[std::string(kv.key())] = static_cast<int>(kv.value().as_int64());
+  return [roles, who](const std::string& id, const char* what) -> int {
+    const auto it = roles.find(id);
+    if (it == roles.end())
+      throw std::invalid_argument(std::string(who) + ": curve_roles has no entry for " + what + " '" + id + "'");
+    return it->second;
+  };
+}
+}  // namespace
+
+std::vector<der::ExposureSet> netting_sets_from_json(const json::object& o) {
+  std::vector<der::ExposureSet> out;
+  if (!o.contains("netting_sets") || !o.at("netting_sets").is_array()) return out;
+  const json::array& sarr = o.at("netting_sets").as_array();
+  if (sarr.empty()) return out;
+  const swaps::build::Date vd = swaps::build::Date::from_iso(
+      str(need(o, "value_date", "exposure: netting_sets require a 'value_date' (ISO)")));
+  const auto role_of = role_resolver(o, "exposure");
+  for (const auto& se : sarr) {
+    const auto& so = se.as_object();
+    if (!so.contains("csa") || !so.at("csa").is_object())
+      throw std::invalid_argument("exposure: every netting set needs a 'csa'");
+    std::string ccy;
+    into(so.at("csa").as_object(), "collateral_currency", ccy);
+    const swaps::trade::CSA csa = swaps::trade::CSA::cash(ccy);
+    const std::string disc_id = csa.discount_index_id();
+    if (disc_id.empty()) throw std::invalid_argument("exposure: netting-set CSA has an unknown collateral currency");
+    const int csa_role = role_of(disc_id, "discount index");
+    std::string id;
+    into(so, "id", id);
+    swaps::trade::NettingSet ns(id, csa);
+    if (so.contains("trades") && so.at("trades").is_array())
+      for (const auto& te : so.at("trades").as_array()) ns.add(typed_trade_from_json(te.as_object(), role_of, csa_role));
+    out.push_back({ns.id(), ns.to_book(vd, csa_role)});  // THE CSA DECIDES every trade's discounting
+  }
+  return out;
+}
+
 pf::MultiCurveBook book_from_json(const json::value& v) {
   pf::MultiCurveBook book;
   const auto& o = v.as_object();
@@ -579,42 +658,9 @@ pf::MultiCurveBook book_from_json(const json::value& v) {
   if (o.contains("trades")) {
     const swaps::build::Date vd = swaps::build::Date::from_iso(
         str(need(o, "value_date", "book: typed 'trades' require a 'value_date' (ISO)")));
-    std::map<std::string, int> roles;
-    if (o.contains("curve_roles"))
-      for (const auto& kv : o.at("curve_roles").as_object())
-        roles[std::string(kv.key())] = static_cast<int>(kv.value().as_int64());
-    const auto role_of = [&](const std::string& id, const char* what) -> int {
-      const auto it = roles.find(id);
-      if (it == roles.end())
-        throw std::invalid_argument(std::string("book: curve_roles has no entry for ") + what + " '" +
-                                    id + "'");
-      return it->second;
-    };
-    for (const auto& e : o.at("trades").as_array()) {
-      const auto& to = e.as_object();
-      const auto term = [&](const char* k) -> const json::value& {
-        return need(to, k, std::string("book: every typed trade needs '") + k + "'");
-      };
-      const std::string index = str(term("index"));
-      if (index.empty()) throw std::invalid_argument("book: every typed trade needs an 'index'");
-      std::optional<swaps::trade::CSA> csa;
-      if (to.contains("csa")) {
-        std::string ccy;
-        into(to.at("csa").as_object(), "collateral_currency", ccy);
-        csa = swaps::trade::CSA::cash(ccy);
-      }
-      std::string explicit_discount, id, currency;
-      into(to, "discount_index", explicit_discount);
-      into(to, "id", id);
-      into(to, "currency", currency);
-      const std::string disc_id = swaps::trade::discount_index_for(csa, explicit_discount);
-      swaps::trade::Trade t = swaps::trade::Trade::vanilla_swap(
-          id, term("notional").to_number<double>(), pay_from_str(str(term("pay"))),
-          term("fixed_rate").to_number<double>(), currency, index,
-          swaps::build::Date::from_iso(str(term("effective"))), swaps::build::Date::from_iso(str(term("maturity"))),
-          role_of(index, "trade index"), role_of(disc_id, "discount index"));
-      book.positions.push_back(t.to_position(vd));  // per-trade conventions from the trade's own index
-    }
+    const auto role_of = role_resolver(o, "book");
+    for (const auto& e : o.at("trades").as_array())
+      book.positions.push_back(typed_trade_from_json(e.as_object(), role_of, std::nullopt).to_position(vd));  // per-trade conventions from the trade's own index
   }
 
   if (!o.contains("positions")) return book;

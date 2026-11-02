@@ -61,6 +61,7 @@ graph TD
     derive --> curve
     derive --> pricing
     derive --> portfolio
+    derive --> xva
     api --> curve
     api --> pricing
 ```
