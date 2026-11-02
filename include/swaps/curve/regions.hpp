@@ -181,63 +181,71 @@ class Linear {
   std::vector<Scalar> y_, I_;
 };
 
-// Natural cubic spline on the forwards (C2 internally; C0 at the near join via the pinned leading
-// value; natural zero-curvature at the far end). This reproduces the current back-end interpolation.
+namespace cubic_detail {
+// Thomas algorithm for a tridiagonal system (double bands, Scalar rhs/solution -> AAD flows via rhs). THE one
+// copy (2026-11-01, review item 2.3): NaturalCubic, MonotoneCubic and Tension each carried this loop inline;
+// the arithmetic and its order are unchanged.
 template <class Scalar>
-class NaturalCubic {
- public:
-  explicit NaturalCubic(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "NaturalCubic"); }
-  int n_values() const { return static_cast<int>(s_.size()); }
-  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
-  double t_end() const { return s_.back(); }
-  static constexpr bool is_linear_map = true;
+inline void thomas_solve(std::vector<double>& lo, std::vector<double>& di, std::vector<double>& up,
+                         std::vector<Scalar>& r, std::vector<Scalar>& out) {
+  const int N = static_cast<int>(di.size());
+  for (int i = 1; i < N; ++i) {
+    const double w = lo[i] / di[i - 1];
+    di[i] -= w * up[i - 1];
+    r[i] = r[i] - w * r[i - 1];
+  }
+  out.resize(N);
+  out[N - 1] = r[N - 1] / di[N - 1];
+  for (int i = N - 1; i-- > 0;) out[i] = (r[i] - up[i] * out[i + 1]) / di[i];
+}
+}  // namespace cubic_detail
 
+// THE piecewise-cubic segment store (2026-11-01, review item 2.3): the nodes (xs_, ys_), the per-segment cubic
+// f(u) = a + b u + c u^2 + d u^3 (u = t - xs_[i]), the cumulative integral at the nodes and the evaluation /
+// derivative / integral / out() of that form. NaturalCubic, Hermite and MonotoneCubic are this store with
+// different TANGENTS (moments, Bessel tangents, the Hyman-filtered spline tangents): they used to carry three
+// byte-identical copies of everything below. A policy places its nodes (place_nodes), computes its tangents,
+// sets the coefficients (set_from_tangents / set_from_moments), accumulates the integral and names its end slope.
+template <class Scalar>
+struct CubicSegments {
+  // The nodes: the region's own knots `s` (LEADING: flat-extrapolate the first value backwards, mirroring the far
+  // end -- no phantom (0,0), no ramp from zero) or the pinned incoming boundary followed by the knots (FOLLOWING:
+  // the C0 join). Returns N, the node count.
   template <class Vec>
-  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
-    // LEADING: spline the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end); no
-    // phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 continuity (as before).
+  int place_nodes(const std::vector<double>& s, const Vec& x, int off, int n, const Boundary<Scalar>& in,
+                  const char* what) {
     const bool lead = !in.has_predecessor;
     const int N = lead ? n : n + 1;
-    if (N < 2) throw std::invalid_argument("NaturalCubic: needs >= 2 nodes (a LEADING region needs >= 2 knots)");  // PATCH
+    if (N < 2) throw std::invalid_argument(std::string(what) + ": needs >= 2 nodes (a LEADING region needs >= 2 knots)");
     xs_.resize(N);
     ys_.resize(N);
     if (lead) {
-      for (int i = 0; i < n; ++i) { xs_[i] = s_[i]; ys_[i] = x[off + i]; }
+      for (int i = 0; i < n; ++i) { xs_[i] = s[i]; ys_[i] = x[off + i]; }
     } else {
       xs_[0] = in.time;
       ys_[0] = in.value;  // C0: leading value pinned to the incoming boundary
-      for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
+      for (int i = 0; i < n; ++i) { xs_[i + 1] = s[i]; ys_[i + 1] = x[off + i]; }
     }
-
-    const int nseg = N - 1;
-    std::vector<double> h(nseg);
-    for (int i = 0; i < nseg; ++i) h[i] = xs_[i + 1] - xs_[i];
-
-    // natural: M[0]=M[N-1]=0; Thomas on the interior. WIDTH-PRESERVING zero (ys_[0]*0.0), not Scalar(0.0):
-    // for a Dual, Scalar(0.0) has an EMPTY derivative vector and Eigen's expr(empty)+expr(M) is UB (it drops
-    // the derivatives silently for N==2 and asserts in a debug build for N>=3).
-    std::vector<Scalar> M(N, ys_[0] * 0.0);
-    if (nseg >= 2) {
-      const int k = nseg - 1;
-      std::vector<double> lower(k), diag(k), upper(k);
-      std::vector<Scalar> rhs(k);
-      for (int i = 1; i <= k; ++i) {
-        lower[i - 1] = h[i - 1];
-        diag[i - 1] = 2.0 * (h[i - 1] + h[i]);
-        upper[i - 1] = h[i];
-        rhs[i - 1] = 6.0 * ((ys_[i + 1] - ys_[i]) / h[i] - (ys_[i] - ys_[i - 1]) / h[i - 1]);
-      }
-      for (int i = 1; i < k; ++i) {
-        const double w = lower[i] / diag[i - 1];
-        diag[i] -= w * upper[i - 1];
-        rhs[i] = rhs[i] - w * rhs[i - 1];
-      }
-      std::vector<Scalar> mi(k);
-      mi[k - 1] = rhs[k - 1] / diag[k - 1];
-      for (int i = k - 1; i-- > 0;) mi[i] = (rhs[i] - upper[i] * mi[i + 1]) / diag[i];
-      for (int i = 1; i <= k; ++i) M[i] = mi[i - 1];
+    return N;
+  }
+  // Coefficients from node TANGENTS m (Hermite form), with segment lengths h and secants sec.
+  void set_from_tangents(const std::vector<double>& h, const std::vector<Scalar>& sec, const std::vector<Scalar>& m) {
+    const int nseg = static_cast<int>(h.size());
+    a_.resize(nseg);
+    b_.resize(nseg);
+    c_.resize(nseg);
+    d_.resize(nseg);
+    for (int i = 0; i < nseg; ++i) {
+      const double hi = h[i];
+      a_[i] = ys_[i];
+      b_[i] = m[i];
+      c_[i] = 3.0 * sec[i] / hi - (2.0 * m[i] + m[i + 1]) / hi;
+      d_[i] = (m[i] + m[i + 1]) / (hi * hi) - 2.0 * sec[i] / (hi * hi);
     }
-
+  }
+  // Coefficients from node SECOND derivatives M (the natural spline's moments), with segment lengths h.
+  void set_from_moments(const std::vector<double>& h, const std::vector<Scalar>& M) {
+    const int nseg = static_cast<int>(h.size());
     a_.resize(nseg);
     b_.resize(nseg);
     c_.resize(nseg);
@@ -248,14 +256,16 @@ class NaturalCubic {
       c_[i] = M[i] / 2.0;
       d_[i] = (M[i + 1] - M[i]) / (6.0 * h[i]);
     }
-    Is_.resize(N);
-    Is_[0] = lead ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
+  }
+  // The cumulative integral at every node (a leading region's flat pre-segment at v1 first).
+  void accumulate(const std::vector<double>& h, const Boundary<Scalar>& in) {
+    const int nseg = static_cast<int>(h.size());
+    Is_.resize(nseg + 1);
+    Is_[0] = !in.has_predecessor ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
     for (int i = 0; i < nseg; ++i) {
       const double u = h[i];
       Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
     }
-    const double hl = h[nseg - 1];
-    end_slope_ = b_[nseg - 1] + hl * (2.0 * c_[nseg - 1] + 3.0 * d_[nseg - 1] * hl);
   }
 
   Scalar forward(double t) const {
@@ -287,14 +297,67 @@ class NaturalCubic {
   }
   Boundary<Scalar> out() const { return {xs_.back(), ys_.back(), end_slope_, Is_.back()}; }
 
- private:
   int seg(double t) const {
     auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
     return static_cast<int>(it - xs_.begin()) - 1;
   }
-  std::vector<double> s_, xs_;
+  std::vector<double> xs_;
   std::vector<Scalar> ys_, a_, b_, c_, d_, Is_;
   Scalar end_slope_{0.0};
+};
+
+// Natural cubic spline on the forwards (C2 internally; C0 at the near join via the pinned leading
+// value; natural zero-curvature at the far end). This reproduces the current back-end interpolation.
+template <class Scalar>
+class NaturalCubic : public CubicSegments<Scalar> {
+ public:
+  explicit NaturalCubic(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "NaturalCubic"); }
+  int n_values() const { return static_cast<int>(s_.size()); }
+  const std::vector<double>& knots() const { return s_; }  // the region's own knots (the tangent twin builds from them)
+  double t_end() const { return s_.back(); }
+  static constexpr bool is_linear_map = true;
+
+  template <class Vec>
+  void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
+    // LEADING: spline the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end); no
+    // phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 continuity (as before).
+    const int N = this->place_nodes(s_, x, off, n, in, "NaturalCubic");
+    const int nseg = N - 1;
+    std::vector<double> h(nseg);
+    for (int i = 0; i < nseg; ++i) h[i] = xs_[i + 1] - xs_[i];
+
+    // natural: M[0]=M[N-1]=0; Thomas on the interior. WIDTH-PRESERVING zero (ys_[0]*0.0), not Scalar(0.0):
+    // for a Dual, Scalar(0.0) has an EMPTY derivative vector and Eigen's expr(empty)+expr(M) is UB (it drops
+    // the derivatives silently for N==2 and asserts in a debug build for N>=3).
+    std::vector<Scalar> M(N, ys_[0] * 0.0);
+    if (nseg >= 2) {
+      const int k = nseg - 1;
+      std::vector<double> lower(k), diag(k), upper(k);
+      std::vector<Scalar> rhs(k);
+      for (int i = 1; i <= k; ++i) {
+        lower[i - 1] = h[i - 1];
+        diag[i - 1] = 2.0 * (h[i - 1] + h[i]);
+        upper[i - 1] = h[i];
+        rhs[i - 1] = 6.0 * ((ys_[i + 1] - ys_[i]) / h[i] - (ys_[i] - ys_[i - 1]) / h[i - 1]);
+      }
+      std::vector<Scalar> mi;
+      cubic_detail::thomas_solve(lower, diag, upper, rhs, mi);
+      for (int i = 1; i <= k; ++i) M[i] = mi[i - 1];
+    }
+    this->set_from_moments(h, M);
+    this->accumulate(h, in);
+    const double hl = h[nseg - 1];
+    end_slope_ = b_[nseg - 1] + hl * (2.0 * c_[nseg - 1] + 3.0 * d_[nseg - 1] * hl);
+  }
+
+ private:
+  using CubicSegments<Scalar>::xs_;
+  using CubicSegments<Scalar>::ys_;
+  using CubicSegments<Scalar>::b_;
+  using CubicSegments<Scalar>::c_;
+  using CubicSegments<Scalar>::d_;
+  using CubicSegments<Scalar>::end_slope_;
+  std::vector<double> s_;
 };
 
 // Local C1 cubic (Hermite) with Bessel/parabolic tangents. Each node's tangent is a fixed linear
@@ -303,7 +366,7 @@ class NaturalCubic {
 // preserved. Contrast NaturalCubic, which is C2 but GLOBAL (dense W). C0 at the near join (pinned
 // leading value); one-sided parabolic tangents at the ends.
 template <class Scalar>
-class Hermite {
+class Hermite : public CubicSegments<Scalar> {
  public:
   explicit Hermite(std::vector<double> knots) : s_(std::move(knots)) { require_increasing_knots(s_, "Hermite"); }
   int n_values() const { return static_cast<int>(s_.size()); }
@@ -315,18 +378,7 @@ class Hermite {
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
     // LEADING: Hermite over the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end);
     // no phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join point for C0 (unchanged).
-    const bool lead = !in.has_predecessor;
-    const int N = lead ? n : n + 1;
-    if (N < 2) throw std::invalid_argument("Hermite: needs >= 2 nodes (a LEADING region needs >= 2 knots)");  // PATCH
-    xs_.resize(N);
-    ys_.resize(N);
-    if (lead) {
-      for (int i = 0; i < n; ++i) { xs_[i] = s_[i]; ys_[i] = x[off + i]; }
-    } else {
-      xs_[0] = in.time;
-      ys_[0] = in.value;
-      for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
-    }
+    const int N = this->place_nodes(s_, x, off, n, in, "Hermite");
     const int nseg = N - 1;
     // Scratch MEMBERS, sized once (2026-10-31): these were three locals allocated per build -- the E3 finding B3 that
     // made every hybrid tick pay three allocations; the tangent tier rebuilds a curve per state, so it had to go.
@@ -351,64 +403,17 @@ class Hermite {
       m[0] = sec[0];
       m[1] = sec[0];
     }
-
-    a_.resize(nseg);
-    b_.resize(nseg);
-    c_.resize(nseg);
-    d_.resize(nseg);
-    for (int i = 0; i < nseg; ++i) {
-      const double hi = h[i];
-      a_[i] = ys_[i];
-      b_[i] = m[i];
-      c_[i] = 3.0 * sec[i] / hi - (2.0 * m[i] + m[i + 1]) / hi;
-      d_[i] = (m[i] + m[i + 1]) / (hi * hi) - 2.0 * sec[i] / (hi * hi);
-    }
-    Is_.resize(N);
-    Is_[0] = lead ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
-    for (int i = 0; i < nseg; ++i) {
-      const double u = h[i];
-      Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
-    }
+    this->set_from_tangents(h, sec, m);
+    this->accumulate(h, in);
     end_slope_ = m[N - 1];
   }
 
-  Scalar forward(double t) const {
-    if (t <= xs_.front()) return ys_.front();  // flat pre-segment (leading) / clamp start (following)
-    if (t >= xs_.back()) return ys_.back();
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
-  }
-  Scalar forward_d1(double t) const {  // exact derivatives of the piece cubic (flat outside the region)
-    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return b_[i] + u * (2.0 * c_[i] + 3.0 * u * d_[i]);
-  }
-  Scalar forward_d2(double t) const {
-    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return 2.0 * c_[i] + 6.0 * u * d_[i];
-  }
-  std::vector<double> pieces() const { return xs_; }  // the polynomial pieces break at the nodes (incl. the join)
-  Scalar integral(double t) const {
-    if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
-    if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
-  }
-  Boundary<Scalar> out() const { return {xs_.back(), ys_.back(), end_slope_, Is_.back()}; }
-
  private:
-  int seg(double t) const {
-    auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
-    return static_cast<int>(it - xs_.begin()) - 1;
-  }
-  std::vector<double> s_, xs_, h_;
-  std::vector<Scalar> ys_, a_, b_, c_, d_, Is_, sec_, m_;  // h_/sec_/m_: build scratch, sized once (2026-10-31)
-  Scalar end_slope_{0.0};
+  using CubicSegments<Scalar>::xs_;
+  using CubicSegments<Scalar>::ys_;
+  using CubicSegments<Scalar>::end_slope_;
+  std::vector<double> s_, h_;
+  std::vector<Scalar> sec_, m_;  // h_/sec_/m_: build scratch, sized once (2026-10-31)
 };
 
 // Hyman-filtered MONOTONE cubic on the forward-at-knot values -- the first NON-LINEAR region policy
@@ -427,7 +432,7 @@ class Hermite {
 // NaturalCubic/Hermite). The per-segment cubic build + analytic quartic integral are identical to Hermite;
 // only the tangents differ (spline + filter, vs Hermite's Bessel tangents).
 template <class Scalar>
-class MonotoneCubic {
+class MonotoneCubic : public CubicSegments<Scalar> {
  public:
   explicit MonotoneCubic(std::vector<double> knots) : s_(std::move(knots)) {
     require_increasing_knots(s_, "MonotoneCubic");
@@ -441,18 +446,7 @@ class MonotoneCubic {
   void build(const Vec& x, int off, int n, const Boundary<Scalar>& in) {
     // LEADING: filter+spline the n actual knots, flat-extrapolate v1=x[off] for t<t1 (mirrors the far end);
     // no phantom (0,0). FOLLOWING: prepend the pinned (in.time,in.value) join node for C0 (unchanged).
-    const bool lead = !in.has_predecessor;
-    const int N = lead ? n : n + 1;
-    if (N < 2) throw std::invalid_argument("MonotoneCubic: needs >= 2 nodes (>=1 back knot when following)");
-    xs_.resize(N);
-    ys_.resize(N);
-    if (lead) {
-      for (int i = 0; i < n; ++i) { xs_[i] = s_[i]; ys_[i] = x[off + i]; }
-    } else {
-      xs_[0] = in.time;
-      ys_[0] = in.value;
-      for (int i = 0; i < n; ++i) { xs_[i + 1] = s_[i]; ys_[i + 1] = x[off + i]; }
-    }
+    const int N = this->place_nodes(s_, x, off, n, in, "MonotoneCubic");
     const int nseg = N - 1;
     std::vector<double> h(nseg);
     std::vector<Scalar> S(nseg);  // secant slopes
@@ -477,8 +471,8 @@ class MonotoneCubic {
       rhs[i] = 3.0 * (h[i] * S[i - 1] + h[i - 1] * S[i]);
     }
     lower[N - 1] = 1.0; diag[N - 1] = 2.0; rhs[N - 1] = 3.0 * S[nseg - 1];
-    std::vector<Scalar> m(N);
-    thomas_solve(lower, diag, upper, rhs, m);
+    std::vector<Scalar> m;
+    cubic_detail::thomas_solve(lower, diag, upper, rhs, m);
 
     // EXPERIMENT: keep the filter's INPUTS (linear in x) so a caller can precompute z = G·x once and read the
     // branch pattern without rebuilding the curve (pattern_from_prefilter).
@@ -495,71 +489,13 @@ class MonotoneCubic {
     if (m_override_)
       for (int j = 0; j < N; ++j) m[j] = m_override_[j];
 
-    // Per-segment cubic f(u) = a + b u + c u^2 + d u^3, u = t - xs_[i]  (identical form to Hermite).
-    a_.resize(nseg); b_.resize(nseg); c_.resize(nseg); d_.resize(nseg);
-    for (int i = 0; i < nseg; ++i) {
-      const double hi = h[i];
-      a_[i] = ys_[i];
-      b_[i] = m[i];
-      c_[i] = 3.0 * S[i] / hi - (2.0 * m[i] + m[i + 1]) / hi;
-      d_[i] = (m[i] + m[i + 1]) / (hi * hi) - 2.0 * S[i] / (hi * hi);
-    }
-    Is_.resize(N);
-    Is_[0] = lead ? (in.integral + ys_[0] * (xs_[0] - in.time)) : in.integral;  // leading: flat pre-seg at v1
-    for (int i = 0; i < nseg; ++i) {
-      const double u = h[i];
-      Is_[i + 1] = Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
-    }
+    // Per-segment cubic f(u) = a + b u + c u^2 + d u^3, u = t - xs_[i]  (the one CubicSegments form).
+    this->set_from_tangents(h, S, m);
+    this->accumulate(h, in);
     end_slope_ = m[N - 1];
   }
 
-  Scalar forward(double t) const {
-    if (t <= xs_.front()) return ys_.front();  // flat pre-segment (leading) / clamp start (following)
-    if (t >= xs_.back()) return ys_.back();
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return a_[i] + u * (b_[i] + u * (c_[i] + u * d_[i]));
-  }
-  Scalar forward_d1(double t) const {  // exact derivatives of the piece cubic (flat outside the region)
-    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return b_[i] + u * (2.0 * c_[i] + 3.0 * u * d_[i]);
-  }
-  Scalar forward_d2(double t) const {
-    if (t <= xs_.front() || t >= xs_.back()) return ys_.front() * 0.0;
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return 2.0 * c_[i] + 6.0 * u * d_[i];
-  }
-  std::vector<double> pieces() const { return xs_; }  // the polynomial pieces break at the nodes (incl. the join)
-  Scalar integral(double t) const {
-    if (t <= xs_.front()) return Is_.front() - ys_.front() * (xs_.front() - t);  // flat pre-segment at v1
-    if (t >= xs_.back()) return Is_.back() + ys_.back() * (t - xs_.back());
-    const int i = seg(t);
-    const double u = t - xs_[i];
-    return Is_[i] + u * (a_[i] + u * (b_[i] / 2.0 + u * (c_[i] / 3.0 + u * d_[i] / 4.0)));
-  }
-  Boundary<Scalar> out() const { return {xs_.back(), ys_.back(), end_slope_, Is_.back()}; }
-
  private:
-  int seg(double t) const {
-    auto it = std::upper_bound(xs_.begin(), xs_.end(), t);
-    return static_cast<int>(it - xs_.begin()) - 1;
-  }
-  // Thomas algorithm for a tridiagonal system (double bands, Scalar rhs/solution -> AAD flows via rhs).
-  static void thomas_solve(std::vector<double>& lo, std::vector<double>& di, std::vector<double>& up,
-                           std::vector<Scalar>& r, std::vector<Scalar>& out) {
-    const int N = static_cast<int>(di.size());
-    for (int i = 1; i < N; ++i) {
-      const double w = lo[i] / di[i - 1];
-      di[i] -= w * up[i - 1];
-      r[i] = r[i] - w * r[i - 1];
-    }
-    out.resize(N);
-    out[N - 1] = r[N - 1] / di[N - 1];
-    for (int i = N - 1; i-- > 0;) out[i] = (r[i] - up[i] * out[i + 1]) / di[i];
-  }
   // min/max on the SCALAR type via comparison (Eigen's AutoDiffScalar min/max overloads are ambiguous for
   // two duals; these pick a branch by value and return it by value, so the chosen dual's derivatives ride
   // along). abs() is the unary Eigen/std global (unambiguous), pulled in per-call with `using std::abs`.
@@ -646,7 +582,7 @@ class MonotoneCubic {
   // Requires one prior build (h_ is the node spacing, fixed by the knots and the join time).
   // EXPERIMENT (analytic re-take).
   void set_tangent_override(const Scalar* m) { m_override_ = m; }  // nullptr restores the filter
-  int n_nodes() const { return static_cast<int>(xs_.size()); }       // tangents N (valid after a build)
+  int n_nodes() const { return static_cast<int>(this->xs_.size()); }  // tangents N (valid after a build)
   // DECODE a node's canonical code into its formula over the filter inputs z = [S (N-1); m_raw (N)]:
   // m_j = phi · z, written into phi[0 .. 2N-2]. The exact inverse of the encoding in hyman_filter:
   //   kind 0 -> 0;  kind 1 -> m_raw_j;  kind 2/3 -> sign(m) * factor * sign(cand) * cand,
@@ -709,9 +645,10 @@ class MonotoneCubic {
   std::vector<double> h_;
   std::vector<Scalar> pre_;
   mutable std::vector<double> scratch_S_, scratch_m_;
-  std::vector<double> s_, xs_;
-  std::vector<Scalar> ys_, a_, b_, c_, d_, Is_;
-  Scalar end_slope_{0.0};
+  using CubicSegments<Scalar>::xs_;
+  using CubicSegments<Scalar>::ys_;
+  using CubicSegments<Scalar>::end_slope_;
+  std::vector<double> s_;
 };
 
 // Hagan-West MONOTONE CONVEX (Interpolation Methods for Curve Construction, 2006; Methods for Constructing a
@@ -1574,15 +1511,8 @@ class Tension {
         upper[i - 1] = tension_detail::p_coef(sigma_, h_[i]);
         rhs[i - 1] = (ys_[i + 1] - ys_[i]) / h_[i] - (ys_[i] - ys_[i - 1]) / h_[i - 1];
       }
-      // Thomas (double bands, Scalar rhs -> AAD flows through the values).
-      for (int i = 1; i < k; ++i) {
-        const double w = lower[i] / diag[i - 1];
-        diag[i] -= w * upper[i - 1];
-        rhs[i] = rhs[i] - w * rhs[i - 1];
-      }
-      std::vector<Scalar> zi(k);
-      zi[k - 1] = rhs[k - 1] / diag[k - 1];
-      for (int i = k - 1; i-- > 0;) zi[i] = (rhs[i] - upper[i] * zi[i + 1]) / diag[i];
+      std::vector<Scalar> zi;
+      cubic_detail::thomas_solve(lower, diag, upper, rhs, zi);  // double bands, Scalar rhs -> AAD flows through the values
       for (int i = 1; i <= k; ++i) z_[i] = zi[i - 1];
     }
 

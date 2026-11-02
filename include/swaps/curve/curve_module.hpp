@@ -21,6 +21,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <Eigen/Core>
@@ -135,13 +136,22 @@ struct LinearTangentTwin {
   }
 };
 
+// A policy is constructed from its knots, or from (knots, sigma) when it takes a tension parameter (Tension; the
+// separate TensionHolder that existed for that one argument was folded in on 2026-11-01, review item 2.3).
+template <class P>
+P make_policy(std::vector<double> knots, double sigma) {
+  if constexpr (std::is_constructible_v<P, std::vector<double>, double>) return P(std::move(knots), sigma);
+  else return P(std::move(knots));
+}
+
 template <class S, template <class> class Policy>
 struct RegionHolder final : RegionIface<S> {
   Policy<S> p;
+  double sigma_;
   mutable LinearTangentTwin<Policy<ad::Dual>> twin_;  // built from p.knots() on the first tangent request
   double in_time_ = 0.0;
   bool has_pred_ = false;
-  explicit RegionHolder(std::vector<double> knots) : p(std::move(knots)) {}
+  explicit RegionHolder(std::vector<double> knots, double sigma = 0.0) : p(make_policy<Policy<S>>(std::move(knots), sigma)), sigma_(sigma) {}
   int n_values() const override { return p.n_values(); }
   double t_end() const override { return p.t_end(); }
   bool linear() const override { return Policy<S>::is_linear_map; }
@@ -158,14 +168,14 @@ struct RegionHolder final : RegionIface<S> {
   void integral_tangent(double t, double* own, double& d_inv) const override {
     if constexpr (requires { p.integral_tangent(t, own, d_inv); }) p.integral_tangent(t, own, d_inv);
     else if constexpr (Policy<S>::is_linear_map) {
-      twin_.ensure([this] { return std::make_unique<Policy<ad::Dual>>(p.knots()); }, p.n_values(), in_time_, has_pred_);
+      twin_.ensure([this] { return std::make_unique<Policy<ad::Dual>>(make_policy<Policy<ad::Dual>>(p.knots(), sigma_)); }, p.n_values(), in_time_, has_pred_);
       twin_.integral(t, own, d_inv);
     } else throw std::logic_error("region: no tangent");
   }
   void out_value_tangent(double* own, double& d_inv) const override {
     if constexpr (requires { p.out_value_tangent(own, d_inv); }) p.out_value_tangent(own, d_inv);
     else if constexpr (Policy<S>::is_linear_map) {
-      twin_.ensure([this] { return std::make_unique<Policy<ad::Dual>>(p.knots()); }, p.n_values(), in_time_, has_pred_);
+      twin_.ensure([this] { return std::make_unique<Policy<ad::Dual>>(make_policy<Policy<ad::Dual>>(p.knots(), sigma_)); }, p.n_values(), in_time_, has_pred_);
       twin_.out_value(own, d_inv);
     } else throw std::logic_error("region: no tangent");
   }
@@ -206,41 +216,6 @@ struct RegionHolder final : RegionIface<S> {
       out.insert(out.end(), part.begin(), part.end());
     }
   }
-};
-
-// Tension needs a second construction argument (σ), so it gets its own holder rather than the generic
-// RegionHolder (which passes only knots). Everything else about the contract is identical.
-template <class S>
-struct TensionHolder final : RegionIface<S> {
-  Tension<S> p;
-  double sigma_;
-  mutable LinearTangentTwin<Tension<ad::Dual>> twin_;
-  double in_time_ = 0.0;
-  bool has_pred_ = false;
-  TensionHolder(std::vector<double> knots, double sigma) : p(std::move(knots), sigma), sigma_(sigma) {}
-  int n_values() const override { return p.n_values(); }
-  double t_end() const override { return p.t_end(); }
-  bool linear() const override { return Tension<S>::is_linear_map; }
-  void build(const S* x, int off, const Boundary<S>& in) override {
-    in_time_ = in.time;
-    has_pred_ = in.has_predecessor;
-    p.build(x, off, p.n_values(), in);
-  }
-  bool has_tangent() const override { return true; }
-  void integral_tangent(double t, double* own, double& d_inv) const override {
-    twin_.ensure([this] { return std::make_unique<Tension<ad::Dual>>(p.knots(), sigma_); }, p.n_values(), in_time_, has_pred_);
-    twin_.integral(t, own, d_inv);
-  }
-  void out_value_tangent(double* own, double& d_inv) const override {
-    twin_.ensure([this] { return std::make_unique<Tension<ad::Dual>>(p.knots(), sigma_); }, p.n_values(), in_time_, has_pred_);
-    twin_.out_value(own, d_inv);
-  }
-  S forward(double t) const override { return p.forward(t); }
-  S integral(double t) const override { return p.integral(t); }
-  S forward_d1(double t) const override { return p.forward_d1(t); }
-  S forward_d2(double t) const override { return p.forward_d2(t); }
-  std::vector<double> pieces() const override { return p.pieces(); }
-  Boundary<S> out() const override { return p.out(); }
 };
 
 // MonotoneCubic is the one NON-LINEAR scheme here: RegionHolder<S,MonotoneCubic>::linear() returns false,
@@ -319,8 +294,8 @@ class ModularCurve {
   ModularCurve() = default;
 
   template <template <class> class Policy>
-  ModularCurve& add(std::vector<double> knots) {
-    regions_.push_back(std::make_unique<RegionHolder<S, Policy>>(std::move(knots)));
+  ModularCurve& add(std::vector<double> knots, double sigma = 0.0) {  // sigma: read by a policy that takes one (Tension)
+    regions_.push_back(std::make_unique<RegionHolder<S, Policy>>(std::move(knots), sigma));
     n_ += regions_.back()->n_values();
     return *this;
   }
@@ -333,12 +308,7 @@ class ModularCurve {
       case Scheme::MonotoneCubic: return add<MonotoneCubic>(m.knots);
       case Scheme::MonotoneConvex: return add<MonotoneConvex>(m.knots);
       case Scheme::BSpline: return add<BSpline>(m.knots);
-      case Scheme::Tension: {
-        regions_.push_back(
-            std::make_unique<TensionHolder<S>>(m.knots, m.sigma > 0.0 ? m.sigma : 1.0));
-        n_ += regions_.back()->n_values();
-        return *this;
-      }
+      case Scheme::Tension: return add<Tension>(m.knots, m.sigma > 0.0 ? m.sigma : 1.0);
     }
     return *this;
   }
