@@ -5,7 +5,7 @@
 //             cells:[{expiry, tenor, normal_vol? | sabr?{alpha,rho,nu}}],
 //             swaptions:[{expiry, tenor, strike? | moneyness_bp?, payer?, notional?}]}}
 // It calibrates the bundle (same recipe as swaption_json), resolves each CELL's underlying forward-starting
-// swap schedule (annual fixed), samples the curve's discount factors ONCE over the union of all schedule times
+// swap schedule (build::swaption_schedule, the one walk), samples the curve's discount factors ONCE over the union of all schedule times
 // to form each cell's forward swap rate + annuity, maps each SWAPTION to its (expiry, tenor) cell, then buckets
 // d(book value)/d(vol parameter) per cell via vol/vega_ladder.hpp. Reuses BundleSession + the build/ date layer
 // + the vol/ analytics; reimplements no pricing. QuantLib-free.
@@ -20,10 +20,12 @@
 #include "swaps/api/bundle_api.hpp"
 #include "swaps/api/vega.hpp"
 #include "swaps/api/json_util.hpp"
+#include "swaps/api/options.hpp"  // require_index_arg / currency_for_index (the vol verbs' shared readers)
 #include "swaps/build/calendar.hpp"
 #include "swaps/build/conventions.hpp"
 #include "swaps/build/day_count.hpp"
 #include "swaps/build/schedule.hpp"
+#include "swaps/build/swaption_schedule.hpp"  // the ONE swaption schedule walk
 #include "swaps/conventions_data.hpp"
 #include "swaps/vol/swaption.hpp"
 #include "swaps/vol/vega_ladder.hpp"
@@ -33,52 +35,6 @@ namespace swaps::api {
 namespace json = boost::json;
 namespace b = swaps::build;
 namespace v = swaps::vol;
-
-namespace {
-
-// One cell's CURVE-INDEPENDENT schedule in curve time (ACT/365F): expiry, swap start, annual fixed pay times +
-// accruals — the same walk options.cpp uses for the vol cube.
-struct CellSchedule {
-  double t_start = 0.0, t_expiry = 0.0;
-  std::vector<double> pay_time, tau;
-};
-CellSchedule cell_schedule(const std::string& expiry, const std::string& tenor, const b::Date& vd,
-                           const b::SwapConv& conv) {
-  if (expiry.empty() || tenor.empty())
-    throw std::invalid_argument("vega: each cell/swaption needs a non-empty 'expiry' and 'tenor'");
-  const b::Date expiry_date = b::resolve(expiry, vd, conv.calendar, conv.bdc, 0);
-  const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
-  const double tenor_years = conventions::period_years(tenor);
-  if (!(tenor_years > 0.0))
-    throw std::invalid_argument("vega: unrecognized or non-positive tenor '" + tenor + "' (use e.g. 2Y, 5Y, 10Y)");
-  const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
-  CellSchedule s;
-  s.t_start = b::curve_time(vd, swap_start);
-  s.t_expiry = b::curve_time(vd, expiry_date);
-  // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
-  // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
-  const b::Date und_mat = swap_start.plus_months(months);
-  for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
-    s.tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
-    s.pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
-  }
-  return s;
-}
-
-// The swap's DB index is REQUIRED (it carries the product conventions); `currency` is optional and, if given,
-// must agree with the index row (PRINCIPLES.md P2: no "USD"/"USD-SOFR" defaults).
-std::string require_index_arg(const json::object& o, const char* verb) {
-  const std::string index = js(o, "index");
-  if (index.empty()) throw std::invalid_argument(std::string(verb) + ": missing 'index' (the swap's DB index id, e.g. USD-SOFR)");
-  return index;
-}
-std::string currency_for_index(const std::string& index, const std::string& given, const char* verb) {
-  const std::string ccy = std::string(swaps::conventions::require_index(index).currency);
-  if (!given.empty() && b::upper(given) != ccy)
-    throw std::invalid_argument(std::string(verb) + ": 'currency' " + given + " does not match index " + index + " (" + ccy + ")");
-  return ccy;
-}
-}  // namespace
 
 std::string vega_json(const json::object& request) {
   const json::object& top = request;
@@ -104,13 +60,13 @@ std::string vega_json(const json::object& request) {
   if (!o.contains("cells") || !o.at("cells").is_array())
     throw std::invalid_argument("vega: missing 'cells' array");
   std::vector<v::VegaCell> cells;
-  std::vector<CellSchedule> scheds;
+  std::vector<b::SwaptionSchedule> scheds;
   std::map<std::string, int> cell_index;  // "expiry|tenor" -> cell index (for swaption -> cell mapping)
   std::vector<double> all_times;
   for (const auto& ce : o.at("cells").as_array()) {
     const json::object& c = ce.as_object();
     const std::string expiry = js(c, "expiry"), tenor = js(c, "tenor");
-    const CellSchedule s = cell_schedule(expiry, tenor, vd, conv);
+    const b::SwaptionSchedule s = b::swaption_schedule(vd, conv, expiry, tenor, "vega");
     v::VegaCell cell;
     cell.expiry_years = s.t_expiry;
     if (c.contains("sabr") && c.at("sabr").is_object()) {
@@ -142,7 +98,7 @@ std::string vega_json(const json::object& request) {
     return disc[static_cast<std::size_t>(it - all_times.begin())];
   };
   for (std::size_t ci = 0; ci < cells.size(); ++ci) {
-    const CellSchedule& s = scheds[ci];
+    const b::SwaptionSchedule& s = scheds[ci];
     std::vector<double> df_pay;
     df_pay.reserve(s.pay_time.size());
     for (double t : s.pay_time) df_pay.push_back(df_at(t));

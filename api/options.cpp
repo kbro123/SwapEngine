@@ -1,24 +1,26 @@
-// Options seam: a run_json "swaption" verb that prices European swaptions off a CALIBRATED SOFR curve.
-// Request: {"swaption": {value_date, bundle, currency?, index?, curve?, trades:[{expiry, tenor, strike,
-// payer?, normal_vol? , sabr?{alpha,rho,nu}}]}}. It calibrates the bundle, and for each trade builds the
-// underlying forward-starting swap schedule (annual fixed), samples the curve's discount factors, forms the
-// forward swap rate + annuity, and prices with the Bachelier normal model (SABR vol at the strike if given).
-// Reuses BundleSession + the build/ date-schedule layer + the vol/ analytics. QuantLib-free.
+// Options seam: the `swaption` verb, the `sabr_calibrate` verb, the vol-cube codec, BundleSession::price_vol_cube
+// and the compiled VolSurface (declared in swaps/api/options.hpp). A swaption's underlying schedule is
+// build::swaption_schedule (the one walk); the cube is a VolSurface the session holds per spec shape; the
+// `swaption` verb is one cell per trade of that cube. Reuses BundleSession + the build/ date-schedule layer + the
+// vol/ analytics. QuantLib-free.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include <boost/json.hpp>
 
 #include "swaps/api/bundle_api.hpp"
+#include "swaps/api/options.hpp"
 #include "swaps/api/json_util.hpp"
 #include "swaps/build/calendar.hpp"
 #include "swaps/build/conventions.hpp"
 #include "swaps/build/day_count.hpp"
 #include "swaps/build/schedule.hpp"
+#include "swaps/build/swaption_schedule.hpp"
 #include "swaps/conventions_data.hpp"
 #include "swaps/vol/bachelier.hpp"
 #include "swaps/vol/sabr_calibration.hpp"
@@ -40,8 +42,8 @@ double sabr_beta_of(const json::object& s) {
   return b;
 }
 
-// The swap's DB index is REQUIRED (it carries the product conventions); `currency` is optional and, if given,
-// must agree with the index row (PRINCIPLES.md P2: no "USD"/"USD-SOFR" defaults).
+}  // namespace
+
 std::string require_index_arg(const json::object& o, const char* verb) {
   const std::string index = js(o, "index");
   if (index.empty()) throw std::invalid_argument(std::string(verb) + ": missing 'index' (the swap's DB index id, e.g. USD-SOFR)");
@@ -52,99 +54,6 @@ std::string currency_for_index(const std::string& index, const std::string& give
   if (!given.empty() && b::upper(given) != ccy)
     throw std::invalid_argument(std::string(verb) + ": 'currency' " + given + " does not match index " + index + " (" + ccy + ")");
   return ccy;
-}
-}  // namespace
-
-std::string swaption_json(const json::object& request) {
-  const json::object& top = request;
-  const json::object& o = top.contains("swaption") ? top.at("swaption").as_object() : top;
-
-  const std::string vd_iso = js(o, "value_date");
-  if (vd_iso.empty()) throw std::invalid_argument("swaption: missing 'value_date'");
-  if (!o.contains("bundle")) throw std::invalid_argument("swaption: missing 'bundle'");
-  const b::Date vd = b::Date::from_iso(vd_iso);
-  const std::string index = require_index_arg(o, "swaption");
-  const std::string currency = currency_for_index(index, js(o, "currency"), "swaption");
-  const int curve = static_cast<int>(jd(o, "curve", 0.0));
-  const b::SwapConv conv = b::swap_conv(currency, index);
-
-  // Calibrate the bundle to its markets -> the curve we price off.
-  cal::BundleProblem prob = bundle_from_json(o.at("bundle"));
-  BundleSession sess(std::move(prob));
-  sess.calibrate(flat_x0(sess.problem()));  // smoothing is the bundle's region data (regions[].reg_lambda)
-
-  json::array out_trades;
-  if (o.contains("trades") && o.at("trades").is_array()) {
-    for (const auto& te : o.at("trades").as_array()) {
-      const json::object& t = te.as_object();
-      const std::string expiry = js(t, "expiry"), tenor = js(t, "tenor");
-      const double strike = jd(t, "strike", 0.0);
-      const bool payer = jb(t, "payer", true);
-
-      // Underlying forward-starting swap: option expires at `expiry`, swap starts spot after expiry, annual
-      // fixed leg to `tenor`.
-      if (expiry.empty() || tenor.empty())
-        throw std::invalid_argument("swaption: each trade needs a non-empty 'expiry' and 'tenor'");
-      const b::Date expiry_date = b::resolve(expiry, vd, conv.calendar, conv.bdc, 0);  // throws on an unrecognized expiry token
-      const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
-      const double tenor_years = conventions::period_years(tenor);  // 0 for an unrecognized token
-      if (!(tenor_years > 0.0))
-        throw std::invalid_argument("swaption: unrecognized or non-positive tenor '" + tenor +
-                                    "' (use e.g. 2Y, 5Y, 10Y)");
-      const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
-      std::vector<double> pay_time, tau;
-      // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
-      // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
-      const b::Date und_mat = swap_start.plus_months(months);
-      for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
-        tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
-        pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
-      }
-      const double t_start = b::curve_time(vd, swap_start);
-      const double t_expiry = b::curve_time(vd, expiry_date);
-
-      // Sample the calibrated curve's discount factors at the swap start + every pay date.
-      std::vector<double> times{t_start};
-      times.insert(times.end(), pay_time.begin(), pay_time.end());
-      const std::vector<CurveSample> cs = sess.sample(times);
-      const std::vector<double>& df = cs.at(static_cast<std::size_t>(curve)).discount;
-      const double df_start = df.front();
-      std::vector<double> df_pay(df.begin() + 1, df.end());
-      const double df_end = df_pay.back();
-
-      const v::ForwardSwap fs = v::forward_swap(df_start, df_end, df_pay, tau);
-      const v::Payoff cp = payer ? v::Payoff::Payer : v::Payoff::Receiver;
-
-      double vol, atm_vol;
-      if (t.contains("sabr") && t.at("sabr").is_object()) {
-        const auto& s = t.at("sabr").as_object();
-        const v::SabrParams sp{jd(s, "alpha", 0.0), jd(s, "rho", 0.0), jd(s, "nu", 0.0), sabr_beta_of(s)};
-        vol = v::sabr_normal_vol(fs.rate, strike, t_expiry, sp);
-        atm_vol = v::sabr_normal_vol(fs.rate, fs.rate, t_expiry, sp);
-      } else {
-        vol = atm_vol = jd(t, "normal_vol", 0.0);
-      }
-      const double price = v::swaption_price(fs.rate, fs.annuity, strike, vol, t_expiry, cp);
-
-      json::object r;
-      r["expiry"] = expiry;
-      r["tenor"] = tenor;
-      r["strike"] = strike;
-      r["payer"] = payer;
-      r["expiry_years"] = t_expiry;
-      r["forward"] = fs.rate;
-      r["annuity"] = fs.annuity;
-      r["normal_vol"] = vol;
-      r["atm_normal_vol"] = atm_vol;
-      r["price"] = price;
-      r["vega"] = v::bachelier_vega<double>(fs.rate, strike, vol, t_expiry, fs.annuity);
-      r["delta"] = v::bachelier_delta<double>(fs.rate, strike, vol, t_expiry, fs.annuity, cp);
-      out_trades.push_back(std::move(r));
-    }
-  }
-  json::object out;
-  out["trades"] = std::move(out_trades);
-  return json::serialize(json::value(std::move(out)));
 }
 
 // Stateless SABR strip calibration verb (see options.hpp). No bundle: fit (alpha,rho,nu) to (strikes,
@@ -228,156 +137,103 @@ VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json) {
   return spec;
 }
 
-// NATIVE batched vol-cube reprice off the CURRENTLY CALIBRATED curve — the options hot path (see VolCube in
-// bundle_api.hpp), no JSON. Curve-independent schedules are memoized per cell; each cell's (forward, annuity)
-// is cached against the curve state x, so a vol-only reprice (SABR-slider tick) samples the curve NOT AT ALL —
-// just the Bachelier/SABR pass. Reuses the calibrated/streaming session, so a live vol surface reprices with
-// no recalibration. This is what benchmarks and native clients call; the JSON verb is a thin wrapper below.
+// NATIVE batched vol-cube reprice off the CURRENTLY CALIBRATED curve — the options hot path, no JSON. The session
+// holds ONE compiled VolSurface per spec SHAPE (value date, currency, index, curve, the cells' expiry / tenor and
+// their strike counts): the surface resolves the schedules once and caches each cell's (forward, annuity) against
+// the curve state x, so a vol-only reprice (a SABR-slider tick) samples the curve NOT AT ALL. The spec's vols and
+// strikes are copied onto the surface's cells and it reprices; the result is a copy of its SoA output. Reuses the
+// calibrated/streaming session, so a live vol surface reprices with no recalibration. This is what benchmarks and
+// native clients call; the JSON verb is a thin wrapper below.
 VolCube BundleSession::price_vol_cube(const VolCubeSpec& spec) const {
   if (spec.index.empty()) throw std::invalid_argument("vol_cube: VolCubeSpec.index is required (the swap's DB index)");
-  const b::Date vd = b::Date::from_iso(spec.value_date);
-  const b::SwapConv conv = b::swap_conv(spec.currency, spec.index);
-  const std::vector<VolCubeCell>& cells = spec.cells;
-
-  const auto clock0 = std::chrono::steady_clock::now();
-
-  // ---- (1) resolve each cell's schedule, MEMOIZED per cell (curve-independent — the calendar walk is the
-  // dominant cost and is identical for every reprice). Key by the fields that determine it.
-  std::vector<const SwaptionSchedule*> sched(cells.size(), nullptr);
-  std::vector<std::string> keys(cells.size());
-  for (std::size_t ci = 0; ci < cells.size(); ++ci) {
-    const VolCubeCell& c = cells[ci];
-    if (c.expiry.empty() || c.tenor.empty())
-      throw std::invalid_argument("vol_cube: each cell needs a non-empty 'expiry' and 'tenor'");
-    std::string key = spec.value_date;
-    key += '|'; key += spec.currency; key += '|'; key += spec.index; key += '|';
-    key += std::to_string(spec.curve); key += '|'; key += c.expiry; key += '|'; key += c.tenor;
-    auto it = vol_sched_cache_.find(key);
-    if (it == vol_sched_cache_.end()) {
-      const b::Date expiry_date = b::resolve(c.expiry, vd, conv.calendar, conv.bdc, 0);
-      const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
-      const double tenor_years = conventions::period_years(c.tenor);
-      if (!(tenor_years > 0.0))
-        throw std::invalid_argument("vol_cube: unrecognized or non-positive tenor '" + c.tenor +
-                                    "' (use e.g. 2Y, 5Y, 10Y)");
-      const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
-      SwaptionSchedule ss;
-      ss.t_start = b::curve_time(vd, swap_start);
-      ss.t_expiry = b::curve_time(vd, expiry_date);
-      // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
-      // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
-      const b::Date und_mat = swap_start.plus_months(months);
-      for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
-        ss.tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
-        ss.pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
-      }
-      it = vol_sched_cache_.emplace(key, std::move(ss)).first;
-    }
-    sched[ci] = &it->second;
-    keys[ci] = std::move(key);
+  std::string key = spec.value_date;
+  key += '|'; key += spec.currency; key += '|'; key += spec.index; key += '|'; key += std::to_string(spec.curve);
+  for (const VolCubeCell& c : spec.cells) {
+    key += '|'; key += c.expiry; key += '/'; key += c.tenor; key += '/';
+    key += std::to_string(c.strikes.size()); key += ','; key += std::to_string(c.moneyness_bp.size()); key += ',';
+    key += (c.atm ? '1' : '0');
   }
-
-  // ---- (2) forward/annuity per cell, cached against the curve state x. If x is unchanged (a vol-only reprice),
-  // reuse it and DO NOT sample the curve. When x moved (or a cell is new), sample once over the missing times.
-  const Eigen::VectorXd& xnow = this->x();
-  const bool fa_valid = vol_fa_x_.size() == xnow.size() && xnow.size() > 0 &&
-                        (vol_fa_x_.array() == xnow.array()).all();
-  if (!fa_valid) {
-    vol_fa_cache_.clear();
-    vol_fa_x_ = xnow;
-  }
-  std::vector<double> need_times;
-  for (std::size_t ci = 0; ci < cells.size(); ++ci)
-    if (vol_fa_cache_.find(keys[ci]) == vol_fa_cache_.end()) {
-      need_times.push_back(sched[ci]->t_start);
-      need_times.insert(need_times.end(), sched[ci]->pay_time.begin(), sched[ci]->pay_time.end());
-    }
-  if (!need_times.empty()) {
-    std::sort(need_times.begin(), need_times.end());
-    need_times.erase(std::unique(need_times.begin(), need_times.end()), need_times.end());
-    const std::vector<CurveSample> cs_all = this->sample(need_times);
-    if (spec.curve < 0 || spec.curve >= static_cast<int>(cs_all.size()))
-      throw std::invalid_argument("vol_cube: curve index out of range");
-    const CurveSample& csamp = cs_all[static_cast<std::size_t>(spec.curve)];
-    // R2: csamp.t is the sorted/uniqued need_times, and every lookup hits an exact member — so a std::map
-    // (tree alloc + pointer-chasing per node) is pure churn. Binary-search the contiguous sorted vector.
-    const auto df_at = [&](double t) -> double {
-      const auto it = std::lower_bound(csamp.t.begin(), csamp.t.end(), t);
-      if (it == csamp.t.end() || *it != t)
-        throw std::runtime_error("vol_cube: internal sample-time lookup failed");
-      return csamp.discount[static_cast<std::size_t>(it - csamp.t.begin())];
-    };
-    for (std::size_t ci = 0; ci < cells.size(); ++ci) {
-      if (vol_fa_cache_.find(keys[ci]) != vol_fa_cache_.end()) continue;
-      const SwaptionSchedule& s = *sched[ci];
-      std::vector<double> df_pay;
-      df_pay.reserve(s.pay_time.size());
-      for (double t : s.pay_time) df_pay.push_back(df_at(t));
-      const v::ForwardSwap fs = v::forward_swap(df_at(s.t_start), df_pay.back(), df_pay, s.tau);
-      vol_fa_cache_.emplace(keys[ci], std::make_pair(fs.rate, fs.annuity));
-    }
-  }
-
-  // ---- (3) price every cell x strike into the flat SoA result (pure Bachelier/SABR off the cached fwd/annuity).
-  VolCube out;
-  out.n_cells = static_cast<int>(cells.size());
-  out.cell_forward.reserve(cells.size());
-  out.cell_annuity.reserve(cells.size());
-  out.cell_expiry_years.reserve(cells.size());
-  std::size_t npts = 0;  // reserve the per-point SoA arrays up front (no reallocation in the hot loop)
-  for (const VolCubeCell& c : cells) {
-    const std::size_t k = c.strikes.size() + c.moneyness_bp.size() + (c.atm ? 1 : 0);
-    npts += (k == 0) ? 1 : k;
-  }
-  for (std::vector<double>* col : {&out.point_cell, &out.strike, &out.moneyness_bp, &out.normal_vol,
-                                   &out.price, &out.vega, &out.delta, &out.gamma, &out.vanna, &out.volga,
-                                   &out.payer})
-    col->reserve(npts);
-  for (std::size_t ci = 0; ci < cells.size(); ++ci) {
-    const VolCubeCell& c = cells[ci];
-    const SwaptionSchedule& s = *sched[ci];
-    const std::pair<double, double>& fa = vol_fa_cache_.at(keys[ci]);
-    const v::ForwardSwap fs{fa.first, fa.second};
-    out.cell_forward.push_back(fs.rate);
-    out.cell_annuity.push_back(fs.annuity);
-    out.cell_expiry_years.push_back(s.t_expiry);
-
-    const v::SabrParams sp{c.sabr_alpha, c.sabr_rho, c.sabr_nu, c.sabr_beta};
-
-    // Strike list: explicit absolute strikes, moneyness offsets (bp from the forward), and/or ATM; default ATM.
-    std::vector<double> strikes;
-    strikes.reserve(c.strikes.size() + c.moneyness_bp.size() + 1);
-    for (double k : c.strikes) strikes.push_back(k);
-    for (double m : c.moneyness_bp) strikes.push_back(fs.rate + m / 1e4);
-    if (c.atm || strikes.empty()) strikes.push_back(fs.rate);
-
-    for (double strike : strikes) {
-      const bool payer = c.payer_set ? c.payer : (strike >= fs.rate);
-      const v::Payoff cp = payer ? v::Payoff::Payer : v::Payoff::Receiver;
-      const double vol = c.has_sabr ? v::sabr_normal_vol(fs.rate, strike, s.t_expiry, sp) : c.normal_vol;
-      out.point_cell.push_back(static_cast<double>(ci));
-      out.strike.push_back(strike);
-      out.moneyness_bp.push_back((strike - fs.rate) * 1e4);
-      out.normal_vol.push_back(vol);
-      const v::BachelierGreeks<double> g = v::bachelier_greeks<double>(fs.rate, strike, vol, s.t_expiry,
-                                                                       fs.annuity, cp);  // R1: one pass
-      out.price.push_back(g.price);
-      out.vega.push_back(g.vega);
-      out.delta.push_back(g.delta);
-      out.gamma.push_back(g.gamma);
-      out.vanna.push_back(g.vanna);
-      out.volga.push_back(g.volga);
-      out.payer.push_back(payer ? 1.0 : 0.0);
-    }
-  }
-  out.n_points = static_cast<int>(out.price.size());
-  out.price_us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - clock0).count();
-  return out;
+  auto it = vol_surfaces_.find(key);
+  if (it == vol_surfaces_.end()) it = vol_surfaces_.emplace(key, std::make_unique<VolSurface>(spec)).first;
+  VolSurface& surf = *it->second;
+  surf.cells() = spec.cells;  // the vols / strikes of THIS request (the same shape, keyed above)
+  return surf.reprice(*this);
 }
 
 // Thin JSON convenience over the native reprice (the run_json / pybind seam): parse -> price_vol_cube.
 VolCube BundleSession::price_vol_cube_json(const std::string& spec_json) const {
   return price_vol_cube(vol_cube_spec_from_json(spec_json));
+}
+
+// The `swaption` verb: ONE cell per trade of the vol cube -- its strike and the ATM point -- priced through the
+// session's surface and reshaped per trade (what the verb has always returned).
+std::string swaption_json(const json::object& request) {
+  const json::object& top = request;
+  const json::object& o = top.contains("swaption") ? top.at("swaption").as_object() : top;
+
+  const std::string vd_iso = js(o, "value_date");
+  if (vd_iso.empty()) throw std::invalid_argument("swaption: missing 'value_date'");
+  if (!o.contains("bundle")) throw std::invalid_argument("swaption: missing 'bundle'");
+  VolCubeSpec spec;
+  spec.value_date = vd_iso;
+  spec.index = require_index_arg(o, "swaption");
+  spec.currency = currency_for_index(spec.index, js(o, "currency"), "swaption");
+  spec.curve = static_cast<int>(jd(o, "curve", 0.0));
+
+  // Calibrate the bundle to its markets -> the curve we price off.
+  cal::BundleProblem prob = bundle_from_json(o.at("bundle"));
+  BundleSession sess(std::move(prob));
+  sess.calibrate(flat_x0(sess.problem()));  // smoothing is the bundle's region data (regions[].reg_lambda)
+
+  if (o.contains("trades") && o.at("trades").is_array()) {
+    for (const auto& te : o.at("trades").as_array()) {
+      const json::object& t = te.as_object();
+      VolCubeCell c;
+      c.expiry = js(t, "expiry");
+      c.tenor = js(t, "tenor");
+      if (c.expiry.empty() || c.tenor.empty())
+        throw std::invalid_argument("swaption: each trade needs a non-empty 'expiry' and 'tenor'");
+      c.strikes.push_back(jd(t, "strike", 0.0));
+      c.atm = true;  // the ATM point beside the strike: the trade's atm_normal_vol
+      c.payer_set = true;
+      c.payer = jb(t, "payer", true);
+      if (t.contains("sabr") && t.at("sabr").is_object()) {
+        const auto& sj = t.at("sabr").as_object();
+        c.has_sabr = true;
+        c.sabr_alpha = jd(sj, "alpha", 0.0);
+        c.sabr_rho = jd(sj, "rho", 0.0);
+        c.sabr_nu = jd(sj, "nu", 0.0);
+        c.sabr_beta = sabr_beta_of(sj);
+      } else {
+        c.normal_vol = jd(t, "normal_vol", 0.0);
+      }
+      spec.cells.push_back(std::move(c));
+    }
+  }
+  const VolCube cube = sess.price_vol_cube(spec);
+
+  json::array out_trades;
+  for (std::size_t ci = 0; ci < spec.cells.size(); ++ci) {
+    const VolCubeCell& c = spec.cells[ci];
+    const std::size_t k = 2 * ci;  // the cell's two points: [strike, atm]
+    json::object r;
+    r["expiry"] = c.expiry;
+    r["tenor"] = c.tenor;
+    r["strike"] = cube.strike[k];
+    r["payer"] = c.payer;
+    r["expiry_years"] = cube.cell_expiry_years[ci];
+    r["forward"] = cube.cell_forward[ci];
+    r["annuity"] = cube.cell_annuity[ci];
+    r["normal_vol"] = cube.normal_vol[k];
+    r["atm_normal_vol"] = cube.normal_vol[k + 1];
+    r["price"] = cube.price[k];
+    r["vega"] = cube.vega[k];
+    r["delta"] = cube.delta[k];
+    out_trades.push_back(std::move(r));
+  }
+  json::object out;
+  out["trades"] = std::move(out_trades);
+  return json::serialize(json::value(std::move(out)));
 }
 
 // ---- VolSurface: resolve schedules once, pre-index into one sample grid, pre-size the SoA output ----------
@@ -392,29 +248,14 @@ VolSurface::VolSurface(const VolCubeSpec& spec) : curve_(spec.curve), defs_(spec
   cells_.reserve(spec.cells.size());
   raw.reserve(spec.cells.size());
   for (const VolCubeCell& c : spec.cells) {
-    if (c.expiry.empty() || c.tenor.empty())
-      throw std::invalid_argument("vol_surface: each cell needs a non-empty 'expiry' and 'tenor'");
-    const b::Date expiry_date = b::resolve(c.expiry, vd, conv.calendar, conv.bdc, 0);
-    const b::Date swap_start = b::spot_date(expiry_date, conv.calendar, conv.spot_lag);
-    const double tenor_years = conventions::period_years(c.tenor);
-    if (!(tenor_years > 0.0))
-      throw std::invalid_argument("vol_surface: unrecognized or non-positive tenor '" + c.tenor + "'");
-    const int months = std::max(1, static_cast<int>(std::lround(tenor_years * 12.0)));
+    b::SwaptionSchedule ss = b::swaption_schedule(vd, conv, c.expiry, c.tenor, "vol_cube");  // the one walk
     Cell cell;
-    cell.t_expiry = b::curve_time(vd, expiry_date);
-    const double t_start = b::curve_time(vd, swap_start);
-    std::vector<double> pay_time;
-    // The underlying's FIXED leg on the product's own schedule (frequency / bdc / pay lag / day count) — it used
-    // to be hard-wired annual with no pay lag, wrong for every non-annual-fixed market (SAR/AUD/CNY/ZAR/CAD...).
-    const b::Date und_mat = swap_start.plus_months(months);
-    for (const auto& [ps, pe] : b::swap_periods_between(swap_start, conv.calendar, und_mat, conv.fixed_freq_tok, conv.bdc)) {
-      cell.tau.push_back(b::year_frac(conv.fixed_dc, ps, pe));
-      pay_time.push_back(b::curve_time(vd, b::advance_bd(conv.calendar, pe, conv.pay_lag)));
-    }
-    times.push_back(t_start);
-    times.insert(times.end(), pay_time.begin(), pay_time.end());
+    cell.t_expiry = ss.t_expiry;
+    cell.tau = std::move(ss.tau);
+    times.push_back(ss.t_start);
+    times.insert(times.end(), ss.pay_time.begin(), ss.pay_time.end());
     cells_.push_back(std::move(cell));
-    raw.emplace_back(t_start, std::move(pay_time));
+    raw.emplace_back(ss.t_start, std::move(ss.pay_time));
   }
 
   // (2) the one sample grid, and (3) pre-index each cell's start/pay into it + assign output offsets + pre-size.

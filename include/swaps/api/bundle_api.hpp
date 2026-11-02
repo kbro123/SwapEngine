@@ -38,6 +38,7 @@
 #include "swaps/calibration/book_rows.hpp"  // BookRows — the bound book as rows of the compiled engine
 #include "swaps/pricing/fixings.hpp"
 #include "swaps/api/codec.hpp"  // the JSON <-> object-graph codecs (E7)
+#include "swaps/api/options.hpp"  // VolCube / VolCubeSpec / VolSurface -- the swaption vol object model (2026-11-01)
 
 namespace swaps::api {
 
@@ -76,71 +77,6 @@ struct PortfolioRisk {
   Eigen::VectorXd ladder;            // dP/dq = curve_grad^T · M, length n_residuals (native delta ladder)
   double risk_us = 0.0;              // engine time of the AAD reprice + M multiply, microseconds
   int n = 0;                         // number of positions
-};
-
-// Result of a batched swaption VOL CUBE reprice off the calibrated curve (BundleSession::price_vol_cube_json).
-// Flat SoA (parallel arrays), so the whole expiry x tenor x strike surface reprices into reused buffers on the
-// engine hot path — the options analogue of price_portfolio. The curve-dependent part (per-cell forward /
-// annuity / expiry) is computed once from a SINGLE curve sample over the union of all schedule times; every
-// strike is then a pure Bachelier/SABR evaluation in C++. `price_us` is the ENGINE-measured pricing time (a
-// steady_clock pair around the reprice only, no JSON/marshalling), the exact analogue of price_us/last_solve_us.
-// Per-cell arrays have length n_cells; per-point arrays have length n_points, and point i belongs to the cell
-// index point_cell[i]. All arrays are double (int-valued ones like point_cell/payer carry whole numbers) so the
-// one STRUCT marshaller (VEC) covers every field.
-struct VolCube {
-  std::vector<double> cell_forward;        // per cell: forward swap rate off the calibrated curve
-  std::vector<double> cell_annuity;        // per cell: Σ τ_i·DF_i (the numeraire)
-  std::vector<double> cell_expiry_years;   // per cell: option expiry in curve time (ACT/365F)
-  std::vector<double> point_cell;          // per point: which cell (index into the per-cell arrays)
-  std::vector<double> strike;              // per point: absolute strike (rate)
-  std::vector<double> moneyness_bp;        // per point: (strike − forward) in bp
-  std::vector<double> normal_vol;          // per point: Bachelier normal vol used (SABR at the strike, or flat)
-  std::vector<double> price;               // per point: swaption price (annuity units)
-  std::vector<double> vega;                // per point: dV/dσ
-  std::vector<double> delta;               // per point: dV/dF
-  std::vector<double> gamma;               // per point: d²V/dF²
-  std::vector<double> vanna;               // per point: d²V/(dF dσ)
-  std::vector<double> volga;               // per point: d²V/dσ²
-  std::vector<double> payer;               // per point: 1 payer, 0 receiver
-  double price_us = 0.0;                   // pure engine pricing time of the cube, microseconds
-  int n_cells = 0;
-  int n_points = 0;
-};
-
-// Native input for the vol cube (the C++ analogue of the JSON `vol_cube` document) — so callers and benchmarks
-// build a surface as typed structs, no JSON in the hot path. sabr wins over normal_vol when has_sabr; strikes
-// combine absolute `strikes` + `moneyness_bp` offsets from the forward + `atm`; `payer` is honoured only when
-// `payer_set`, else the OTM convention (payer above the forward) is used.
-struct VolCubeCell {
-  std::string expiry;
-  std::string tenor;
-  bool has_sabr = false;
-  double sabr_alpha = 0.0, sabr_rho = 0.0, sabr_nu = 0.0;
-  double sabr_beta = 0.0;  // CEV backbone in [0,1]; 0 = normal SABR (E3-F1: was dropped by every verb until 2026-09-10)
-  double normal_vol = 0.0;
-  bool payer_set = false;
-  bool payer = true;
-  std::vector<double> strikes;       // absolute strike rates
-  std::vector<double> moneyness_bp;  // strikes at forward + bp/1e4
-  bool atm = false;                  // include the ATM strike (forward)
-};
-struct VolCubeSpec {
-  std::string value_date;
-  std::string currency;  // optional; must agree with the index's DB currency when given
-  std::string index;     // REQUIRED: the swap's DB index (carries the product conventions)
-  int curve = 0;
-  std::vector<VolCubeCell> cells;
-};
-
-// One swaption cell's CURVE-INDEPENDENT schedule in curve time (ACT/365F): the option expiry, the underlying
-// swap start, and its annual fixed pay times + accruals. Building this walks the calendar (business-day
-// adjustment / holidays) for every pay date, which is the same for every reprice — so price_vol_cube_json
-// memoizes it per (value_date, currency, index, curve, expiry, tenor). See BundleSession::vol_sched_cache_.
-struct SwaptionSchedule {
-  double t_start = 0.0;
-  double t_expiry = 0.0;
-  std::vector<double> pay_time;
-  std::vector<double> tau;
 };
 
 // The JSON <-> engine object-graph codecs are declared in swaps/api/codec.hpp (included above).
@@ -514,57 +450,14 @@ class BundleSession {
   int last_status_ = 0;
   const char* last_reason_ = "converged";
 
-  // ---- vol-cube reprice caches (populated by the const price_vol_cube_json; mutable so it stays const) ----
-  // The swaption schedules are CURVE-INDEPENDENT, so they are built once per cell and reused across reprices
-  // (killing the per-call calendar walk). The per-cell (forward, annuity) depend only on the curve state x,
-  // so they are cached against the x they were computed at and reused while x is unchanged (a vol-only reprice
-  // — e.g. a SABR-slider tick — then needs NO curve sample, just the Bachelier pass). Cleared when x moves.
-  mutable std::unordered_map<std::string, SwaptionSchedule> vol_sched_cache_;
-  mutable std::unordered_map<std::string, std::pair<double, double>> vol_fa_cache_;  // cell key -> (fwd, annuity)
-  mutable Eigen::VectorXd vol_fa_x_;  // the x for which vol_fa_cache_ is valid (empty => invalid)
+  // ---- vol-cube reprice: ONE compiled VolSurface per spec SHAPE (value date, index, curve, the cells and their
+  // strike counts), built on first use and reused across reprices (populated by the const price_vol_cube; mutable
+  // so it stays const). The surface owns the curve-independent schedules and the per-cell (forward, annuity) cached
+  // against the x they were computed at, so a vol-only reprice samples nothing (2026-11-01, review item 2.2: this
+  // replaced three ad-hoc caches that re-implemented the surface).
+  mutable std::unordered_map<std::string, std::unique_ptr<VolSurface>> vol_surfaces_;
 };
 
-// A COMPILED vol surface: resolve a FIXED set of swaption cells' schedules ONCE (the calendar walk), pre-index
-// them into a single sample grid, and pre-size the flat SoA output — then `reprice()` off the current curve
-// with zero per-call schedule/key/allocation work: one curve sample (only when x moved), then a pure
-// Bachelier/SABR pass writing straight into reused, index-addressed buffers. The stateful streaming analog of
-// BundleSession::price_vol_cube for a live surface / a fixed swaption book repriced every tick — this is what
-// beats QuantLib's native loop (price_vol_cube trades some of that away for a fresh spec on every call). The
-// referenced session must outlive the surface. Not thread-safe (reuses one output buffer). To move the vols
-// (a SABR-slider tick) mutate `cells()` in place and call `reprice()` — no schedule rebuild, no resample.
-class VolSurface {
- public:
-  explicit VolSurface(const VolCubeSpec& spec);   // resolve schedules + pre-index + pre-size (curve-independent)
-  const VolCube& reprice(const BundleSession& sess) const;  // sample iff x moved, then price into reused VolCube
-  // Overwrite every cell's SABR (alpha per cell, rho/nu shared) — the streaming update for a live surface (a
-  // level/skew slider) without touching the schedules. alpha.size() must equal n_cells.
-  void set_sabr(const std::vector<double>& alpha, double rho, double nu);
-  std::vector<VolCubeCell>& cells() { return defs_; }        // mutate vols/strikes in place, then reprice()
-  const std::vector<VolCubeCell>& cells() const { return defs_; }
-  int n_cells() const { return static_cast<int>(defs_.size()); }
-  int n_points() const { return n_points_; }
-
- private:
-  struct Cell {
-    double t_expiry = 0.0;
-    std::vector<double> tau;
-    std::size_t start_idx = 0;         // index into union_times_ / the sampled discount vector
-    std::vector<std::size_t> pay_idx;
-    int point_offset = 0;              // first output-point index for this cell
-  };
-  int curve_ = 0;
-  int n_points_ = 0;
-  std::vector<Cell> cells_;                   // resolved schedules (built once)
-  std::vector<VolCubeCell> defs_;             // per-cell vol model + strike specs (mutable between reprices)
-  std::vector<double> union_times_;           // the one sample grid (sorted, unique)
-  mutable std::vector<double> fwd_, annuity_; // per-cell curve-dependent, refreshed when x moves
-  mutable Eigen::VectorXd fa_x_;              // the x fwd_/annuity_ were computed at
-  mutable VolCube out_;                       // pre-sized, reused across reprices
-};
-
-// Parse a `vol_cube` JSON document into the native VolCubeSpec (used by the JSON verb and to build a VolSurface
-// from a spec string in the binding). Definition in api/options.cpp.
-VolCubeSpec vol_cube_spec_from_json(const std::string& spec_json);
 
 // One-shot stateless JSON dispatcher for a web call. Request:
 //   { "bundle": {...},                         (required) the BundleProblem object graph
