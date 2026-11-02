@@ -218,9 +218,11 @@ inline bool anchor_window(const Instrument& ins, int c, double& s, double& e) {
 // value date (a spot lag; a futures window that opened before the value date starts at a negative time) and ENDS AT
 // the first knot: the front knot IS that instrument's maturity -- the knot sits at the window's end or within
 // `lag_tol` after it (a knot at the instrument's PAYMENT time, a pay lag past the accrual end). A leading Flat region
-// is the meeting-date front, whose first segment is one value however long: there the window only has to reach the
-// knot (the SOFR reference market: FOMC knots under a 1M futures strip). A window that ends past a non-Flat first
-// knot pins that knot together with the next one and leaves the front to extrapolation -- not an anchor.
+// is the meeting-date front, whose first segment [0, t1] is ONE value however long (region 0 flat-extrapolates its
+// first knot): there ANY window reading that segment anchors it -- a 1W deposit under a meeting six weeks out as much
+// as the SOFR reference market's 1M futures reaching the FOMC knot. (Until 2026-11-02 the Flat window had to REACH
+// the knot, which refused exactly that deposit.) A window that ends past a non-Flat first knot pins that knot
+// together with the next one and leaves the front to extrapolation -- not an anchor.
 inline std::vector<FrontAnchor> front_anchors(const BundleProblem& p, double front_tol = 0.03, double lag_tol = 0.03) {
   std::vector<FrontAnchor> out;
   for (int c = 0; c < p.n_curves(); ++c) {
@@ -232,7 +234,7 @@ inline std::vector<FrontAnchor> front_anchors(const BundleProblem& p, double fro
     for (int r = 0; r < p.n_residuals() && a.row < 0; ++r) {
       double s = 0.0, e = 0.0;
       if (!anchor_window(p.row(r), c, s, e) || s > front_tol) continue;
-      const bool ends_at_knot = flat_front ? e + lag_tol >= a.first_knot : (a.first_knot >= e - 1e-6 && a.first_knot <= e + lag_tol);
+      const bool ends_at_knot = flat_front ? (e > s && e > 0.0) : (a.first_knot >= e - 1e-6 && a.first_knot <= e + lag_tol);
       if (ends_at_knot) { a.row = r; a.start = s; a.end = e; }
     }
     out.push_back(a);
