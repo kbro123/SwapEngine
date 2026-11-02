@@ -78,7 +78,7 @@ class CompiledCurveSet {
     eval_x_.assign(specs.size(), Eigen::VectorXd());
   }
 
-  // EXPERIMENT (exp/piecewise-linear-w): PIECEWISE-LINEAR mode. A curve with a value-dependent region takes
+  // The piecewise-linear tier (shipped 2026-09-22): PIECEWISE-LINEAR mode. A curve with a value-dependent region takes
   // its W at a STATE (integral_weight_matrix_at) instead of refusing times past its linear horizon; the W is
   // then exact throughout that state's branch-pattern cell. The owner re-points the state and re-runs
   // finalize() when the pattern changes. Call before finalize(). Fully linear curves are unaffected.
@@ -110,7 +110,7 @@ class CompiledCurveSet {
   int knot_offset(int c) const { return knot_offset_[c]; }
   const std::vector<CurveStructure>& specs() const { return specs_; }
 
-  // ---- ANALYTIC RE-TAKE (EXPERIMENT, exp/piecewise-linear-w) ------------------------------------------
+  // ---- ANALYTIC RE-TAKE (the piecewise-linear tier, shipped 2026-09-22) ------------------------------------------
   // For a curve c with exactly one value-dependent (MonotoneCubic) region, every registered time t obeys
   //     integral_c(t) = L_t·x_c + B_t·m        (m = the region's N FILTERED tangents)
   // with L_t, B_t structure-only, and m = Φ_P·G·x_c (Φ_P decoded from the branch pattern). So when nodes
@@ -627,9 +627,9 @@ class CompiledCurveSet {
   std::vector<CurveStructure> specs_;
   std::vector<int> knot_offset_;
   int n_knots_ = 0;
-  bool pwl_ = false;                     // EXPERIMENT: value-dependent curves take W at eval_x_
-  std::vector<Eigen::VectorXd> eval_x_;  // EXPERIMENT: per-curve W evaluation state (empty = default seed)
-  std::vector<PwlCurve> pwlc_;           // EXPERIMENT: analytic re-take structure per value-dependent curve
+  bool pwl_ = false;                     // value-dependent curves take W at eval_x_
+  std::vector<Eigen::VectorXd> eval_x_;  // per-curve W evaluation state (empty = default seed)
+  std::vector<PwlCurve> pwlc_;           // analytic re-take structure per value-dependent curve
   std::vector<PwlTracker> trk_;          // the tier's trackers (pwl_init)
   std::vector<TangentCurve> tg_;         // the tangent curves (tangent_init)
   mutable Eigen::VectorXd corr_x_;       // the state the corrections are taken at

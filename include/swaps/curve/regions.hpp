@@ -474,7 +474,7 @@ class MonotoneCubic : public CubicSegments<Scalar> {
     std::vector<Scalar> m;
     cubic_detail::thomas_solve(lower, diag, upper, rhs, m);
 
-    // EXPERIMENT: keep the filter's INPUTS (linear in x) so a caller can precompute z = G·x once and read the
+    // keep the filter's INPUTS (linear in x) so a caller can precompute z = G·x once and read the
     // branch pattern without rebuilding the curve (pattern_from_prefilter).
     h_ = h;
     pre_.assign(S.begin(), S.end());
@@ -483,7 +483,7 @@ class MonotoneCubic : public CubicSegments<Scalar> {
     // Hyman monotonicity filter (bit-for-bit QuantLib): clamp each tangent so no segment overshoots.
     // The `!= ` comparisons + min/max/sign are exactly the value-dependent branches that break linearity.
     hyman_filter(h, S, m, pattern_);
-    // EXPERIMENT (analytic re-take): replace the filtered tangents by caller-supplied scalars. Seeded as
+    // The analytic re-take: replace the filtered tangents by caller-supplied scalars. Seeded as
     // INDEPENDENT duals, one AAD pass then splits d integral(t) into [dx | dm] = [L_t | B_t] -- the curve is
     // linear in (x, m) jointly once m is freed from the filter. Values are irrelevant to those derivatives.
     if (m_override_)
@@ -504,7 +504,7 @@ class MonotoneCubic : public CubicSegments<Scalar> {
   // QuantLib's Hyman monotonicity filter on the node tangents m, given segment lengths h and secants S.
   // QuantLib's Hyman monotonicity filter on the node tangents m, given segment lengths h and secants S.
   //
-  // EXPERIMENT (exp/piecewise-linear-w): the filter's VALUES are built only from abs/min/max/sign and fixed
+  // The piecewise-linear tier (shipped 2026-09-22): the filter's VALUES are built only from abs/min/max/sign and fixed
   // h-ratios (products appear only inside conditions), so each node ends as ONE of three linear formulas:
   //   0,   m_raw,   or   sign(m_raw) * c * |candidate|   (candidate one of S[i-1], S[i], pm, pd, pu, 3·S_end)
   // `pattern` records exactly that CANONICAL outcome per node -- two bytes {kind, candidate id + sign} -- NOT
@@ -580,7 +580,7 @@ class MonotoneCubic : public CubicSegments<Scalar> {
   const std::vector<Scalar>& prefilter() const { return pre_; }
   // The branch pattern for inputs z (a slice of G·x), WITHOUT rebuilding: the same recorder on doubles.
   // Requires one prior build (h_ is the node spacing, fixed by the knots and the join time).
-  // EXPERIMENT (analytic re-take).
+  // (The analytic re-take.)
   void set_tangent_override(const Scalar* m) { m_override_ = m; }  // nullptr restores the filter
   int n_nodes() const { return static_cast<int>(this->xs_.size()); }  // tangents N (valid after a build)
   // DECODE a node's canonical code into its formula over the filter inputs z = [S (N-1); m_raw (N)]:

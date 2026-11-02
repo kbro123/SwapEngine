@@ -45,14 +45,14 @@ struct RegionIface {
   virtual S forward_d2(double t) const = 0;           // exact d²f/dt²
   virtual std::vector<double> pieces() const = 0;     // breakpoints between which f is ONE analytic piece
   virtual Boundary<S> out() const = 0;
-  // EXPERIMENT (exp/piecewise-linear-w): append this region's value-dependent branch trace (empty for every
+  // The piecewise-linear tier (shipped 2026-09-22): append this region's value-dependent branch trace (empty for every
   // LINEAR scheme -- it has no decisions). Equal traces over the whole curve => the same linear map of x.
   virtual void pattern_into(std::vector<unsigned char>&) const {}
   // Phase 2: the filter inputs (linear in x) and the pattern computed from them. Empty / no-op when linear.
   virtual void prefilter_into(std::vector<S>&) const {}
   virtual int prefilter_size() const { return 0; }
   virtual void pattern_from_prefilter(const double*, std::vector<unsigned char>&) const {}
-  // Analytic re-take (EXPERIMENT): tangent override + the node structure the decoder needs. No-ops if linear.
+  // Analytic re-take (the piecewise-linear tier): tangent override + the node structure the decoder needs. No-ops if linear.
   virtual void set_tangent_override(const S*) {}
   virtual int n_nodes() const { return 0; }
   // The piecewise-linear capability (2026-09-22): the region's own cell description. 0 / no-op when linear.
@@ -424,7 +424,7 @@ class ModularCurve {
       off += nk;
     }
   }
-  // EXPERIMENT: the curve's branch pattern at the last set_forwards (concatenated region traces; empty for a
+  // the curve's branch pattern at the last set_forwards (concatenated region traces; empty for a
   // fully linear curve). A piecewise-linear curve is ONE linear map of x throughout each pattern's cell.
   void pattern_into(std::vector<unsigned char>& out) const {
     out.clear();
@@ -436,7 +436,7 @@ class ModularCurve {
     out.clear();
     for (const auto& r : regions_) r->prefilter_into(out);
   }
-  // Analytic re-take (EXPERIMENT): supported for a curve with EXACTLY ONE value-dependent region (the one
+  // Analytic re-take (the piecewise-linear tier): supported for a curve with EXACTLY ONE value-dependent region (the one
   // whose tangents are overridden / decoded); otherwise the caller falls back to the AAD re-take.
   int n_value_dependent_regions() const {
     int k = 0;

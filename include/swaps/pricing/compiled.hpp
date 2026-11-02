@@ -87,7 +87,7 @@ inline Eigen::MatrixXd integral_tangent_matrix(const std::vector<curve::CurveMod
   return W;
 }
 
-// EXPERIMENT (exp/piecewise-linear-w): the W of a PIECEWISE-linear curve at state x. Every shipped scheme is
+// The piecewise-linear tier (shipped 2026-09-22): the W of a PIECEWISE-linear curve at state x. Every shipped scheme is
 // piecewise-linear in its knot values (the linear ones trivially; MonotoneCubic because its Hyman filter is
 // built from abs/min/max/sign -- see MonotoneCubic::hyman_filter), so integral(t) = W_P·x exactly throughout
 // the branch-pattern cell P containing x, and the AAD gradient AT x is that W_P. No horizon refusal: the

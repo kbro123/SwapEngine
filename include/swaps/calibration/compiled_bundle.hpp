@@ -50,7 +50,7 @@ namespace swaps::calibration {
 
 class CompiledBundleResidual {
  public:
-  // `pwl` (EXPERIMENT, exp/piecewise-linear-w): accept value-dependent (piecewise-linear) curves at any time;
+  // `pwl` (the piecewise-linear tier, shipped 2026-09-22): accept value-dependent (piecewise-linear) curves at any time;
   // their W is taken at a state and the OWNER must call rebuild_W(x) whenever x's branch pattern changes.
   explicit CompiledBundleResidual(const BundleProblem& p, bool pwl = false)
       : CompiledBundleResidual(p, identity_rows(p.n_residuals()), pwl) {}
@@ -945,7 +945,7 @@ class CompiledBundleResidual {
   // Mutable per-call scratch (② reused Jacobian buffers, ③ DF memo) -- state that only CACHES pure
   // functions of x, so const-ness of residuals()/jacobian() is preserved semantically.
   mutable Eigen::VectorXd df_, df_x_, inv_;
-  mutable bool df_stale_ = false;  // EXPERIMENT: W changed under an unchanged x (pwl re-take)
+  mutable bool df_stale_ = false;  // W changed under an unchanged x (pwl re-take)
   bool has_moment_ = false;                    // any batch carries moment-path coupons (set_state + direct terms)
   bool has_quotient_ = false;                  // any Quotient term (its derivative needs the row VALUES; an Npv-only book does not)
   mutable Eigen::VectorXd row_scale_, tf_, ann_keep_, num_keep_;  // jacobian_vs scratch: row slopes, term chain factors, the moment direct terms' quotient factors
