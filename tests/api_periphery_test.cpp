@@ -135,7 +135,7 @@ TEST(ApiPeriphery, CapiSessionAndCompileRewriteHonourTheSpecsSmoothing) {
   const char* spec = R"({"value_date":"2026-07-08","smoothness":"light","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
     "regions":[{"id":"r0","name":"Flat","policy":"Flat","sigma":0.0},{"id":"r1","name":"Hermite","policy":"Hermite","sigma":0.0}],
     "instruments":[
-      {"type":"rate","end":"1w","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
+      {"type":"rate","end":"1d","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
       {"type":"swap","end":"1Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0415},
       {"type":"swap","end":"2Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0398},
       {"type":"swap","end":"3Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":false,"unit":"dec","target":0.0},
@@ -271,7 +271,7 @@ TEST(ApiPeriphery, TheCompileVerbAcceptsEverySchemeTheCodecKnows) {
   const char* spec_tpl = R"({"value_date":"2026-07-08","smoothness":"off","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
     "regions":[{"id":"r0","name":"Flat","policy":"Flat","sigma":0.0},{"id":"r1","name":"Back","policy":"%s","sigma":0.0}],
     "instruments":[
-      {"type":"rate","end":"1w","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
+      {"type":"rate","end":"1d","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
       {"type":"swap","end":"1Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0415},
       {"type":"swap","end":"2Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0398},
       {"type":"swap","end":"5Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0389},
@@ -294,18 +294,29 @@ TEST(ApiPeriphery, TheCompileVerbAcceptsEverySchemeTheCodecKnows) {
 
 // PRINCIPLES P15 at the compile seam (review defect 4.3, 2026-11-01): the rule was test-only, so a client spec whose
 // spread curve had no front anchor compiled into the regime it exists to prevent. The verb WARNS, naming the curve:
-// the SOFR spec above (a 1w rate from the value date) is anchored; dropping that row for a 1Y swap that starts at
-// the first knot leaves the front to smoothing.
+// the SOFR spec above (the 1d fixing from the value date) is anchored; dropping that row for a 1Y swap that starts at
+// the first knot leaves the front to smoothing. Since 2026-11-02 the anchor is the curve's OWN fixing: the same spec
+// with a 1w deposit in place of the 1D fixing warns, naming the tenor.
 TEST(ApiPeriphery, TheCompileVerbWarnsOnACurveWithoutAFrontAnchor) {
   const char* anchored = R"({"value_date":"2026-07-08","smoothness":"light","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
     "regions":[{"id":"r0","name":"Flat","policy":"Flat","sigma":0.0},{"id":"r1","name":"Hermite","policy":"Hermite","sigma":0.0}],
     "instruments":[
-      {"type":"rate","end":"1w","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
+      {"type":"rate","end":"1d","start":"0d","adds_knot":true,"knot_region":"front","quote_kind":"Rate","has_quote":true,"unit":"dec","target":0.0432},
       {"type":"swap","end":"1Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0415},
       {"type":"swap","end":"2Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0398},
       {"type":"swap","end":"5Y","start":null,"adds_knot":true,"knot_region":"back","quote_kind":"ParRate","has_quote":true,"unit":"dec","target":0.0389}]}]})";
   const auto ok = api::compile_spec(json::parse(anchored), "2026-07-08");
   for (const auto& w : ok.warnings) EXPECT_EQ(w.find("No front anchor"), std::string::npos) << w;
+  ASSERT_EQ(ok.bundle.curves.size(), 1u);
+  EXPECT_NEAR(ok.bundle.curves[0].fixing_tenor, 1.0 / 365.0, 1e-12) << "the compile verb stamps the overnight index's 1D tenor";
+  {
+    std::string one_week = anchored;
+    one_week.replace(one_week.find("\"end\":\"1d\""), 10, "\"end\":\"1w\"");
+    const auto wk = api::compile_spec(json::parse(one_week), "2026-07-08");
+    bool warned = false;
+    for (const auto& w : wk.warnings) warned = warned || (w.find("No front anchor") != std::string::npos && w.find("(1D)") != std::string::npos);
+    EXPECT_TRUE(warned) << "a 1W deposit is not the overnight curve's fixing: the verb warns, naming the 1D tenor";
+  }
   // the same curve with its first pillar a FORWARD-STARTING swap (1Y x 1Y): no instrument reads the front window
   const char* unanchored = R"({"value_date":"2026-07-08","smoothness":"light","curves":[{"id":"SOFR","currency":"USD","index":"USD-SOFR","kind":"outright",
     "regions":[{"id":"r1","name":"Hermite","policy":"Hermite","sigma":0.0}],

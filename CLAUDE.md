@@ -12,7 +12,7 @@ Guidance for Claude Code when working in this repository. Read this first, every
 
 ## 0. Design principles
 
-> **The law is [`PRINCIPLES.md`](PRINCIPLES.md) (P0–P13, ratified 2026-09-08; P14 the verb codec; P15 every curve has a front anchor, 2026-11-01).**
+> **The law is [`PRINCIPLES.md`](PRINCIPLES.md) (P0–P13, ratified 2026-09-08; P14 the verb codec; P15 every curve has a front anchor, 2026-11-01 -- and the anchor is the curve's OWN fixing, a 1D anchor for a 1D index, 2026-11-02).**
 > **[`ASSUMPTIONS.md`](ASSUMPTIONS.md) is the inventory of every approximation, threshold, premise and default with its pinning test (2026-09-10); update the entry in the same commit as the code.** The bullets below are the
 > original statement kept for history; where they disagree with `PRINCIPLES.md`, `PRINCIPLES.md` wins.
 

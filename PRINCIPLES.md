@@ -101,10 +101,12 @@ that needs something the library cannot do gets a library function first. A defa
 library struct, never re-stated in a decoder. `tools/verb_density.py` (verify.sh) counts what each api file still
 carries from clang's typed AST and locks it in `tests/verb_density.lock`: a count may only go down (E7).
 
-**P15. Every curve has a front anchor.** A curve's first knot is pinned by an instrument that reads THAT curve's
-forward over one window starting at the front -- a fixing or deposit, a meeting-to-meeting or futures observation, a
-single-coupon swap, an FX forward from the value date; for a spread curve its 1D fixing at zero spread over the base,
-since the overnight fixing is the same whoever clears it. Never the leading region's flat extrapolation of a term
+**P15. Every curve has a front anchor, and the anchor is the curve's own fixing.** A curve's first knot is pinned by
+an instrument that reads THAT curve's forward over the window of its index tenor starting at the front -- the 1D fixing
+of an overnight curve (ESTR, SOFR), the 3M fixing of a 3M tenor curve (2026-11-02: never a 1W deposit, a 1M future or a
+1Y OIS standing in for the 1D fixing); for a spread curve its 1D fixing at zero spread over the base, since the
+overnight fixing is the same whoever clears it; an xccy collateral curve, which has no index, its FX forward from the
+value date. Never the leading region's flat extrapolation of a term
 pillar, and never a discount-only read (a par rate's discounting column vanishes at the front). The state at every
 knot is a forward; the front one is a market quote like any other. `calibration::front_anchors` (`bundle_problem.hpp`) is the check and the `compile` verb warns on
 an unanchored curve; `tests/front_anchor_rule_test.cpp` / `front_anchor_reference_test.cpp` walk every fixture in the repo (ratified

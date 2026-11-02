@@ -27,8 +27,8 @@ void expect_anchored(const std::string& name, const cal::BundleProblem& p) {
     if (a.first_knot < 0.0) continue;
     EXPECT_GE(a.row, 0) << name << ": curve " << a.curve << " (first knot " << a.first_knot
                         << "y) has no front anchor -- no row reads its forward over one window from the front";
-    std::printf("  %-26s curve %2d first knot %7.4fy  anchor row %3d  window [%.4f, %.4f]\n", name.c_str(), a.curve, a.first_knot,
-                a.row, a.start, a.end);
+    std::printf("  %-26s curve %2d first knot %7.4fy  anchor row %3d  window [%.4f, %.4f]  tenor %7.4f\n", name.c_str(), a.curve, a.first_knot,
+                a.row, a.start, a.end, a.tenor);
   }
 }
 }  // namespace

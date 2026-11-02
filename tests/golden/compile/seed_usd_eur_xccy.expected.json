@@ -4,6 +4,7 @@
       {
         "base": -1,
         "currency": 0,
+        "fixing_tenor": 0.0027397260273972603,
         "regions": [
           {
             "knots": [
@@ -44,6 +45,7 @@
       {
         "base": -1,
         "currency": 1,
+        "fixing_tenor": 0.0027397260273972603,
         "regions": [
           {
             "knots": [
@@ -112,6 +114,7 @@
       {
         "base": 1,
         "currency": 1,
+        "fixing_tenor": 0.25,
         "regions": [
           {
             "knots": [
@@ -138,6 +141,7 @@
       {
         "base": 3,
         "currency": 1,
+        "fixing_tenor": 0.5,
         "regions": [
           {
             "knots": [

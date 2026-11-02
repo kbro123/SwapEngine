@@ -270,6 +270,7 @@ cal::BundleCurveSpec spec_from(const json::object& o) {
   into(o, "back", legacy_back);
   into(o, "base", s.base);
   into(o, "currency", s.currency);
+  into(o, "fixing_tenor", s.fixing_tenor);  // P15: the curve's index tenor (years); absent = not stated
   if (o.contains("regions"))
     for (const auto& e : o.at("regions").as_array()) {
       const auto& ro = e.as_object();
@@ -405,6 +406,7 @@ json::object spec_to(const cal::BundleCurveSpec& s) {
   json::object o;
   o["base"] = s.base;
   o["currency"] = s.currency;
+  if (s.fixing_tenor > 0.0) o["fixing_tenor"] = s.fixing_tenor;
   // Canonical curve representation on the wire: ALWAYS `regions`. modules() collapses the legacy Flat-front
   // + Hermite-back `meeting`/`back` layout into the identical region list, so a meeting/back-authored curve
   // and a region-authored curve serialize byte-identically — one representation, not two. (bundle_from_json

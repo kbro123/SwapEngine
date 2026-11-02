@@ -172,20 +172,38 @@ inline void validate_problem(const BundleProblem& p, const std::string& where = 
 // (ParRate/Rate/ZeroCouponRate) quote, clamped to [0.1%, 20%], falling back to 2% for a bundle with no outright
 // rows. Spread curves and turn deltas always seed at 0. (Moved from api/bundle_api.cpp, E7 3.6: it is a function
 // of the problem alone, and calibration-layer code seeds from it.)
-// ---- THE FRONT ANCHOR RULE (owner's rule, 2026-11-01; PRINCIPLES.md P15, ASSUMPTIONS K53) -----------------------
-// Every curve's front is pinned by an instrument that reads THAT curve's forward over ONE window starting at the
-// front: a Rate row forecast on it (a fixing, a deposit, a meeting-to-meeting or futures observation), a quotient row
-// whose leg on the curve is a single coupon (a 1Y OIS, a 6M IRS to its first pillar), an FX forward reading its
-// discount from the value date (one integral from 0), or a Portfolio with such a component (the CCP 1D zero-basis
-// row). A multi-coupon swap is NOT an anchor, nor is any discount-only read: a par rate's discounting column vanishes
-// at the front, which is how a spread curve with a knot per pillar ended up held by the smoothing tie-breaker alone.
-// Region 0 flat-extrapolates its first knot, so an unanchored front silently carries a term pillar's value to day one.
+// ---- THE FRONT ANCHOR RULE (owner's rule, 2026-11-01, sharpened 2026-11-02; PRINCIPLES.md P15, ASSUMPTIONS K53) ---
+// Every curve's front is pinned by THE CURVE'S OWN FIXING: an instrument that reads THAT curve's forward over one window
+// of its index tenor starting at the front -- the 1D fixing of an overnight curve (ESTR, SOFR; a CCP discount spread at
+// zero spread over its RFR), the 3M fixing of a 3M tenor curve. The tenor is `CurveStructure::fixing_tenor` (engine-
+// blind data the builder stamps from the index, the compile verb from the conventions DB). A curve that states no tenor
+// is held to the single-window form of the rule as ratified on 2026-11-01: a Rate row forecast on it (a fixing, a
+// deposit, a meeting-to-meeting or futures observation), a quotient row whose leg on the curve is a single coupon (a 1Y
+// OIS, a 6M IRS to its first pillar), an FX forward reading its discount from the value date (one integral from 0), or
+// a Portfolio with such a component (the CCP 1D zero-basis row) -- the window ending at the first knot. A multi-coupon
+// swap is NOT an anchor, nor is any discount-only read: a par rate's discounting column vanishes at the front, which is
+// how a spread curve with a knot per pillar ended up held by the smoothing tie-breaker alone. Region 0 flat-
+// extrapolates its first knot, so an unanchored front silently carries a term pillar's value to day one.
 struct FrontAnchor {
   int curve = -1;
   double first_knot = 0.0;  // the curve's first interpolation knot time (-1: no interp knots)
+  double tenor = -1.0;      // the curve's stated fixing tenor (years), < 0 when it states none
   int row = -1;             // the anchoring row (global residual index), -1 = UNANCHORED
   double start = 0.0, end = 0.0;  // the anchoring window on the curve
 };
+// How far a fixing's window may differ from the stated tenor: a 1D fixing over a four-day weekend (4/360 = 0.011y)
+// is the 1D fixing; a 1W deposit (7/365 = 0.019y) is not. Relative beyond 0.12y so a 3M fixing's ACT/360 stub passes.
+inline double anchor_length_tol(double tenor) { return std::max(0.012, 0.1 * tenor); }
+// A stated tenor as the market spells it, for the warning: days under a week, whole weeks, else months / years.
+inline std::string fixing_tenor_label(double tenor) {
+  const int days = static_cast<int>(std::lround(tenor * 365.0));
+  const int months = static_cast<int>(std::lround(tenor * 12.0));
+  if (days < 7) return std::to_string(std::max(days, 1)) + "D";
+  if (months > 0 && std::abs(days - months * 365.0 / 12.0) <= 1.5)
+    return months % 12 == 0 ? std::to_string(months / 12) + "Y" : std::to_string(months) + "M";
+  if (days % 7 == 0) return std::to_string(days / 7) + "W";
+  return std::to_string(days) + "D";
+}
 // The one window instrument `ins` reads of curve c's forward, if it is a single-window read (see above).
 inline bool anchor_window(const Instrument& ins, int c, double& s, double& e) {
   const auto leg_window = [&](const FloatLeg& leg) {
@@ -215,14 +233,16 @@ inline bool anchor_window(const Instrument& ins, int c, double& s, double& e) {
   }
 }
 // Per curve, the first row that anchors its front, or row = -1. The window starts within `front_tol` years of the
-// value date (a spot lag; a futures window that opened before the value date starts at a negative time) and ENDS AT
-// the first knot: the front knot IS that instrument's maturity -- the knot sits at the window's end or within
-// `lag_tol` after it (a knot at the instrument's PAYMENT time, a pay lag past the accrual end). A leading Flat region
-// is the meeting-date front, whose first segment [0, t1] is ONE value however long (region 0 flat-extrapolates its
-// first knot): there ANY window reading that segment anchors it -- a 1W deposit under a meeting six weeks out as much
-// as the SOFR reference market's 1M futures reaching the FOMC knot. (Until 2026-11-02 the Flat window had to REACH
-// the knot, which refused exactly that deposit.) A window that ends past a non-Flat first knot pins that knot
-// together with the next one and leaves the front to extrapolation -- not an anchor.
+// value date (a spot lag; a futures window that opened before the value date starts at a negative time). A curve with
+// a STATED tenor is anchored only by its own fixing: a window of that length (within `anchor_length_tol`) -- a 1W
+// deposit, a 1M future or a 1Y OIS on an overnight curve is not the 1D fixing and does not count -- which, under a
+// leading Flat region (the meeting-date front, whose first segment is one value however long), reads that first
+// segment, and under any other leading region ENDS AT the first knot: the fixing IS the front knot. A curve stating no
+// tenor (the fixtures) keeps the 2026-11-01 form: under a leading Flat region the window REACHES the first knot (the
+// reference market's 1M future running into the FOMC knot), otherwise it ends there -- the knot sits at the window's
+// end or within `lag_tol` after it (a knot at the instrument's PAYMENT time, a pay lag past the accrual end). A window
+// that ends past a non-Flat first knot pins that knot together with the next one and leaves the front to
+// extrapolation -- not an anchor.
 inline std::vector<FrontAnchor> front_anchors(const BundleProblem& p, double front_tol = 0.03, double lag_tol = 0.03) {
   std::vector<FrontAnchor> out;
   for (int c = 0; c < p.n_curves(); ++c) {
@@ -230,12 +250,19 @@ inline std::vector<FrontAnchor> front_anchors(const BundleProblem& p, double fro
     a.curve = c;
     const auto& cs = p.curves[static_cast<std::size_t>(c)];
     a.first_knot = cs.n_interp_knots() > 0 ? cs.regions.front().knots.front() : -1.0;
+    a.tenor = cs.fixing_tenor;
     const bool flat_front = !cs.regions.empty() && cs.regions.front().scheme == curve::Scheme::Flat;
+    const bool stated = a.tenor > 0.0;
     for (int r = 0; r < p.n_residuals() && a.row < 0; ++r) {
       double s = 0.0, e = 0.0;
       if (!anchor_window(p.row(r), c, s, e) || s > front_tol) continue;
-      const bool ends_at_knot = flat_front ? (e > s && e > 0.0) : (a.first_knot >= e - 1e-6 && a.first_knot <= e + lag_tol);
-      if (ends_at_knot) { a.row = r; a.start = s; a.end = e; }
+      if (stated && std::abs((e - s) - a.tenor) > anchor_length_tol(a.tenor)) continue;  // not the curve's own fixing
+      // stated + Flat: the fixing reads the first segment; unstated + Flat: the window REACHES the first knot (the
+      // 2026-11-01 form: the reference market's 1M future running into the FOMC knot); otherwise it ends at the knot.
+      const bool anchors = stated && flat_front ? e > 0.0
+                         : flat_front          ? e + lag_tol >= a.first_knot
+                                               : (a.first_knot >= e - 1e-6 && a.first_knot <= e + lag_tol);
+      if (anchors) { a.row = r; a.start = s; a.end = e; }
     }
     out.push_back(a);
   }
@@ -253,11 +280,17 @@ inline std::vector<std::string> front_anchor_warnings(const BundleProblem& p, co
     char knot[32];
     std::snprintf(knot, sizeof knot, "%.3g", a.first_knot);
     const std::size_t c = static_cast<std::size_t>(a.curve);
-    out.push_back("No front anchor (P15): curve '" + (c < names.size() ? names[c] : std::string("?")) + "' (id " +
-                  (c < ids.size() ? ids[c] : std::string("?")) +
-                  ") has no instrument reading its forward over one window from the value date to its first knot (" +
-                  std::string(knot) + "y); its front is held by smoothing alone. Add a fixing, deposit or " +
-                  "first-pillar swap (a spread curve: its 1D fixing at zero spread).");
+    const std::string who = "No front anchor (P15): curve '" + (c < names.size() ? names[c] : std::string("?")) + "' (id " +
+                            (c < ids.size() ? ids[c] : std::string("?")) + ") has no instrument reading its forward over ";
+    if (a.tenor > 0.0) {
+      const std::string tok = fixing_tenor_label(a.tenor);
+      out.push_back(who + "its own fixing tenor (" + tok + ") from the value date; its front is held by smoothing alone. " +
+                    "Add the " + tok + " fixing (a spread curve: at zero spread over its base).");
+    } else {
+      out.push_back(who + "one window from the value date to its first knot (" + std::string(knot) +
+                    "y); its front is held by smoothing alone. Add a fixing, deposit or first-pillar swap " +
+                    "(a spread curve: its 1D fixing at zero spread).");
+    }
   }
   return out;
 }

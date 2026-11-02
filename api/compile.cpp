@@ -574,6 +574,9 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     const std::string cname = js(c, "name", "?");
     const int ci = idx.at(cid);
     const std::string ccy = js(c, "currency"), ix = js(c, "index");  // the curve's currency / index, read once
+    // P15 (owner's rule, 2026-11-02): the curve's front anchor is ITS OWN FIXING, the window of its index tenor
+    // (build::index_fixing_tenor: 1D for an overnight index, the tenor of a term one, none for a curve without an index).
+    R.bundle.curves[static_cast<std::size_t>(ci)].fixing_tenor = b::index_fixing_tenor(ix);
     const int my_ccy = ccy_index(ccy);
     const int disc = ccy_root.count(my_ccy) ? ccy_root.at(my_ccy) : root_outright;
     const int spread_base = (js(c, "kind") == "spread" && present(c, "base")) ? idx.at(js(c, "base")) : disc;
@@ -712,9 +715,10 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   R.grid = display_grid(max_t, all_knots);
   for (const json::object* cp : order) R.curve_names.push_back(js(*cp, "name", "?"));
   for (const json::object* cp : order) R.order_ids.push_back(js(*cp, "id"));
-  // EVERY CURVE HAS A FRONT ANCHOR (PRINCIPLES P15, 2026-11-01): a curve whose front no single-window instrument reads
-  // is held there by the smoothing tie-breaker alone (the unanchored CCP curves: a 0.1 bp tick swung the spreads
-  // 600 bp). A WARNING per such curve (calibration::front_anchor_warnings), not a refusal.
+  // EVERY CURVE HAS A FRONT ANCHOR (PRINCIPLES P15, 2026-11-01; its own FIXING since 2026-11-02): a curve whose front
+  // its index-tenor fixing does not read is held there by the smoothing tie-breaker alone (the unanchored CCP curves:
+  // a 0.1 bp tick swung the spreads 600 bp). A WARNING per such curve (calibration::front_anchor_warnings), not a
+  // refusal.
   {
     const std::vector<std::string> p15 = cal::front_anchor_warnings(R.bundle, R.curve_names, R.order_ids);
     R.warnings.insert(R.warnings.end(), p15.begin(), p15.end());

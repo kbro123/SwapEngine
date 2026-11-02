@@ -46,6 +46,13 @@ struct CurveStructure {
   // curve and FX conversion at construction time (CLAUDE.md §1: the engine names no currency). Default
   // 0 keeps every single-currency bundle byte-identical.
   int currency = 0;
+  // The curve's INDEX TENOR in years (engine-blind like `currency`; the builder stamps it from the index, the compile
+  // verb from the conventions DB: 1/365 for an overnight index, 0.25 for a 3M one). It is the length of the FRONT
+  // ANCHOR window PRINCIPLES P15 demands (owner's rule, 2026-11-02: a curve's front is pinned by ITS OWN fixing -- the
+  // 1D fixing of an overnight curve, the 3M fixing of a 3M tenor curve; `calibration::front_anchors`). < 0: not
+  // stated -- the single-window form of the rule as ratified on 2026-11-01 applies (the fixtures). Never read by the
+  // kernel.
+  double fixing_tenor = -1.0;
   // Interpolation regions (each a scheme + its knot times) -- the ONE representation of this curve's
   // interpolation. Exactly one curve type is built from modules(); region knots are the free forwards,
   // region by region, in this order. (The legacy front/back Flat+Hermite pair is now just the two-region

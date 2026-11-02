@@ -188,6 +188,16 @@ inline std::string index_calendar(const std::string& index) {
   const cvd::IndexConv ix = cvd::require_index(index);
   return sv_str(cvd::require_field(ix.calendar, "calendar", ix.id));
 }
+// The index's FIXING TENOR in years -- the length of the front-anchor window PRINCIPLES P15 demands of a curve on it
+// (owner's rule, 2026-11-02: a 1D anchor for a 1D index, the tenor fixing for a tenor curve): an overnight index fixes
+// over ONE day by definition (the DB carries a tenor only for term indices), a term index over its tenor. -1 for no
+// index (an xccy collateral curve) or one the DB does not know: the curve states no tenor.
+inline double index_fixing_tenor(const std::string& index) {
+  if (index.empty()) return -1.0;
+  const auto ix = cvd::index(index);
+  if (!ix) return -1.0;
+  return !ix->tenor.empty() ? cvd::period_years(ix->tenor) : cvd::period_years("1D");
+}
 
 }  // namespace swaps::build
 
