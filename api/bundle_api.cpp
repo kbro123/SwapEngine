@@ -119,8 +119,7 @@ BundleSession::BundleSession(cal::BundleProblem prob) : prob_(std::move(prob)) {
   }
   for (const auto& c : prob_.curves) {
     if (!c.regions.empty()) has_modular_ = true;  // custom interpolation regions
-    for (const auto& r : c.regions)        // only a NON-LINEAR scheme forces off the W-cache
-      if (!curve::scheme_is_linear(r.scheme)) has_nonlinear_ = true;  // the one definition (curve_module.hpp)
+    if (!c.linear()) has_nonlinear_ = true;       // only a NON-LINEAR scheme forces off the W-cache (curve_spec.hpp)
   }
   x_ = Eigen::VectorXd::Zero(prob_.n_knots());
   resolve_fixings();  // resolve any schedule-carrying observations (no-op when none carry a schedule)

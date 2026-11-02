@@ -62,13 +62,13 @@ TEST(AadBlockGroups, GroupedBlocksAreOneBlocksDoublesBitForBit) {
     // Jacobian (stored mids) and residuals
     const Eigen::MatrixXd Jg = h.jacobian(x);
     Eigen::MatrixXd J1 = Eigen::MatrixXd::Zero(p.n_residuals(), p.n_knots());
-    one.blk.jacobian_into(x, J1);
+    one.blk.jacobian_vs_into(x, p.market(), J1, nullptr);
     expect_same_rows(Jg, J1, one.rows, "jacobian");
     // Residuals go through each block's DF cache, whose GEMV now runs over the closure's columns instead of the whole
     // state: the same sum with the zero terms dropped, so the vectorised summation order differs by an ulp.
     const Eigen::VectorXd rg = h.residuals(x);
     Eigen::VectorXd r1 = Eigen::VectorXd::Zero(p.n_residuals());
-    one.blk.residuals_into(x, r1);
+    one.blk.residuals_vs_into(x, p.market(), r1);
     for (int r : one.rows) EXPECT_NEAR(rg[r], r1[r], 4e-16 * (1.0 + std::abs(r1[r]))) << s.name << " residual row " << r;
     // the live-market forms the streamer uses
     Eigen::MatrixXd Jvg = Eigen::MatrixXd::Zero(p.n_residuals(), p.n_knots()), Jv1 = Jvg;

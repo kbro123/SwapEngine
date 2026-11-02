@@ -90,30 +90,16 @@ class CompiledCurveSet {
   // piecewise-linear nor tangent-capable (MonotoneCubic and MonotoneConvex regions together) is refused as before.
   void enable_pwl() {
     for (const auto& c : specs_) {
-      bool pwl = true, tangent = true;
-      for (const auto& r : c.regions) {
-        pwl = pwl && curve::scheme_is_piecewise_linear(r.scheme);
-        tangent = tangent && curve::scheme_has_tangent(r.scheme);
-      }
-      if (!(pwl || tangent))  // the same rule as pricing::curve_tier_trackable (curve_handle.hpp)
+      if (!c.tier_trackable())  // the curve's own answer (curve_spec.hpp)
         throw std::invalid_argument("CompiledCurveSet: the state-tracking W tier takes a piecewise-linear curve (MonotoneCubic) "
                                     "or a tangent curve (MonotoneConvex), not a curve mixing the two; its rows belong on the AAD tier");
     }
     pwl_ = true;
   }
   bool pwl() const { return pwl_; }
-  bool value_dependent(int c) const {
-    for (const auto& r : specs_[c].regions)
-      if (!curve::scheme_is_linear(r.scheme)) return true;
-    return false;
-  }
+  bool value_dependent(int c) const { return !specs_[c].linear(); }
   // A TANGENT curve: value-dependent, every region tangent-capable (its W is the tangent at the state).
-  bool tangent_curve(int c) const {
-    if (!value_dependent(c)) return false;
-    for (const auto& r : specs_[c].regions)
-      if (!curve::scheme_has_tangent(r.scheme)) return false;
-    return true;
-  }
+  bool tangent_curve(int c) const { return !specs_[c].linear() && specs_[c].has_tangent(); }
   int n_tangent_curves() const { return static_cast<int>(tg_.size()); }
   int tangent_syncs() const { return tangent_syncs_; }
   // The state a value-dependent curve's W is taken at (its interp-knot segment of the stacked x).

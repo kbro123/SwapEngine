@@ -134,10 +134,10 @@ TEST(KernelEdges, TurnJumpRidesTheAadBlock) {
   cal::AadBlock blk;
   blk.init(p.curves, {p.instruments[static_cast<std::size_t>(row)]}, {row}, p.n_knots());
   Eigen::VectorXd rb = Eigen::VectorXd::Zero(p.n_residuals());
-  blk.residuals_into(xt, rb);
+  blk.residuals_vs_into(xt, p.market(), rb);
   EXPECT_LT(std::abs(rb[row]), 1e-12) << "the block prices the turn jump, not NaN";
   Eigen::MatrixXd Jb = Eigen::MatrixXd::Zero(p.n_residuals(), p.n_knots());
-  blk.jacobian_into(xt, Jb);
+  blk.jacobian_vs_into(xt, p.market(), Jb, nullptr);
   EXPECT_NEAR(Jb(row, delta_col), 1.0, 1e-12) << "the turn's curve is in the block's touched set";
   Eigen::VectorXd rest_b = Jb.row(row).transpose();
   rest_b[delta_col] = 0.0;

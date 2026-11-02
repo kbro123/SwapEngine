@@ -131,7 +131,6 @@ class CompiledRows final : public RowEngine {
     scatter(dsub_, out);
   }
   void model_rates_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override { scatter(eng_.model_rates(x), out); }
-  void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override { scatter(eng_.residuals(x), out); }
   void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out) const override {
     gather(q);
     scatter(eng_.residuals_vs(x, qsub_), out);
@@ -139,10 +138,6 @@ class CompiledRows final : public RowEngine {
   void residuals_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::VectorXd& out, Eigen::VectorXd* model) const override {
     residuals_vs_into(x, q, out);
     if (model) scatter(eng_.last_model_rates(), *model);
-  }
-  void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const override {
-    const Eigen::MatrixXd Jc = eng_.jacobian(x);
-    for (std::size_t j = 0; j < rows_.size(); ++j) J.row(rows_[j]) = Jc.row(static_cast<int>(j));
   }
   // Into the caller's J (C6): the sub-Jacobian lands in a member scratch, so a warm call allocates no matrix.
   void jacobian_vs_into(const Eigen::VectorXd& x, const Eigen::VectorXd& q, Eigen::MatrixXd& J, Eigen::VectorXd* r) const override {
@@ -242,13 +237,16 @@ class HybridBundleResidual {
   // SCALAR quote updates by GLOBAL row (the object model, 2026-09-10): no Instrument is copied; the row's
   // owning engine takes it.
   void set_quote(int row, double market, double lower, double upper, double decay) {
+    market_[row] = market;
     engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(row)])]->set_quote(row, market, lower, upper, decay);
   }
   void set_market(const Eigen::VectorXd& q) {
     if (q.size() != n_res_) throw std::invalid_argument("HybridBundleResidual::set_market: market length differs");
+    market_ = q;
     for (int r = 0; r < n_res_; ++r) engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(r)])]->set_market(r, q[r]);
   }
   void set_market(int row, double market) {  // one row's target (a session's quote block under a constraint block)
+    market_[row] = market;
     engines_[static_cast<std::size_t>(owner_[static_cast<std::size_t>(row)])]->set_market(row, market);
   }
   // The FX spot of row `row`'s resetting leg (a book of Npv rows under an FX move): the row's owning engine takes it.
@@ -286,11 +284,10 @@ class HybridBundleResidual {
     for (const auto& e : engines_) e->model_rates_into(x, out_);
     return out_;
   }
+  // Residuals against the rows' STORED targets: the live-market form at q = market_ (one spelling, 2026-11-01).
   const Eigen::VectorXd& residuals(const Eigen::VectorXd& x) const {
     if (whole_) return compiled_->engine().residuals(x);
-    res_.resize(n_res_);
-    for (const auto& e : engines_) e->residuals_into(x, res_);
-    return res_;
+    return residuals_vs(x, market_);
   }
   // Streaming residual/Jacobian against a live market q (global residual order). Drives frozen-Newton for a
   // mixed bundle too: each engine's `_vs` form on its rows. When one compiled engine owns every row it is a
@@ -336,8 +333,8 @@ class HybridBundleResidual {
   }
   Eigen::MatrixXd jacobian(const Eigen::VectorXd& x) const {
     if (whole_) return compiled_->engine().jacobian(x);
-    Eigen::MatrixXd J = Eigen::MatrixXd::Zero(n_res_, static_cast<int>(x.size()));
-    for (const auto& e : engines_) e->jacobian_into(x, J);
+    Eigen::MatrixXd J;
+    jacobian_vs_into(x, market_, J, nullptr);  // the live-market form at the stored targets (one spelling, 2026-11-01)
     return J;
   }
 
@@ -418,6 +415,8 @@ class HybridBundleResidual {
     owner_.assign(static_cast<std::size_t>(n_res_), -1);
     for (std::size_t k = 0; k < engines_.size(); ++k)
       for (int r : engines_[k]->rows()) owner_[static_cast<std::size_t>(r)] = static_cast<int>(k);
+    market_.resize(n_res_);
+    for (int r = 0; r < n_res_; ++r) market_[r] = p.row(r).market;
     whole_ = compiled_ && static_cast<int>(compiled_->rows().size()) == n_res_;
     return true;
   }
@@ -438,6 +437,7 @@ class HybridBundleResidual {
     return std::vector<int>(closed.begin(), closed.end());
   }
   bool whole_ = false;                                // ONE compiled engine owns every row: direct delegate, no stitch
+  Eigen::VectorXd market_;                            // every row's stored target (the `_vs` forms at this q are residuals / jacobian)
   mutable Eigen::VectorXd out_, res_;
 };
 

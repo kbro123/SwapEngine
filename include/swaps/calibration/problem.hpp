@@ -537,17 +537,9 @@ struct has_state<C, std::void_t<decltype(std::declval<const C&>().state(0))>> : 
 // weight: continuity at the edge forces that, and it is the right reading of a bid/offer tolerance.
 // No band (upper <= lower): the plain residual q − m. AAD-safe: branch selection on q (one-sided
 // derivative exactly at an edge), constants folded so `q` is always the plain-scalar operand.
-// The three band forms are the PenaltyMap's band instance (2026-10-07): the shape is written once, above.
-template <class Scalar>
-Scalar band_residual(const Scalar& q, double market, double lower, double upper, double decay) {
-  return PenaltyMap::band(lower, upper, decay).residual<Scalar>(q, market);
-}
-inline std::pair<double, double> band_residual_d(double q, double market, double lower, double upper, double decay) {
-  return PenaltyMap::band(lower, upper, decay).residual_d(q, market);
-}
-inline double band_slope(double q, double lower, double upper, double decay) {
-  return PenaltyMap::band(lower, upper, decay).slope_at(q, 0.5 * (lower + upper));  // a band's target piece is the band
-}
+// The band IS the PenaltyMap's band instance (2026-10-07; the three free-function shims that wrapped it had test
+// readers only and went on 2026-11-02, review item 2.4): PenaltyMap::band(lower, upper, decay).residual / residual_d /
+// slope_at.
 
 inline PenaltyMap Instrument::penalty() const {
   if (quote == QuoteKind::FxForward) return PenaltyMap::plain();

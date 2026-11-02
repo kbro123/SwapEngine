@@ -95,10 +95,7 @@ class CompiledBundleResidual {
     {  // the UNSCALED quote rows of rows evaluated on a zero-slope piece (see jacobian_core): at most one per row whose
        // map has such a piece, sized here so a refresh that finds one allocates nothing (a zero-slope map installed later
        // by set_quote grows it once, in that refresh).
-      int cap = 0;
-      for (const RowMeta& m : rows_)
-        for (int i = 0; i <= m.penalty.n; ++i) if (m.penalty.s[i] == 0.0) { ++cap; break; }
-      dead_J_.resize(cap, cs_.n_knots());
+      dead_J_.resize(dead_cap_, cs_.n_knots());  // counted at registration (register_generic)
     }
 
     // ---- the support-blocked Jacobian's STRUCTURE (built once; see jacobian_vs) --------------------
@@ -752,7 +749,11 @@ class CompiledBundleResidual {
   void register_generic(const BundleProblem& p, const std::vector<int>& rows) {
     for (int row = 0; row < n_gen_; ++row) {  // the engine's rows, in its local order (global: BundleProblem::row)
       const Instrument& ins = p.row(rows[static_cast<std::size_t>(row)]);
-      rows_.push_back(RowMeta{ins.quote, ins.fx_time, ins.penalty_map, ins.penalty()});
+      rows_.push_back(RowMeta{ins.quote, ins.fx_time, ins.penalty_map});
+      {  // a row whose map has a zero-slope piece may be evaluated dead: one unscaled quote row of capacity for it
+        const PenaltyMap pm = ins.penalty();
+        for (int i = 0; i <= pm.n; ++i) if (pm.s[i] == 0.0) { ++dead_cap_; break; }
+      }
       market_[row] = ins.market;
       // The row's residual map is decided by the TOP-LEVEL quote kind, exactly as instrument_residual does:
       // a standalone FX forward is the log-basis row (never banded -- the templated residual applies the log
@@ -889,9 +890,9 @@ class CompiledBundleResidual {
     QuoteKind quote;
     double fx_time;
     std::optional<PenaltyMap> penalty_map;  // the row's general map, if it carries one
-    PenaltyMap penalty;                     // Instrument::penalty() at registration (the dead-row capacity)
   };
   std::vector<RowMeta> rows_;
+  int dead_cap_ = 0;  // rows registered with a zero-slope piece (the dead-row capacity, dead_J_)
   pricing::CompiledCurveSet cs_;
   // The ONE generic block (design §3): every float leg of every quotient term in ONE float batch (signed, mapped
   // back to its term by leg_q_/leg_sign_), the fixed annuities, and the rate batch for the futures.

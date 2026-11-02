@@ -153,8 +153,9 @@ void jacobian_tier(benchmark::State& st, std::size_t i, bool aad) {
   Eigen::MatrixXd J = Eigen::MatrixXd::Zero(f.rows.n_residuals(), f.rows.n_knots());
   double n_rows = 0;
   for (const auto* e : tier) n_rows += static_cast<double>(e->rows().size());
+  const Eigen::VectorXd q = f.rows.market();
   for (auto _ : st) {
-    for (const auto* e : tier) e->jacobian_into(f.x_cal, J);
+    for (const auto* e : tier) e->jacobian_vs_into(f.x_cal, q, J, nullptr);
     benchmark::DoNotOptimize(J.data());
   }
   st.counters["tier_rows"] = n_rows;

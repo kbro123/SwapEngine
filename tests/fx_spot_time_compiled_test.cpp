@@ -160,8 +160,8 @@ TEST(FxSpotTimeCompiled, PortfolioOfFxForwardsIsACompiledRowWithAPlainResidual) 
   pb.instruments[static_cast<std::size_t>(r)].band_upper = ff.market + 5e-4;
   pb.instruments[static_cast<std::size_t>(r)].band_decay = 0.25;
   const cal::CompiledBundleResidual crb(pb);
-  // The Huber band residual of the PORTFOLIO quote (problem.hpp band_residual), whichever side of the band it sits.
-  EXPECT_NEAR(crb.residuals(xs)[r], cal::band_residual_d(want, ff.market, ff.market - 5e-4, ff.market + 5e-4, 0.25).first, 1e-14);
+  // The Huber band residual of the PORTFOLIO quote (problem.hpp PenaltyMap::band), whichever side of the band it sits.
+  EXPECT_NEAR(crb.residuals(xs)[r], cal::PenaltyMap::band(ff.market - 5e-4, ff.market + 5e-4, 0.25).residual_d(want, ff.market).first, 1e-14);
   EXPECT_NEAR(crb.residuals(xs)[r], pb.residuals<double>(xs)[r], 1e-14) << "== the templated banded residual";
   const Eigen::MatrixXd Jb = crb.jacobian(xs), Jbaad = cal::aad_jacobian(pb, xs);
   EXPECT_LE((Jb - Jbaad).cwiseAbs().maxCoeff() / scale, tol::jacobian_rel);

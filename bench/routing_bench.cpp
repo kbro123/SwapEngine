@@ -45,7 +45,8 @@ void routed_residual(benchmark::State& st, const Shape& s) {
 void aad_residual(benchmark::State& st, const Shape& s) {
   Arms a(s);
   Eigen::VectorXd r(s.prob.n_residuals());
-  for (auto _ : st) { r.setZero(); a.all_aad.residuals_into(s.x_true, r); benchmark::DoNotOptimize(r.sum()); }
+  const Eigen::VectorXd q = s.prob.market();
+  for (auto _ : st) { r.setZero(); a.all_aad.residuals_vs_into(s.x_true, q, r); benchmark::DoNotOptimize(r.sum()); }
 }
 void routed_jacobian(benchmark::State& st, const Shape& s) {
   Arms a(s);
@@ -65,7 +66,8 @@ void pwl_jacobian(benchmark::State& st, const Shape& s) {
 void aad_jacobian(benchmark::State& st, const Shape& s) {
   Arms a(s);
   Eigen::MatrixXd J(s.prob.n_residuals(), s.prob.n_knots());
-  for (auto _ : st) { J.setZero(); a.all_aad.jacobian_into(s.x_true, J); benchmark::DoNotOptimize(J.sum()); }
+  const Eigen::VectorXd q = s.prob.market();
+  for (auto _ : st) { J.setZero(); a.all_aad.jacobian_vs_into(s.x_true, q, J, nullptr); benchmark::DoNotOptimize(J.sum()); }
 }
 
 }  // namespace

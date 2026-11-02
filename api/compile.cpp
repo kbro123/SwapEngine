@@ -36,18 +36,11 @@ namespace px = swaps::pricing;
 
 namespace {
 
-// ---- Boost.JSON field accessors (mirror bundle_api.cpp) ------------------------------------------
-double get_d(const json::object& o, const char* k, double d) {
-  return o.contains(k) && !o.at(k).is_null() ? o.at(k).to_number<double>() : d;
-}
+// ---- Boost.JSON field accessors: jd / js from json_util.hpp (the same two were copied here as get_d / get_s until
+// 2026-11-02, review item 2.7); get_b stays STRICT (a present non-bool throws, where jb would default) and the
+// composer's own readers below keep its "a numeric string is a number" rule.
 bool get_b(const json::object& o, const char* k, bool d) {
   return o.contains(k) && !o.at(k).is_null() ? o.at(k).as_bool() : d;
-}
-std::string get_s(const json::object& o, const char* k, const char* d = "") {
-  if (!o.contains(k) || o.at(k).is_null()) return d;
-  const auto& v = o.at(k);
-  if (v.is_string()) return std::string(v.as_string().c_str());
-  return d;
 }
 // Present and non-null and (if a string) non-empty — Python's `x not in (None, "")`.
 bool present(const json::object& o, const char* k) {
@@ -154,12 +147,12 @@ struct RT { b::Date date; double t; };
 // spot lag), or for an xccy curve the pair's XCCY-MTM product. No literal fallback (P2).
 struct DateConv { std::string calendar, bdc; int spot_lag = -1; };
 DateConv date_conv_for_curve(const json::object& c) {
-  const std::string pair = get_s(c, "pair");
-  if (!pair.empty() && get_s(c, "index").empty()) {
+  const std::string pair = js(c, "pair");
+  if (!pair.empty() && js(c, "index").empty()) {
     const b::XccyConv x = b::xccy_conv(pair);
     return {x.calendar, x.bdc, x.spot_lag};
   }
-  const b::SwapConv sc = b::swap_conv(get_s(c, "currency"), get_s(c, "index"));
+  const b::SwapConv sc = b::swap_conv(js(c, "currency"), js(c, "index"));
   return {sc.calendar, sc.bdc, sc.spot_lag};
 }
 RT resolve_time(const std::string& tok, const b::Date& vd, bool roll, const DateConv& dc, const std::string& ctx) {
@@ -179,22 +172,22 @@ struct Resolved {
 };
 Resolved resolve_instrument(const json::object& ins, const b::Date& vd, const DateConv& dc,
                             const std::optional<std::string>& start_override, const std::string& ctx) {
-  const std::string type = get_s(ins, "type");
+  const std::string type = js(ins, "type");
   const bool roll = !(type == "fut1m" || type == "fut3m");
   Resolved r;
   if (present(ins, "end")) {
-    const RT e = resolve_time(get_s(ins, "end"), vd, roll, dc, ctx);
+    const RT e = resolve_time(js(ins, "end"), vd, roll, dc, ctx);
     r.ed = e.date; r.t_end = e.t; r.has_ed = true;
   } else {
-    r.t_end = get_d(ins, "time", 0.0);
+    r.t_end = jd(ins, "time", 0.0);
   }
-  if (get_s(ins, "quote_kind") == "Rate") {
+  if (js(ins, "quote_kind") == "Rate") {
     std::optional<std::string> start_tok = start_override ? start_override : opt_str(ins, "start");
     if (start_tok) {
       const RT s = resolve_time(*start_tok, vd, roll, dc, ctx);
       r.sd = s.date; r.t_start = s.t; r.has_sd = true;
     } else {
-      r.t_start = get_d(ins, "span_start", 0.0);
+      r.t_start = jd(ins, "span_start", 0.0);
     }
   }
   return r;
@@ -208,9 +201,9 @@ std::unordered_map<std::string, std::string> chained_meeting_starts(const json::
   std::vector<Q> quoted;
   for (std::size_t j = 0; j < insts.size(); ++j) {
     const auto& ins = insts[j].as_object();
-    if (get_s(ins, "type") == "meeting" && get_b(ins, "has_quote", false) && present(ins, "end")) {
+    if (js(ins, "type") == "meeting" && get_b(ins, "has_quote", false) && present(ins, "end")) {
       try {
-        const b::Date ed = b::resolve(get_s(ins, "end"), vd, dc.calendar, dc.bdc, dc.spot_lag);  // meeting date, adjusted on the index calendar
+        const b::Date ed = b::resolve(js(ins, "end"), vd, dc.calendar, dc.bdc, dc.spot_lag);  // meeting date, adjusted on the index calendar
         quoted.push_back({b::curve_time(vd, ed), b::iso(ed), ins_key(ins, j)});
       } catch (const std::exception&) { /* skip unresolvable, like Python */ }
     }
@@ -229,11 +222,11 @@ std::unordered_map<std::string, std::string> chained_meeting_starts(const json::
 px::RateObservation rate_obs(const json::object& ins, const Resolved& r, double a, double T,
                              const b::Date& vd, const std::string& dc, const std::string& cal,
                              const std::string& index) {
-  const std::string accrual = get_s(ins, "accrual");
+  const std::string accrual = js(ins, "accrual");
   if ((accrual == "averaged" || accrual == "compounded") && r.has_sd && r.has_ed) {
     if (!index.empty() && r.sd < vd)
       return b::scheduled_observation(vd, r.sd, r.ed, accrual, dc, cal, index);
-    return b::observation(vd, r.sd, r.ed, accrual, get_d(ins, "realized", 0.0), dc, cal);
+    return b::observation(vd, r.sd, r.ed, accrual, jd(ins, "realized", 0.0), dc, cal);
   }
   return b::plain_rate_obs(a, T);
 }
@@ -251,7 +244,7 @@ struct Layout {
   std::string policies;                        // display
 };
 Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_items) {
-  const std::string name = get_s(c, "name", "?");
+  const std::string name = js(c, "name", "?");
   const json::array* regions = nullptr;
   if (c.contains("regions") && c.at("regions").is_array() && !c.at("regions").as_array().empty())
     regions = &c.at("regions").as_array();
@@ -274,9 +267,9 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
   std::unordered_map<std::string, double> sigma, reg_lambda;
   for (const auto& e : *regions) {
     const auto& ro = e.as_object();
-    const std::string rid = get_s(ro, "id");
+    const std::string rid = js(ro, "id");
     order_ids.push_back(rid);
-    policy[rid] = scheme_from_policy(get_s(ro, "policy", "Hermite"));
+    policy[rid] = scheme_from_policy(js(ro, "policy", "Hermite"));
     sigma[rid] = std::max(0.0, opt_num(ro, "sigma").value_or(0.0));
     reg_lambda[rid] = opt_num(ro, "reg_lambda").value_or(curve::kRegLambdaUnset);  // the region's OWN smoothing weight
   }
@@ -332,7 +325,7 @@ Layout curve_layout(const json::object& c, const std::vector<KnotItem>& knot_ite
 struct TurnWindow { double start, end; b::Date sd, ed; };
 TurnWindow turn_window(const json::object& ins, const b::Date& vd, const std::string& index,
                        const std::string& currency, const std::string& ctx) {
-  const std::string tok = present(ins, "date") ? get_s(ins, "date") : get_s(ins, "end");
+  const std::string tok = present(ins, "date") ? js(ins, "date") : js(ins, "end");
   b::Date raw;
   try {
     raw = b::resolve(tok, vd, "NONE", "Unadjusted", 0);  // the entered calendar date, unadjusted
@@ -359,7 +352,7 @@ TurnWindow turn_window(const json::object& ins, const b::Date& vd, const std::st
 // ---- curve ordering (compile._order_curves) ------------------------------------------------------
 std::vector<const json::object*> order_curves(const json::array& curves) {
   std::unordered_map<std::string, const json::object*> by_id;
-  for (const auto& e : curves) by_id[get_s(e.as_object(), "id")] = &e.as_object();
+  for (const auto& e : curves) by_id[js(e.as_object(), "id")] = &e.as_object();
   std::vector<const json::object*> order;
   std::unordered_set<std::string> seen, stack;
   std::function<void(const std::string&)> visit = [&](const std::string& cid) {
@@ -369,12 +362,12 @@ std::vector<const json::object*> order_curves(const json::array& curves) {
     if (it == by_id.end()) throw CompileError("A spread curve references a base that does not exist.");
     stack.insert(cid);
     const json::object& c = *it->second;
-    if (get_s(c, "kind") == "spread" && present(c, "base")) visit(get_s(c, "base"));
+    if (js(c, "kind") == "spread" && present(c, "base")) visit(js(c, "base"));
     stack.erase(cid);
     seen.insert(cid);
     order.push_back(&c);
   };
-  for (const auto& e : curves) visit(get_s(e.as_object(), "id"));
+  for (const auto& e : curves) visit(js(e.as_object(), "id"));
   return order;
 }
 
@@ -409,7 +402,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     throw CompileError("Add at least one curve.");
   const json::array& curves = spec.at("curves").as_array();
 
-  std::string vd_iso = get_s(spec, "value_date");
+  std::string vd_iso = js(spec, "value_date");
   if (vd_iso.empty()) vd_iso = today_iso;
   if (vd_iso.empty()) throw CompileError("value date must be YYYY-MM-DD");
   b::Date value_date;
@@ -421,11 +414,11 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
 
   const std::vector<const json::object*> order = order_curves(curves);
   std::unordered_map<std::string, int> idx;
-  for (std::size_t i = 0; i < order.size(); ++i) idx[get_s(*order[i], "id")] = int(i);
+  for (std::size_t i = 0; i < order.size(); ++i) idx[js(*order[i], "id")] = int(i);
 
   int root_outright = -1;
   for (std::size_t i = 0; i < order.size(); ++i)
-    if (get_s(*order[i], "kind") != "spread") { root_outright = int(i); break; }
+    if (js(*order[i], "kind") != "spread") { root_outright = int(i); break; }
   if (root_outright < 0) throw CompileError("At least one curve must be outright (a discount/base curve).");
 
   // Currency -> engine-blind integer tag, by first use.
@@ -441,8 +434,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   // Discount root per currency: first OUTRIGHT curve in that currency.
   std::unordered_map<int, int> ccy_root;
   for (std::size_t i = 0; i < order.size(); ++i)
-    if (get_s(*order[i], "kind") != "spread")
-      ccy_root.emplace(ccy_index(get_s(*order[i], "currency")), int(i));
+    if (js(*order[i], "kind") != "spread")
+      ccy_root.emplace(ccy_index(js(*order[i], "currency")), int(i));
 
   CompileResult R;
   R.value_date = b::iso(value_date);
@@ -450,7 +443,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   // ---- pass 0: resolve every instrument's tokens once, keyed by (curve id, ins key) --------------
   std::map<std::pair<std::string, std::string>, Resolved> resolved;
   for (const json::object* cp : order) {
-    const std::string cid = get_s(*cp, "id");
+    const std::string cid = js(*cp, "id");
     const json::array empty_arr;
     const json::array& insts = (cp->contains("instruments") && cp->at("instruments").is_array())
                                    ? cp->at("instruments").as_array() : empty_arr;
@@ -462,7 +455,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
       std::optional<std::string> ov;
       if (auto it = starts_map.find(iid); it != starts_map.end()) ov = it->second;
       const std::string ctx =
-          get_s(*cp, "name", "?") + " \xC2\xB7 " + get_s(ins, "label", get_s(ins, "type", "?").c_str());
+          js(*cp, "name", "?") + " \xC2\xB7 " + js(ins, "label", js(ins, "type", "?").c_str());
       resolved[{cid, iid}] = resolve_instrument(ins, value_date, dconv, ov, ctx);
     }
   }
@@ -473,8 +466,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   std::vector<double> all_knots;
   for (const json::object* cp : order) {
     const json::object& c = *cp;
-    const std::string cid = get_s(c, "id");
-    const std::string cname = get_s(c, "name", "?");
+    const std::string cid = js(c, "id");
+    const std::string cname = js(c, "name", "?");
     const json::array empty_arr;
     const json::array& insts = (c.contains("instruments") && c.at("instruments").is_array())
                                    ? c.at("instruments").as_array() : empty_arr;
@@ -483,9 +476,9 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     std::vector<px::Turn> curve_turns;
     for (std::size_t j = 0; j < insts.size(); ++j) {
       const auto& i = insts[j].as_object();
-      if (get_s(i, "type") != "turn") continue;
+      if (js(i, "type") != "turn") continue;
       const std::string iid = ins_key(i, j);
-      const TurnWindow w = turn_window(i, value_date, get_s(c, "index"), get_s(c, "currency"),
+      const TurnWindow w = turn_window(i, value_date, js(c, "index"), js(c, "currency"),
                                        cname + " \xC2\xB7 turn");
       turn_index_of[{cid, iid}] = int(curve_turns.size());
       curve_turns.push_back(px::Turn{w.start, w.end});
@@ -497,15 +490,15 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     std::vector<KnotItem> knot_items;
     for (std::size_t j = 0; j < insts.size(); ++j) {
       const auto& i = insts[j].as_object();
-      if (get_s(i, "type") == "portfolio") {
+      if (js(i, "type") == "portfolio") {
         if (i.contains("knots") && i.at("knots").is_array())
           for (const auto& ke : i.at("knots").as_array()) {
             const auto& k = ke.as_object();
-            const RT kt = resolve_time(get_s(k, "end"), value_date, true, date_conv_for_curve(c), cname + " \xC2\xB7 portfolio knot");
+            const RT kt = resolve_time(js(k, "end"), value_date, true, date_conv_for_curve(c), cname + " \xC2\xB7 portfolio knot");
             KnotItem it;
             it.t = std::round(kt.t * 1e10) / 1e10;
             it.region = opt_str(k, "region");
-            it.knot_region = get_s(k, "knot_region", "back");
+            it.knot_region = js(k, "knot_region", "back");
             knot_items.push_back(std::move(it));
           }
       } else if (get_b(i, "adds_knot", false)) {
@@ -523,8 +516,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         throw CompileError("Curve '" + cname + "' has a knot on/before the value date — use a future date.");
 
     int base = -1;
-    if (get_s(c, "kind") == "spread" && present(c, "base")) {
-      base = idx.at(get_s(c, "base"));
+    if (js(c, "kind") == "spread" && present(c, "base")) {
+      base = idx.at(js(c, "base"));
       if (base >= idx.at(cid))
         throw CompileError("Curve '" + cname + "' is spread off a curve that comes after it.");
     }
@@ -533,29 +526,29 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
 
     bool is_xccy = false;
     for (const auto& e : insts) {
-      const std::string qk = get_s(e.as_object(), "quote_kind");
+      const std::string qk = js(e.as_object(), "quote_kind");
       if (qk == "FxForward" || qk == "XccyMtmBasis") { is_xccy = true; break; }
     }
-    const std::string ctype = present(c, "type") ? get_s(c, "type") : (is_xccy ? "xccy" : "rate");
+    const std::string ctype = present(c, "type") ? js(c, "type") : (is_xccy ? "xccy" : "rate");
     double fwd_tenor = 0.0;
     if (present(c, "index")) {
-      if (auto ix = cvd::index(get_s(c, "index")))
+      if (auto ix = cvd::index(js(c, "index")))
         if (ix->type == "ibor" && !ix->tenor.empty()) fwd_tenor = cvd::period_years(ix->tenor);
     }
 
     PerCurveInfo pc;
     pc.name = cname;
-    if (get_s(c, "currency").empty()) throw CompileError("curve '" + cname + "' has no 'currency' (required; no default)");
-    pc.currency = upper(get_s(c, "currency"));
+    if (js(c, "currency").empty()) throw CompileError("curve '" + cname + "' has no 'currency' (required; no default)");
+    pc.currency = upper(js(c, "currency"));
     pc.type = ctype;
     pc.fwd_tenor = fwd_tenor;
     pc.policies = layout.policies;
-    if (base >= 0) { pc.has_base = true; pc.base_name = get_s(*order[base], "name", "?"); }
+    if (base >= 0) { pc.has_base = true; pc.base_name = js(*order[base], "name", "?"); }
     for (const auto& e : insts) if (get_b(e.as_object(), "has_quote", false)) pc.n_quotes++;
 
     cal::BundleCurveSpec cs;
     cs.base = base;
-    cs.currency = ccy_index(get_s(c, "currency"));
+    cs.currency = ccy_index(js(c, "currency"));
     if (layout.classic) {
       cs.regions = curve::flat_hermite(layout.front, layout.back);
       cs.regions.back().reg_lambda = layout.back_reg_lambda;  // the Hermite region row's own weight, or unset (a front-less classic layout has ONE region)
@@ -577,16 +570,16 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
   // ---- pass 2: instruments + starts + drifts -----------------------------------------------------
   for (const json::object* cp : order) {
     const json::object& c = *cp;
-    const std::string cid = get_s(c, "id");
-    const std::string cname = get_s(c, "name", "?");
+    const std::string cid = js(c, "id");
+    const std::string cname = js(c, "name", "?");
     const int ci = idx.at(cid);
-    const std::string ccy = get_s(c, "currency"), ix = get_s(c, "index");  // the curve's currency / index, read once
+    const std::string ccy = js(c, "currency"), ix = js(c, "index");  // the curve's currency / index, read once
     const int my_ccy = ccy_index(ccy);
     const int disc = ccy_root.count(my_ccy) ? ccy_root.at(my_ccy) : root_outright;
-    const int spread_base = (get_s(c, "kind") == "spread" && present(c, "base")) ? idx.at(get_s(c, "base")) : disc;
+    const int spread_base = (js(c, "kind") == "spread" && present(c, "base")) ? idx.at(js(c, "base")) : disc;
 
     auto bench_of = [&](const json::object& ins) -> int {
-      const std::string bnm = get_s(ins, "bench");
+      const std::string bnm = js(ins, "bench");
       if (bnm.empty()) return spread_base;
       auto it = idx.find(bnm);
       if (it == idx.end())
@@ -603,18 +596,18 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
       const auto& ins = insts[j].as_object();
       const std::string iid = ins_key(ins, j);
 
-      if (get_s(ins, "type") == "portfolio") {
+      if (js(ins, "type") == "portfolio") {
         const b::SwapConv pconv = b::swap_conv(ccy, ix);
         cal::Instrument obj;
         obj.quote = cal::QuoteKind::Portfolio;
         if (ins.contains("components") && ins.at("components").is_array())
           for (const auto& ce : ins.at("components").as_array()) {
             const auto& comp = ce.as_object();
-            const RT ct = resolve_time(get_s(comp, "end"), value_date, true, date_conv_for_curve(c), cname + " \xC2\xB7 portfolio component");
+            const RT ct = resolve_time(js(comp, "end"), value_date, true, date_conv_for_curve(c), cname + " \xC2\xB7 portfolio component");
             if (ct.t <= 0)
               throw CompileError("Portfolio component on '" + cname + "' needs a future tenor.");
             cal::WeightedInstrument wi;
-            wi.weight = get_d(comp, "weight", 1.0);
+            wi.weight = jd(comp, "weight", 1.0);
             wi.instrument = b::par_swap(value_date, pconv, ct.date, ci, disc, 0.0);
             obj.combination.push_back(std::move(wi));
           }
@@ -625,13 +618,13 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         apply_band(obj, ins, "bp");
         R.bundle.instruments.push_back(std::move(obj));
         R.starts.push_back(mkt);
-        R.drifts.push_back(get_d(ins, "drift", 0.0));
+        R.drifts.push_back(jd(ins, "drift", 0.0));
         continue;
       }
       if (!get_b(ins, "has_quote", false)) continue;
 
-      const std::string kind = get_s(ins, "quote_kind", "ParRate");
-      const std::string unit = get_s(ins, "unit", "pct");
+      const std::string kind = js(ins, "quote_kind", "ParRate");
+      const std::string unit = js(ins, "unit", "pct");
       const double mkt = to_decimal(quote_band(ins).target, unit);
       const Resolved& r = resolved.at({cid, iid});
       const double T = r.t_end;
@@ -651,11 +644,11 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
         // par product (build::basis_conv_for_curves, 2026-10-12; until then both legs took the quoted index's).
         const int bi = bench_of(ins);
         obj = b::basis_swap(value_date,
-                            b::basis_conv_for_curves(ccy, ix, get_s(*order[static_cast<std::size_t>(bi)], "currency"),
-                                                     get_s(*order[static_cast<std::size_t>(bi)], "index")),
+                            b::basis_conv_for_curves(ccy, ix, js(*order[static_cast<std::size_t>(bi)], "currency"),
+                                                     js(*order[static_cast<std::size_t>(bi)], "index")),
                             mat_date, ci, bi, disc, mkt);
       } else if (kind == "FxForward") {
-        const std::string den = get_s(ins, "fx_den");
+        const std::string den = js(ins, "fx_den");
         if (den.empty() || !idx.count(den))
           throw CompileError("FX forward on '" + cname + "' needs a valid 'fx_den' curve.");
         if (idx.at(den) == ci)
@@ -668,12 +661,12 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
             required_text(c, "pair", "FX forward on '" + cname + "' needs the curve's 'pair' (e.g. EURUSD): fx_pairs supplies its spot date."),
             value_date);
       } else if (kind == "XccyMtmBasis") {
-        const std::string fund = get_s(ins, "fx_den");
+        const std::string fund = js(ins, "fx_den");
         if (fund.empty() || !idx.count(fund))
           throw CompileError("Xccy basis on '" + cname + "' needs a valid 'fx_den' curve.");
         if (idx.at(fund) == ci)
           throw CompileError("Xccy basis on '" + cname + "' cannot use its own curve as the fund leg.");
-        const std::string pair = get_s(c, "pair");
+        const std::string pair = js(c, "pair");
         if (pair.empty())
           throw CompileError("Xccy basis on '" + cname + "' needs the curve's 'pair' (e.g. EURUSD) — the DB product XCCY-MTM-<PAIR> supplies the conventions.");
         obj = b::xccy_mtm_basis(value_date, b::xccy_conv(pair), mat_date, ci, bench_of(ins), idx.at(fund),
@@ -698,7 +691,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
       apply_band(obj, ins, unit);
       R.bundle.instruments.push_back(std::move(obj));
       R.starts.push_back(mkt);
-      R.drifts.push_back(get_d(ins, "drift", 0.0));
+      R.drifts.push_back(jd(ins, "drift", 0.0));
     }
   }
 
@@ -717,8 +710,8 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
                          std::to_string(R.n_knots) + " knots — a region's smoothing (regions[].reg_lambda) selects the smoothest curve; the solver is rank-safe without one.");
 
   R.grid = display_grid(max_t, all_knots);
-  for (const json::object* cp : order) R.curve_names.push_back(get_s(*cp, "name", "?"));
-  for (const json::object* cp : order) R.order_ids.push_back(get_s(*cp, "id"));
+  for (const json::object* cp : order) R.curve_names.push_back(js(*cp, "name", "?"));
+  for (const json::object* cp : order) R.order_ids.push_back(js(*cp, "id"));
   // EVERY CURVE HAS A FRONT ANCHOR (PRINCIPLES P15, 2026-11-01): a curve whose front no single-window instrument reads
   // is held there by the smoothing tie-breaker alone (the unanchored CCP curves: a 0.1 bp tick swung the spreads
   // 600 bp). A WARNING per such curve (calibration::front_anchor_warnings), not a refusal.
@@ -727,7 +720,7 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
     R.warnings.insert(R.warnings.end(), p15.begin(), p15.end());
   }
   R.currency_codes = ccy_order;
-  R.smoothness = get_s(spec, "smoothness", "light");
+  R.smoothness = js(spec, "smoothness", "light");
   // SMOOTHING IS REGION DATA (2026-10-13): a region's own `reg_lambda` is the only source of smoothing rows. A LEGACY
   // spec -- saved before the composer stamped the weight onto each region -- carries only the spec-level `smoothness`
   // word, so it is migrated ONCE here onto every non-Flat region that says nothing (the engine's one table: light 0.5
@@ -744,13 +737,13 @@ CompileResult compile_spec(const json::value& spec_v, const std::string& today_i
       R.warnings.push_back("Legacy smoothing: the spec's '" + R.smoothness + "' was stamped onto its regions (regions[].reg_lambda = " +
                            std::to_string(lam) + "); smoothing is region data -- set it on each region.");
   }
-  if (present(spec, "reg_op")) { R.reg_op = get_s(spec, "reg_op"); R.has_reg_op = true; }
+  if (present(spec, "reg_op")) { R.reg_op = js(spec, "reg_op"); R.has_reg_op = true; }
   R.tension_sigma = std::max(0.0, opt_num(spec, "tension_sigma").value_or(0.0));
   cal::refuse_retired_regulariser(R.has_reg_op, R.reg_op, R.tension_sigma);  // regularize.hpp: refused, never silently remapped
 
   // Resolved windows, for the UI's read-only date columns.
   for (const json::object* cp : order) {
-    const std::string cid = get_s(*cp, "id");
+    const std::string cid = js(*cp, "id");
     const json::array empty_arr;
     const json::array& insts = (cp->contains("instruments") && cp->at("instruments").is_array())
                                    ? cp->at("instruments").as_array() : empty_arr;

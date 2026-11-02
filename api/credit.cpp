@@ -28,12 +28,6 @@ namespace cvd = swaps::conventions;
 namespace cal = swaps::calibration;
 
 namespace {
-std::vector<double> arrf(const json::object& o, const char* k) {
-  std::vector<double> v;
-  if (o.contains(k) && o.at(k).is_array())
-    for (const auto& e : o.at(k).as_array()) v.push_back(e.to_number<double>());
-  return v;
-}
 
 // A nominal discount-factor function DF(t). Either a flat continuous zero (DF=exp(-z·t)) or a log-linear
 // interpolation of an explicit {discount_times, dfs} node set (flat-forward extrapolation beyond the ends).
@@ -84,8 +78,8 @@ std::string credit_json(const json::object& request) {
   // Nominal discount curve: explicit {discount_times, dfs} node set, else a flat continuous zero.
   DiscountFn df;
   df.z = jd(o, "discount_zero", 0.0);
-  const std::vector<double> dtimes = arrf(o, "discount_times");
-  const std::vector<double> dfs = arrf(o, "dfs");
+  const std::vector<double> dtimes = darr(o, "discount_times");
+  const std::vector<double> dfs = darr(o, "dfs");
   if (!dtimes.empty() && dtimes.size() == dfs.size()) {
     df.t = dtimes;
     df.ln_df.reserve(dfs.size());
@@ -113,7 +107,7 @@ std::string credit_json(const json::object& request) {
   if (prob.instruments.empty()) throw std::invalid_argument("credit: no instruments");
 
   // Hazard-curve back knots: explicit `knot_times`, else the sorted-unique instrument maturities.
-  std::vector<double> knots = arrf(o, "knot_times");
+  std::vector<double> knots = darr(o, "knot_times");
   if (knots.empty()) {
     knots = maturities;
     std::sort(knots.begin(), knots.end());
@@ -134,7 +128,7 @@ std::string credit_json(const json::object& request) {
   hz.set_forwards(res.x);
   const curve::SurvivalCurve<double> surv{&hz};
 
-  std::vector<double> out_t = arrf(o, "output_times");
+  std::vector<double> out_t = darr(o, "output_times");
   if (out_t.empty()) out_t = knots;
 
   std::vector<double> survival_v, hazard_v, density_v;

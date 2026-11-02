@@ -18,10 +18,6 @@ namespace json = boost::json;
 namespace p = swaps::pricing;
 
 namespace {
-bool has_num(const json::object& o, const char* k) {
-  return o.contains(k) && (o.at(k).is_number() || o.at(k).is_double() || o.at(k).is_int64() ||
-                           o.at(k).is_uint64());
-}
 // direction: "sell"/"short" -> −1, else (incl. "buy"/"long"/missing) -> +1.
 double dir_of(const json::object& o) {
   const std::string s = js(o, "direction", "buy");
@@ -49,7 +45,7 @@ std::string ndf_json(const json::object& request) {
       const double direction = dir_of(t);
       // A trade with no strike prices at the fair forward (PV ≈ 0).
       const double fwd = p::ndf_fair_forward<double>(spot, T, r_settle, r_nd);
-      const double strike = has_num(t, "strike") ? jd(t, "strike", fwd) : fwd;
+      const double strike = has_number(t, "strike") ? jd(t, "strike", fwd) : fwd;
 
       const p::NdfGreeks<double> g =
           p::ndf_greeks<double>(spot, strike, T, r_settle, r_nd, notional, direction);
@@ -83,7 +79,7 @@ std::string ndf_json(const json::object& request) {
     const double fair = p::nds_fair_rate<double>(spot, r_settle, r_nd, maturities, notionals);
     json::object nds_out;
     nds_out["fair_rate"] = fair;
-    const double fixed = has_num(n, "fixed_rate") ? jd(n, "fixed_rate", fair) : fair;
+    const double fixed = has_number(n, "fixed_rate") ? jd(n, "fixed_rate", fair) : fair;
     const double direction = dir_of(n);
     nds_out["fixed_rate"] = fixed;
     nds_out["pv"] = p::nds_pv<double>(spot, fixed, r_settle, r_nd, maturities, notionals, direction);

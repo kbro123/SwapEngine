@@ -237,14 +237,7 @@ class BundleCurveSet {
 // well, which makes the horizon a simple recursive minimum. It replaces the old whole-curve-set veto, under
 // which one MonotoneCubic region anywhere dropped every instrument in the bundle to the AAD path.
 inline double curve_linear_horizon(const std::vector<CurveStructure>& curves, int c) {
-  double h = std::numeric_limits<double>::infinity();
-  const auto& regions = curves[static_cast<std::size_t>(c)].regions;
-  for (std::size_t i = 0; i < regions.size(); ++i) {
-    if (curve::scheme_is_linear(regions[i].scheme)) continue;
-    h = (i == 0 || regions[i - 1].knots.empty()) ? -std::numeric_limits<double>::infinity()
-                                                 : regions[i - 1].knots.back();
-    break;
-  }
+  const double h = curves[static_cast<std::size_t>(c)].linear_horizon();  // the curve's own (curve_spec.hpp)
   const int base = curves[static_cast<std::size_t>(c)].base;
   return base >= 0 ? std::min(h, curve_linear_horizon(curves, base)) : h;
 }
@@ -261,22 +254,14 @@ inline std::vector<double> curve_linear_horizons(const std::vector<CurveStructur
 // varies inside a shape cell, so the tier is refused and the horizon partition sends the rows that read it to AAD.
 inline bool curves_piecewise_linear(const std::vector<CurveStructure>& curves) {
   for (const auto& c : curves)
-    for (const auto& r : c.regions)
-      if (!curve::scheme_is_piecewise_linear(r.scheme)) return false;
+    if (!c.piecewise_linear()) return false;
   return true;
 }
 // Can the compiled engine's state-tracking tier take EVERY curve (2026-10-31)? A curve rides it either as a
 // piecewise-linear curve (every region scheme_is_piecewise_linear: MonotoneCubic's cell-constant W, re-taken on a
 // cell change) or as a TANGENT curve (every region scheme_has_tangent: W re-taken analytically at every state --
 // MonotoneConvex). A curve mixing the two kinds of value dependence is neither, and the horizon partition takes it.
-inline bool curve_tier_trackable(const CurveStructure& c) {
-  bool pwl = true, tangent = true;
-  for (const auto& r : c.regions) {
-    pwl = pwl && curve::scheme_is_piecewise_linear(r.scheme);
-    tangent = tangent && curve::scheme_has_tangent(r.scheme);
-  }
-  return pwl || tangent;
-}
+inline bool curve_tier_trackable(const CurveStructure& c) { return c.tier_trackable(); }
 inline bool curves_tier_trackable(const std::vector<CurveStructure>& curves) {
   for (const auto& c : curves)
     if (!curve_tier_trackable(c)) return false;
@@ -287,8 +272,7 @@ inline bool curves_tier_trackable(const std::vector<CurveStructure>& curves) {
 // callers that only need the all-or-nothing answer.
 inline bool curves_are_noncacheable(const std::vector<CurveStructure>& curves) {
   for (const auto& c : curves)
-    for (const auto& r : c.regions)
-      if (!curve::scheme_is_linear(r.scheme)) return true;
+    if (!c.linear()) return true;
   return false;
 }
 

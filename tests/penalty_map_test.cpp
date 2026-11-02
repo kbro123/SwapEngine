@@ -1,6 +1,6 @@
 // E5 taxonomy: T1 unit (one component, no oracle)
 // The PenaltyMap (problem.hpp, constraint rows 2026-10-07): the ONE description of a row's piecewise-linear residual.
-// Pins (1) the band instance is bit for bit the three band forms it replaced (residual<Scalar>, residual_d, slope);
+// Pins (1) the band instance is bit for bit the band expressions it replaced (residual<Scalar>, residual_d, slope);
 // (2) the piece conventions: a target on an edge is inside, a value on an edge resolves toward the target's piece;
 // (3) a general three-piece map (a band with an outer dead zone, the shape a bound would use) is continuous, zero at
 // the target, with the declared slopes; (4) piece_from_residual and invert round-trip the double form, which is what
@@ -16,7 +16,7 @@
 namespace cal = swaps::calibration;
 namespace ad = swaps::ad;
 
-TEST(PenaltyMap, BandInstanceIsBitForBitTheThreeOldBandForms) {
+TEST(PenaltyMap, BandInstanceIsBitForBitTheOldBandExpressions) {
   const double lo = 0.030, hi = 0.032, m = 0.0309, decay = 0.25;
   const cal::PenaltyMap pm = cal::PenaltyMap::band(lo, hi, decay);
   for (double q : {0.025, lo, 0.0305, m, 0.0315, hi, 0.040}) {
@@ -28,8 +28,6 @@ TEST(PenaltyMap, BandInstanceIsBitForBitTheThreeOldBandForms) {
     EXPECT_EQ(pm.residual_d(q, m).first, want_d) << q;
     EXPECT_EQ(pm.residual_d(q, m).second, want_s) << q;
     EXPECT_EQ(pm.slope_at(q, m), want_s) << q;
-    EXPECT_EQ(cal::band_residual<double>(q, m, lo, hi, decay), want) << q;
-    EXPECT_EQ(cal::band_slope(q, lo, hi, decay), want_s) << q;
   }
   // the dual form carries the slope as its derivative and keeps q the plain operand
   const ad::Dual q(0.035, 1, 0);

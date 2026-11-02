@@ -208,8 +208,9 @@ static void BM_FxStream_AadBlockJacobian(benchmark::State& state) {
   cal::AadBlock blk;
   blk.init(f.prob.curves, f.nc, f.nc_rows, f.prob.n_knots());
   Eigen::MatrixXd J = Eigen::MatrixXd::Zero(f.prob.n_residuals(), f.prob.n_knots());
+  const Eigen::VectorXd q = f.prob.market();
   for (auto _ : state) {
-    blk.jacobian_into(f.x_solved, J);
+    blk.jacobian_vs_into(f.x_solved, q, J, nullptr);
     benchmark::DoNotOptimize(J.data());
   }
 }
@@ -222,8 +223,9 @@ static void BM_FxStream_AadBlockJacobianHeap(benchmark::State& state) {
   cal::AadBlock blk;
   blk.init(f.prob.curves, f.nc, f.nc_rows, f.prob.n_knots(), /*force_heap=*/true);
   Eigen::MatrixXd J = Eigen::MatrixXd::Zero(f.prob.n_residuals(), f.prob.n_knots());
+  const Eigen::VectorXd q = f.prob.market();
   for (auto _ : state) {
-    blk.jacobian_into(f.x_solved, J);
+    blk.jacobian_vs_into(f.x_solved, q, J, nullptr);
     benchmark::DoNotOptimize(J.data());
   }
 }

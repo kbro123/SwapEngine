@@ -153,8 +153,8 @@ TEST(AadBlockPooled, NarrowBlockPooledMatchesHeapBitForBit) {
 
   const int n = f.prob.n_residuals(), m = f.prob.n_knots();
   Eigen::MatrixXd Jp = Eigen::MatrixXd::Zero(n, m), Jh = Eigen::MatrixXd::Zero(n, m);
-  pooled.jacobian_into(f.x, Jp);
-  heap.jacobian_into(f.x, Jh);
+  pooled.jacobian_vs_into(f.x, f.prob.market(), Jp, nullptr);
+  heap.jacobian_vs_into(f.x, f.prob.market(), Jh, nullptr);
   EXPECT_EQ((Jp - Jh).cwiseAbs().maxCoeff(), 0.0)
       << "pooled and heap AAD sweeps must be bit-identical (same doubles, same order)";
 
@@ -196,7 +196,7 @@ TEST(AadBlockPooled, WideBundleFallsBackToHeapAndMatches) {
 
   const int n = f.prob.n_residuals(), m = f.prob.n_knots();
   Eigen::MatrixXd Jb = Eigen::MatrixXd::Zero(n, m);
-  blk.jacobian_into(f.x, Jb);
+  blk.jacobian_vs_into(f.x, f.prob.market(), Jb, nullptr);
   const Eigen::MatrixXd Jfull = cal::aad_jacobian(f.prob, f.x);
   double worst = 0.0;
   for (int r : f.nc_rows) worst = std::max(worst, (Jb.row(r) - Jfull.row(r)).cwiseAbs().maxCoeff());

@@ -57,6 +57,8 @@ inline std::vector<int> iarr(const json::object& o, const char* k) {
   return out;
 }
 inline std::vector<int> jia(const json::object& o, const char* k) { return iarr(o, k); }
+// Present and a NUMBER (an optional numeric field a verb branches on: "strike given, else the forward").
+inline bool has_number(const json::object& o, const char* k) { return o.contains(k) && o.at(k).is_number(); }
 // A bare JSON array value -> doubles (the C ABI's market / times payloads arrive unwrapped).
 inline std::vector<double> to_vec(const json::value& v) {
   std::vector<double> out;

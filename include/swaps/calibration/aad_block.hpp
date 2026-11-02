@@ -184,15 +184,6 @@ class AadBlock final : public RowEngine {
       out[rows_[j]] = instrument_model_quote<double>(sub_.instruments[j], curve_of);
   }
 
-  // True residuals (doubles) of the block's instruments against their stored markets, into out[global_row].
-  void residuals_into(const Eigen::VectorXd& x, Eigen::VectorXd& out) const override {
-    if (rows_.empty()) return;
-    refresh_curves(x);
-    const auto curve_of = [this](int i) -> const CurveHandle<double>& { return *resolve_[i]; };
-    for (int j = 0; j < size(); ++j)
-      out[rows_[j]] = instrument_residual<double>(sub_.instruments[j], curve_of);
-  }
-
   // (J·dir)[global_row] by ONE width-one directional dual pass (ad::DualDir seeded with dir): the derivative of each
   // row's residual along dir, heap-free, regardless of the block's touched width. The DualDir curve set is built on
   // first use (a block that is never asked for a directional pays nothing).
@@ -210,14 +201,6 @@ class AadBlock final : public RowEngine {
       const ad::DualDir rj = instrument_residual<ad::DualDir>(sub_.instruments[j], curve_of);
       out[rows_[j]] = rj.derivatives().size() ? rj.derivatives()[0] : 0.0;
     }
-  }
-
-  // Jacobian rows d(residual)/dx via WIDTH-REDUCED AAD, into J.row(global_row) of an (n_res x n_knots) J.
-  // Only the touched columns are nonzero; the rest stay whatever the caller pre-zeroed.
-  void jacobian_into(const Eigen::VectorXd& x, Eigen::MatrixXd& J) const override {
-    if (rows_.empty()) return;
-    if (pooled_) jacobian_impl(pool_, x, J, nullptr);
-    else jacobian_impl(heap_, x, J, nullptr);
   }
 
   // --- Streaming (frozen-Newton) forms: residual/Jacobian against a LIVE market q instead of the stored
@@ -356,7 +339,7 @@ class AadBlock final : public RowEngine {
     // the real-curve fallback (resolve_ already points at dcurves_) and simply prices without the cache.
     std::vector<char> linear(NC, 1);
     for (int c : closed_) {  // ascending, bases first (base < c), so linear[a] is final when c reads it
-      if (!curve::make_modular_curve<ad::Dual>(sub_.curves[c].modules()).is_linear_map()) linear[c] = 0;
+      if (!sub_.curves[c].linear()) linear[c] = 0;  // the curve's own answer (curve_spec.hpp): no Dual curve built to ask it
       for (int a = sub_.curves[c].base; a >= 0; a = sub_.curves[a].base)
         if (!linear[a]) linear[c] = 0;
     }

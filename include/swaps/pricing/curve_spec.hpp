@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 #include <Eigen/Core>
@@ -75,6 +76,42 @@ struct CurveStructure {
   // stacked-x layout, the Jacobian width and AAD block sizing -- everything EXCEPT the interpolation
   // itself (which uses n_interp_knots()).
   int n_knots() const { return n_interp_knots() + static_cast<int>(turns.size()); }
+
+  // THE curve's tier, reflected (2026-11-01, review item 2.6; the reflect-your-own-properties rule): every region's
+  // scheme is on the inclusion lists in curve_module.hpp, and these are the ONE place the answers are composed --
+  // the engine build, the AAD block, the session and the router used to re-derive each of them.
+  //   linear():           every region is a linear map of its knots -> the W-cache takes the whole curve;
+  //   piecewise_linear(): every region has a cell-constant W (the linear schemes, MonotoneCubic);
+  //   has_tangent():      every region carries its integral's tangent (the linear schemes, MonotoneConvex);
+  //   tier_trackable():   the compiled engine's state-tracking tier can take it (one of the two above);
+  //   linear_horizon():   the last time this curve's OWN regions are linear up to (+inf when linear(); -inf when the
+  //                       first region is value-dependent -- a leading region flat-extrapolates its first value, so
+  //                       even earlier times read it). A spread curve's horizon is the min with its base's
+  //                       (curve_linear_horizon, curve_handle.hpp), since its weight row is its own plus its base's.
+  bool linear() const {
+    for (const auto& r : regions)
+      if (!curve::scheme_is_linear(r.scheme)) return false;
+    return true;
+  }
+  bool piecewise_linear() const {
+    for (const auto& r : regions)
+      if (!curve::scheme_is_piecewise_linear(r.scheme)) return false;
+    return true;
+  }
+  bool has_tangent() const {
+    for (const auto& r : regions)
+      if (!curve::scheme_has_tangent(r.scheme)) return false;
+    return true;
+  }
+  bool tier_trackable() const { return piecewise_linear() || has_tangent(); }
+  double linear_horizon() const {
+    for (std::size_t i = 0; i < regions.size(); ++i) {
+      if (curve::scheme_is_linear(regions[i].scheme)) continue;
+      return (i == 0 || regions[i - 1].knots.empty()) ? -std::numeric_limits<double>::infinity()
+                                                      : regions[i - 1].knots.back();
+    }
+    return std::numeric_limits<double>::infinity();
+  }
 };
 
 // The PARALLEL direction in a bundle's stacked state x (curves in order, each block [interp knots | turn deltas]): 1 on

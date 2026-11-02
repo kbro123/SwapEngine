@@ -137,27 +137,28 @@ TEST(PortfolioInstrument, CompiledResidualAndJacobianMatchAad) {
 // form agrees with the templated one.
 TEST(BandResidual, HuberProfile) {
   const double lo = 0.030, hi = 0.032, m = 0.031, decay = 0.1;
-  EXPECT_NEAR(cal::band_residual<double>(m, m, lo, hi, decay), 0.0, 1e-15) << "zero at the mid";
-  EXPECT_NEAR(cal::band_slope(m, lo, hi, decay), decay, 1e-15) << "decay slope inside";
-  EXPECT_NEAR(cal::band_slope(hi + 1e-6, lo, hi, decay), 1.0, 1e-15) << "unit slope outside";
+  const cal::PenaltyMap pm = cal::PenaltyMap::band(lo, hi, decay);  // THE band (problem.hpp; the shims went 2026-11-02)
+  EXPECT_NEAR(pm.residual<double>(m, m), 0.0, 1e-15) << "zero at the mid";
+  EXPECT_NEAR(pm.slope_at(m, m), decay, 1e-15) << "decay slope inside";
+  EXPECT_NEAR(pm.slope_at(hi + 1e-6, m), 1.0, 1e-15) << "unit slope outside";
   // continuity at the edges (the residual has no jump; only its slope does)
-  EXPECT_NEAR(cal::band_residual<double>(hi + 1e-12, m, lo, hi, decay), cal::band_residual<double>(hi, m, lo, hi, decay), 1e-11);
-  EXPECT_NEAR(cal::band_residual<double>(lo - 1e-12, m, lo, hi, decay), cal::band_residual<double>(lo, m, lo, hi, decay), 1e-11);
+  EXPECT_NEAR(pm.residual<double>(hi + 1e-12, m), pm.residual<double>(hi, m), 1e-11);
+  EXPECT_NEAR(pm.residual<double>(lo - 1e-12, m), pm.residual<double>(lo, m), 1e-11);
   // monotone, and strictly steeper outside than inside
-  double prev = cal::band_residual<double>(0.020, m, lo, hi, decay);
+  double prev = pm.residual<double>(0.020, m);
   for (double q = 0.020; q <= 0.042; q += 0.0001) {
-    const double r = cal::band_residual<double>(q, m, lo, hi, decay);
+    const double r = pm.residual<double>(q, m);
     EXPECT_GE(r, prev - 1e-15);
-    const auto rd = cal::band_residual_d(q, m, lo, hi, decay);
+    const auto rd = pm.residual_d(q, m);
     EXPECT_NEAR(rd.first, r, 1e-15) << "double form == templated form at q=" << q;
-    EXPECT_NEAR(rd.second, cal::band_slope(q, lo, hi, decay), 1e-15);
+    EXPECT_NEAR(rd.second, pm.slope_at(q, m), 1e-15);
     prev = r;
   }
   // far outside: full-slope pull to the EDGE plus the decay pull to the mid (not full-slope pull to the mid)
-  EXPECT_NEAR(cal::band_residual<double>(0.040, m, lo, hi, decay), decay * (hi - m) + (0.040 - hi), 1e-15);
+  EXPECT_NEAR(pm.residual<double>(0.040, m), decay * (hi - m) + (0.040 - hi), 1e-15);
   // no band (upper <= lower) -> the plain residual q − m
-  EXPECT_NEAR(cal::band_residual<double>(0.031, 0.030, 0.0, 0.0, 1.0), 0.001, 1e-15);
-  EXPECT_EQ(cal::band_slope(0.031, 0.0, 0.0, 1.0), 1.0);
+  EXPECT_NEAR(cal::PenaltyMap::band(0.0, 0.0, 1.0).residual<double>(0.031, 0.030), 0.001, 1e-15);
+  EXPECT_EQ(cal::PenaltyMap::band(0.0, 0.0, 1.0).slope_at(0.031, 0.030), 1.0);
 }
 
 // THE subtle one: with a banded instrument, the compiled W-cache residual AND its analytic Jacobian must

@@ -19,10 +19,6 @@ namespace json = boost::json;
 namespace v = swaps::vol;
 
 namespace {
-bool has_num(const json::object& o, const char* k) {
-  return o.contains(k) && (o.at(k).is_number() || o.at(k).is_double() || o.at(k).is_int64() ||
-                           o.at(k).is_uint64());
-}
 
 // Parse a delta-convention string. Default (and every unrecognised value) = spot-unadjusted, so existing
 // requests are byte-identical. Accepts the common spellings for {spot,forward}×{unadjusted,premium-adj}.
@@ -77,7 +73,7 @@ std::string fx_option_json(const json::object& request) {
       q.atm = jd(s, "atm", 0.0);
       q.rr25 = jd(s, "rr25", 0.0);
       q.bf25 = jd(s, "bf25", 0.0);
-      if (has_num(s, "rr10") || has_num(s, "bf10")) {
+      if (has_number(s, "rr10") || has_number(s, "bf10")) {
         q.has10 = true;
         q.rr10 = jd(s, "rr10", 0.0);
         q.bf10 = jd(s, "bf10", 0.0);
@@ -85,7 +81,7 @@ std::string fx_option_json(const json::object& request) {
       surf = v::FxVolSurface::from_delta_quotes(q, fwd, expiry, df_for, delta_conv, atm_conv);
     }
     have_surface = true;
-  } else if (has_num(o, "vol")) {
+  } else if (has_number(o, "vol")) {
     surf = v::FxVolSurface::flat(fwd, expiry, jd(o, "vol", 0.0), df_for);
     have_surface = true;
   }
@@ -95,7 +91,7 @@ std::string fx_option_json(const json::object& request) {
     for (const auto& oe : o.at("options").as_array()) {
       const json::object& t = oe.as_object();
       const v::CallPut cp = jb(t, "put", false) ? v::CallPut::Put : v::CallPut::Call;
-      const bool by_delta = has_num(t, "delta") && !has_num(t, "strike");
+      const bool by_delta = has_number(t, "delta") && !has_number(t, "strike");
       const double notional = jd(t, "notional", 1.0);
 
       double strike;
@@ -113,7 +109,7 @@ std::string fx_option_json(const json::object& request) {
       r["call"] = (cp == v::CallPut::Call);
 
       // Implied-vol mode: an option carrying a 'price' (and no external vol source) inverts to a vol.
-      if (has_num(t, "price") && !have_surface) {
+      if (has_number(t, "price") && !have_surface) {
         const double px = jd(t, "price", 0.0);
         const double iv = v::gk_implied_vol(px, spot, strike, expiry, r_dom, r_for, cp);
         r["price"] = px;
