@@ -62,12 +62,14 @@ inline Shape g10_desk(bool g4_turns, bool light = true) {
   const b::Date obs_s = b::Date::from_iso("2026-12-15"), obs_e = b::Date::from_iso("2027-01-15");
   for (const g10::Leg& lg : g10::legs()) {
     const b::SwapConv conv = b::swap_conv(lg.ccy_code, lg.index);
+    // EVERY CURVE'S FRONT ANCHOR IS ITS OWN FIXING (PRINCIPLES P15; owner's rule 2026-11-01/02): the 3M fixing on the
+    // term-index curve, the 1D fixing on each overnight curve -- one knot per row, so the plain desk stays SQUARE.
     std::vector<double> knots;
-    if (lg.discount != lg.role)  // a term-index curve: its own fixing anchors the front (PRINCIPLES P15)
-      knots.push_back(detail::add_fixing(p, lg.ccy_code, lg.index, "3M", lg.role));
+    if (lg.discount != lg.role) knots.push_back(detail::add_fixing(p, lg.ccy_code, lg.index, "3M", lg.role));
     const std::vector<double> ks = detail::add_par_swaps(p, conv, lg.role, lg.discount, g10::tenors());
     knots.insert(knots.end(), ks.begin(), ks.end());
-    px::CurveStructure s = detail::spec(knots);
+    if (lg.discount == lg.role) knots = detail::with_front(detail::add_on_fixing(p, lg.ccy_code, lg.index, lg.role), knots);
+    px::CurveStructure s = detail::spec(knots, -1, lg.index);
     s.currency = lg.ccy;
     if (g4_turns && lg.g4) {
       s.turns = {px::Turn{b::curve_time(detail::vd(), turn_s), b::curve_time(detail::vd(), turn_e)}};

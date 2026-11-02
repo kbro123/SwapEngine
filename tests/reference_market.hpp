@@ -17,9 +17,12 @@
 //     passes the 3y swap maturity. There is a deliberate ~2.5-month gap between the strips; the
 //     spline interpolates through it.
 //   - 9 x par OIS swaps, 4y..30y (the futures cover everything shorter).
+//   - the 1D SOFR fixing (owner's rule, 2026-11-02: every overnight curve carries its own 1D fixing
+//     beside the futures strip -- PRINCIPLES P15, the curve's front anchor is its own fixing). It is
+//     the LAST row, so the avg | comp | swaps order of the first 29 is untouched.
 //
 // The futures OVER-SPECIFY the knots on purpose, so the least-squares fit has a NON-ZERO residual
-// at the optimum. Never assert exact repricing. 29 instruments vs 23 knots.
+// at the optimum. Never assert exact repricing. 30 instruments vs 23 knots.
 
 #include <array>
 #include <cmath>
@@ -127,8 +130,14 @@ inline constexpr std::array<double, 17> reference_back_forwards{
 inline constexpr int n_front_knots = static_cast<int>(meeting_dates.size());          // 6
 inline constexpr int n_back_knots = static_cast<int>(reference_back_forwards.size()); // 17
 inline constexpr int n_knots = n_front_knots + n_back_knots;                          // 23
+// ---- The 1D SOFR fixing: today's overnight rate, the realised fixing the elapsed current-month contract
+// days are seeded with (gen_golden / build_market), so the strip and the fixing tell one story. ----
+inline constexpr double sofr_fixing = 0.0430;
+// The overnight index's fixing tenor in years (conventions::period_years("1D")): what CurveStructure::fixing_tenor
+// states for every overnight curve of a fixture, and what calibration::front_anchors holds it to.
+inline constexpr double overnight_tenor = 1.0 / 365.0;
 inline constexpr int n_instruments =
-    static_cast<int>(futures_1m.size() + futures_3m.size() + swaps.size());           // 29
+    static_cast<int>(futures_1m.size() + futures_3m.size() + swaps.size()) + 1;       // 29 + the 1D fixing = 30
 
 static_assert(n_instruments > n_knots,
               "The calibration must be OVER-determined: more instruments than knot forwards. "

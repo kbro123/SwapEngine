@@ -115,9 +115,14 @@ perf-gate integrity). The historical statement that QuantLib "IS a linked depend
   contract starts on/after the last 1M end date). The 3M strip runs past ~3y.
 - **Par swaps from 4y** define the long back-end knots.
 - The strips and swaps span multiple knots, so front and back are coupled: one **global** solve.
-  Reference market: 6 front + 17 back = 23 knots vs 29 instruments (12×1M + 8×3M + 9 swaps).
-  The current-month 1M contract straddles the evaluation date, so its elapsed SOFR fixings are
-  seeded when generating golden data.
+  Reference market: 6 front + 17 back = 23 knots vs 30 instruments (12×1M + 8×3M + 9 swaps + the
+  1D SOFR fixing). The current-month 1M contract straddles the evaluation date, so its elapsed SOFR
+  fixings are seeded when generating golden data. **Every overnight curve carries its own 1D fixing
+  beside its futures strip (owner's rule, 2026-11-02: "the 1M futures should be kept, but also an
+  additional 1D fixing by default"; PRINCIPLES P15) -- the reference market, the shape ladder, the
+  G10 and G4 desks, the basis chain / star and every multi-currency bundle were re-anchored so; the
+  QuantLib GlobalBootstrap square problem is the one fixture without it (QuantLib's own instrument
+  set, kept square).**
 - Futures convexity is **Hull–White** (`½σ² …` with mean reversion `a`), not Ho–Lee — the a→0
   limit `½σ²t₁t₂` under-damps once the strip passes ~2y. Transcribed from
   `HullWhite::convexityBias` and checked against it in `tests/convexity_test.cpp`.
@@ -898,8 +903,8 @@ delete those, they enforce the rule. Two honest residues:
       4 doubles/reg; correctness gate green. Perf checker still a stub → Phase 6.)*
 - [x] **Phase 1** — Correctness harness + golden reference from QuantLib.
       *(Reference market: 6 FOMC front knots + 17 back knots (8 from 3M-futures end dates + 9
-      swap maturities) vs 29 instruments (12×1M then 8×3M sequential futures + 9 swaps 4y–30y),
-      over-determined.
+      swap maturities) vs 30 instruments (12×1M then 8×3M sequential futures + 9 swaps 4y–30y,
+      plus the 1D SOFR fixing since 2026-11-02), over-determined.
       The two-region forward curve (now `ModularCurve` via `flat_hermite`, see §2) validated against
       QuantLib's BackwardFlat and natural-cubic interpolators to ~1e-16, with a 1bp negative control.
       Hull–White futures convexity matches `HullWhite::convexityBias` exactly. `ql_term_structure.hpp`

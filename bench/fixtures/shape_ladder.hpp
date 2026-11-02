@@ -64,10 +64,14 @@ namespace detail {
 
 inline const b::Date& vd() { static const b::Date d = b::Date::from_iso("2026-07-08"); return d; }
 inline std::vector<std::string> pillars() { return {"1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"}; }
-inline px::CurveStructure spec(const std::vector<double>& knots, int base = -1) {
+// `index` is the curve's conventions-DB index: the spec states its FIXING TENOR (PRINCIPLES P15, owner's rule
+// 2026-11-02: a curve's front anchor is its own fixing -- 1D for an overnight index, the tenor for a term one -- and
+// calibration::front_anchors holds a curve that states its tenor to exactly that). A collateral curve has none.
+inline px::CurveStructure spec(const std::vector<double>& knots, int base = -1, const char* index = nullptr) {
   px::CurveStructure s;
   s.base = base;
   s.regions = swaps::curve::flat_hermite({}, knots);
+  if (index) s.fixing_tenor = b::index_fixing_tenor(index);
   return s;
 }
 // The SAME knots split into a LINEAR-MAP front (Hermite, W-cacheable) and a VALUE-DEPENDENT back
@@ -75,9 +79,10 @@ inline px::CurveStructure spec(const std::vector<double>& knots, int base = -1) 
 // the ladder exercised the router's per-row partition at all: a scheme is not an instrument shape, and the
 // ladder only varied instruments. `split` is the first knot that belongs to the non-linear region, so the
 // curve's LINEAR HORIZON is knots[split - 1] and a row is compiled iff every time it reads sits at or below it.
-inline px::CurveStructure spec_mixed(const std::vector<double>& knots, std::size_t split, int base = -1) {
+inline px::CurveStructure spec_mixed(const std::vector<double>& knots, std::size_t split, int base = -1, const char* index = nullptr) {
   px::CurveStructure s;
   s.base = base;
+  if (index) s.fixing_tenor = b::index_fixing_tenor(index);
   const std::vector<double> front(knots.begin(), knots.begin() + static_cast<std::ptrdiff_t>(split));
   const std::vector<double> back(knots.begin() + static_cast<std::ptrdiff_t>(split), knots.end());
   s.regions = {swaps::curve::CurveModule{front, swaps::curve::Scheme::Hermite},
@@ -86,9 +91,10 @@ inline px::CurveStructure spec_mixed(const std::vector<double>& knots, std::size
 }
 // The same split with the long end on MonotoneConvex (Hagan-West): value-dependent AND not piecewise-linear, so its
 // rows ride the AAD block, never the piecewise-linear W tier (the mixed_convex rung, 2026-10-12).
-inline px::CurveStructure spec_mixed_convex(const std::vector<double>& knots, std::size_t split, int base = -1) {
+inline px::CurveStructure spec_mixed_convex(const std::vector<double>& knots, std::size_t split, int base = -1, const char* index = nullptr) {
   px::CurveStructure s;
   s.base = base;
+  if (index) s.fixing_tenor = b::index_fixing_tenor(index);
   const std::vector<double> front(knots.begin(), knots.begin() + static_cast<std::ptrdiff_t>(split));
   const std::vector<double> back(knots.begin() + static_cast<std::ptrdiff_t>(split), knots.end());
   s.regions = {swaps::curve::CurveModule{front, swaps::curve::Scheme::Hermite},
@@ -115,6 +121,17 @@ inline double add_fixing(cal::BundleProblem& p, const std::string& ccy, const st
   const b::Date start = b::spot_date(vd(), c.calendar, c.spot_lag), end = b::resolve(tenor, vd(), c.calendar, c.bdc, c.spot_lag);
   p.instruments.push_back(b::rate_instrument(fc, b::observation(vd(), start, end, "compounded", 0.0, b::index_day_count(index), b::index_calendar(index)), 0.03));
   return b::curve_time(vd(), end);
+}
+// THE 1D FIXING (owner's rule, 2026-11-02: "the 1M futures should be kept, but also an additional 1D fixing by default").
+// Every overnight curve carries its own 1D fixing beside whatever else pins its front; it is appended AFTER the curve's
+// other rows so every existing row index (bands, butterflies, the turn pin) stays, and its end time leads the knots
+// (`with_front`): under a Hermite front the fixing IS the first knot, under a Flat front it reads the first segment.
+inline double add_on_fixing(cal::BundleProblem& p, const std::string& ccy, const std::string& index, int fc) {
+  return add_fixing(p, ccy, index, "1D", fc);
+}
+inline std::vector<double> with_front(double t, std::vector<double> knots) {
+  knots.insert(knots.begin(), t);
+  return knots;
 }
 inline std::vector<double> add_basis_swaps(cal::BundleProblem& p, const b::SwapConv& conv, int fc, int bench, int disc,
                                            const std::vector<std::string>& tenors) {
@@ -177,8 +194,17 @@ inline void fill_x(Shape& s) {
   s.x_true.resize(p.n_knots()); s.x0.resize(p.n_knots());
   for (int c = 0; c < p.n_curves(); ++c) {
     const int off = p.offset(c), ni = p.curves[c].n_interp_knots(), nk = p.curves[c].n_knots();
+    // THE GENERATING STATE IS A STRAIGHT LINE IN TIME (2026-11-02; it was linear in knot INDEX): 40 bp/yr on an outright
+    // curve, 0.5 bp/yr on a spread, from 3 % / 20 bp at t = 0. Index-linear values bend wherever the pillar spacing
+    // changes (5Y/7Y/10Y, 12Y/15Y/20Y), and once every overnight curve carried its 1D knot the MonotoneCubic desk's long
+    // end sat on a Hyman branch kink under the 25 bp gate tick and 2-cycled there (FLK2's mechanism) -- the index-linear
+    // state had merely happened to miss it. A line in time is what every smoothing row is zero on and what the
+    // multi-currency fixtures have generated from since 2026-09-21.
+    std::vector<double> kt;
+    for (const auto& m : p.curves[c].regions) kt.insert(kt.end(), m.knots.begin(), m.knots.end());
     for (int i = 0; i < ni; ++i) {
-      s.x_true[off + i] = p.curves[c].base < 0 ? 0.030 + 0.0004 * i : 0.0020 + 0.00005 * i;
+      const double t = kt[static_cast<std::size_t>(i)];
+      s.x_true[off + i] = p.curves[c].base < 0 ? 0.030 + 0.0004 * t : 0.0020 + 0.00005 * t;
       s.x0[off + i] = p.curves[c].base < 0 ? 0.030 : 0.0020;
     }
     for (int i = ni; i < nk; ++i) { s.x_true[off + i] = 0.0020; s.x0[off + i] = 0.0; }  // turn jumps
@@ -265,53 +291,64 @@ inline Shape make(std::string name, std::string note, cal::BundleProblem prob, b
 // ---- the rungs -----------------------------------------------------------------------------------------------
 inline Shape ois_nolag() {  // GBP SONIA: self-discounted, NO pay lag (the telescoping shape)
   cal::BundleProblem p; const auto conv = b::swap_conv("GBP", "GBP-SONIA");
-  p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
+  const auto k = detail::add_par_swaps(p, conv, 0, 0);
+  p.curves = {detail::spec(detail::with_front(detail::add_on_fixing(p, "GBP", "GBP-SONIA", 0), k), -1, "GBP-SONIA")};
   return detail::make("ois_nolag", "GBP SONIA OIS, 1 curve, pay lag 0", std::move(p));
 }
 inline Shape ois_lag() {  // USD SOFR: self-discounted, 2-day pay lag
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
-  p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
+  const auto k = detail::add_par_swaps(p, conv, 0, 0);
+  p.curves = {detail::spec(detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k), -1, "USD-SOFR")};
   return detail::make("ois_lag", "USD SOFR OIS, 1 curve, pay lag 2", std::move(p));
 }
 inline Shape ibor_multicurve() {  // EUR: ESTR discount curve + 6M EURIBOR forecast curve as a spread over it
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-ESTR"), 0, 0);
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-ESTR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "EUR", "EUR-ESTR", 0), k0);
   std::vector<double> k1 = {detail::add_fixing(p, "EUR", "EUR-EURIBOR-6M", "6M", 1)};  // the 6M fixing anchors the front (P15)
   const auto k1s = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-EURIBOR-6M"), 1, 0);
   k1.insert(k1.end(), k1s.begin(), k1s.end());
-  p.curves = {detail::spec(k0), detail::spec(k1, 0)};
+  p.curves = {detail::spec(k0, -1, "EUR-ESTR"), detail::spec(k1, 0, "EUR-EURIBOR-6M")};
   return detail::make("ibor_multicurve", "EUR ESTR OIS + 6M EURIBOR fixing + IRS on ESTR discounting (spread curve)", std::move(p));
 }
 inline Shape basis_spread() {  // USD SOFR + Fed funds as a ParSpread basis chain
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
-  const auto k1 = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, detail::pillars());
-  p.curves = {detail::spec(k0), detail::spec(k1, 0)};
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k0);
+  auto k1 = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, detail::pillars());
+  k1 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", 1), k1);
+  p.curves = {detail::spec(k0, -1, "USD-SOFR"), detail::spec(k1, 0, "USD-FEDFUNDS")};
   return detail::make("basis_spread", "USD SOFR OIS + FF/SOFR basis (ParSpread rows, spread curve)", std::move(p));
 }
 inline Shape averaged() {  // + monthly AVERAGED Fed funds futures (daily weighted sub-periods) on the FF curve
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k0);
   auto k1 = detail::add_averaged_futures(p, "USD-FEDFUNDS", 1, 6);
   const auto P = detail::pillars();
   std::vector<std::string> longer(P.begin() + 1, P.end());  // 2Y..30Y basis
   const auto k1b = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, longer);
   k1.insert(k1.end(), k1b.begin(), k1b.end());
-  p.curves = {detail::spec(k0), detail::spec(k1, 0)};
+  k1 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", 1), k1);  // the FF 1D fixing beside the futures strip
+  p.curves = {detail::spec(k0, -1, "USD-SOFR"), detail::spec(k1, 0, "USD-FEDFUNDS")};
   return detail::make("averaged", "basis_spread + 6 monthly averaged FF futures (weighted sub-periods)", std::move(p));
 }
 inline Shape averaged_leg() {  // SOFR + FF OIS whose float legs are daily arithmetic averages (weighted sub-periods in a LEG)
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
-  const auto k1 = detail::add_averaged_leg_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), "USD-FEDFUNDS", 1, 0, detail::pillars());
-  p.curves = {detail::spec(k0), detail::spec(k1, 0)};
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k0);
+  auto k1 = detail::add_averaged_leg_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), "USD-FEDFUNDS", 1, 0, detail::pillars());
+  k1 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", 1), k1);
+  p.curves = {detail::spec(k0, -1, "USD-SOFR"), detail::spec(k1, 0, "USD-FEDFUNDS")};
   return detail::make("averaged_leg", "USD SOFR OIS + FF OIS with daily-averaged float coupons (ParRate rows, weighted sub-periods)", std::move(p));
 }
 inline Shape averaged_leg_moment() {  // the same FF OIS legs on the MOMENT path (one bracket + xᵀQx per coupon)
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
-  const auto k1 = detail::add_moment_leg_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), "USD-FEDFUNDS", 1, 0, detail::pillars());
-  p.curves = {detail::spec(k0), detail::spec(k1, 0)};
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k0);
+  auto k1 = detail::add_moment_leg_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), "USD-FEDFUNDS", 1, 0, detail::pillars());
+  k1 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", 1), k1);
+  p.curves = {detail::spec(k0, -1, "USD-SOFR"), detail::spec(k1, 0, "USD-FEDFUNDS")};
   return detail::make("averaged_leg_moment", "USD SOFR OIS + FF OIS with daily-averaged float coupons on the MOMENT path", std::move(p));
 }
 // EVERY LINEAR-MAP SCHEME IN ONE CURVE (2026-09-10). The ladder's promise is that a kernel change is measured
@@ -326,15 +363,19 @@ inline Shape all_schemes() {
   // 18 pillars, not the usual 12: a cubic B-spline region needs >= 3 knots, so every region gets 3.
   const std::vector<std::string> tenors = {"1Y",  "2Y",  "3Y",  "4Y",  "5Y",  "6Y",  "7Y",  "8Y",  "9Y",
                                            "10Y", "11Y", "12Y", "15Y", "20Y", "25Y", "30Y", "35Y", "40Y"};
-  const auto k = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0, tenors);
+  auto k = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0, tenors);
+  // the 1D fixing is the leading Flat region's FIRST knot (the meeting-date style: a [0, 1D] segment of its own), so the
+  // rung stays SQUARE -- 19 rows, 19 knots -- and its 25 bp refresh keeps the square exemption (premise refreshes == 0)
+  k = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k);
   const swaps::curve::Scheme order[] = {swaps::curve::Scheme::Flat,        swaps::curve::Scheme::Linear,
                                         swaps::curve::Scheme::NaturalCubic, swaps::curve::Scheme::Hermite,
                                         swaps::curve::Scheme::BSpline,     swaps::curve::Scheme::Tension};
   px::CurveStructure s0;
   s0.base = -1;
-  const std::size_t per = k.size() / 6;  // 18 knots -> 3 per region (the B-spline minimum)
+  s0.fixing_tenor = b::index_fixing_tenor("USD-SOFR");
+  const std::size_t per = (k.size() - 1) / 6;  // the fixing + 18 pillars -> 4 knots in the Flat region, 3 per region after (the B-spline minimum)
   for (std::size_t r = 0; r < 6; ++r) {
-    const std::size_t lo = r * per, hi = (r == 5) ? k.size() : (r + 1) * per;
+    const std::size_t lo = r == 0 ? 0 : 1 + r * per, hi = (r == 5) ? k.size() : 1 + (r + 1) * per;
     s0.regions.push_back(swaps::curve::CurveModule{
         std::vector<double>(k.begin() + static_cast<std::ptrdiff_t>(lo), k.begin() + static_cast<std::ptrdiff_t>(hi)),
         order[r]});
@@ -354,14 +395,16 @@ inline Shape all_schemes() {
 // rung was linear. expect_compiled is false: with a partition the tick is not allocation-free.
 inline Shape mixed_scheme() {
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k0);
   auto k1 = detail::add_averaged_futures(p, "USD-FEDFUNDS", 1, 6);
   const auto P = detail::pillars();
   const std::vector<std::string> longer(P.begin() + 1, P.end());  // 2Y..30Y basis
   const auto k1b = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, longer);
   k1.insert(k1.end(), k1b.begin(), k1b.end());
-  // pillars() is 1Y..30Y; split at index 6 => Hermite through 10Y, MonotoneCubic over 12Y..30Y.
-  p.curves = {detail::spec_mixed(k0, 6), detail::spec(k1, 0)};
+  k1 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", 1), k1);
+  // the 1D fixing then pillars() 1Y..30Y; split at index 7 => Hermite through 10Y, MonotoneCubic over 12Y..30Y.
+  p.curves = {detail::spec_mixed(k0, 7, -1, "USD-SOFR"), detail::spec(k1, 0, "USD-FEDFUNDS")};
   return detail::make("mixed_scheme",
                       "averaged + the SOFR long end on MonotoneCubic: the router's per-row partition "
                       "(front rows W-cached, long rows on the AAD block)",
@@ -376,13 +419,16 @@ inline Shape mixed_scheme() {
 // and walked (the soak, the walk guard).
 inline Shape mixed_convex() {
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k0);
   auto k1 = detail::add_averaged_futures(p, "USD-FEDFUNDS", 1, 6);
   const auto P = detail::pillars();
   const std::vector<std::string> longer(P.begin() + 1, P.end());  // 2Y..30Y basis
   const auto k1b = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, longer);
   k1.insert(k1.end(), k1b.begin(), k1b.end());
-  p.curves = {detail::spec_mixed_convex(k0, 6), detail::spec(k1, 0)};
+  k1 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", 1), k1);
+  // the 1D fixing then pillars() 1Y..30Y; split at index 7 => Hermite through 10Y, MonotoneConvex over 12Y..30Y.
+  p.curves = {detail::spec_mixed_convex(k0, 7, -1, "USD-SOFR"), detail::spec(k1, 0, "USD-FEDFUNDS")};
   return detail::make("mixed_convex",
                       "averaged + the SOFR long end on MonotoneConvex: not piecewise-linear, so since 2026-10-31 the "
                       "TANGENT tier re-takes its W analytically at every state (every row compiled, the tick allocation-free)",
@@ -390,13 +436,15 @@ inline Shape mixed_convex() {
 }
 inline Shape banded() {  // SOFR OIS with a +-1 bp Huber band on every row
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
-  p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
+  const auto k = detail::add_par_swaps(p, conv, 0, 0);
+  p.curves = {detail::spec(detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k), -1, "USD-SOFR")};
   return detail::make("banded", "USD SOFR OIS, +-1bp bands decay 0.5 on every row", std::move(p), true,
                       [](Shape& s) { detail::band_all(s.prob, 1e-4, 0.5); });
 }
 inline Shape turns() {  // SOFR OIS + a year-end TURN (banded pin) + a bracketing compounded future
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
-  auto s0 = detail::spec(detail::add_par_swaps(p, conv, 0, 0));
+  const auto k = detail::add_par_swaps(p, conv, 0, 0);
+  auto s0 = detail::spec(detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k), -1, "USD-SOFR");
   s0.turns = {px::Turn{b::curve_time(detail::vd(), b::Date::from_iso("2026-12-31")), b::curve_time(detail::vd(), b::Date::from_iso("2027-01-04"))}};
   p.curves = {s0};
   const std::string dc = b::index_day_count("USD-SOFR"), cl = b::index_calendar("USD-SOFR");
@@ -407,7 +455,8 @@ inline Shape turns() {  // SOFR OIS + a year-end TURN (banded pin) + a bracketin
 }
 inline Shape portfolio() {  // SOFR OIS + two butterflies as Portfolio rows
   cal::BundleProblem p; const auto conv = b::swap_conv("USD", "USD-SOFR");
-  p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0))};
+  const auto k = detail::add_par_swaps(p, conv, 0, 0);
+  p.curves = {detail::spec(detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k), -1, "USD-SOFR")};  // row 12: the fixing
   p.instruments.push_back(detail::butterfly(p, 1, 4, 6));    // 2y / 5y / 10y
   p.instruments.push_back(detail::butterfly(p, 4, 6, 11));   // 5y / 10y / 30y
   return detail::make("portfolio", "USD SOFR OIS + 2 butterflies (Portfolio rows)", std::move(p));
@@ -415,13 +464,16 @@ inline Shape portfolio() {  // SOFR OIS + two butterflies as Portfolio rows
 inline Shape zero_coupon() {  // BRL DI x Pre: ZeroCouponRate rows (the nonlinear quote transform)
   cal::BundleProblem p; const auto conv = b::swap_conv("BRL", "BRL-CDI");
   std::vector<std::string> ten{"1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y"};
-  p.curves = {detail::spec(detail::add_par_swaps(p, conv, 0, 0, ten, 0.12))};
+  const auto k = detail::add_par_swaps(p, conv, 0, 0, ten, 0.12);
+  p.curves = {detail::spec(detail::with_front(detail::add_on_fixing(p, "BRL", "BRL-CDI", 0), k), -1, "BRL-CDI")};  // the CDI 1D fixing
   return detail::make("zero_coupon", "BRL DI x Pre zero-coupon swaps (BUS/252, annually compounded quotes)", std::move(p));
 }
 inline Shape fx_xccy() {  // USD SOFR + EUR ESTR + EUR-in-USD collateral curve: FX forwards + MtM xccy basis
   cal::BundleProblem p;
-  const auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
-  const auto k1 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-ESTR"), 1, 1);
+  auto k0 = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
+  k0 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k0);
+  auto k1 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-ESTR"), 1, 1);
+  k1 = detail::with_front(detail::add_on_fixing(p, "EUR", "EUR-ESTR", 1), k1);
   std::vector<double> k2;
   const auto xc = b::xccy_conv("EURUSD");
   for (const char* t : {"1W", "1M", "3M", "6M", "1Y"}) {
@@ -434,7 +486,7 @@ inline Shape fx_xccy() {  // USD SOFR + EUR ESTR + EUR-in-USD collateral curve: 
     p.instruments.push_back(b::xccy_mtm_basis(detail::vd(), xc, mat, 2, 1, 0, 1.08, 0.0));
     k2.push_back(p.instruments.back().fixed.coupons.back().pay);
   }
-  p.curves = {detail::spec(k0), detail::spec(k1), detail::spec(k2)};
+  p.curves = {detail::spec(k0, -1, "USD-SOFR"), detail::spec(k1, -1, "EUR-ESTR"), detail::spec(k2)};  // the collateral curve has no index: its FX forward anchors it
   return detail::make("fx_xccy", "USD SOFR + EUR ESTR + EUR-in-USD: 5 FX forwards + 8 MtM xccy basis rows", std::move(p), true);  // compiled since 2026-09-09
 }
 // everything at once: 5 curves, every quote kind, bands, a turn, butterflies. `mixed` puts the SOFR curve's
@@ -443,8 +495,9 @@ inline Shape fx_xccy() {  // USD SOFR + EUR ESTR + EUR-in-USD collateral curve: 
 // varying between them.
 inline Shape desk_impl(bool mixed) {
   cal::BundleProblem p;
-  const auto k_sofr = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);
-  auto s0 = mixed ? detail::spec_mixed(k_sofr, 6) : detail::spec(k_sofr);
+  auto k_sofr = detail::add_par_swaps(p, b::swap_conv("USD", "USD-SOFR"), 0, 0);  // rows 0..11: the banded swaps
+  k_sofr = detail::with_front(detail::add_on_fixing(p, "USD", "USD-SOFR", 0), k_sofr);  // row 12: the SOFR 1D fixing
+  auto s0 = mixed ? detail::spec_mixed(k_sofr, 7, -1, "USD-SOFR") : detail::spec(k_sofr, -1, "USD-SOFR");  // the fixing then 1Y..7Y Hermite, 10Y.. MonotoneCubic
   const int n_sofr = p.n_residuals();
   s0.turns = {px::Turn{b::curve_time(detail::vd(), b::Date::from_iso("2026-12-31")), b::curve_time(detail::vd(), b::Date::from_iso("2027-01-04"))}};
   auto k1 = detail::add_averaged_futures(p, "USD-FEDFUNDS", 1, 6);
@@ -452,7 +505,9 @@ inline Shape desk_impl(bool mixed) {
   std::vector<std::string> longer(P.begin() + 1, P.end());
   const auto k1b = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), 1, 0, 0, longer);
   k1.insert(k1.end(), k1b.begin(), k1b.end());
-  const auto k2 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-ESTR"), 2, 2);
+  k1 = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", 1), k1);
+  auto k2 = detail::add_par_swaps(p, b::swap_conv("EUR", "EUR-ESTR"), 2, 2);
+  k2 = detail::with_front(detail::add_on_fixing(p, "EUR", "EUR-ESTR", 2), k2);
   std::vector<double> k3;
   const auto xc = b::xccy_conv("EURUSD");
   for (const char* t : {"1W", "1M", "3M", "6M", "1Y"}) {
@@ -471,7 +526,7 @@ inline Shape desk_impl(bool mixed) {
   p.instruments.push_back(b::turn_jump(0, 0, 0.0));
   p.instruments.push_back(detail::butterfly(p, 1, 4, 6));
   p.instruments.push_back(detail::butterfly(p, 4, 6, 11));
-  p.curves = {s0, detail::spec(k1, 0), detail::spec(k2), detail::spec(k3), detail::spec(k4, 2)};
+  p.curves = {s0, detail::spec(k1, 0, "USD-FEDFUNDS"), detail::spec(k2, -1, "EUR-ESTR"), detail::spec(k3), detail::spec(k4, 2, "EUR-EURIBOR-6M")};
   return detail::make(mixed ? "desk_mixed" : "desk",
                       mixed ? "desk with the SOFR long end on MonotoneCubic: the full-coverage bundle across "
                               "the router's partition (front rows W-cached, long rows on the AAD block)"

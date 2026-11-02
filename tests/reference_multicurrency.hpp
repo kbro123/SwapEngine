@@ -95,9 +95,9 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
   const std::vector<double> eur_back{1, 2, 3, 5, 7, 10};
   const Date fix3m_start = Euribor3M().valueDate(eval), fix3m_end = Euribor3M().maturityDate(fix3m_start);
   const std::vector<double> eur3m_meet{t(fix3m_end), 0.5};
-  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};      // outright
-  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(eur3m_meet, eur_back)};   // spread over ESTR
-  b.prob.curves[b.EUR6M] = swaps::pricing::CurveStructure{.base = b.EUR3M, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(eur_meet, eur_back)};  // spread over EUR3M
+  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};      // outright
+  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .fixing_tenor = 0.25, .regions = swaps::curve::flat_hermite(eur3m_meet, eur_back)};   // spread over ESTR
+  b.prob.curves[b.EUR6M] = swaps::pricing::CurveStructure{.base = b.EUR3M, .currency = CCY_EUR, .fixing_tenor = 0.5, .regions = swaps::curve::flat_hermite(eur_meet, eur_back)};  // spread over EUR3M
 
   b.off.assign(3, 0);
   for (int c = 1; c < 3; ++c) b.off[c] = b.off[c - 1] + b.prob.curves[c - 1].n_knots();
@@ -254,6 +254,9 @@ inline MultiCcyBundle build_eur_bundle(QuantLib::Date eval = QuantLib::Date(15, 
   for (auto& s : vs_keep) s->deepUpdate();
 
   // Self-consistent market so joint & staged solves recover x_true exactly.
+  // THE 1D FIXING (owner's rule, 2026-11-02; P15): each overnight curve's own fixing beside its other front rows,
+  // appended last so no earlier row is renumbered; its market is set from x_true with the rest.
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.estr, dc, b.ESTR, 0.0));
   const Eigen::VectorXd r0 = b.prob.residuals<double>(b.x_true);
   for (int i = 0; i < static_cast<int>(b.prob.instruments.size()); ++i) b.prob.instruments[i].market += r0[i];
 
@@ -299,12 +302,12 @@ inline MultiCcyBundle build_usd_bundle() {
   b.SOFR = 0;
   b.FF = 1;
   b.prob.curves.resize(2);
-  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .regions = swaps::curve::flat_hermite(mk.meeting_times, mk.back_times)};  // outright
+  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(mk.meeting_times, mk.back_times)};  // outright
 
   // FF: spread over SOFR, a flat front + Hermite back at the basis-swap pillars.
   const std::vector<double> ff_meet{0.5};
   const std::vector<double> ff_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
-  b.prob.curves[b.FF] = swaps::pricing::CurveStructure{.base = b.SOFR, .currency = CCY_USD, .regions = swaps::curve::flat_hermite(ff_meet, ff_back)};
+  b.prob.curves[b.FF] = swaps::pricing::CurveStructure{.base = b.SOFR, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(ff_meet, ff_back)};
 
   b.off = {0, b.prob.curves[b.SOFR].n_knots()};
   const int N = b.off[b.FF] + b.prob.curves[b.FF].n_knots();
@@ -363,6 +366,9 @@ inline MultiCcyBundle build_usd_bundle() {
   for (auto& s : mk.swaps) s->deepUpdate();
   for (auto& s : keep) s->deepUpdate();
 
+  // THE 1D FIXING (owner's rule, 2026-11-02; P15): each overnight curve's own fixing beside its other front rows,
+  // appended last so no earlier row is renumbered; its market is set from x_true with the rest.
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.fedfunds, dc, b.FF, 0.0));
   const Eigen::VectorXd r0 = b.prob.residuals<double>(b.x_true);
   for (int i = 0; i < static_cast<int>(b.prob.instruments.size()); ++i) b.prob.instruments[i].market += r0[i];
 
@@ -402,8 +408,8 @@ inline MultiCcyBundle build_xccy_bundle(QuantLib::Date eval = QuantLib::Date(15,
   const std::vector<double> meet{0.5};
   const std::vector<double> ois_back{1, 2, 3, 5, 7, 10, 15, 20, 30};
   const std::vector<double> xccy_back{1, 2, 3, 5, 7, 10};
-  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .regions = swaps::curve::flat_hermite(meet, ois_back)};        // outright
-  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(meet, ois_back)};        // outright
+  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(meet, ois_back)};        // outright
+  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(meet, ois_back)};        // outright
   b.prob.curves[b.EURUSD] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(meet, xccy_back)}; // spread over ESTR (the xccy basis)
 
   b.off = {0, b.prob.curves[b.SOFR].n_knots(),
@@ -486,6 +492,10 @@ inline MultiCcyBundle build_xccy_bundle(QuantLib::Date eval = QuantLib::Date(15,
   }
   for (auto& s : keep) s->deepUpdate();
 
+  // THE 1D FIXING (owner's rule, 2026-11-02; P15): each overnight curve's own fixing beside its other front rows,
+  // appended last so no earlier row is renumbered; its market is set from x_true with the rest.
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.sofr, dc, b.SOFR, 0.0));
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.estr, dc, b.ESTR, 0.0));
   const Eigen::VectorXd r0 = b.prob.residuals<double>(b.x_true);
   for (int i = 0; i < static_cast<int>(b.prob.instruments.size()); ++i) b.prob.instruments[i].market += r0[i];
 
@@ -518,8 +528,8 @@ inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(
   b.prob.curves.resize(3);
   const std::vector<double> meet{0.5}, ois_back{1, 2, 3, 5, 7, 10};
   const std::vector<double> xccy_meet{0.25, 0.5}, xccy_back{1, 2, 3, 5, 7, 10};
-  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .regions = swaps::curve::flat_hermite(meet, ois_back)};
-  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(meet, ois_back)};
+  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(meet, ois_back)};
+  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(meet, ois_back)};
   b.prob.curves[b.EURUSD] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(xccy_meet, xccy_back)};  // ESTR + xccy basis
   b.off = {0, b.prob.curves[b.SOFR].n_knots(),
            b.prob.curves[b.SOFR].n_knots() + b.prob.curves[b.ESTR].n_knots()};
@@ -621,6 +631,10 @@ inline MultiCcyBundle build_xccy_fx_bundle(QuantLib::Date eval = QuantLib::Date(
     b.h[c].linkTo(tsc);
   }
   for (auto& s : keep) s->deepUpdate();
+  // THE 1D FIXING (owner's rule, 2026-11-02; P15): each overnight curve's own fixing beside its other front rows,
+  // appended last so no earlier row is renumbered; its market is set from x_true with the rest.
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.sofr, dc, b.SOFR, 0.0));
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.estr, dc, b.ESTR, 0.0));
   const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
   for (auto& ins : b.prob.instruments)
     ins.market = cal::instrument_model_quote<double>(ins, curve_of);
@@ -845,13 +859,13 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
   for (int y : swap_tenors) b.prob.instruments.push_back(eur6m_outright(y));
 
   // ---- Curve specs + parameterization (ESTR outright; EUR3M spread/ESTR; EUR6M spread/EUR3M) ----
-  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};
+  b.prob.curves[b.ESTR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};
   // STAR (not chain): ESTR is the ONE outright curve; EUR3M AND EUR6M are each a spread over ESTR
   // directly. A spread chain (EUR6M over EUR3M over ESTR) accumulates and is less stable; a single
   // outright + spreads-over-it is the desk-standard parameterization. EUR3M's first futures pillar is
   // ~0.44y so its flat-front knot sits below that (Flat/Hermite join needs back.front() > meeting.back()).
-  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({anchored ? t(fix3m_end) : 0.1}, eur3m_back)};  // the fixing's end (P15); 0.1 was the first form's
-  b.prob.curves[b.EUR6M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({0.5}, eur6m_back)};
+  b.prob.curves[b.EUR3M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .fixing_tenor = 0.25, .regions = swaps::curve::flat_hermite({anchored ? t(fix3m_end) : 0.1}, eur3m_back)};  // the fixing's end (P15); 0.1 was the first form's
+  b.prob.curves[b.EUR6M] = swaps::pricing::CurveStructure{.base = b.ESTR, .currency = CCY_EUR, .fixing_tenor = 0.5, .regions = swaps::curve::flat_hermite({0.5}, eur6m_back)};
   b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
   const int N = b.off[2] + b.prob.curves[2].n_knots();
   b.default_discount = {{b.ESTR, b.ESTR}, {b.EUR3M, b.ESTR}, {b.EUR6M, b.ESTR}};
@@ -882,6 +896,9 @@ inline MultiCcyBundle build_eur_curves(QuantLib::Date eval = QuantLib::Date(8, Q
   }
   for (auto& s : keep_ois) s->deepUpdate();
   for (auto& s : keep_vs) s->deepUpdate();
+  // THE 1D FIXING (owner's rule, 2026-11-02; P15): each overnight curve's own fixing beside its other front rows,
+  // appended last so no earlier row is renumbered; its market is set from x_true with the rest.
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.estr, dc, b.ESTR, 0.0));
   const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
   for (auto& ins : b.prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
 
@@ -944,7 +961,7 @@ inline MultiCcyBundle build_eur_multicurrency() {
   b.eur6m = eur.eur6m;
 
   b.prob.curves.resize(5);
-  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .regions = swaps::curve::flat_hermite(mk.meeting_times, mk.back_times)};
+  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(mk.meeting_times, mk.back_times)};
   for (int c = 0; c < 3; ++c) {  // splice the EUR trio specs, shifting bases by +1
     auto spec = eur.prob.curves[c];
     if (spec.base >= 0) spec.base += 1;
@@ -1124,9 +1141,9 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
   b.prob.instruments.push_back(irs_par(b.eur6m, 2, 6 * Months));
   for (int y : pillars) b.prob.instruments.push_back(irs_par(b.eur6m, 2, Period(y, Years)));
 
-  b.prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};
-  b.prob.curves[1] = swaps::pricing::CurveStructure{.base = 0, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({t(fix3m_end), 0.5}, eur_back)};  // EUR3M = ESTR + spread
-  b.prob.curves[2] = swaps::pricing::CurveStructure{.base = 1, .currency = CCY_EUR, .regions = swaps::curve::flat_hermite({0.5}, eur_back)};  // EUR6M = EUR3M + spread
+  b.prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_EUR, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(estr_meet, estr_back)};
+  b.prob.curves[1] = swaps::pricing::CurveStructure{.base = 0, .currency = CCY_EUR, .fixing_tenor = 0.25, .regions = swaps::curve::flat_hermite({t(fix3m_end), 0.5}, eur_back)};  // EUR3M = ESTR + spread
+  b.prob.curves[2] = swaps::pricing::CurveStructure{.base = 1, .currency = CCY_EUR, .fixing_tenor = 0.5, .regions = swaps::curve::flat_hermite({0.5}, eur_back)};  // EUR6M = EUR3M + spread
   b.off = {0, b.prob.curves[0].n_knots(), b.prob.curves[0].n_knots() + b.prob.curves[1].n_knots()};
   const int N = b.off[2] + b.prob.curves[2].n_knots();
   b.default_discount = {{0, 0}, {1, 0}, {2, 0}};
@@ -1151,6 +1168,9 @@ inline MultiCcyBundle build_eur_streamable(QuantLib::Date eval = QuantLib::Date(
   }
   for (auto& s : koi) s->deepUpdate();
   for (auto& s : kvs) s->deepUpdate();
+  // THE 1D FIXING (owner's rule, 2026-11-02; P15): each overnight curve's own fixing beside its other front rows,
+  // appended last so no earlier row is renumbered; its market is set from x_true with the rest.
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.estr, dc, 0, 0.0));
   const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
   for (auto& ins : b.prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
   b.x0.resize(N);
@@ -1204,9 +1224,9 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   const std::vector<int> spr_tenors{1, 2, 3, 5, 7, 10, 15, 20, 30};
 
   b.prob.curves.resize(NC);
-  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .regions = swaps::curve::flat_hermite(mk.meeting_times, mk.back_times)};
-  b.prob.curves[b.FF] = swaps::pricing::CurveStructure{.base = b.SOFR, .currency = CCY_USD, .regions = swaps::curve::flat_hermite({0.5}, spr_back)};
-  b.prob.curves[PRIME] = swaps::pricing::CurveStructure{.base = b.FF, .currency = CCY_USD, .regions = swaps::curve::flat_hermite({0.5}, spr_back)};
+  b.prob.curves[b.SOFR] = swaps::pricing::CurveStructure{.base = -1, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(mk.meeting_times, mk.back_times)};
+  b.prob.curves[b.FF] = swaps::pricing::CurveStructure{.base = b.SOFR, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite({0.5}, spr_back)};
+  b.prob.curves[PRIME] = swaps::pricing::CurveStructure{.base = b.FF, .currency = CCY_USD, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite({0.5}, spr_back)};
   for (int c = 0; c < 3; ++c) {  // EUR trio, bases shifted +3
     auto spec = eur.prob.curves[c];
     if (spec.base >= 0) spec.base += 3;
@@ -1325,6 +1345,10 @@ inline MultiCcyBundle build_full_multicurrency(bool include_xccy = true, bool co
   }
   for (auto& s : mk.swaps) s->deepUpdate();
   for (auto& s : keep) s->deepUpdate();
+  // THE 1D FIXING (owner's rule, 2026-11-02; P15): each overnight curve's own fixing beside its other front rows,
+  // appended last so no earlier row is renumbered; its market is set from x_true with the rest.
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), b.fedfunds, dc, b.FF, 0.0));
+  b.prob.instruments.push_back(on_fixing_instrument(QuantLib::Settings::instance().evaluationDate(), prime_idx, dc, PRIME, 0.0));
   const auto curve_of = [&](int i) -> const cal::CurveHandle<double>& { return *b.curve_handles[i]; };
   for (auto& ins : b.prob.instruments) ins.market = cal::instrument_model_quote<double>(ins, curve_of);
 

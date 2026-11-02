@@ -33,6 +33,9 @@ struct CalibrationProblem {
   // Curve topology (year fractions on the curve day count).
   std::vector<double> meeting_times;
   std::vector<double> back_times;
+  // The curve's index tenor (CurveStructure::fixing_tenor): < 0 = not stated. The reference market states the
+  // overnight tenor (its 1D SOFR fixing is the P15 anchor); the square problem states none.
+  double fixing_tenor = -1.0;
 
   // Every calibration instrument is a generic Instrument (design §3). This problem has exactly ONE
   // curve, so every leg role resolves to it and the legs' curve indices are ignored (single_curve_bundle()
@@ -76,7 +79,7 @@ struct CalibrationProblem {
 // thin delegate to CompiledBundleResidual -- one compiled engine, not two.
 inline BundleProblem single_curve_bundle(const CalibrationProblem& p) {
   BundleProblem b;
-  b.curves.push_back({.regions = curve::flat_hermite(p.meeting_times, p.back_times)});  // base = -1
+  b.curves.push_back({.fixing_tenor = p.fixing_tenor, .regions = curve::flat_hermite(p.meeting_times, p.back_times)});  // base = -1
   for (Instrument ins : p.instruments) {  // by value: force every role onto the single curve, so the
     ins.fwd.forecast = ins.fwd.discount = 0;  // compiled path cannot disagree with price_residuals(),
     ins.bench.forecast = ins.bench.discount = 0;  // which resolves every role to the one curve.

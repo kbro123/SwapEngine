@@ -9,7 +9,7 @@ Breakpoint          weak_direction_strip
 Pin                 walk_desk_3bp
 Release             walk_desk_3bp
 RescaleFallback     weak_direction_strip
-KinkDamp            desk_mixed_perrow   # the per-row stress walk on the MonotoneCubic desk (2026-11-01: the anchored desk's small tick no longer parks on a kink)
+KinkDamp            desk_mixed_small    # 2026-11-02: with every overnight curve's 1D fixing in and the ladder's line-in-time state, the 0.1 bp tick zigzags the Hyman long end across a cell (25Y/30Y clamp) and the damping fires there; the per-row walk no longer reaches it
 Predicted           square_big_ois
 StallRefresh        desk_mixed_walk3bp  # the +-3 bp walk on the MonotoneCubic desk (2026-11-01, as above)
 FrozenCapRefresh    frozen_cap_ois
@@ -27,11 +27,11 @@ intick_portfolio_rd0         60      20
 failed_portfolio_cap2         8       2
 weak_direction_strip         14       3
 reg_desk_small                0       0
-walk_desk_3bp               224      29  # 28 -> 29 on 2026-11-01: the desk gained the EUR 6M fixing as the 6M curve's front anchor (P15), one more release on the same walk
-desk_mixed_small              0       0  # 4070 / 20 -> 0 / 0 on 2026-11-01: anchored (P15), the small tick streams on frozen steps alone
-desk_mixed_walk3bp          231      38  # new 2026-11-01: the MonotoneCubic desk along the +-3 bp walk
-desk_mixed_perrow           400      61  # new 2026-11-01: the MonotoneCubic desk along the per-row stress walk (bands requoted with the targets)
-desk_mixed_big             3870      18
+walk_desk_3bp               198      33  # 28 -> 29 on 2026-11-01 (the EUR 6M fixing); 29 -> 33 and 224 -> 198 allocs on 2026-11-02: every overnight curve carries its 1D fixing and the generating state is a line in time (P15) -- four more pin releases on the same walk, fewer allocations
+desk_mixed_small            120      20  # 4070 / 20 -> 0 / 0 on 2026-11-01 (anchored, frozen steps alone); 0 / 0 -> 120 / 20 on 2026-11-02: with the 1D fixings and the line-in-time state the 0.1 bp tick zigzags the SOFR long end (25Y +4.5 bp, 30Y -9.6 bp) across a Hyman cell every tick -- one analytic re-sync and one refresh per tick, the MonotoneCubic rung's own cost on exact quotes
+desk_mixed_walk3bp          258      42  # new 2026-11-01: the MonotoneCubic desk along the +-3 bp walk; 231 / 38 -> 258 / 42 on 2026-11-02 (the 1D fixings, the line-in-time state)
+desk_mixed_perrow           156      26  # new 2026-11-01: the MonotoneCubic desk along the per-row stress walk (bands requoted with the targets); 400 / 61 -> 156 / 26 on 2026-11-02
+desk_mixed_big              108      18  # 3870 -> 108 allocs on 2026-11-02 (the 1D fixings, the line-in-time state)
 
 [callsites]
 set_anchor         7  # 8 -> 7 on 2026-11-01: the TrackRefresh site (a background-worker M without J) went with the prefetch worker

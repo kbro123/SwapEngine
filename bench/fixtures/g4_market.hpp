@@ -179,9 +179,15 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
       prev = m;
     }
     const std::vector<double> back = detail::add_par_swaps(p, conv, r.role, r.role);  // 1Y..30Y par OIS
+    // THE 1D FIXING (owner's rule, 2026-11-02): the overnight curve's own fixing beside the meeting observations -- it reads
+    // the leading Flat region's first segment, so it adds no knot; the curve states its tenor and P15 holds it to this row.
+    const b::Date on_end = b::resolve("1D", vd, conv.calendar, conv.bdc, conv.spot_lag);
+    const px::RateObservation on = b::observation(vd, spot, on_end, "compounded", 0.0, dc, cl);
+    p.instruments.push_back(b::rate_instrument(r.role, on, 0.03));
     px::CurveStructure s;
     s.base = -1;
     s.currency = r.ccy;
+    s.fixing_tenor = b::index_fixing_tenor(r.index);
     s.regions = {cv::CurveModule{front, cv::Scheme::Flat}, cv::CurveModule{back, o.back}};
     if (o.turns) {
       s.turns = {px::Turn{b::curve_time(vd, turn_s), b::curve_time(vd, turn_e)}};
@@ -199,8 +205,6 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     // there and the tick never moves the row.
     std::vector<double> kc;
     {
-      const b::Date on_end = b::resolve("1D", vd, conv.calendar, conv.bdc, conv.spot_lag);
-      const px::RateObservation on = b::observation(vd, spot, on_end, "compounded", 0.0, dc, cl);
       cal::Instrument row;
       row.quote = cal::QuoteKind::Portfolio;
       row.combination = {{+1.0, b::rate_instrument(r.ccp, on, 0.0)}, {-1.0, b::rate_instrument(r.role, on, 0.0)}};
@@ -221,6 +225,7 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     if (kc.size() != o.ccp_knots.size() + 1) throw std::invalid_argument("g4_desk: every ccp_knots tenor must be a ccp_tenors pillar");
     px::CurveStructure sc = one_region(kc, r.role);
     sc.currency = r.ccy;
+    sc.fixing_tenor = b::index_fixing_tenor(r.index);  // the same overnight index: its 1D zero-basis row is the anchor
     p.curves[static_cast<std::size_t>(r.ccp)] = std::move(sc);
   }
   // ---- USD tenor basis: Fed funds over SOFR (averaged futures front, FF/SOFR basis back) ----
@@ -228,8 +233,10 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     std::vector<double> k = detail::add_averaged_futures(p, "USD-FEDFUNDS", g4::USD_FF, 6);
     const auto kb = detail::add_basis_swaps(p, b::swap_conv("USD", "USD-FEDFUNDS"), g4::USD_FF, g4::USD_SOFR, g4::USD_SOFR, ccp_tenors);
     k.insert(k.end(), kb.begin(), kb.end());
+    k = detail::with_front(detail::add_on_fixing(p, "USD", "USD-FEDFUNDS", g4::USD_FF), k);  // the FF 1D fixing beside the futures (P15)
     px::CurveStructure s = one_region(k, g4::USD_SOFR);
     s.currency = g4::USD;
+    s.fixing_tenor = b::index_fixing_tenor("USD-FEDFUNDS");
     p.curves[g4::USD_FF] = std::move(s);
   }
   // ---- EUR tenor basis: 6M IRS pins EUR6M over ESTR; the 3s6s basis pins EUR3M over EUR6M ----
@@ -248,6 +255,7 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     k6.insert(k6.end(), k6s.begin(), k6s.end());
     px::CurveStructure s6 = one_region(k6, g4::EUR_ESTR);
     s6.currency = g4::EUR;
+    s6.fixing_tenor = b::index_fixing_tenor("EUR-EURIBOR-6M");
     p.curves[g4::EUR_6M] = std::move(s6);
     const b::BasisConv bc = b::basis_conv("EUR-3S6S-BASIS");
     std::vector<double> k3 = {fixing_anchor("EUR-EURIBOR-3M", "3M", g4::EUR_3M)};
@@ -258,6 +266,7 @@ inline Shape g4_desk(const g4::Opts& o = {}) {
     }
     px::CurveStructure s3 = one_region(k3, g4::EUR_6M);
     s3.currency = g4::EUR;
+    s3.fixing_tenor = b::index_fixing_tenor("EUR-EURIBOR-3M");
     p.curves[g4::EUR_3M] = std::move(s3);
   }
   // ---- the three collateral curves: FX forwards then MtM xccy basis, all funded on SOFR ----

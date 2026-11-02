@@ -34,8 +34,8 @@ TEST(G4Desk, StructureIsTheDesk) {
   const Shape s = swaps::shapes::g4_desk(raw(cv::Scheme::MonotoneConvex));
   const auto& p = s.prob;
   EXPECT_EQ(p.n_curves(), 14);
-  EXPECT_EQ(p.n_knots(), 174);
-  EXPECT_EQ(p.n_quotes(), 198);
+  EXPECT_EQ(p.n_knots(), 175);   // 174 + the FF 1D fixing's knot (2026-11-02)
+  EXPECT_EQ(p.n_quotes(), 203);  // 198 + a 1D fixing on each of the four RFR curves and on FF (owner's rule, 2026-11-02)
   EXPECT_EQ(p.n_constraints(), 0);
   // the four RFR curves: a Flat front with one knot per DB meeting before the 1Y pillar, then the smooth back, a turn
   const int meetings[] = {8, 8, 4, 4};

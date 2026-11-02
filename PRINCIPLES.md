@@ -110,7 +110,9 @@ value date. Never the leading region's flat extrapolation of a term
 pillar, and never a discount-only read (a par rate's discounting column vanishes at the front). The state at every
 knot is a forward; the front one is a market quote like any other. `calibration::front_anchors` (`bundle_problem.hpp`) is the check and the `compile` verb warns on
 an unanchored curve; `tests/front_anchor_rule_test.cpp` / `front_anchor_reference_test.cpp` walk every fixture in the repo (ratified
-2026-11-01, after the G4 desk's CCP curves were found carrying a 2Y spread from day one; ASSUMPTIONS K53).
+2026-11-01, after the G4 desk's CCP curves were found carrying a 2Y spread from day one; ASSUMPTIONS K53). Every fixture
+that stands for a market states its curves' tenors and carries the 1D fixing beside whatever else pins the front -- the
+1M futures strip stays (owner's rule, 2026-11-02: "an additional 1D fixing by default, for examples etc.").
 
 ## What "done" means
 

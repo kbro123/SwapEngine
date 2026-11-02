@@ -155,10 +155,16 @@ Outcome soak(const Shape& s, WalkKind kind, const cal::RegSpec& reg, long n, uns
     // 1000:1 kink): row A is the quote as a pure BOUND (+-kSoakBand, no pull inside), row B the same instrument at the
     // constant weak slope kSmoothedBandDecay toward mid (PenaltyMap::stiff -- a one-piece map), appended after every
     // quote so the original quote indices are unchanged; the walk feeds row B the same target as row A.
+    // A FIXING IS NOT A QUOTE (2026-11-02): the P15 anchor rows -- every overnight curve's 1D fixing, a tenor curve's
+    // tenor fixing -- are published numbers with no bid/offer, so they stay HARD; the bound + mid-row pair is for the
+    // quoted rows (swaps, futures, basis). Banding a fixing left the front held by the mid row alone inside a dead zone.
+    std::vector<char> is_anchor(static_cast<std::size_t>(prob.n_residuals()), 0);
+    for (const cal::FrontAnchor& a : cal::front_anchors(prob))
+      if (a.row >= 0 && prob.row(a.row).quote == cal::QuoteKind::Rate) is_anchor[static_cast<std::size_t>(a.row)] = 1;
     const int n0 = prob.n_quotes();
     for (int i = 0; i < n0; ++i) {
       auto& ins = prob.instruments[static_cast<std::size_t>(i)];
-      if (ins.quote == cal::QuoteKind::FxForward || ins.band_upper > ins.band_lower) continue;
+      if (ins.quote == cal::QuoteKind::FxForward || ins.band_upper > ins.band_lower || is_anchor[static_cast<std::size_t>(i)]) continue;
       cal::Instrument mid = ins;
       mid.penalty_map = cal::PenaltyMap::stiff(cal::kSmoothedBandDecay);
       mid.band_lower = mid.band_upper = 0.0;

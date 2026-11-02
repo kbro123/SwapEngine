@@ -152,7 +152,12 @@ TEST(SmoothingTieBreaker, MinimumCurvatureWithinBandsRemovesTheJitterZigzagWitho
   ASSERT_GT(z_hard, 3.0 * z_true + 1e-6) << "premise: hard jittered quotes zigzag the knots";
   // the same jittered quotes as bounds +-0.1 bp with no pull inside, smoothed
   cal::BundleProblem banded = hard;
-  for (auto& ins : banded.instruments) { ins.band_lower = ins.market - 1e-5; ins.band_upper = ins.market + 1e-5; ins.band_decay = 0.0; }
+  const int anchor = cal::front_anchors(hard).front().row;  // the 1D SOFR fixing: a published number, never a bid/offer band
+  for (int i = 0; i < banded.n_quotes(); ++i) {
+    if (i == anchor) continue;
+    auto& ins = banded.instruments[static_cast<std::size_t>(i)];
+    ins.band_lower = ins.market - 1e-5; ins.band_upper = ins.market + 1e-5; ins.band_decay = 0.0;
+  }
   const cal::BundleProblem bs = smoothed(banded);
   const Fit fb = fit_of(bs, s.x0);
   EXPECT_TRUE(fb.converged);

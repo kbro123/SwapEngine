@@ -73,7 +73,7 @@ inline Market build_market(QuantLib::RelinkableHandle<QuantLib::YieldTermStructu
 
   // Seed elapsed SOFR fixings so the current-month 1M contract can price.
   for (Date d = mk.today - 20; d <= mk.today; ++d)
-    if (mk.sofr->isValidFixingDate(d)) mk.sofr->addFixing(d, 0.0430);
+    if (mk.sofr->isValidFixingDate(d)) mk.sofr->addFixing(d, rm::sofr_fixing);
 
   auto t = [&](const Date& d) { return mk.dc.yearFraction(mk.today, d); };
 
@@ -206,19 +206,38 @@ inline cal::Instrument future_instrument(const Market& mk, const Future& f, doub
   return ins;
 }
 
+// THE 1D FIXING ROW (owner's rule, 2026-11-02; PRINCIPLES P15): the overnight index's own fixing -- its overnight period
+// from today's fixing date, read off curve `fc` -- beside whatever else pins the front (the 1M futures strip stays).
+// `rate` is its market (a self-consistent fixture overwrites it from x_true). The period is the INDEX's: valueDate of
+// today's fixing to its maturityDate, accrued on the index day count.
+inline cal::Instrument on_fixing_instrument(const QuantLib::Date& today, const QuantLib::ext::shared_ptr<QuantLib::OvernightIndex>& idx,
+                                            const QuantLib::DayCounter& curve_dc, int fc, double rate) {
+  const QuantLib::Date fix = idx->fixingCalendar().adjust(today);
+  const QuantLib::Date s = idx->valueDate(fix), e = idx->maturityDate(s);
+  cal::Instrument ins;
+  ins.quote = cal::QuoteKind::Rate;
+  ins.forecast = fc;
+  ins.obs = swaps::qlx::make_observation({{s, e}}, 0.0, idx->dayCounter().yearFraction(s, e), today, curve_dc);
+  ins.market = rate;
+  return ins;
+}
+
 // Build the calibration problem as generic Instruments. Residual order is preserved as
 // avg | comp | swaps (CLAUDE.md §2): the 1M averaging futures first, then the 3M compounding futures,
 // then the swaps, all in the ONE instrument list (the legacy avg_futs/comp_futs/swaps groups stay
-// empty, so the overall residual sequence is byte-identical to the legacy build).
+// empty, so the overall residual sequence is byte-identical to the legacy build), then the 1D SOFR
+// fixing LAST (2026-11-02) so no earlier row is renumbered. The curve states its overnight tenor.
 inline swaps::testing::CalibrationProblem build_problem(const Market& mk) {
   swaps::testing::CalibrationProblem p;
   p.meeting_times = mk.meeting_times;
   p.back_times = mk.back_times;
+  p.fixing_tenor = rm::overnight_tenor;
   for (const auto& f : mk.futures)
     if (!f.quarterly) p.instruments.push_back(future_instrument(mk, f, mk.convexity(f)));
   for (const auto& f : mk.futures)
     if (f.quarterly) p.instruments.push_back(future_instrument(mk, f, mk.convexity(f)));
   for (std::size_t i = 0; i < mk.swaps.size(); ++i) p.instruments.push_back(swap_instrument(mk, i));
+  p.instruments.push_back(on_fixing_instrument(mk.today, mk.sofr, mk.dc, 0, rm::sofr_fixing));
   return p;
 }
 
@@ -233,7 +252,9 @@ inline Curve reference_curve(const Market& mk) {
 
 // ---- Square setup: 6x1M + 8x3M futures + 9 swaps = 23 instruments, 23 knots at the instrument
 // pillar dates, zero convexity. Shared by the curve-build and risk benchmarks/tests so this exact
-// problem lives in ONE place. `build_square_ql` fills `quotes` with the SimpleQuotes so a caller can
+// problem lives in ONE place. It is QuantLib's own GlobalBootstrap instrument set (the same-algorithm
+// comparison, CLAUDE.md §3) and stays SQUARE, so it carries no 1D fixing and states no tenor: its front
+// is held by the 2026-11-01 single-window form (the current-month 1M future reaching the FOMC knot). `build_square_ql` fills `quotes` with the SimpleQuotes so a caller can
 // bump them and force a QuantLib re-bootstrap.
 inline swaps::testing::CalibrationProblem build_square_problem(const Market& mk) {
   using namespace QuantLib;

@@ -64,10 +64,10 @@ inline RealisticBundle build_realistic_bundle(Market& mk,
   // Curve specs: SOFR outright (reference knots); each basis curve = meeting front + basis-tenor back,
   // spread over its base (Star: base 0; Chain: base c-1).
   rb.prob.curves.resize(NC);
-  rb.prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .regions = swaps::curve::flat_hermite(sofr.meeting_times, sofr.back_times)};
+  rb.prob.curves[0] = swaps::pricing::CurveStructure{.base = -1, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(sofr.meeting_times, sofr.back_times)};
   for (int c = 1; c < NC; ++c) {
     const int base = (topo == BundleTopology::Star) ? 0 : c - 1;
-    rb.prob.curves[c] = swaps::pricing::CurveStructure{.base = base, .regions = swaps::curve::flat_hermite(sofr.meeting_times, back_t)};
+    rb.prob.curves[c] = swaps::pricing::CurveStructure{.base = base, .fixing_tenor = rm::overnight_tenor, .regions = swaps::curve::flat_hermite(sofr.meeting_times, back_t)};
   }
   rb.off.assign(NC, 0);
   for (int c = 1; c < NC; ++c) rb.off[c] = rb.off[c - 1] + rb.prob.curves[c - 1].n_knots();
@@ -122,6 +122,8 @@ inline RealisticBundle build_realistic_bundle(Market& mk,
           MakeOIS(p, rb.idx[c], 0.03).withDiscountingTermStructure(hS));
       rb.prob.instruments.push_back(basis_inst(*o, c, bench, 0));
     }
+    // the basis index's own 1D fixing beside its futures strip (P15, 2026-11-02; its market is set from x_true below)
+    rb.prob.instruments.push_back(on_fixing_instrument(today, rb.idx[c], dc, c, 0.0));
   }
 
   // Actual forward curves at x_true, exposed to QuantLib; build_bundle_curves resolves the spread graph.

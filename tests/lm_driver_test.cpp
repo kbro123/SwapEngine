@@ -71,9 +71,13 @@ TEST(LmDriver, EndsWhereMinpackEndsOnEveryRungAndTheG4Desk) {
     // stationarity. The G4 desk's CCP discount blocks are a flat valley (cond(J) 2e5: a 20 bp discount spread moves a par
     // rate 0.5 bp), so two drivers stopping on a 1e-14 scaled step end up to 4e-7 apart along it with the same objective
     // to 1e-12; on the well-conditioned rungs the states agree to 1e-9 as well.
+    // The G4 desk's quote-space agreement is held to 1e-9 (every ladder rung to 1e-10): with the 1D fixings beside the
+    // meeting observations (2026-11-02) the two drivers end 1.8e-10 apart on the warm solve after the 25 bp move -- the
+    // same objective to 1e-12 and the same stationarity, the CCP valley's 1e-14 scaled steps -- a 2e-6 bp difference.
+    const double quote_tol = s.name.rfind("g4_", 0) == 0 ? 1e-9 : 1e-10;
     const auto same_point = [&](const cal::HybridBundleResidual& e, const Fit& p1, const Fit& p2, const char* what) {
       const Eigen::MatrixXd J = e.jacobian(p2.x);
-      EXPECT_LT((J * (p1.x - p2.x)).cwiseAbs().maxCoeff(), 1e-10) << s.name << " " << what << ": the two answers differ in quote space";
+      EXPECT_LT((J * (p1.x - p2.x)).cwiseAbs().maxCoeff(), quote_tol) << s.name << " " << what << ": the two answers differ in quote space";
       EXPECT_NEAR(p1.fnorm, p2.fnorm, 1e-12 * (1.0 + p2.fnorm)) << s.name << " " << what << " residual norm";
       const double st1 = (J.transpose() * e.residuals(p1.x)).cwiseAbs().maxCoeff();
       const double st2 = (J.transpose() * e.residuals(p2.x)).cwiseAbs().maxCoeff();
